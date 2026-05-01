@@ -1,0 +1,630 @@
+% =====================================================================
+% POPW Multi-Task Assembly Recognition --- Benchmark Comparison Template
+% =====================================================================
+% Compile: pdflatex popw_benchmark.tex && bibtex popw_benchmark && pdflatex popw_benchmark.tex && pdflatex popw_benchmark.tex
+% Or with biber: latexmk -pdf popw_benchmark.tex
+% =====================================================================
+
+\documentclass[11pt,a4paper]{article}
+
+% ---------- Geometry & spacing ----------
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage[final,protrusion=true,expansion=false]{microtype}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+
+% ---------- Tables ----------
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{makecell}
+\usepackage{siunitx}
+\sisetup{
+  detect-weight        = true,
+  detect-family        = true,
+  group-separator      = {,},
+  group-minimum-digits = 4,
+  table-format         = 2.2,
+  table-number-alignment = center,
+}
+
+% ---------- Math, graphics, links ----------
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\usepackage{url}
+
+% ---------- Bibliography ----------
+\usepackage[numbers,sort&compress]{natbib}
+
+% ---------- Float control ----------
+\usepackage{placeins}        % \FloatBarrier
+\usepackage{float}           % H placement specifier
+
+% ---------- Convenience ----------
+\newcommand{\popw}{POPW}
+\newcommand{\ikea}{IKEA-ASM}
+\newcommand{\industreal}{IndustReal}
+\newcommand{\map}{mAP}
+\newcommand{\todo}{\textit{---}}              % placeholder for unfilled results
+\newcommand{\best}[1]{\textbf{#1}}            % bold = best in column
+\newcommand{\runnerup}[1]{\underline{#1}}     % underline = second best
+\newcommand{\popwres}{\todo}                  % shortcut for empty POPW cell
+
+% Symbols for table footnotes
+\newcommand{\sym}[1]{\textsuperscript{\textit{#1}}}
+
+\title{\popw{}: A Unified Multi-Task Architecture for\\
+       Egocentric Assembly Understanding\\
+       \textit{Benchmark Comparison Tables}}
+\author{(Author names omitted for review)}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present \popw{}, a single unified architecture for multi-task assembly understanding from egocentric video.
+A shared ConvNeXt-Tiny backbone with a Feature Pyramid Network feeds five task heads:
+RetinaNet-style object/state detection, 2D pose regression, 9-DoF head pose,
+classifier-attention activity recognition, and a causal-Transformer procedure step recognition (PSR) head.
+The same architecture is evaluated on \ikea{}~\cite{benshabat2021ikea} and \industreal{}~\cite{schoonbeek2024industreal},
+adapted only by output dimensionality.
+This document collects the benchmark tables against which we compare; all \popw{} cells are
+intentionally left blank during the experimental phase.
+\end{abstract}
+
+% =====================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Assembly understanding is fragmented across single-task models: dedicated detectors
+for object/state detection (e.g.\ YOLOv8m on \industreal{}~\cite{schoonbeek2024industreal}),
+dedicated transformers for action recognition (e.g.\ MViTv2~\cite{schoonbeek2024industreal} pretrained on Kinetics),
+and dedicated rule-based or temporal-encoder pipelines for procedure step recognition (PSR)
+such as the \industreal{} B3 baseline and STORM-PSR~\cite{schoonbeek2025storm}.
+\popw{} replaces this stack with a single forward pass, which is a meaningful systems contribution
+when streaming inference latency matters.
+
+The remainder of this document is the \emph{benchmark comparison harness}.
+Tables~\ref{tab:ikea-headline}--\ref{tab:efficiency} list every external baseline
+\popw{} is compared against, along with the protocol and source paper.
+The \popw{} columns are deliberately blank until experiments complete;
+once we have results, only those cells need to be filled.
+
+% =====================================================================
+\section{Datasets and protocols}
+\label{sec:datasets}
+
+\paragraph{\ikea{}~\cite{benshabat2021ikea}.}
+371 videos, 33 atomic action classes, 17K action instances, $\sim$3M frames.
+Three RGB views (front / top / side) and depth at $640{\times}480$.
+Tasks: object segmentation (7 classes), 2D body pose (17 keypoints), action recognition,
+phase classification, temporal localization.
+
+\paragraph{\industreal{}~\cite{schoonbeek2024industreal}.}
+Egocentric RGB at $1280{\times}720$, single camera, real and synthetic recordings of
+toy-assembly tasks. 74 atomic action classes, 24 ASD (Assembly State Detection) classes,
+11-component PSR labels, and 9-DoF head pose ground truth.
+
+\paragraph{Notation.}
+The \popw{} architecture is identical between datasets; only head dimensions and the
+applicable task set differ. Resolution, class count, and presence of PSR / phase /
+temporal-localization labels are summarised in Table~\ref{tab:dataset-config}.
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Dataset configuration. \popw{} uses the same backbone, FPN, and head architectures
+on both datasets; only the output dimensionality and the active task set differ.}
+\label{tab:dataset-config}
+\begin{tabular}{l c c}
+\toprule
+& \ikea{} & \industreal{} \\
+\midrule
+Resolution                      & $640{\times}480$ & $1280{\times}720$ \\
+Cameras                         & 3 RGB views      & 1 RGB (egocentric) \\
+Detection classes               & 7 objects        & 24 ASD states \\
+Pose                            & body, 17 kpts    & head, 9-DoF \\
+Action classes                  & 33               & 74 \\
+PSR                             & ---              & 11 components \\
+Phase classification            & 12-phase         & --- \\
+Temporal localization           & yes              & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\FloatBarrier
+% =====================================================================
+\section{Headline benchmark tables}
+\label{sec:headline}
+
+Tables~\ref{tab:ikea-headline} and~\ref{tab:industreal-headline} list every
+metric for which a published baseline exists on \ikea{} and \industreal{}
+respectively. Each row records the protocol, the strongest baseline we are
+aware of, and the \popw{} entry under the same protocol. \popw{} entries are
+deliberately blank during the experimental phase; once results converge they
+will be filled in with mean$\pm$std across three random seeds.
+
+% --------------------------- IKEA ASM ---------------------------------
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{\textbf{\ikea{} headline benchmarks.} Each row is a published baseline for a specific task.
+\popw{} (last group) is evaluated under the same protocol as the corresponding row.
+Empty cells will be filled once experiments converge; results will be reported as
+mean$\pm$std across three random seeds.}
+\label{tab:ikea-headline}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l l l c c}
+\toprule
+\textbf{Task} & \textbf{Method} & \textbf{Metric} & \textbf{Score} & \textbf{Reference} \\
+\midrule
+\multicolumn{5}{l}{\textit{Object segmentation}} \\
+Front view & ResNeXt-101-FPN  & AP@0.5         & 85.3 & \cite{benshabat2021ikea} \\
+Front view & ResNeXt-101-FPN  & AP (COCO)      & 65.9 & \cite{benshabat2021ikea} \\
+Front view & Mask R-CNN       & AP@0.5         & 78.9 & \cite{benshabat2021ikea} \\
+Front view & \popw{} (ours)   & AP@0.5         & \popwres & --- \\
+Front view & \popw{} (ours)   & AP (COCO)      & \popwres & --- \\
+\midrule
+\multicolumn{5}{l}{\textit{2D body pose}} \\
+Front view & MaskRCNN-ft      & PCK@10\,px     & 64.3 & \cite{benshabat2021ikea} \\
+Front view & MaskRCNN-ft      & PCK@0.2        & 88.0 & \cite{benshabat2021ikea} \\
+Front view & \popw{} (ours)   & PCK@10\,px     & \popwres & --- \\
+Front view & \popw{} (ours)   & PCK@0.2        & \popwres & --- \\
+\midrule
+\multicolumn{5}{l}{\textit{Activity recognition}} \\
+Front view (RGB)        & P3D                  & Top-1   & 60.40 & \cite{benshabat2021ikea} \\
+Front view (RGB+pose)   & I3D RGB+pose         & Top-1   & 64.15 & \cite{benshabat2021ikea} \\
+All views (RGB)         & I3D                  & Top-1   & 47.00 & \cite{benshabat2021ikea} \\
+All views, most-relevant obj. & PC3D~\cite{aganian2023ikea}     & Top-1 & 80.20 & \cite{aganian2023ikea} \\
+All views, all obj.     & 2D-CNN~\cite{aganian2023ikea}        & Top-1 & 79.70 & \cite{aganian2023ikea} \\
+Online (cross-subject)  & MiniROAD             & mcAP    & 80.84 & \cite{xie2025ptma} \\
+Online (cross-subject)  & PTMA                 & mcAP    & 86.99 & \cite{xie2025ptma} \\
+Online (cross-subj.+view) & PTMA               & mcAP    & 84.47 & \cite{xie2025ptma} \\
+Front view (RGB+pose)   & \popw{} (ours)       & Top-1   & \popwres & --- \\
+All views               & \popw{} (ours)       & Top-1   & \popwres & --- \\
+Online                  & \popw{} (ours)       & mcAP    & \popwres & --- \\
+\midrule
+\multicolumn{5}{l}{\textit{Temporal localization}} \\
+All views & I3D                       & \map{}@0.5 & 20.00 & \cite{benshabat2021ikea} \\
+RGB-only  & ActionFormer              & \map{}@0.5 & 21.49 & \cite{gatedsrm2026} \\
+RGB+pose  & Gated SRM                 & \map{}@0.5 & 21.77 & \cite{gatedsrm2026} \\
+          & \popw{} (ours)            & \map{}@0.5 & \popwres & --- \\
+\midrule
+\multicolumn{5}{l}{\textit{Phase classification \& temporal order}} \\
+Self-supervised & STEPs               & Acc@1.0          & 37.02 & \cite{shah2023steps} \\
+Self-supervised & STEPs               & Kendall's $\tau$ &  0.91 & \cite{shah2023steps} \\
+                & \popw{} (ours)      & Acc@1.0          & \popwres & --- \\
+                & \popw{} (ours)      & Kendall's $\tau$ & \popwres & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% --------------------------- IndustReal -------------------------------
+\begin{table}[!htbp]
+\centering
+\small
+\caption{\textbf{\industreal{} headline benchmarks.} Each baseline is the strongest competitor
+reported in the cited paper. \industreal{} is single-view egocentric, so cross-view protocols
+do not apply. Head-pose has no published supervised baseline; \popw{} establishes one.}
+\label{tab:industreal-headline}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l l l c c}
+\toprule
+\textbf{Task} & \textbf{Method} & \textbf{Metric} & \textbf{Score} & \textbf{Reference} \\
+\midrule
+\multicolumn{5}{l}{\textit{Assembly State Detection (ASD)}} \\
+& YOLOv8m (COCO+synth+real) & \map{}@0.5     & 83.80 & \cite{schoonbeek2024industreal} \\
+& \popw{} (ours)            & \map{}@0.5     & \popwres & --- \\
+& \popw{} (ours)            & \map{}@[0.5{:}0.95] & \popwres & --- \\
+\midrule
+\multicolumn{5}{l}{\textit{Activity recognition}} \\
+& MViTv2 (Kinetics-400 pretrained) & Top-1   & 66.45 & \cite{schoonbeek2024industreal} \\
+& MViTv2 (Kinetics-400 pretrained) & Top-5   & 88.43 & \cite{schoonbeek2024industreal} \\
+& \popw{} (ours)            & Top-1          & \popwres & --- \\
+& \popw{} (ours)            & Top-5          & \popwres & --- \\
+\midrule
+\multicolumn{5}{l}{\textit{Procedure Step Recognition (PSR)}} \\
+& B3 rule-based             & F1             & 0.883 & \cite{schoonbeek2024industreal} \\
+& B3 rule-based             & Precision      & 0.885 & \cite{schoonbeek2024industreal} \\
+& B3 rule-based             & Recall         & 0.880 & \cite{schoonbeek2024industreal} \\
+& STORM-PSR                 & F1\sym{a}      & 0.901 & \cite{schoonbeek2025storm} \\
+& STORM-PSR                 & POS\sym{a}     & 0.812 & \cite{schoonbeek2025storm} \\
+& \popw{} (ours)            & F1             & \popwres & --- \\
+& \popw{} (ours)            & POS            & \popwres & --- \\
+\midrule
+\multicolumn{5}{l}{\textit{Assembly state recognition / error verification}} \\
+& SupCon+ISIL (ResNet-34)   & F1@1           & \texttt{$\sim$0.85}\sym{b} & \cite{schoonbeek2024supcon} \\
+& SupCon+ISIL (ResNet-34)   & MAP@R(+)       & \todo & \cite{schoonbeek2024supcon} \\
+& Best contrastive (ResNet-34) & Error-Verif.\ AP & \texttt{$\sim$0.58}\sym{b} & \cite{lehman2024statediffnet} \\
+& \popw{} (ours)            & F1@1           & \popwres & --- \\
+& \popw{} (ours)            & Error-Verif.\ AP & \popwres & --- \\
+\midrule
+\multicolumn{5}{l}{\textit{Head pose (9-DoF)}} \\
+& \textit{no published supervised baseline} & --- & --- & --- \\
+& \popw{} (ours)            & Forward angular MAE ($^\circ$)  & \popwres & --- \\
+& \popw{} (ours)            & Up angular MAE ($^\circ$)       & \popwres & --- \\
+& \popw{} (ours)            & Position MAE (mm)               & \popwres & --- \\
+\bottomrule
+\end{tabular}
+
+\vspace{0.4em}
+\footnotesize
+\sym{a} STORM-PSR uses a $\pm 3$-frame tolerance. We report \popw{} under both
+$\pm 3$ and $\pm 5$ tolerances for fair comparison.
+\sym{b} Estimated from the published figures (numbers not given in tabular form).
+\end{table}
+
+\FloatBarrier
+% =====================================================================
+\section{Per-task breakdown}
+\label{sec:per-task}
+
+The headline tables interleave tasks for compactness. The following
+subsections split results by task, which is the comparison form most
+reviewers reach for when checking a single capability.
+
+\subsection{Activity recognition}
+\label{sec:activity-breakdown}
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Activity recognition: per-protocol breakdown across both datasets.
+Empty cells are reserved for \popw{} results.}
+\label{tab:activity-breakdown}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l l c c c}
+\toprule
+\textbf{Dataset} & \textbf{Method} & \textbf{Top-1} & \textbf{Top-5} & \textbf{mcAP} \\
+\midrule
+\ikea{} (front, RGB)    & P3D~\cite{benshabat2021ikea}                 & 60.40 & \todo & \todo \\
+\ikea{} (front, RGB+pose) & I3D~\cite{benshabat2021ikea}               & 64.15 & \todo & \todo \\
+\ikea{} (all views)     & I3D~\cite{benshabat2021ikea}                 & 47.00 & \todo & \todo \\
+\ikea{} (all views)     & PC3D~\cite{aganian2023ikea}                  & 80.20 & \todo & \todo \\
+\ikea{} (online, csv)   & PTMA~\cite{xie2025ptma}                      & \todo & \todo & 84.47 \\
+\ikea{} (online, cs)    & PTMA~\cite{xie2025ptma}                      & \todo & \todo & 86.99 \\
+\ikea{} (online, cs)    & MiniROAD~\cite{xie2025ptma}                  & \todo & \todo & 80.84 \\
+\ikea{}                 & \popw{} (ours)                               & \popwres & \popwres & \popwres \\
+\midrule
+\industreal{}           & MViTv2~\cite{schoonbeek2024industreal}       & 66.45 & 88.43 & \todo \\
+\industreal{}           & \popw{} (ours)                               & \popwres & \popwres & \popwres \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Object / state detection}
+\label{sec:detection-breakdown}
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Detection performance across both datasets. \industreal{} ASD is a 24-class
+state recognition problem treated as detection by~\cite{schoonbeek2024industreal}.}
+\label{tab:detection-breakdown}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l l c c}
+\toprule
+\textbf{Dataset} & \textbf{Method} & \textbf{AP} & \textbf{AP@0.5} \\
+\midrule
+\ikea{}        & ResNeXt-101-FPN~\cite{benshabat2021ikea}   & 65.9 & 85.3 \\
+\ikea{}        & Mask R-CNN~\cite{benshabat2021ikea}        & \todo & 78.9 \\
+\ikea{}        & \popw{} (ours)                             & \popwres & \popwres \\
+\midrule
+\industreal{}  & YOLOv8m~\cite{schoonbeek2024industreal}    & \todo & 83.8 \\
+\industreal{}  & \popw{} (ours)                             & \popwres & \popwres \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Pose estimation}
+\label{sec:pose-breakdown}
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Pose results. The two datasets define pose differently: \ikea{} reports 2D body
+keypoints (PCK), \industreal{} provides 9-DoF head pose with no published supervised baseline.
+\popw{} establishes the first such baseline on \industreal{}.}
+\label{tab:pose-breakdown}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l l c}
+\toprule
+\textbf{Dataset / Pose} & \textbf{Method / Metric} & \textbf{Score} \\
+\midrule
+\multicolumn{3}{l}{\textit{\ikea{} --- 2D body pose, 17 keypoints}} \\
+MaskRCNN-ft~\cite{benshabat2021ikea}    & PCK@10\,px         & 64.3 \\
+MaskRCNN-ft~\cite{benshabat2021ikea}    & PCK@0.2            & 88.0 \\
+\popw{} (ours)                          & PCK@10\,px         & \popwres \\
+\popw{} (ours)                          & PCK@0.2            & \popwres \\
+\midrule
+\multicolumn{3}{l}{\textit{\industreal{} --- 9-DoF head pose}} \\
+\popw{} (ours, baseline)                & Forward angular MAE ($^\circ$) & \popwres \\
+\popw{} (ours, baseline)                & Up angular MAE ($^\circ$)      & \popwres \\
+\popw{} (ours, baseline)                & Position MAE (mm)              & \popwres \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Procedure Step Recognition (\industreal{})}
+\label{sec:psr-breakdown}
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{PSR on \industreal{}. Tolerance window is the temporal slack allowed when matching
+predicted step boundaries to ground truth. STORM-PSR is the strongest published baseline.}
+\label{tab:psr-breakdown}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l c c c c c}
+\toprule
+\textbf{Method} & \textbf{Tol.} & \textbf{Precision} & \textbf{Recall} & \textbf{F1} & \textbf{POS} \\
+\midrule
+B3 rule-based~\cite{schoonbeek2024industreal} & $\pm 5$ & 0.885 & 0.880 & 0.883 & \todo \\
+STORM-PSR~\cite{schoonbeek2025storm}          & $\pm 3$ & \todo & \todo & 0.901 & 0.812 \\
+\popw{} (ours)                                & $\pm 5$ & \popwres & \popwres & \popwres & \popwres \\
+\popw{} (ours)                                & $\pm 3$ & \popwres & \popwres & \popwres & \popwres \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\FloatBarrier
+% =====================================================================
+\section{Efficiency comparison}
+\label{sec:efficiency}
+
+\popw{} is structurally heavier than purpose-built single-task models such as
+PTMA (12.9\,M parameters) or MiniROAD (10.5\,M); we accept that trade.
+The fair comparison is against a sequential pipeline of single-task baselines
+that would be required to produce the same set of outputs --- an arrangement
+in which throughput is bounded by the slowest stage.
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Efficiency at native dataset resolution.
+\popw{} reports two FPS numbers: \emph{batched} (single-frame forward, the standard reporting convention)
+and \emph{streaming} (per-frame forward with cached temporal feature bank, the deployment-relevant number).
+Where competitor papers do not report a number we use \todo. ``$^\dagger$'' denotes RTX 3060.}
+\label{tab:efficiency}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l l S[table-format=2.1] S[table-format=3.2] S[table-format=3.0] c}
+\toprule
+\textbf{Dataset} & \textbf{Method} &
+{\textbf{Params (M)}} & {\textbf{GFLOPs}} &
+{\textbf{FPS}} & \textbf{Hardware} \\
+\midrule
+\multicolumn{6}{l}{\textit{\ikea{} --- $640{\times}480$}} \\
+\ikea{} & MiniROAD~\cite{xie2025ptma}              & 10.5 &   1.08 & 325 & --- \\
+\ikea{} & PTMA~\cite{xie2025ptma}                  & 12.9 &   1.96 & 291 & --- \\
+\ikea{} & ActionFormer (RGB)~\cite{gatedsrm2026}   & 27.7 &  83.28 &  21 & GTX\,1080 \\
+\ikea{} & Gated SRM~\cite{gatedsrm2026}            & 33.5 & 121.09 &  16 & GTX\,1080 \\
+\ikea{} & \popw{} (ours, batched)                  & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
+\ikea{} & \popw{} (ours, streaming)                & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
+\midrule
+\multicolumn{6}{l}{\textit{\industreal{} --- $1280{\times}720$}} \\
+\industreal{} & YOLOv8m~\cite{schoonbeek2024industreal}     & {\todo} & {\todo} & {\todo} & --- \\
+\industreal{} & MViTv2~\cite{schoonbeek2024industreal}      & {\todo} & {\todo} & {\todo} & --- \\
+\industreal{} & STORM-PSR~\cite{schoonbeek2025storm}        & {\todo} & {\todo} & {\todo} & --- \\
+\industreal{} & \popw{} (ours, batched)                     & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
+\industreal{} & \popw{} (ours, streaming)                   & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Verified benchmark papers with publicly available model weights/code for efficiency testing on user GPU.}
+\label{tab:verified-models}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l l l l}
+\toprule
+\textbf{Model} & \textbf{arXiv ID} & \textbf{Venue} & \textbf{Public Code} \\
+\midrule
+Ben-Shabat et al. (IKEA ASM) & \href{https://arxiv.org/abs/2007.00394}{2007.00394} & WACV 2021 & \href{https://github.com/ultralytics/ultralytics}{YOLOv8m Available} \\
+Xie et al. (PTMA / MiniROAD) & \href{https://arxiv.org/abs/2508.17025}{2508.17025} & IEEE TMM 2025 & Code Not Released \\
+Takami \& Fukuda (Gated SRM) & \href{https://www.mdpi.com/1424-8220/26/8/2454}{Sensors 2026} & MDPI 2026 & Code Not Released \\
+Zhang et al. (ActionFormer) & \href{https://arxiv.org/abs/2202.07925}{2202.07925} & ECCV 2022 & \href{https://github.com/happyharrycn/actionformer\_release}{Available} \\
+Schoonbeek et al. (IndustReal) & \href{https://arxiv.org/abs/2310.17323}{2310.17323} & WACV 2024 & \href{https://github.com/ultralytics/ultralytics}{YOLOv8m}, \href{https://github.com/facebookresearch/SlowFast}{MViTv2 via SlowFast} \\
+Schoonbeek et al. (STORM-PSR) & \href{https://arxiv.org/abs/2510.12385}{2510.12385} & CVIU 2025 & \href{https://github.com/shaohsuanhung/STORM-PSR}{Available} \\
+Schoonbeek et al. (SupCon+ISIL) & \href{https://arxiv.org/abs/2408.11700}{2408.11700} & IEEE RAL 2024 & Code Not Released \\
+Lehman et al. (StateDiffNet) & \href{https://arxiv.org/abs/2408.12945}{2408.12945} & ECCV VISION 2024 & Code Not Released \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\vspace{0.5em}
+\footnotesize
+Note: Section~5 efficiency comparison uses YOLOv8m, MViTv2, STORM-PSR, ActionFormer, PTMA, MiniROAD, and Gated SRM. YOLOv8m code is from ultralytics (not the original authors). MViTv2 code is via PySlowFast~\cite{schoonbeek2024industreal}. ActionFormer code is at happyharrycn/actionformer\_release. PTMA and MiniROAD share the same arXiv paper (2508.17025) but have no public code. Gated SRM is a Sensors 2026 paper by Takami \& Fukuda with no public code.
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Known benchmark metrics from verified papers for reference.}
+\label{tab:verified-metrics}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l l c c}
+\toprule
+\textbf{Model} & \textbf{Dataset} & \textbf{Metric} & \textbf{Value} \\
+\midrule
+SlowFast (Feichtenhofer et al.) & Kinetics-400 & Top-1 & 79.8\% \\
+SlowFast (Feichtenhofer et al.) & AVA v2.2 & mAP & 28.3\% \\
+TSM (Lin et al.) & Kinetics-400 & Top-1 & 76\% \\
+Non-Local (Wang et al.) & Kinetics-400 & Top-1 & 77.7\% \\
+ST-GCN (Yan et al.) & NTU RGB+D & Accuracy & 81.5\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Sequential single-task pipeline vs.\ \popw{}'s single forward pass on \industreal{}.}
+\label{tab:multi-model}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l c c c}
+\toprule
+\textbf{Pipeline} & \textbf{Params} & \textbf{GFLOPs} & \textbf{FPS} \\
+\midrule
+YOLOv8m + MViTv2 + STORM-PSR (sequential) & {\todo} & {\todo} & {\todo} \\
+\popw{} (one forward pass)                & \popwres & \popwres & \popwres \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\FloatBarrier
+% =====================================================================
+\section{Target thresholds}
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Sequential single-task pipeline vs.\ \popw{}'s single forward pass on \industreal{}.}
+\label{tab:multi-model}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l c c c}
+\toprule
+\textbf{Pipeline} & \textbf{Params} & \textbf{GFLOPs} & \textbf{FPS} \\
+\midrule
+YOLOv8m + MViTv2 + STORM-PSR (sequential) & {\todo} & {\todo} & {\todo} \\
+\popw{} (one forward pass)                & \popwres & \popwres & \popwres \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\FloatBarrier
+% =====================================================================
+\section{Target thresholds}
+\label{sec:targets}
+
+For transparency we list the exact value \popw{} must beat on each metric to constitute
+state-of-the-art. The thresholds are taken from the strongest published baseline.
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{\popw{} target thresholds for each headline metric. ``Beat'' means strictly greater
+than (or strictly less than for error metrics) the listed value.}
+\label{tab:targets}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{l l l c}
+\toprule
+\textbf{Dataset} & \textbf{Metric} & \textbf{Strongest baseline} & \textbf{Threshold} \\
+\midrule
+\ikea{}         & Object det.\ AP@0.5             & ResNeXt-101-FPN  & $>$\,85.30 \\
+\ikea{}         & Object det.\ AP (COCO)          & ResNeXt-101-FPN  & $>$\,65.90 \\
+\ikea{}         & Pose PCK@0.2                    & MaskRCNN-ft      & $>$\,88.00 \\
+\ikea{}         & Pose PCK@10\,px                 & MaskRCNN-ft      & $>$\,64.30 \\
+\ikea{}         & Activity Top-1 (front, RGB+pose) & I3D RGB+pose     & $>$\,64.15 \\
+\ikea{}         & Activity Top-1 (all views)      & PC3D             & $>$\,80.20 \\
+\ikea{}         & Activity mcAP (csv)             & PTMA             & $>$\,84.47 \\
+\ikea{}         & Activity mcAP (cs)              & PTMA             & $>$\,86.99 \\
+\ikea{}         & Temporal loc.\ \map{}@0.5       & Gated SRM        & $>$\,21.77 \\
+\ikea{}         & Phase Acc@1.0                   & STEPs            & $>$\,37.02 \\
+\ikea{}         & Temporal order Kendall's $\tau$ & STEPs            & $>$\,0.91 \\
+\midrule
+\industreal{}   & ASD \map{}@0.5                  & YOLOv8m          & $>$\,83.80 \\
+\industreal{}   & Activity Top-1                  & MViTv2           & $>$\,66.45 \\
+\industreal{}   & Activity Top-5                  & MViTv2           & $>$\,88.43 \\
+\industreal{}   & PSR F1 ($\pm 3$ frames)         & STORM-PSR        & $>$\,0.901 \\
+\industreal{}   & PSR POS ($\pm 3$ frames)        & STORM-PSR        & $>$\,0.812 \\
+\industreal{}   & Assembly state F1@1             & SupCon+ISIL      & $>$ baseline \\
+\industreal{}   & Error-verification AP           & GCA              & $>$ baseline \\
+\industreal{}   & Head pose (9-DoF)               & none             & establish \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\FloatBarrier
+% =====================================================================
+\section{Reproducibility}
+\label{sec:repro}
+
+All competitor numbers are taken from the cited papers. Where a paper reports multiple
+protocols (e.g.\ cross-subject, cross-view, cross-subject-view for online action detection
+on \ikea{}~\cite{xie2025ptma}), we report the strongest. \popw{} is evaluated under each
+listed protocol exactly; in particular,
+PSR is evaluated at both $\pm 3$ and $\pm 5$ frame tolerances to permit direct comparison
+against both STORM-PSR~\cite{schoonbeek2025storm} (which uses $\pm 3$) and the
+\industreal{} paper's B3 baseline~\cite{schoonbeek2024industreal} (which uses $\pm 5$).
+Final \popw{} numbers will be reported as mean$\pm$std across three random seeds
+(42, 123, 7).
+
+% =====================================================================
+% Bibliography
+% =====================================================================
+\begin{thebibliography}{9}
+
+\bibitem{benshabat2021ikea}
+Y.~Ben-Shabat, X.~Yu, F.~Saleh, D.~Campbell, C.~Rodriguez-Opazo, H.~Li, and S.~Gould,
+``The IKEA ASM Dataset: Understanding people assembling furniture through actions, objects and pose,''
+in \emph{Proc.\ IEEE/CVF Winter Conf.\ on Applications of Computer Vision (WACV)}, 2021.
+arXiv:2007.00394.
+
+\bibitem{shah2023steps}
+A.~Shah, B.~Lundell, H.~Sawhney, and R.~Chellappa,
+``STEPs: Self-Supervised Key Step Extraction and Localization from Unlabeled Procedural Videos,''
+in \emph{Proc.\ IEEE/CVF Int.\ Conf.\ on Computer Vision (ICCV)}, 2023.
+arXiv:2301.00794.
+
+\bibitem{aganian2023ikea}
+D.~Aganian, M.~K\"ohler, S.~Baake, M.~Eisenbach, and H.-M.~Gross,
+``How Object Information Improves Skeleton-based Human Action Recognition in Assembly Tasks,''
+in \emph{Proc.\ Int.\ Joint Conf.\ on Neural Networks (IJCNN)}, 2023.
+arXiv:2306.05844.
+
+\bibitem{xie2025ptma}
+L.~Xie, Y.~Tan, S.~Jing, H.~Lu, and K.~Zhang,
+``Probabilistic Temporal Masked Attention for Cross-view Online Action Detection,''
+\emph{IEEE Trans.\ on Multimedia}, 2025 (in press).
+arXiv:2508.17025.
+
+\bibitem{gatedsrm2026}
+M.~Takami and T.~Fukuda,
+``Confidence-Aware Gated Multimodal Fusion for Robust Temporal Action Localization in Occluded Environments,''
+\textit{Sensors}, vol.~26, no.~8, article 2454, 2026.
+doi: 10.3390/s26082454.
+
+\textit{Note:} ActionFormer baseline results reported in this paper are from Zhang et al.~(ECCV 2022)~\cite{zhang2022actionformer}.
+
+\bibitem{zhang2022actionformer}
+C.-L.~Zhang, J.-X.~Wu, and Y.~Li,
+``ActionFormer: Localizing Moments of Actions with Transformers,''
+in \emph{Proc.\ European Conf.\ on Computer Vision (ECCV)}, 2022.
+arXiv:2202.07925.
+Code: \url{https://github.com/happyharrycn/actionformer\_release}.
+
+\bibitem{schoonbeek2024industreal}
+T.~J.~Schoonbeek, T.~Houben, H.~Onvlee, P.~H.~N.~de~With, and F.~van~der~Sommen,
+``IndustReal: A Dataset for Procedure Step Recognition Handling Execution Errors
+in Egocentric Videos in an Industrial-Like Setting,''
+in \emph{Proc.\ IEEE/CVF Winter Conf.\ on Applications of Computer Vision (WACV)}, 2024.
+arXiv:2310.17323.
+
+\bibitem{schoonbeek2025storm}
+T.~J.~Schoonbeek, S.-H.~Hung, J.~Kustra, P.~H.~N.~de~With, and F.~van~der~Sommen,
+``STORM-PSR: Spatio-Temporal Reasoning for Procedure Step Recognition,''
+\emph{Computer Vision and Image Understanding (CVIU)}, 2025.
+arXiv:2510.12385.
+
+\bibitem{schoonbeek2024supcon}
+T.~J.~Schoonbeek, G.~Balachandran, H.~Onvlee, T.~Houben, S.-H.~Hung, J.~Kustra,
+P.~H.~N.~de~With, and F.~van~der~Sommen,
+``Supervised Representation Learning towards Generalizable Assembly State Recognition,''
+\emph{IEEE Robotics and Automation Letters (RAL)}, 2024.
+arXiv:2408.11700.
+
+\bibitem{lehman2024statediffnet}
+D.~Lehman, T.~J.~Schoonbeek, S.-H.~Hung, J.~Kustra, P.~H.~N.~de~With, and F.~van~der~Sommen,
+``Find the Assembly Mistakes: Error Segmentation for Industrial Applications,''
+in \emph{Proc.\ ECCV Vision-based InduStrial InspectiON (VISION) Workshop}, 2024.
+arXiv:2408.12945.
+
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,22 @@
+# Exclude large/sensitive directories
+data/
+external/
+
+# Exclude logs and model files
+*.log
+*.pth
+*.pt
+*.pkl
+*.h5
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+*.swp
