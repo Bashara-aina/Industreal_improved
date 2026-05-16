@@ -26,10 +26,10 @@ _cfg_logger = logging.getLogger(__name__)
 # =========================================================================
 BENCHMARK_MODE = True  # When True: VAL_EVERY=1, full metrics every epoch
 DEBUG_MODE         = False
-DEBUG_MAX_VIDEOS   = 20
+DEBUG_MAX_VIDEOS   = 2  # smoke test: 2 recordings only
 DEBUG_FRAME_STRIDE = 10
 
-SUBSET_RATIO = 0.05  # Fraction of recordings to use (0.0-1.0). 0.05 = 5% of data.
+SUBSET_RATIO = 1.0  # [FIX] Was 0.05 — full dataset for full benchmark
 
 TRAIN_FRAME_STRIDE = 3  # A.2: stride 3 → T=16 covers 1.6s at 30FPS (median action)
 EVAL_FRAME_STRIDE  = 1
@@ -156,7 +156,6 @@ def _load_act_class_names() -> list:
     We build a full 75-slot list (indices 0-74) so the ID directly indexes the list.
     Unknown IDs (37, 64) are filled with placeholder names.
     """
-    import csv
     import os
 
     recordings_root = RECORDINGS_ROOT
@@ -233,8 +232,12 @@ NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp10 in PSR_la
 # =========================================================================
 # Anchor sizes for RetinaNet detection head (Doc 01 B.3)
 # These are calibrated via k-means on GT boxes: python calibrate_anchors.py
-# Default covers ~24-384px assembly piece sizes at 1280x720
-ANCHOR_SIZES = (24, 48, 96, 192, 384)
+# Calibrated on 923 GT boxes (2 train recordings on disk):
+#   w=146-594px, h=89-463px, w/h ratio=0.82-2.95 (wider than tall)
+#   sqrt(area)=188-436px, k-means centers: 164, 269, 333, 338, 404
+# Coverage with (128,192,256,384,512): 100% IoU>=0.5, 82.6% IoU>=0.75
+# =========================================================================
+ANCHOR_SIZES = (128, 192, 256, 384, 512)
 IMG_WIDTH       = 1280
 IMG_HEIGHT      = 720
 IMG_SIZE        = (IMG_WIDTH, IMG_HEIGHT)
@@ -247,8 +250,8 @@ IMAGENET_STD  = [0.229, 0.224, 0.225]
 # =========================================================================
 # Training (RTX 3060 12 GB)
 # =========================================================================
-BATCH_SIZE       = 2     # [REVERT] BS=4 is SLOWER per epoch (110min vs 61min) due to optimizer overhead doubling
-GRAD_ACCUM_STEPS = 16    # [KEEP] Effective batch ~32; BS=2 + accum=16 is optimal for this GPU
+BATCH_SIZE       = 4     # [FIX] Was 2 — with FP16 enabled we can use larger base batch
+GRAD_ACCUM_STEPS = 8     # [FIX] Was 16 — effective batch 32 with BS=4+FP16 is memory-optimal
 EFFECTIVE_BATCH  = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
 
 VAL_BATCH_SIZE  = 4     # [FIX] Increased from 2 for faster eval (more samples/batch)
@@ -269,7 +272,7 @@ EVAL_MAX_BATCHES = 15   # [FIX] Reduced from 30 to prevent validation OOM on sub
 
 NUM_WORKERS     = 2     # [OPT] 2 workers optimal on this system (workers=0 wastes GPU; workers=4+ adds CPU contention)
 PIN_MEMORY      = True
-MIXED_PRECISION = False
+MIXED_PRECISION = True   # [FIX] Was False — FP16 for RTX 3060 Ampere tensor cores
 SEED            = 42
 
 # EMA (Exponential Moving Average) — [FIX #4 HIGH] Enabled per paper §Training: EMA=0.999 in Stage 3
@@ -344,6 +347,8 @@ STAGE1_EPOCHS = 5    # Detection-only warmup
 STAGE2_EPOCHS = 10   # Add pose + head pose
 STAGE3_EPOCHS = 85   # Full multi-task with EMA
 ACT_RAMP_EPOCHS = 5  # Activity loss ramp-up
+ACTIVITY_LOSS_CAP = 40.0  # Cap activity loss to prevent NaN cascade at Stage 3 entry (epoch 16) — loss spiked to 40.8 in prior runs
+STAGE3_WARMUP_EPOCHS = 3  # LR warmup epochs at Stage 3 entry to stabilize new head activation
 
 # =========================================================================
 # LDAM-DRW for activity (Doc 01 §B.2 + Doc 02 C.2)
@@ -366,7 +371,7 @@ PSR_FOCAL_GAMMA = 2.0
 # Doc 01 §D.1: Current training samples one frame per step, making the
 # temporal Transformer dormant. Sequence-mode trains on contiguous T-frame
 # windows where the Transformer is properly engaged.
-USE_PSR_SEQUENCE_MODE = False  # Doc 01 §D.2: PSR sequence-mode — alternating batches
+USE_PSR_SEQUENCE_MODE = True   # Doc 01 §D.2: PSR sequence-mode — THE biggest PSR unlock
 PSR_SEQUENCE_LENGTH = 4        # T=4 keeps memory bounded on 12GB GPU
 PSR_SEQ_EVERY_N_BATCHES = 10  # Draw one sequence batch every N normal batches
 
@@ -543,7 +548,7 @@ def _validate_paths():
         for issue in issues:
             _cfg_logger.warning(f'[config] {issue}')
     else:
-        _cfg_logger.info(f'[config] All critical paths validated.')
+        _cfg_logger.info('[config] All critical paths validated.')
         sample_rec = list((RECORDINGS_ROOT / 'train').iterdir())[0].name
         _cfg_logger.info(f'[config] Sample recording: {sample_rec}')
         _cfg_logger.info(f'[config] NUM_CLASSES_ACT = {NUM_CLASSES_ACT}')
@@ -557,7 +562,7 @@ def _validate_paths():
 _validate_paths()
 update_dynamic_paths()
 
-_cfg_logger.info(f'[config] Initialized IndustReal config')
+_cfg_logger.info('[config] Initialized IndustReal config')
 _cfg_logger.info(f'[config] POPW_ROOT: {POPW_ROOT}')
 _cfg_logger.info(f'[config] OUTPUT_ROOT: {OUTPUT_ROOT}')
 _cfg_logger.info(f'[config] BENCHMARK_MODE={BENCHMARK_MODE}, VAL_EVERY={VAL_EVERY}')

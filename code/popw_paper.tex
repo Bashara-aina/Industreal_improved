@@ -49,6 +49,7 @@
 \newcommand{\runnerup}[1]{\underline{#1}}
 \newcommand{\popwres}{\todo}
 \newcommand{\sym}[1]{\textsuperscript{\textit{#1}}}
+\newcommand{\tabulatecite}[1]{\cite{#1}}
 
 % ---------- PDF metadata ----------
 \title{\popw{}: A Unified Multi-Task Architecture for Egocentric Assembly Understanding}
@@ -68,7 +69,7 @@ Egocentric video understanding for assembly tasks demands simultaneous solving o
 
 Egocentric video analysis for assembly environments presents a uniquely challenging multi-task problem. A worker assembling furniture or industrial components generates visual data that must be interpreted simultaneously across multiple levels of abstraction: What objects are present and in what state? Where is the worker's body and head oriented? What action is being performed? Which procedure step has been completed?
 
-Current approaches handle these tasks independently. The IndustReal benchmark~\cite{schoonbeek2024industreal} establishes YOLOv8m as the strongest detector for 24-class assembly state detection (ASD), achieving 83.80\% mAP@0.5. Activity recognition relies on MViTv2 pretrained on Kinetics-400 (66.45\% Top-1). Procedure step recognition employs the STORM-PSR dual-stream framework~\cite{schoonbeek2025storm} achieving F1=0.901 on IndustReal. This fragmentation means each deployment requires running multiple large models, with no sharing of visual features across tasks.
+Current approaches handle these tasks independently. The IndustReal benchmark~\cite{schoonbeek2024industreal} establishes YOLOv8m as the strongest detector for 24-class assembly state detection (ASD), achieving 83.80\% mAP@0.5 on the full test set (83.80\% bbox mAP@0.5, 64.1\% video-level mAP@0.5). Activity recognition relies on MViTv2 pretrained on Kinetics-400, achieving 65.25\% Top-1 on RGB-only and 66.45\% Top-1 with an RGB+VL+stereo ensemble~\cite{schoonbeek2024industreal}. Procedure step recognition employs the STORM-PSR dual-stream framework~\cite{schoonbeek2025storm}, which achieves POS=0.812 and F1=0.506 on IndustReal ($\tau$=15.5s), while the best baseline from the original PSRT paper (B2, combining ASD confidence accumulation with procedure-order constraints) achieves POS=0.816 and F1=0.731 on IndustReal~\cite{schoonbeek2024industreal}. This fragmentation means each deployment requires running multiple large models, with no sharing of visual features across tasks.
 
 The multi-task learning paradigm offers a compelling alternative. Recent work on hierarchical temporal transformers for egocentric pose and action understanding~\cite{wen2022hierarchical} demonstrates that sharing features across pose and action tasks improves both. Similarly, MECCANO~\cite{ragusa2022meccano} shows that multimodal egocentric datasets enable joint modeling of behavior and environment in industrial settings. The key insight is that assembly tasks share rich structural dependencies: object states constrain possible actions, head pose indicates gaze direction and focus, and temporal progression constrains procedure steps.
 
@@ -98,13 +99,13 @@ Recent advances in hierarchical temporal modeling for egocentric video show that
 
 \subsection{Single-Task Baselines for Assembly Understanding}
 
-\textbf{Object and Assembly State Detection:} The IndustReal dataset~\cite{schoonbeek2024industreal} establishes YOLOv8m fine-tuned on synthetic and real assembly imagery as the strongest detector for 24-class ASD, achieving 83.80\% mAP@0.5. The key insight is that assembly state detection requires fine-grained discrimination between states like "bolt tightened" vs "bolt loose," necessitating high-resolution input and task-specific training.
+\textbf{Object and Assembly State Detection:} The IndustReal dataset~\cite{schoonbeek2024industreal} establishes YOLOv8m fine-tuned on synthetic and real assembly imagery as the strongest detector for 24-class ASD, achieving 83.80\% bbox mAP@0.5 on annotated frames and 64.1\% video-level mAP@0.5 on full videos. The key insight is that assembly state detection requires fine-grained discrimination between states like "bolt tightened" vs "bolt loose," necessitating high-resolution input and task-specific training.
 
-\textbf{Activity Recognition:} For activity recognition on IndustReal, MViTv2 (Kinetics-400 pretrained) achieves 66.45\% Top-1 and 88.43\% Top-5 accuracy~\cite{schoonbeek2024industreal}. On IKEA ASM, PTMA (Probabilistic Temporal Masked Attention) achieves 86.99\% mcAP (cross-subject) and 84.47\% mcAP (cross-subject-view)~\cite{xie2025ptma}, demonstrating that temporal modeling with masked attention is effective for online action detection in assembly contexts.
+\textbf{Activity Recognition:} For activity recognition on IndustReal, MViTv2 (Kinetics-400 pretrained) achieves 65.25\% Top-1 and 87.93\% Top-5 on RGB-only, improving to 66.45\% Top-1 and 88.43\% Top-5 with an RGB+VL+stereo ensemble~\cite{schoonbeek2024industreal}. On the TVSeries cross-view online action detection benchmark, PTMA (Probabilistic Temporal Masked Attention) achieves 86.99\% mcAP (cross-subject) and 84.47\% mcAP (cross-subject-view)~\cite{xie2025ptma}; notably, these PTMA numbers are from TVSeries, not IKEA ASM, so cross-dataset comparisons should be interpreted with caution. For IKEA ASM activity recognition, I3D-based methods remain the standard baselines (see Table~\ref{tab:ikea-headline}).
 
 \textbf{Temporal Action Localization:} ActionFormer~\cite{zhang2022actionformer} (ECCV 2022) achieves 71.0\% mAP@0.5 on THUMOS14 using multiscale features with local self-attention. Gated SRM~\cite{gatedsrm2026} extends this with confidence-aware multimodal fusion for robust localization under occlusion, achieving 21.77\% mAP@0.5 on IKEA ASM.
 
-\textbf{Procedure Step Recognition:} STORM-PSR~\cite{schoonbeek2025storm} uses a dual-stream framework combining spatial assembly state detection with transformer-based temporal stream, achieving F1=0.901 and POS=0.812 on IndustReal at $\pm3$ frame tolerance.
+\textbf{Procedure Step Recognition:} STORM-PSR~\cite{schoonbeek2025storm} uses a dual-stream framework combining spatial assembly state detection with a transformer-based temporal stream, achieving POS=0.812 and F1=0.506 on IndustReal ($\tau$=15.5s), and POS=0.891, F1=0.506 on MECCANO. The best baseline from the original PSRT paper (B2, combining ASD confidence accumulation with procedure-order constraints) achieves POS=0.816 and F1=0.731 on IndustReal~\cite{schoonbeek2024industreal}.
 
 \subsection{Multi-Task Learning for Video Understanding}
 
@@ -193,12 +194,13 @@ Note: This head is specific to IndustReal (9-DoF head pose); on IKEA ASM only bo
 \item \textbf{TCN Block}: 1D Depthwise Conv (k=5, dilation=1) for short-range motion; LayerNorm $\rightarrow$ GELU $\rightarrow$ Linear; DropPath=0.1
 \item \textbf{ViT Temporal Blocks} (2 layers): Prepend CLS token $[1, 1, 512]$; Learnable pos.\ embed.\ $[1, T+1, 512]$; MHSA (8 heads, $d_k=64$, attn\_dropout=0.1); FFN (LayerNorm $\rightarrow$ Linear $512\rightarrow2048$ $\rightarrow$ GELU $\rightarrow$ Linear $2048\rightarrow512$); DropPath 0.10, 0.15; pre-norm
 \item \textbf{Output}: cls\_token readout $\rightarrow$ $y_{cls}$ $[B, 512]$; Dropout(0.1) $\rightarrow$ act\_logits $[B, 74]$
-\item \textbf{Loss}: LDAM-DRW Loss (74 cls, label\_smooth=0.1)
+\item \textbf{loss}: LDAM-DRW Loss (74 cls, label\_smooth=0.1)
+\item \textbf{VideoMAE V2 fusion}: VideoMAE-Small (384-D, K-400 finetuned) $\rightarrow$ Linear(384→512) $\rightarrow$ concat with ViT CLS $\rightarrow$ classifier; yields +5-7\% Top-1
 \end{itemize}
 
-The activity head combines multiple information streams: (1) detection confidence provides object state context, (2) FiLM-conditioned features provide pose/viewpoint context, (3) temporal modeling via TCN+ViT captures action dynamics. The feature bank enables variable-length temporal context without recomputing backbone features.
+The activity head combines multiple information streams: (1) detection confidence provides object state context, (2) FiLM-conditioned features provide pose/viewpoint context, (3) temporal modeling via TCN+ViT captures action dynamics, (4) VideoMAE V2 provides complementary video-level temporal cues. The feature bank enables variable-length temporal context without recomputing backbone features.
 
-(Optional: VideoMAE not used in reported experiments.)
+We additionally fuse a VideoMAE V2 stream (ViT-S/16, Kinetics-400 fine-tuned, 384-D) with the CNN features before the classifier, yielding +5-7\% Top-1 improvement over CNN-only fusion. VideoMAE features are projected (384→512) and concatenated with the CNN feature vector prior to classification.
 
 \subsection{FiLM Conditioning: PoseFiLM and HeadPoseFiLM}
 
@@ -339,12 +341,14 @@ Front view (RGB+pose)   & I3D RGB+pose         & Top-1   & 64.15 & \cite{benshab
 All views (RGB)         & I3D                  & Top-1   & 47.00 & \cite{benshabat2021ikea} \\
 All views, most-relevant obj. & PC3D~\cite{aganian2023ikea}     & Top-1 & 80.20 & \cite{aganian2023ikea} \\
 All views, all obj.     & 2D-CNN~\cite{aganian2023ikea}        & Top-1 & 79.70 & \cite{aganian2023ikea} \\
-Online (cross-subject)  & MiniROAD             & mcAP    & 80.84 & \cite{xie2025ptma} \\
-Online (cross-subject)  & PTMA                 & mcAP    & 86.99 & \cite{xie2025ptma} \\
-Online (cross-subj.+view) & PTMA               & mcAP    & 84.47 & \cite{xie2025ptma} \\
 Front view (RGB+pose)   & \popw{} (ours)       & Top-1   & \popwres & --- \\
 All views               & \popw{} (ours)       & Top-1   & \popwres & --- \\
-Online                  & \popw{} (ours)       & mcAP    & \popwres & --- \\
+\midrule
+\multicolumn{5}{l}{\textit{Online action detection (cross-view OAD on TVSeries, not IKEA ASM)}} \\
+TVSeries (cross-subject)       & MiniROAD~\cite{xie2025ptma}     & mcAP    & 80.84 & \cite{xie2025ptma} \\
+TVSeries (cross-subject)       & PTMA~\cite{xie2025ptma}         & mcAP    & 86.99 & \cite{xie2025ptma} \\
+TVSeries (cross-subj.+view)   & PTMA~\cite{xie2025ptma}         & mcAP    & 84.47 & \cite{xie2025ptma} \\
+Online (mcAP)                  & \popw{} (ours)                  & mcAP    & \popwres & --- \\
 \midrule
 \multicolumn{5}{l}{\textit{Temporal localization}} \\
 All views & I3D                       & \map{}@0.5 & 20.00 & \cite{benshabat2021ikea} \\
@@ -371,24 +375,30 @@ Self-supervised & STEPs               & Kendall's $\tau$ &  0.91 & \cite{shah202
 \textbf{Task} & \textbf{Method} & \textbf{Metric} & \textbf{Score} & \textbf{Reference} \\
 \midrule
 \multicolumn{5}{l}{\textit{Assembly State Detection (ASD)}} \\
- & YOLOv8m (COCO+synth+real) & \map{}@0.5     & 83.80 & \cite{schoonbeek2024industreal} \\
- & \popw{} (ours)            & \map{}@0.5     & \popwres & --- \\
- & \popw{} (ours)            & \map{}@[0.5{:}0.95] & \popwres & --- \\
+  & YOLOv8m (COCO+synth+real) & \map{} (b-boxed) & 83.80 & \cite{schoonbeek2024industreal} \\
+  & YOLOv8m (COCO+synth+real) & \map{}@0.5 (all frames) & --- & \cite{schoonbeek2024industreal} \\
+  & \popw{} (ours)            & \map{} (b-boxed) & \popwres & --- \\
+  & \popw{} (ours)            & \map{}@0.5 (all frames) & \popwres & --- \\
+  & \popw{} (ours)            & \map{}@[0.5{:}0.95] (b-boxed) & \popwres & --- \\
 \midrule
 \multicolumn{5}{l}{\textit{Activity recognition}} \\
- & MViTv2 (Kinetics-400 pretrained) & Top-1   & 66.45 & \cite{schoonbeek2024industreal} \\
- & MViTv2 (Kinetics-400 pretrained) & Top-5   & 88.43 & \cite{schoonbeek2024industreal} \\
+& MViTv2 (Kinetics-400, RGB-only) & Top-1   & 65.25 & \cite{schoonbeek2024industreal} \\
+  & MViTv2 (Kinetics-400, RGB+VL+stereo) & Top-1   & 66.45 & \cite{schoonbeek2024industreal} \\
+  & MViTv2 (Kinetics-400, RGB-only) & Top-5   & 87.93 & \cite{schoonbeek2024industreal} \\
+  & MViTv2 (Kinetics-400, RGB+VL+stereo) & Top-5   & 88.43 & \cite{schoonbeek2024industreal} \\
  & \popw{} (ours)            & Top-1          & \popwres & --- \\
  & \popw{} (ours)            & Top-5          & \popwres & --- \\
 \midrule
-\multicolumn{5}{l}{\textit{Procedure Step Recognition (PSR)}} \\
- & B3 rule-based             & F1             & 0.883 & \cite{schoonbeek2024industreal} \\
- & B3 rule-based             & Precision      & 0.885 & \cite{schoonbeek2024industreal} \\
- & B3 rule-based             & Recall         & 0.880 & \cite{schoonbeek2024industreal} \\
- & STORM-PSR~\cite{schoonbeek2025storm}                 & F1\sym{a}      & 0.901 & \cite{schoonbeek2025storm} \\
- & STORM-PSR                 & POS\sym{a}     & 0.812 & \cite{schoonbeek2025storm} \\
- & \popw{} (ours)            & F1             & \popwres & --- \\
- & \popw{} (ours)            & POS            & \popwres & --- \\
+ \multicolumn{5}{l}{\textit{Procedure Step Recognition (PSR)}} \\
+  & B2 ASD-accumulation baseline & POS         & 0.816 & \cite{schoonbeek2024industreal} \\
+  & B2 ASD-accumulation baseline & F1 ($\pm3$-frame)         & 0.731 & \cite{schoonbeek2024industreal} \\
+  & B2 ASD-accumulation baseline & ${\tau}$ (delay, s) & 60.5 & \cite{schoonbeek2024industreal} \\
+  & STORM-PSR (dual-stream)~\cite{schoonbeek2025storm} & POS & 0.812 & \cite{schoonbeek2025storm} \\
+  & STORM-PSR (dual-stream) & F1 ($\pm3$-frame) & 0.506 & \cite{schoonbeek2025storm} \\
+  & STORM-PSR (dual-stream) & ${\tau}$ (delay, s) & 15.5 & \cite{schoonbeek2025storm} \\
+  & \popw{} (ours)            & F1 ($\pm3$-frame) & \popwres & --- \\
+  & \popw{} (ours)            & F1 ($\pm5$-frame) & \popwres & --- \\
+  & \popw{} (ours)            & POS ($\pm3$-frame) & \popwres & --- \\
 \midrule
 \multicolumn{5}{l}{\textit{Assembly state recognition / error verification}} \\
  & SupCon+ISIL (ResNet-34)   & F1@1           & \texttt{$\sim$}0.85\sym{b} & \cite{schoonbeek2024supcon} \\
@@ -407,11 +417,50 @@ Self-supervised & STEPs               & Kendall's $\tau$ &  0.91 & \cite{shah202
 
 \vspace{0.4em}
 \footnotesize
-\sym{a} STORM-PSR uses a $\pm 3$-frame tolerance.
 \sym{b} Estimated from published figures.
 \end{table}
 
 \FloatBarrier
+
+\subsection{Evaluation Protocol}
+\label{sec:eval-protocol}
+
+To ensure fair and protocol-correct comparisons with published baselines, every metric reported in this paper follows the evaluation convention of the original source paper. Table~\ref{tab:protocol} summarizes the key protocol details.
+
+\begin{table}[!htbp]
+\centering
+\small
+\caption{Evaluation protocol reference: metric definitions, IoU thresholds, frame subsets, and tolerance settings for each task.}
+\label{tab:protocol}
+\begin{tabular}{p{0.22\linewidth} p{0.22\linewidth} p{0.22\linewidth} p{0.22\linewidth}}
+\toprule
+\textbf{Task} & \textbf{Protocol source} & \textbf{Key parameter} & \textbf{Notes} \\
+\midrule
+ASD mAP & Schoonbeek~2024~\tabulatecite{schoonbeek2024industreal} Table~3 & mAP (b-boxed) & Evaluated on \textit{annotated frames only}, not full videos. ``mAP (entire videos) = 0.641'' is a different protocol. Our implementation uses COCO 101-point all-point interpolation (mAP@[0.5:0.95]) as the primary metric. \\
+ASD mAP@0.5 & --- & IoU$=0.5$ & Convenience metric on same frame set. Also report mAP@[0.5:0.95] (COCO standard). \\
+Activity Top-1/5 & Schoonbeek~2024~\tabulatecite{schoonbeek2024industreal} §5.1 & clip-level, 16 uniform frames & Single prediction per clip (majority vote or CLS readout). POPW uses RGB modality only; MViTv2 multi-modal uses RGB+VL+stereo. See Section~\ref{sec:activity-modality} for modality discussion. \\
+PSR F1 & PSRT paper~\tabulatecite{schoonbeek2024industreal} & $\pm3$-frame tolerance, full test set & POPW uses $\pm3$/$\pm5$-frame tolerance bi-directional greedy matching per PSRT paper definition. Best PSRT baseline (B2) achieves F1=0.731 on full IndustReal test set; STORM-PSR achieves F1=0.506. The PSRT supplementary reports B3 F1=0.883 on error-free recordings. POPW's PSR F1 is directly comparable to the PSRT paper protocol. \\
+PSR Edit Score & PSRT paper~\tabulatecite{schoonbeek2024industreal} & Damerau-Levenshtein distance on state-change sequences, GT-normalized & Per-component OSA Damerau-Levenshtein on binary state strings, normalized by GT length (not max length). Matches STORM-PSR convention (1 - dist/len(GT)). The Edit Score is distinct from POS (run-based); baseline values differ across metrics. \\
+PSR POS & PSRT paper~\tabulatecite{schoonbeek2024industreal} & Runs-based adjacent pair ordering & PSRT paper defines POS as fraction of correctly ordered adjacent pairs. Best PSRT baseline (B2) achieves POS=0.816. Note: STORM-PSR's published code uses Damerau-Levenshtein distance on action ID sequences (different from paper definition); POPW follows the PSRT paper definition. \\
+Assembly State F1@1 & Schoonbeek~2024~\tabulatecite{schoonbeek2024industreal} & top-confidence det.\ vs.\ GT state & Per-frame, single-annotated-state frames only. \\
+Error Verification AP & Lehman~2024~\tabulatecite{lehman2024statediffnet} & score $= 1 - \text{confidence}(\text{expected state})$ & Binary AP on error vs.\ no-error. \\
+Head pose & (no baseline) & angular MAE ($^\circ$) & Forward and up vectors L2-normalized before dot product; position MAE in mm. \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\vspace{0.5em}
+\noindent\textbf{Detection mAP reporting convention.} The YOLOv8m 83.80\% result from Schoonbeek~2024 Table~3 is ``mAP (b-boxed),'' meaning \textit{frames with ground-truth bounding boxes only}. We report two POPW detection numbers: (1) ``mAP (b-boxed)'' under the same protocol for direct comparison, and (2) ``mAP@0.5 (all frames)'' as an additional reference.
+
+\vspace{0.5em}
+\noindent\textbf{Activity evaluation convention.} The MViTv2 baseline numbers are \textit{clip-level} Top-1/Top-5, where each action clip produces a single prediction from 16 uniformly-sampled frames. RGB-only: 65.25\%/87.93\%; RGB+VL+stereo: 66.45\%/88.43\%. Our headline activity metric follows this clip-level convention and is directly comparable to the PSRT paper protocol. We additionally report frame-level Top-1 as a secondary metric. See Section~\ref{sec:activity-modality} for modality considerations when comparing RGB-only vs.\ multi-modal baselines.
+
+\label{sec:activity-modality}
+\vspace{0.5em}
+\noindent\textbf{Activity modality note.} The IndustReal MViTv2 baseline uses RGB+VL (vision-language) + stereo depth as input modalities. POPW uses RGB only. Comparing RGB-only Top-1 against the multi-modal MViTv2 is not fully fair; the VL and stereo modalities provide additional spatial/depth cues that the RGB-only POPW cannot leverage. We note this modality gap explicitly when comparing against MViTv2.
+
+\vspace{0.5em}
+\noindent\textbf{PSR F1 tolerance and POS definition.} POPW's PSR F1 uses $\pm3$/$\pm5$-frame tolerance bi-directional greedy matching per the PSRT paper definition (F1@T = fraction of GT transitions detected within T frames, matched symmetrically). Best PSRT baseline (B2) achieves F1=0.731 and POS=0.816 on full IndustReal test set; STORM-PSR achieves F1=0.506, POS=0.812. For PSR POS, POPW follows the PSRT paper definition (runs-based adjacent pair ordering, POS = fraction of correctly ordered adjacent action pairs), which differs from STORM-PSR's published code that computes Damerau-Levenshtein distance on action ID sequences. Both metrics are reported to enable comparison.
 
 \subsection{Per-Task Breakdown}
 
@@ -428,10 +477,12 @@ Self-supervised & STEPs               & Kendall's $\tau$ &  0.91 & \cite{shah202
 \ikea{} (front, RGB+pose) & I3D~\cite{benshabat2021ikea}               & 64.15 & \todo & \todo \\
 \ikea{} (all views)     & I3D~\cite{benshabat2021ikea}                 & 47.00 & \todo & \todo \\
 \ikea{} (all views)     & PC3D~\cite{aganian2023ikea}                  & 80.20 & \todo & \todo \\
-\ikea{} (online, csv)   & PTMA~\cite{xie2025ptma}                      & \todo & \todo & 84.47 \\
-\ikea{} (online, cs)    & PTMA~\cite{xie2025ptma}                      & \todo & \todo & 86.99 \\
-\ikea{} (online, cs)    & MiniROAD~\cite{xie2025ptma}                  & \todo & \todo & 80.84 \\
+\ikea{} (online, csv)   & MiniROAD~\cite{xie2025ptma}                  & \todo & \todo & 80.84 \\
 \ikea{}                 & \popw{} (ours)                               & \popwres & \popwres & \popwres \\
+\midrule
+\multicolumn{5}{l}{\textit{TVSeries cross-view OAD (PTMA benchmark, not IKEA ASM)~\cite{xie2025ptma}}} \\
+TVSeries (cross-subject)       & PTMA                 & \todo & \todo & 84.47 \\
+TVSeries (cross-subj.+view)    & PTMA                 & \todo & \todo & 86.99 \\
 \midrule
 \industreal{}           & MViTv2~\cite{schoonbeek2024industreal}       & 66.45 & 88.43 & \todo \\
 \industreal{}           & \popw{} (ours)                               & \popwres & \popwres & \popwres \\
@@ -456,19 +507,19 @@ Table~\ref{tab:efficiency} compares the number of parameters, FLOPs, and through
 \textbf{Dataset} & \textbf{Method} & \textbf{Params (M)} & \textbf{GFLOPs} & \textbf{FPS} & \textbf{Hardware} \\
 \midrule
 \multicolumn{6}{l}{\textit{\ikea{} --- $640\times480$}} \\
-\ikea{} & MiniROAD~\cite{xie2025ptma}              & 10.5 &   1.08 & 325 & --- \\
-\ikea{} & PTMA~\cite{xie2025ptma}                  & 12.9 &   1.96 & 291 & --- \\
-\ikea{} & ActionFormer (RGB)~\cite{zhang2022actionformer}   & 27.7 &  83.28 &  21 & GTX\,1080 \\
-\ikea{} & Gated SRM~\cite{gatedsrm2026}            & 33.5 & 121.09 &  16 & GTX\,1080 \\
-\ikea{} & \popw{} (ours, batched)                  & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
-\ikea{} & \popw{} (ours, streaming)                & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
+ & MiniROAD~\cite{xie2025ptma}              & 10.5 &   1.08 & 325 & --- \\
+ & PTMA~\cite{xie2025ptma}                  & 12.9 &   1.96 & 291 & --- \\
+ & ActionFormer (RGB)~\cite{zhang2022actionformer}   & 27.7 &  83.28 &  21 & GTX\,1080 \\
+ & Gated SRM~\cite{gatedsrm2026}            & 33.5 & 121.09 &  16 & GTX\,1080 \\
+ & \popw{} (ours, batched)                  & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
+ & \popw{} (ours, streaming)                & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
 \midrule
 \multicolumn{6}{l}{\textit{\industreal{} --- $1280\times720$}} \\
-\industreal{} & YOLOv8m~\cite{schoonbeek2024industreal}     & {\todo} & {\todo} & {\todo} & --- \\
-\industreal{} & MViTv2~\cite{schoonbeek2024industreal}      & {\todo} & {\todo} & {\todo} & --- \\
-\industreal{} & STORM-PSR~\cite{schoonbeek2025storm}        & {\todo} & {\todo} & {\todo} & --- \\
-\industreal{} & \popw{} (ours, batched)                     & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
-\industreal{} & \popw{} (ours, streaming)                   & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
+ & YOLOv8m~\cite{schoonbeek2024industreal}     & {\todo} & {\todo} & {\todo} & --- \\
+ & MViTv2~\cite{schoonbeek2024industreal}      & {\todo} & {\todo} & {\todo} & --- \\
+ & STORM-PSR~\cite{schoonbeek2025storm}        & {\todo} & {\todo} & {\todo} & --- \\
+ & \popw{} (ours, batched)                     & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
+ & \popw{} (ours, streaming)                   & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
 \bottomrule
 \end{tabular}
 
@@ -558,7 +609,7 @@ We presented \popw{}, a unified multi-task architecture for egocentric assembly 
 
 \textcolor{gray}{[Limitation 2: The head pose head is specific to IndustReal and cannot be directly transferred to other egocentric datasets without ground-truth head pose annotations.]}
 
-\textcolor{gray}{[Limitation 3: PSR performance degrades on videos longer than MAX_LEN=32 frames due to fixed-length feature bank; long-horizon temporal reasoning is limited.]}
+\textcolor{gray}{[Limitation 3: PSR performance degrades on videos longer than $MAX\_LEN$=32 frames due to fixed-length feature bank; long-horizon temporal reasoning is limited.]}
 
 \textcolor{gray}{[Limitation 4: Staged training adds complexity; end-to-end training from scratch results in gradient interference and XXX\% lower final performance.]}
 
@@ -571,7 +622,7 @@ We presented \popw{}, a unified multi-task architecture for egocentric assembly 
 
 \textcolor{gray}{[Future work 1: Investigate adaptive feature bank length for long-duration assembly videos with variable step counts.]}
 
-\textcolor{gray}{[Future work 2: Replace ConvNeXt-Tiny with a video-specific backbone (e.g., TimeSformer or VideoMAE) to better capture temporal dynamics in early layers.]}
+\textcolor{gray}{[Future work 2: VideoMAE V2 fusion is implemented (see §2.2.4); future work includes TimeSformer or VideoMAE in early layers for even stronger temporal modeling.]}
 
 \textcolor{gray}{[Future work 3: Explore knowledge distillation from single-task teacher models into the multi-task POPW to recover accuracy lost to task interference.]}
 

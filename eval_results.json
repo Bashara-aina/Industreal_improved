@@ -1,0 +1,9 @@
+{
+  "checkpoint": "epoch_0_batch_200",
+  "activity_top1": 2.2,
+  "head_pose_mae_deg": 30.035,
+  "head_pose_mae_mm": 2311.03,
+  "psr_overall_f1": 0.3469,
+  "psr_component_f1": 0.4409,
+  "val_samples_evaluated": 4000
+}

@@ -1,4 +1,5 @@
-import sys, os
+import sys
+import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 """
@@ -172,11 +173,28 @@ class ConvNeXtBackbone(nn.Module):
       C5: 768ch  (after fourth stage with downsample, NOT 2048 like ResNet)
 
     BN handling: ConvNeXt uses LayerNorm internally, no frozen BN layers.
+
+    Memory optimization: gradient checkpointing on stages for RTX 3060 11GB.
+    Uses torch.utils.checkpoint.checkpoint_sequential to trade ~20% compute
+    for ~50% activation memory reduction during backprop.
     """
-    def __init__(self, pretrained: bool = True):
+    def __init__(self, pretrained: bool = True, use_checkpoint: bool = True):
         super().__init__()
         from torchvision.models import convnext_tiny, ConvNeXt_Tiny_Weights
         self.model = convnext_tiny(weights=ConvNeXt_Tiny_Weights.DEFAULT if pretrained else None)
+        self.use_checkpoint = use_checkpoint
+
+        # Stage definitions: (stage_modules, output_name)
+        # Stages 0-1: stem + stage1 → C2 (stride 4, 96ch)
+        # Stages 2-3: downsample2 + stage2 → C3 (stride 8, 192ch)
+        # Stages 4-5: downsample3 + stage3 → C4 (stride 16, 384ch)
+        # Stage 6:   downsample4 + stage4 → C5 (stride 32, 768ch)
+        self.stage_groups = [
+            nn.ModuleList([self.model.features[0], self.model.features[1]]),   # C2
+            nn.ModuleList([self.model.features[2], self.model.features[3]]),   # C3
+            nn.ModuleList([self.model.features[4], self.model.features[5]]),   # C4
+            nn.ModuleList([self.model.features[6]]),                           # C5
+        ]
 
     def train(self, mode: bool = True):
         super().train(mode)
@@ -192,22 +210,41 @@ class ConvNeXtBackbone(nn.Module):
             c4: [B, 384, H/16, W/16]
             c5: [B, 768, H/32, W/32]
         """
-        stages = self.model.features
+        import torch.utils.checkpoint as checkpoint
 
-        x = stages[0](x)
-        c2 = x
+        def stage0(x):
+            for m in self.stage_groups[0]:
+                x = m(x)
+            return x
 
-        x = stages[1](x)
-        x = stages[2](x)
-        c3 = x
+        def stage1(x):
+            for m in self.stage_groups[1]:
+                x = m(x)
+            return x
 
-        x = stages[3](x)
-        x = stages[4](x)
-        c4 = x
+        def stage2(x):
+            for m in self.stage_groups[2]:
+                x = m(x)
+            return x
 
-        x = stages[5](x)
-        x = stages[6](x)
-        c5 = x
+        def stage3(x):
+            for m in self.stage_groups[3]:
+                x = m(x)
+            return x
+
+        # Gradient checkpointing: each stage is wrapped with checkpoint to trade
+        # ~20% compute for ~50% activation memory reduction during backprop.
+        # use_reentrant=False is required for proper gradient flow with autograd.
+        if self.use_checkpoint and self.training:
+            c2 = checkpoint.checkpoint(stage0, x, use_reentrant=False)
+            c3 = checkpoint.checkpoint(stage1, c2, use_reentrant=False)
+            c4 = checkpoint.checkpoint(stage2, c3, use_reentrant=False)
+            c5 = checkpoint.checkpoint(stage3, c4, use_reentrant=False)
+        else:
+            c2 = stage0(x)
+            c3 = stage1(c2)
+            c4 = stage2(c3)
+            c5 = stage3(c4)
 
         return c2, c3, c4, c5
 
@@ -623,7 +660,7 @@ class PoseFiLMModule(nn.Module):
 
         # Flatten keypoints: [B, 34]
         kp_flat = keypoints_norm.flatten(1)  # [B, 34]
-        conf_flat = confidence  # [B, 17]
+        conf_flat = confidence.detach()  # [B, 17] — stop gradient to avoid conditioning gradients from flowing into keypoint confidence
 
         # Concatenate: [B, 51]
         pose_flat = torch.cat([kp_flat, conf_flat], dim=1)
@@ -790,7 +827,7 @@ class VideoMAEStream(nn.Module):
                     logger.debug(f'VideoMAE: missing keys (expected): {missing}')
                 if unexpected:
                     logger.debug(f'VideoMAE: unexpected keys (ignored): {unexpected}')
-                logger.info(f'VideoMAE: loaded VideoMAE-Small (384-D) from local cache')
+                logger.info('VideoMAE: loaded VideoMAE-Small (384-D) from local cache')
             elif os.path.exists(ckpt):
                 # Fallback: load from provided path
                 self.encoder = VideoMAEModel.from_pretrained(ckpt, local_files_only=True)
@@ -960,11 +997,15 @@ class ViTTemporalBlock(nn.Module):
     """
     ViT Temporal Block — Matches XML diagram exactly.
 
-    Diagram spec: Learnable pos embed [1, T, 512] + MHSA (4heads, d_k=128) + FFN (512→2048→512)
+    Diagram spec: Learnable pos embed [1, T, 512] + MHSA (8heads, d_k=64) + FFN (512→2048→512)
 
     No RoPE — diagram does not specify it.
+
+    Note: ActivityHead (line 1183) overrides to num_heads=8 per paper spec
+    (embed_dim=512, dk=512/8=64). ViTTemporalBlock default (num_heads=4, dk=128)
+    is for other uses (e.g., PSR temporal model).
     """
-    def __init__(self, embed_dim: int = 512, num_heads: int = 4,
+    def __init__(self, embed_dim: int = 512, num_heads: int = 8,
                  ff_dim: int = 2048, dropout: float = 0.1, drop_path: float = 0.1,
                  max_seq_len: int = 1024):
         super().__init__()
@@ -1135,14 +1176,15 @@ class ActivityHead(nn.Module):
 
     Inputs:
       det_conf: [B, 24] — max-pooled detection cls scores (stop_grad)
-      c5_mod: [B, 2048, H/32, W/32] — FiLM-modulated C5
+      c5_mod: [B, 768, H/32, W/32] — FiLM-modulated C5 (ConvNeXt-Tiny)
       p4: [B, 256, H/16, W/16] — FPN P4 spatial features
 
     Flow:
-      GAP(C5_mod) → [B, 2048]
+      GAP(C5_mod) → [B, 768]  (ConvNeXt-Tiny C5; ResNet-50 would be 2048)
       GAP(P4) → [B, 256]
-      Concat → [B, 24+2048+256] = [B, 2328]
-      W_proj (Linear 2328→512) → f̃_t [B, 512]
+      Concat → [B, 24+768+256] = [B, 1048]  (ConvNeXt-Tiny)
+              or [B, 24+2048+256] = [B, 2328] (ResNet-50)
+      W_proj (Linear 1048→512) → f̃_t [B, 512]
       Feature Bank B_t = [f̃_{t-T+1}, ..., f̃_t] [B, T=16, 512]
       TCN (depthwise 1D conv) → captures velocity/acceleration
       2× ViT blocks (8 heads, d_k=64) with CLS token
@@ -1288,11 +1330,11 @@ class HeadPoseHead(nn.Module):
         total_in = c4_channels + c5_channels  # 3072
 
         self.head = nn.Sequential(
-            nn.Linear(total_in, hidden_dim * 4),
+            nn.Linear(total_in, hidden_dim * 4),  # 3072→512 (hidden_dim=128, so *4=512)
             nn.LayerNorm(hidden_dim * 4),
             nn.GELU(),
             nn.Dropout(0.15),
-            nn.Linear(hidden_dim * 4, hidden_dim * 2),
+            nn.Linear(hidden_dim * 4, hidden_dim * 2),  # 512→256
             nn.LayerNorm(hidden_dim * 2),
             nn.GELU(),
             nn.Dropout(0.1),
@@ -1307,22 +1349,22 @@ class HeadPoseHead(nn.Module):
 
 
 # ===========================================================================
-# PSR Head — Causal Transformer + Per-Component Heads (Doc 01 C)
+# PSR Head — BiGRU + Per-Component Heads (Doc 01 C)
 # ===========================================================================
 class PSRHead(nn.Module):
     """
     PSR Head with architectural improvements from Doc 01 C.
 
-    Improvements over BiGRU:
-      C.1: Causal Transformer (3 layers, 4 heads) — identical at train/inference
-           BiGRU at inference is effectively unidirectional (no future frames).
-           Causal Transformer with KV-cache is O(T) per frame at inference.
+    Architecture (actual implementation):
+      C.1: BiGRU (2 layers, 256 hidden, bidirectional) — processes per-frame
+           features; hidden states capture forward+backward temporal context.
+           At inference with caching: effectively causal and O(1) per frame.
       C.2: Per-component output heads — each of 11 components has different
            transition statistics. Shared head underfits rare components.
 
     Architecture:
       - Per-frame feature: multi-scale P3+P4+P5 GAP → MLP → 256-D
-      - Causal Transformer encoder (3 layers, 4 heads, d_model=256)
+      - BiGRU (2 layers, 256 hidden, bidirectional) for temporal modeling
       - Per-component output heads (11 separate tiny MLPs)
 
     Doc 02 C.3: Binary focal loss, not BCE. Heavy class imbalance per component.
@@ -1626,6 +1668,14 @@ class POPWMultiTaskModel(nn.Module):
         """
         B = images.shape[0]
 
+        # Handle [B, T, C, H, W] sequence input from PSR sequence mode
+        # _prepare_images flattens it to [B*T, C, H, W]; detect via _seq_len attribute
+        seq_len = getattr(self, '_seq_len', 1)
+        BT = B
+        if images.dim() == 5:
+            BT = images.shape[0] * images.shape[1]
+            images = images.reshape(BT, images.shape[2], images.shape[3], images.shape[4])
+
         c2, c3, c4, c5 = self.backbone(images)
 
         pyramid = self.fpn(c3, c4, c5)
@@ -1635,20 +1685,104 @@ class POPWMultiTaskModel(nn.Module):
 
         heatmaps, keypoints, pose_confidence = self.pose_head(pyramid['p3'])
 
-        # Doc 02 §C.3: When TRAIN_HEAD_POSE=False (IndustReal), the dataset has no
-        # COCO keypoint annotations. The pose head produces untrained/random outputs.
-        # Zero the keypoint output so pose_film becomes a no-op instead of polluting C5.
+        # Doc 02 §C.3: IndustReal has no COCO keypoint annotations, but the detection
+        # head outputs bounding boxes for assembly objects. Use these as pseudo-keypoints
+        # to give PoseFiLM a meaningful spatial signal instead of zeroing it out.
+        # Generate 17 COCO-style keypoints from the highest-confidence detection box.
         if not self.train_pose:
-            B, J = keypoints.shape[:2]
-            keypoints = torch.zeros_like(keypoints)
-            pose_confidence = torch.zeros(B, J, device=keypoints.device, dtype=keypoints.dtype)
+            with torch.no_grad():
+                # cls_preds: [A, NUM_DET_CLASSES], anchors: [A, 4]
+                # Find dominant detection per sample (top-1 by confidence across all classes)
+                top_cls = cls_preds.argmax(dim=1)          # [A]  # noqa: F841 — class index tracked but spatial max used for location
+                top_conf = cls_preds.max(dim=1)[0]         # [A]
+                # Group by sample (anchor assignment to batch is implicit via spatial location)
+                # For each image in the batch, pick the highest-confident detection
+                B_kp = c5.shape[0]
+                H, W = c5.shape[2], c5.shape[3]
+                scale_kp = torch.tensor([W, H], device=c5.device, dtype=c5.dtype)  # noqa: F841 — spatial scale available for future keypoint scaling
+                pseudo_kps = torch.zeros(B_kp, 17, 2, device=c5.device, dtype=c5.dtype)
+                pseudo_conf = torch.zeros(B_kp, 17, device=c5.device, dtype=c5.dtype)
+                for b in range(B_kp):
+                    # Use image-wide max detection confidence as proxy for spatial location
+                    # Since anchors are spatial, the highest-conf anchor's location ≈ object center
+                    max_idx = top_conf.argmax().item()
+                    cx_norm = (anchors[max_idx, 0] / C.IMG_WIDTH).clamp(0, 1)
+                    cy_norm = (anchors[max_idx, 1] / C.IMG_HEIGHT).clamp(0, 1)
+                    w_norm = ((anchors[max_idx, 2] - anchors[max_idx, 0]) / C.IMG_WIDTH).clamp(0.05, 1)
+                    h_norm = ((anchors[max_idx, 3] - anchors[max_idx, 1]) / C.IMG_HEIGHT).clamp(0.05, 1)
+                    x0, y0 = cx_norm - w_norm / 2, cy_norm - h_norm / 2  # noqa: F841 — bbox corners used for keypoint placement
+                    x1, y1 = cx_norm + w_norm / 2, cy_norm + h_norm / 2
+                    # 17 COCO keypoints: 4 corners, 4 mid-edges, 9 body points (approximated from bbox)
+                    # COCO order: nose=0, eyes(1,2), ears(3,4), shoulders(5,6), elbows(7,8),
+                    #            wrists(9,10), hips(11,12), knees(13,14), ankles(15,16)
+                    kps_b = torch.tensor([
+                        [cx_norm, cy_norm],          # 0: nose (bbox center)
+                        [cx_norm - w_norm*0.1, cy_norm - h_norm*0.15],  # 1: l_eye
+                        [cx_norm + w_norm*0.1, cy_norm - h_norm*0.15],  # 2: r_eye
+                        [cx_norm - w_norm*0.2, cy_norm - h_norm*0.1],   # 3: l_ear
+                        [cx_norm + w_norm*0.2, cy_norm - h_norm*0.1],   # 4: r_ear
+                        [cx_norm - w_norm*0.3, cy_norm + h_norm*0.1],   # 5: l_shoulder
+                        [cx_norm + w_norm*0.3, cy_norm + h_norm*0.1],   # 6: r_shoulder
+                        [cx_norm - w_norm*0.4, cy_norm + h_norm*0.35],  # 7: l_elbow
+                        [cx_norm + w_norm*0.4, cy_norm + h_norm*0.35],  # 8: r_elbow
+                        [cx_norm - w_norm*0.5, cy_norm + h_norm*0.55],   # 9: l_wrist
+                        [cx_norm + w_norm*0.5, cy_norm + h_norm*0.55],   # 10: r_wrist
+                        [cx_norm - w_norm*0.15, cy_norm + h_norm*0.5],  # 11: l_hip
+                        [cx_norm + w_norm*0.15, cy_norm + h_norm*0.5],  # 12: r_hip
+                        [cx_norm - w_norm*0.15, cy_norm + h_norm*0.75], # 13: l_knee
+                        [cx_norm + w_norm*0.15, cy_norm + h_norm*0.75], # 14: r_knee
+                        [cx_norm - w_norm*0.15, cy_norm + h_norm*0.95], # 15: l_ankle
+                        [cx_norm + w_norm*0.15, cy_norm + h_norm*0.95], # 16: r_ankle
+                    ], device=c5.device, dtype=c5.dtype)
+                    pseudo_kps_b = kps_b.clone()
+                    pseudo_kps_b[:, 0] = pseudo_kps_b[:, 0].clamp(0, 1)
+                    pseudo_kps_b[:, 1] = pseudo_kps_b[:, 1].clamp(0, 1)
+                    pseudo_kps[b] = pseudo_kps_b
+                    # Confidence: high (0.8) for bbox-derived points, lower for extrapolated
+                    conf_vals = torch.tensor([0.9, 0.7, 0.7, 0.5, 0.5, 0.8, 0.8,
+                                              0.6, 0.6, 0.5, 0.5, 0.7, 0.7, 0.4, 0.4, 0.3, 0.3],
+                                             device=c5.device, dtype=c5.dtype)
+                    pseudo_conf[b] = conf_vals
+                keypoints = pseudo_kps
+                pose_confidence = pseudo_conf
 
         c5_mod = self.pose_film(c5, keypoints, pose_confidence)
 
         with torch.no_grad():
             det_conf = cls_preds.max(dim=1)[0]
 
-        psr_logits = self.psr_head(pyramid, video_ids=video_ids)
+        # PSR Head: pass full temporal sequence for proper BiGRU/Transformer engagement
+        # Pyramid dicts have per-level features [BT, C, H, W]. Reshape each to [B, T, C, H, W].
+        B_main = BT // seq_len if seq_len > 1 else B
+        T_main = seq_len if seq_len > 1 else 1
+        if T_main > 1 and B_main * T_main == BT:
+            pyramid_seq = {}
+            for k, v in pyramid.items():
+                pyramid_seq[k] = v.reshape(B_main, T_main, *v.shape[1:])
+            # Build per-frame features [B, T, hidden] for PSR head
+            frame_feats = []
+            for t in range(T_main):
+                p3_t = pyramid_seq['p3'][:, t]  # [B, C, H, W]
+                p4_t = pyramid_seq['p4'][:, t]
+                p5_t = pyramid_seq['p5'][:, t]
+                p3_gap = self.psr_head.gap_p3(p3_t).flatten(1)
+                p4_gap = self.psr_head.gap_p4(p4_t).flatten(1)
+                p5_gap = self.psr_head.gap_p5(p5_t).flatten(1)
+                fused = torch.cat([p3_gap, p4_gap, p5_gap], dim=1)
+                frame_feats.append(self.psr_head.per_frame_mlp(fused))  # list of [B, hidden]
+            frame_feat_seq = torch.stack(frame_feats, dim=1)  # [B, T, hidden]
+            # BiGRU on full sequence [B, T, hidden]
+            frame_feat_seq = frame_feat_seq.transpose(0, 1).contiguous()  # [T, B, hidden]
+            _, hidden = self.psr_head.bigru(frame_feat_seq)
+            last_out = torch.cat([hidden[-2], hidden[-1]], dim=-1)  # [B, hidden*2]
+            last_out = self.psr_head._temporal_proj(last_out)  # [B, hidden]
+            psr_logits = torch.cat([
+                head(last_out.unsqueeze(0)) for head in self.psr_head.output_heads
+            ], dim=-1)  # [1, 11] → repeat for all T
+            psr_logits = psr_logits.squeeze(0).unsqueeze(0).expand(B_main, T_main, -1)  # [B, T, 11]
+            psr_logits = psr_logits.reshape(B_main * T_main, -1)  # [BT, 11]
+        else:
+            psr_logits = self.psr_head(pyramid, video_ids=video_ids)
 
         head_pose = self.head_pose_head(c4, c5)
 
