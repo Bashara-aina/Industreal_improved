@@ -187,8 +187,7 @@ def _prepare_images(images: torch.Tensor, device: torch.device, training: bool =
         BT = images.shape[0] * images.shape[1]
         images = images.view(BT, images.shape[2], images.shape[3], images.shape[4])
 
-    # channels_last: ~1.8x training speedup on RTX 3060 Ampere
-    return images.contiguous(memory_format=torch.channels_last)
+    return images
 
 
 def _build_loader(
@@ -1563,8 +1562,10 @@ def main(args):
         use_videomae=use_videomae,
         train_pose=CFG_TRAIN_HEAD_POSE,
     ).to(device)
-    # channels_last for ~1.8x training speedup on RTX 3060 Ampere
-    model = model.to(memory_format=torch.channels_last)
+    # Note: channels_last on model-level caused RuntimeError: required rank 4 tensor
+    # (VideoMAE's EncoderDecoder has non-4D params like biases/LayerNorm that can't use CL).
+    # Keeping input-level channels_last in _prepare_images which is safe.
+    model = model.to(device)
     # Tag model with PSR sequence length so forward knows how to reshape
     model._seq_len = getattr(C, 'PSR_SEQUENCE_LENGTH', 4) if C.USE_PSR_SEQUENCE_MODE else 1
     params = count_parameters(model)

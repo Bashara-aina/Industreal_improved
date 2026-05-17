@@ -230,8 +230,7 @@ def _prepare_images(images: torch.Tensor, device: torch.device) -> torch.Tensor:
         mean = torch.tensor(C.IMAGENET_MEAN, device=device, dtype=images.dtype).view(1, 3, 1, 1)
         std = torch.tensor(C.IMAGENET_STD, device=device, dtype=images.dtype).view(1, 3, 1, 1)
         images = (images - mean) / std
-    # channels_last: ~1.8x eval speedup on RTX 3060 Ampere
-    return images.contiguous(memory_format=torch.channels_last)
+    return images
 
 
 # =============================================================================
