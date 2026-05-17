@@ -619,7 +619,12 @@ class MultiTaskLoss(nn.Module):
             cls_loss = reg_loss = loss_det = zero
 
         # === Pose (Wing Loss on keypoints) ===
-        if self.train_pose:
+        # Note: When TRAIN_HEAD_POSE=True, train_pose=True controls head pose head
+        # (9-DoF MSE), NOT body keypoints (COCO-style). The model generates pseudo-
+        # keypoints from detection outputs for PoseFiLM, but there are no real
+        # keypoint annotations in IndustReal. Wing Loss block is only for the rare
+        # body-keypoint case where train_pose=True AND keypoints are actually present.
+        if self.train_pose and 'keypoints' in targets:
             loss_pose = self.pose_loss_fn(
                 outputs['keypoints'],
                 outputs['pose_confidence'],
