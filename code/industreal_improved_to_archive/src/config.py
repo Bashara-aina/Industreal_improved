@@ -90,7 +90,7 @@ EMA_SMOOTHING = False      # Not in diagram — removed
 # =========================================================================
 # Paths
 # =========================================================================
-POPW_ROOT = Path('/home/newadmin/swarm-bot/project/popw/working/data/datasets/industreal')
+POPW_ROOT = Path('/media/newadmin/master/POPW/datasets/industreal')
 
 # Output root for runs (relative to this config file's directory)
 OUTPUT_ROOT = Path(__file__).parent / 'runs'
@@ -197,12 +197,12 @@ def _load_act_class_names() -> list:
 ACT_CLASS_NAMES = _load_act_class_names()
 # The AR_labels.csv does not have an explicit NA/background row.
 # The 73 unique action IDs (0-74 excluding 37, 64) cover all real actions.
-# For classification, prepend 'NA' as class 0 so total = 74 classes.
-# When loading AR_labels, add 1 to action_id to shift: data_id -> class_index
-# (data_id 0 -> index 1, data_id 1 -> index 2, etc.)
+# For classification, prepend 'NA' as class 0 so total = 75 classes (74 AR + NA).
+# AR_labels.csv uses raw IDs 0-73; dataset maps these directly as class indices 0-73.
+# NA placeholder fills index 0 (no raw ID 0 in labels); no ID shift needed.
 if ACT_CLASS_NAMES and ACT_CLASS_NAMES[0] != 'NA':
     ACT_CLASS_NAMES.insert(0, 'NA')
-NUM_CLASSES_ACT = len(ACT_CLASS_NAMES)  # 74
+NUM_CLASSES_ACT = len(ACT_CLASS_NAMES)  # 75
 
 # --- Head pose ---
 NUM_KEYPOINTS = 17
@@ -250,8 +250,8 @@ IMAGENET_STD  = [0.229, 0.224, 0.225]
 # =========================================================================
 # Training (RTX 3060 12 GB)
 # =========================================================================
-BATCH_SIZE       = 4     # [FIX] Was 2 — with FP16 enabled we can use larger base batch
-GRAD_ACCUM_STEPS = 8     # [FIX] Was 16 — effective batch 32 with BS=4+FP16 is memory-optimal
+BATCH_SIZE       = 8     # [FIX] Was 4 — RTX 3060 at BS=8 uses ~0.87GB in Stage 3 forward+backward
+GRAD_ACCUM_STEPS = 4     # [FIX] Effective batch 32 (8×4). 4-step accum keeps per-step memory low while maximizing GPU utilization
 EFFECTIVE_BATCH  = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
 
 VAL_BATCH_SIZE  = 4     # [FIX] Increased from 2 for faster eval (more samples/batch)
@@ -270,7 +270,7 @@ GRAD_CLIP_NORM = 1.0
 VAL_EVERY = 1    # [BENCHMARK] Evaluate every 1 epoch (BENCHMARK_MODE override)
 EVAL_MAX_BATCHES = 15   # [FIX] Reduced from 30 to prevent validation OOM on subset runs
 
-NUM_WORKERS     = 2     # [OPT] 2 workers optimal on this system (workers=0 wastes GPU; workers=4+ adds CPU contention)
+NUM_WORKERS     = 4     # [OPT] 4 workers optimal for parallel data loading
 PIN_MEMORY      = True
 MIXED_PRECISION = True   # [FIX] Was False — FP16 for RTX 3060 Ampere tensor cores
 SEED            = 42

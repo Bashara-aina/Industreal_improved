@@ -5,14 +5,15 @@ works for at least 2 training steps with gradient accumulation.
 """
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Add src/ to path so "from models import model" etc. work from scripts/
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
 
 import torch
 import torch.optim as optim
 from torch.amp import autocast, GradScaler
 
-import model as model_module
-import losses as losses_module
+from models import model as model_module
+from training import losses as losses_module
 import config as C
 
 
@@ -82,7 +83,7 @@ def test_e2e_training():
 
     # ---- Training loop ----
     accum_steps = 4
-    n_steps = 2
+    n_steps = 5  # 5 steps = 1 optimizer update after 4 steps + 1 more for grad accumulation
 
     print(f"\n  Running {n_steps} steps with accum={accum_steps}...")
 
@@ -128,8 +129,11 @@ def test_e2e_training():
 
         # Optimizer step (only after accum_steps)
         if (step + 1) % accum_steps == 0:
-            scaler.step(optimizer)
-            scaler.update()
+            if scaler is not None:
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                optimizer.step()
             optimizer.zero_grad(set_to_none=True)
 
             # EMA update

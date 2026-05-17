@@ -1192,6 +1192,11 @@ class ActivityHead(nn.Module):
 
     With VideoMAE stream:
       VideoMAE(384-D) → fused with CLS output → classifier
+
+    Note: The final classifier outputs 74 classes (not 75). Class index 0 is
+    'NA' padding prepended at dataset load time. The raw AR action IDs (1-74
+    in AR_labels.csv, since 0 and 37,64 are missing) are mapped to indices 1-74
+    by adding 1, so classifier output [B, 74] indexes ACT_CLASS_NAMES directly.
     """
     def __init__(self, c5_channels: int = 2048, p4_channels: int = 256,
                  det_conf_size: int = 24, embed_dim: int = 512,
@@ -1314,13 +1319,13 @@ class HeadPoseHead(nn.Module):
     """
     Head pose head: predicts 9-DoF head pose from multi-scale C4+C5 features.
 
-    Multi-scale: C4 (1024ch, stride 16) + C5 (2048ch, stride 32) from ResNet-50
-    Fusion MLP: 3072→512→256→9 with LayerNorm
+    Multi-scale: C4 (384ch, stride 16) + C5 (768ch, stride 32) from ConvNeXt-Tiny
+    Fusion MLP: 1152→512→256→9 with LayerNorm
 
     9-DoF = forward_vector(3) + position(3) + up_vector(3)
     Trained with MSE loss against raw GT from pose.csv.
     """
-    def __init__(self, c4_channels: int = 1024, c5_channels: int = 2048,
+    def __init__(self, c4_channels: int = 384, c5_channels: int = 768,
                  hidden_dim: int = 128):
         super().__init__()
 

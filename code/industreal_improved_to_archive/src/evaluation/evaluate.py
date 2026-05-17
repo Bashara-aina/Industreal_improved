@@ -310,6 +310,11 @@ def _compute_clip_level_accuracy(
         else:
             # Fallback: majority vote over all frames (original behavior)
             pred_clip_valid = pred_clip[gt_clip != 0] if exclude_na else pred_clip
+            # Guard against empty or all-NaN valid predictions (can occur with
+            # single-frame clips or DEBUG_MAX_VIDEOS=2 smoke test subset)
+            if len(pred_clip_valid) == 0 or np.isnan(pred_clip_valid).all():
+                total += 1
+                continue
             pred_mode = int(stats.mode(pred_clip_valid, keepdims=False)[0])
 
         gt_mode = int(stats.mode(gt_clip, keepdims=False)[0])

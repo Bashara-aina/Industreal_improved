@@ -653,9 +653,9 @@ class MultiTaskLoss(nn.Module):
         # Prior runs showed activity loss spiking to 40.8 when head_pose + PSR activate
         # simultaneously at epoch 16, causing log_var explosion and NaN cascade.
         # Cap activity loss to a safe threshold; Kendall will still learn from lower values.
+        # Must keep as tensor for .item() call at line 816 — use clamp() not scalar assignment.
         act_cap = float(getattr(C, 'ACTIVITY_LOSS_CAP', 40.0))
-        if loss_act > act_cap:
-            loss_act = act_cap
+        loss_act = loss_act.clamp(max=act_cap)
 
         # === PSR ===
         if self.train_psr:

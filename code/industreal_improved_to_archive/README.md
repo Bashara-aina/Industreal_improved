@@ -2,7 +2,7 @@
 
 Multi-task learning for assembly action recognition. Backbone: ConvNeXt-Tiny + FPN, conditioned by FiLM layers, with Kendall homoscedastic uncertainty for loss weighting.
 
-**Tasks:** (1) Assembly State Detection (ASD, 24-class), (2) hand pose estimation (heatmap regression), (3) activity classification (74-class), (4) Procedure Step Recognition (PSR, 36-step binary focal).
+**Tasks:** (1) Assembly State Detection (ASD, 24-class), (2) hand pose estimation (heatmap regression), (3) activity classification (75-class: 74 AR + 1 NA padding for unlabelable frames), (4) Procedure Step Recognition (PSR, 11-component binary focal).
 
 **Datasets:** IndustReal (74-class assembly actions, primary) and IKEA ASM (33-class action + 7-class assembly state, alternative).
 
@@ -72,7 +72,7 @@ This codebase supports two datasets:
 
 | Dataset | Classes | Tasks | Primary Use |
 |---------|---------|-------|-------------|
-| **IndustReal** | 74 activity + 24 ASD + 36 PSR steps | All 4 tasks | Primary benchmark (this README's default) |
+| **IndustReal** | 74 activity + 24 ASD + 11 PSR components | All 4 tasks | Primary benchmark (this README's default) |
 | **IKEA ASM** | 33 activity + 7 ASD | Activity + ASD (no PSR) | Ablation / comparison |
 
 **Config.py default:** IndustReal paths (`/home/newadmin/swarm-bot/project/popw/working/data/datasets/industreal`). IKEA ASM is an alternative dataset that requires manual configuration overrides (see below).
@@ -281,7 +281,7 @@ python scripts/run_multi_seed.py --seeds 0 1 2 --epochs 50 --lr 5e-4
 
 **AMP (mixed precision):** Enabled by default — required for RTX 3060 to avoid VRAM overflow at batch=4.  
 **Staged training:** Detection-only (epochs 1-5) → +Pose/HeadPose (6-15) → Full multi-task (16+).  
-**Kendall weighting:** Active in full multi-task stage (4-task: det, act, psr, head_pose).
+**Kendall weighting:** Active in full multi-task stage (3-task by default: det, act, psr — head_pose disabled via TRAIN_HEAD_POSE=False. Set TRAIN_HEAD_POSE=True to enable 4-task mode).
 
 ---
 

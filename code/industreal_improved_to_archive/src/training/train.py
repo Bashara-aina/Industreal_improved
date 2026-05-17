@@ -1539,7 +1539,7 @@ def main(args):
             f'samples ({seq_len} frames/window, stride=1)'
         )
 
-    class_counts = train_ds.class_counts
+    class_counts = train_ds.class_counts[:C.NUM_CLASSES_ACT]
 
     logger.info(f'Training samples  : {len(train_ds):,}')
     logger.info(f'Validation samples: {len(val_ds):,}')
