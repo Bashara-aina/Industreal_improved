@@ -38,7 +38,7 @@ USE_SPATIAL_AUG = True           # Enable spatial augmentation (flip, crop)
 # Ablation flags
 # =========================================================================
 TRAIN_DET       = True
-TRAIN_HEAD_POSE = False  # No keypoint-based pose loss in IndustReal (dataset has 9-DoF gaze, not COCO keypoints)
+TRAIN_HEAD_POSE = True   # Train 9-DoF head pose head with Kendall uncertainty — was False
 TRAIN_ACT       = True
 TRAIN_PSR       = True
 USE_KENDALL     = True   # Kendall weighting active for 4 tasks (det, act, psr, head_pose 9-DoF MSE)
@@ -302,8 +302,8 @@ DATALOADER_AUTO_FALLBACK = True
 
 # Performance flags
 USE_UINT8_DATA_PIPELINE = True
-CUDNN_DETERMINISTIC = False
-CUDNN_BENCHMARK = True
+CUDNN_DETERMINISTIC = True   # Required for reproducibility — was False
+CUDNN_BENCHMARK = False      # Required for reproducibility — was True
 
 # Ampere (RTX 3060) speedups
 ALLOW_TF32 = True
@@ -345,7 +345,7 @@ PRETRAIN_HFLIP_PROB  = 0.5   # probability of random horizontal flip
 STAGED_TRAINING = True
 STAGE1_EPOCHS = 5    # Detection-only warmup
 STAGE2_EPOCHS = 10   # Add pose + head pose
-STAGE3_EPOCHS = 85   # Full multi-task with EMA
+STAGE3_EPOCHS = 35   # Full multi-task with EMA — 5+10+35=50 total (matches EPOCHS=50) — was 85
 ACT_RAMP_EPOCHS = 5  # Activity loss ramp-up
 ACTIVITY_LOSS_CAP = 40.0  # Cap activity loss to prevent NaN cascade at Stage 3 entry (epoch 16) — loss spiked to 40.8 in prior runs
 STAGE3_WARMUP_EPOCHS = 3  # LR warmup epochs at Stage 3 entry to stabilize new head activation
@@ -356,7 +356,7 @@ STAGE3_WARMUP_EPOCHS = 3  # LR warmup epochs at Stage 3 entry to stabilize new h
 USE_LDAM_DRW = True   # Use LDAM+DRW instead of CB-Focal for activity
 LDAM_MAX_M = 0.5
 LDAM_S = 30
-LDAM_DRW_EPOCH = 60   # Switch to CB weights at this epoch (DRW deferred re-weighting)
+LDAM_DRW_EPOCH = 45   # Switch to CB weights at this epoch (DRW deferred re-weighting) — was 60, never triggered with EPOCHS=50
 # Doc 01 §B.2: DRW activates after epoch 60 when features are stable.
 # Recipe default of 60 confirmed correct for IndustReal long-tail classes.
 

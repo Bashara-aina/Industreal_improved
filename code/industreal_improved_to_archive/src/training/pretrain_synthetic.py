@@ -539,6 +539,8 @@ def seed_everything(seed: int = C.SEED):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = bool(getattr(C, 'CUDNN_DETERMINISTIC', True))
+    torch.backends.cudnn.benchmark = bool(getattr(C, 'CUDNN_BENCHMARK', False))
 
 
 if __name__ == '__main__':
