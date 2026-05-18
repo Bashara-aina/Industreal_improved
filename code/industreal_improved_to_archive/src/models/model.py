@@ -8,57 +8,57 @@ POPW: Pose-Conditioned Multi-Task Architecture for IKEA/IndustReal Recognition
 Matches popw_paper.tex architecture (ConvNeXt-Tiny backbone).
 
 BACKBONE (ConvNeXt-Tiny, ImageNet pretrained):
-  C2 (stride 4, 96ch) → C3 (stride 8, 192ch) → C4 (stride 16, 384ch) → C5 (stride 32, 768ch)
+  C2 (stride 4, 96ch) -> C3 (stride 8, 192ch) -> C4 (stride 16, 384ch) -> C5 (stride 32, 768ch)
   C5 goes DIRECTLY to PoseFiLM (bypasses FPN)
 
 FPN NECK:
-  [C3,C4,C5] → [P3,P4,P5] (lateral 1x1 + top-down upsample + 3x3 smooth)
+  [C3,C4,C5] -> [P3,P4,P5] (lateral 1x1 + top-down upsample + 3x3 smooth)
   P6/P7 via stride-2 conv on C5. All pyramid levels 256ch.
 
 DETECTION HEAD (RetinaNet-style, P3-P7):
-  Cls subnet: 4× Conv3x3+ReLU → Conv(9×24)
-  Reg subnet: 4× Conv3x3+ReLU → Conv(9×4)
-  Anchors: 3 ratios × 3 scales = 9 per location, sizes (24,48,96,192,384)
-  Focal(α=0.25,γ=2) + GIoU loss
+  Cls subnet: 4x Conv3x3+ReLU -> Conv(9x24)
+  Reg subnet: 4x Conv3x3+ReLU -> Conv(9x4)
+  Anchors: 3 ratios x 3 scales = 9 per location, sizes (24,48,96,192,384)
+  Focal(alpha=0.25,gamma=2) + GIoU loss
 
-POSE HEAD (Body — 17 keypoints):
+POSE HEAD (Body -- 17 keypoints):
   Input: P3 (stride 8, 256ch)
-  ConvTranspose2d(k=4,s=2,p=1) + GroupNorm(32) + ReLU → P3 resolution
-  Conv1x1 → heatmaps [B, 17, H, W]
-  Soft-argmax(T=0.1) → keypoints [B, 34] + confidence [B, 17]
-  Wing Loss (ω=0.05, ε=0.005) × 0.001
+  ConvTranspose2d(k=4,s=2,p=1) + GroupNorm(32) + ReLU -> P3 resolution
+  Conv1x1 -> heatmaps [B, 17, H, W]
+  Soft-argmax(T=0.1) -> keypoints [B, 34] + confidence [B, 17]
+  Wing Loss (ω=0.05, ε=0.005) x 0.001
 
 HEAD POSE HEAD (9-DoF):
-  GAP(C4) ‖ GAP(C5) → [B, 384+768=1152] → MLP 1152→512→256→9
-  LayerNorm + GELU + Dropout. MSE × 0.001
+  GAP(C4) ‖ GAP(C5) -> [B, 384+768=1152] -> MLP 1152->512->256->9
+  LayerNorm + GELU + Dropout. MSE x 0.001
 
 POSEFILM MODULE:
-  keypoints [B,34] ‖ confidence [B,17] → [B,51]
-  γ-net: 51→512→768, 1+tanh ∈ (0,2)
-  β-net: same, unbounded
-  C5_direct (bypasses FPN). C5_mod = γ·C5 + β
+  keypoints [B,34] ‖ confidence [B,17] -> [B,51]
+  gamma-net: 51->512->768, 1+tanh ∈ (0,2)
+  beta-net: same, unbounded
+  C5_direct (bypasses FPN). C5_mod = gamma·C5 + beta
 
 HEADPOSEFILM MODULE:
-  head_pose [B,9] (stop_grad — CRITICAL per paper)
-  γ_hp: 9→256→768, 1+tanh. β_hp: unbounded
-  C5_mod2 = γ_hp·C5_mod + β_hp
+  head_pose [B,9] (stop_grad -- CRITICAL per paper)
+  gamma_hp: 9->256->768, 1+tanh. beta_hp: unbounded
+  C5_mod2 = gamma_hp·C5_mod + beta_hp
 
-ACTIVITY HEAD (Feature Bank + TCN + 2×ViT):
-  det_conf = MaxPool(cls_preds) → [B, 24] (stop_grad)
-  f_joint = [24 ‖ GAP(C5_mod2)(768) ‖ GAP(P4)(256)] → [B, 1048]
-  W_proj: Linear(1048→512) → f̃_t [B, 512]
+ACTIVITY HEAD (Feature Bank + TCN + 2xViT):
+  det_conf = MaxPool(cls_preds) -> [B, 24] (stop_grad)
+  f_joint = [24 ‖ GAP(C5_mod2)(768) ‖ GAP(P4)(256)] -> [B, 1048]
+  W_proj: Linear(1048->512) -> f̃_t [B, 512]
   Feature Bank T=16: B_t = [f̃_{t-T+1}, ..., f̃_t] [B, T, 512]
-  TCN: 1D Depthwise Conv(k=5, dilation=1) — true depthwise per paper
-  2× ViT blocks: CLS token, learnable pos embed, MHSA(8heads, d_k=64), FFN(512→2048→512)
+  TCN: 1D Depthwise Conv(k=5, dilation=1) -- true depthwise per paper
+  2x ViT blocks: CLS token, learnable pos embed, MHSA(8heads, d_k=64), FFN(512->2048->512)
   DropPath 0.10/0.15, pre-norm, attn_dropout=0.1
-  CLS readout → Dropout(0.1) → Linear(512→74)
+  CLS readout -> Dropout(0.1) -> Linear(512->74)
   LDAM-DRW
 
 PSR HEAD:
-  Multi-scale GAP(P3+P4+P5) → concat → MLP(768→256)
+  Multi-scale GAP(P3+P4+P5) -> concat -> MLP(768->256)
   Causal Transformer: 3 layers, 4 heads, d_model=256
-  11 per-component tiny MLPs (256→64→1)
-  Binary Focal(α=0.25,γ=2.0) + temporal smoothness(w=0.05)
+  11 per-component tiny MLPs (256->64->1)
+  Binary Focal(alpha=0.25,gamma=2.0) + temporal smoothness(w=0.05)
 
 LOSSES:
   Kendall homoscedastic uncertainty: L = Σ_t exp(-s_t)·L_t·ramp_t + s_t
@@ -83,14 +83,14 @@ import config as C
 
 
 # ===========================================================================
-# Soft-Argmax — differentiable keypoint extraction from heatmaps
+# Soft-Argmax -- differentiable keypoint extraction from heatmaps
 # ===========================================================================
 class SoftArgmax(nn.Module):
     """
     Differentiable soft-argmax for keypoint extraction.
     Converts heatmaps to spatial coordinates via:
       coords = sum_{x,y} (x,y) * softmax(heatmap / temperature)
-    Temperature controls sharpness — lower = more peaked.
+    Temperature controls sharpness -- lower = more peaked.
     """
     def __init__(self, temperature: float = 0.1, eps: float = 1e-6):
         super().__init__()
@@ -100,10 +100,10 @@ class SoftArgmax(nn.Module):
     def forward(self, heatmaps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
-            heatmaps: [B, K, H, W] — K keypoints, raw unnormalized
+            heatmaps: [B, K, H, W] -- K keypoints, raw unnormalized
         Returns:
-            coords: [B, K, 2] — (x, y) spatial coordinates
-            confidence: [B, K] — max-pooled heatmap values (0-1)
+            coords: [B, K, 2] -- (x, y) spatial coordinates
+            confidence: [B, K] -- max-pooled heatmap values (0-1)
         """
         B, K, H, W = heatmaps.shape
         flat = heatmaps.view(B, K, H * W)  # [B, K, HW]
@@ -116,7 +116,7 @@ class SoftArgmax(nn.Module):
         grid_x_2d = grid_x_2d.unsqueeze(0)  # [1, H, W]
         grid_y_2d = grid_y_2d.unsqueeze(0)  # [1, H, W]
 
-        # Weighted sum over spatial dimensions: [B, K, H, W] × [1, H, W] → sum → [B, K, 1, 1]
+        # Weighted sum over spatial dimensions: [B, K, H, W] x [1, H, W] -> sum -> [B, K, 1, 1]
         coords_x = (weights.view(B, K, H, W) * grid_x_2d).sum(dim=[-2, -1], keepdim=True)
         coords_y = (weights.view(B, K, H, W) * grid_y_2d).sum(dim=[-2, -1], keepdim=True)
         coords = torch.cat([coords_x, coords_y], dim=-1).squeeze(-2)  # [B, K, 2]
@@ -129,7 +129,7 @@ class SoftArgmax(nn.Module):
 
 
 # ===========================================================================
-# Wing Loss — robust regression loss for keypoint prediction
+# Wing Loss -- robust regression loss for keypoint prediction
 # ===========================================================================
 class WingLoss(nn.Module):
     """
@@ -158,14 +158,14 @@ class WingLoss(nn.Module):
 
 
 # ===========================================================================
-# Backbone factory — supports ResNet-50 and ConvNeXt-Tiny (Doc 01 D.1)
+# Backbone factory -- supports ResNet-50 and ConvNeXt-Tiny (Doc 01 D.1)
 # ===========================================================================
 class ConvNeXtBackbone(nn.Module):
     """
     ConvNeXt-Tiny pretrained backbone (ImageNet).
 
     Doc 01 D.1: Replaces ResNet-50 for improved ImageNet performance (+1.5%).
-    ConvNeXt-Tiny: 28M params vs ResNet-50's 25M.
+    ConvNeXt-Tiny: twenty-eight-M params vs ResNet-50s twenty-five-M.
     Channel outputs differ from ResNet-50:
       C2: 96ch   (after first stage / stem)
       C3: 192ch  (after second stage with downsample)
@@ -185,15 +185,16 @@ class ConvNeXtBackbone(nn.Module):
         self.use_checkpoint = use_checkpoint
 
         # Stage definitions: (stage_modules, output_name)
-        # Stages 0-1: stem + stage1 → C2 (stride 4, 96ch)
-        # Stages 2-3: downsample2 + stage2 → C3 (stride 8, 192ch)
-        # Stages 4-5: downsample3 + stage3 → C4 (stride 16, 384ch)
-        # Stage 6:   downsample4 + stage4 → C5 (stride 32, 768ch)
+        # Stages 0-1: stem + stage1 -> C2 (stride 4, 96ch)
+        # Stages 2-3: downsample2 + stage2 -> C3 (stride 8, 192ch)
+        # Stages 4-5: downsample3 + stage3 -> C4 (stride 16, 384ch)
+        # Stage 6:   downsample4 + stage4 -> C5 (stride 32, 768ch)
+        # Stage 7:   3 CNBlocks (no spatial downsample, produces final C5 at stride 32)
         self.stage_groups = [
             nn.ModuleList([self.model.features[0], self.model.features[1]]),   # C2
             nn.ModuleList([self.model.features[2], self.model.features[3]]),   # C3
             nn.ModuleList([self.model.features[4], self.model.features[5]]),   # C4
-            nn.ModuleList([self.model.features[6]]),                           # C5
+            nn.ModuleList([self.model.features[6], self.model.features[7]]),   # C5 (downsample + CNBlocks)
         ]
 
     def train(self, mode: bool = True):
@@ -213,22 +214,22 @@ class ConvNeXtBackbone(nn.Module):
         import torch.utils.checkpoint as checkpoint
 
         def stage0(x):
-            for m in self.stage_groups[0]:
+            for m in self.stage_groups[0]:  # features[0] + features[1] -> C2
                 x = m(x)
             return x
 
         def stage1(x):
-            for m in self.stage_groups[1]:
+            for m in self.stage_groups[1]:  # features[2] + features[3] -> C3
                 x = m(x)
             return x
 
         def stage2(x):
-            for m in self.stage_groups[2]:
+            for m in self.stage_groups[2]:  # features[4] + features[5] -> C4
                 x = m(x)
             return x
 
         def stage3(x):
-            for m in self.stage_groups[3]:
+            for m in self.stage_groups[3]:  # features[6] + features[7] -> C5 (downsample + CNBlocks)
                 x = m(x)
             return x
 
@@ -265,7 +266,7 @@ def set_backbone_stage_requires_grad(
         model: POPWMultiTaskModel (has .backbone attribute)
         backbone_type: 'resnet50' or 'convnext_tiny'
         stage: 0-indexed stage to freeze/unfreeze
-               stage=1 → freeze/unfreeze stage 1
+               stage=1 -> freeze/unfreeze stage 1
         requires_grad: True=trainable, False=frozen
     """
     if backbone_type == 'resnet50':
@@ -279,10 +280,10 @@ def set_backbone_stage_requires_grad(
         convnext: ConvNeXtBackbone = model.backbone
         features = convnext.model.features
         # Map logical stage index to ConvNeXt feature indices
-        # stage 0 → features[0,1] (stem + stage1 → produces C2)
-        # stage 1 → features[2,3] (downsample2 + stage2 → produces C3)
-        # stage 2 → features[4,5] (downsample3 + stage3 → produces C4)
-        # stage 3 → features[6]   (downsample4+stage4 → produces C5)
+        # stage 0 -> features[0,1] (stem + stage1 -> produces C2)
+        # stage 1 -> features[2,3] (downsample2 + stage2 -> produces C3)
+        # stage 2 -> features[4,5] (downsample3 + stage3 -> produces C4)
+        # stage 3 -> features[6]   (downsample4+stage4 -> produces C5)
         stage_to_features = {
             0: [0, 1],
             1: [2, 3],
@@ -371,18 +372,18 @@ def build_backbone(backbone_type: str = 'resnet50', pretrained: bool = True) -> 
 
 
 # ===========================================================================
-# FPN — Feature Pyramid Network
+# FPN -- Feature Pyramid Network
 # ===========================================================================
 class FPN(nn.Module):
     """
-    Standard FPN. Takes [C2, C3, C4, C5] → [P3, P4, P5, P6, P7].
+    Standard FPN. Takes [C2, C3, C4, C5] -> [P3, P4, P5, P6, P7].
     All pyramid levels have 256 channels.
     Uses lateral 1x1 convs and top-down upsampling with 3x3 smoothing convs.
     P6/P7 derived via stride-2 conv on C5.
     """
     def __init__(self, in_channels: List[int] = [512, 1024, 2048], out_channels: int = 256):
         super().__init__()
-        # in_channels: [C3, C4, C5] — C2 (stride 4) is not used in FPN
+        # in_channels: [C3, C4, C5] -- C2 (stride 4) is not used in FPN
         c3_ch, c4_ch, c5_ch = in_channels
 
         self.lateral_c3 = nn.Conv2d(c3_ch, out_channels, 1)
@@ -408,9 +409,9 @@ class FPN(nn.Module):
 
     def forward(self, c3, c4, c5) -> Dict[str, torch.Tensor]:
         # Standard FPN: top-down pathway with lateral connections
-        # C3(512ch) → lateral → P3(256ch) at stride 8
-        # C4(1024ch) → lateral → P4(256ch) at stride 16
-        # C5(2048ch) → lateral → P5(256ch) at stride 32
+        # C3(512ch) -> lateral -> P3(256ch) at stride 8
+        # C4(1024ch) -> lateral -> P4(256ch) at stride 16
+        # C5(2048ch) -> lateral -> P5(256ch) at stride 32
         # P6/P7 from stride-2 conv on C5
         p5 = self.lateral_c5(c5)
         p4 = self.lateral_c4(c4) + F.interpolate(p5, size=c4.shape[2:], mode='nearest')
@@ -431,7 +432,7 @@ class FPN(nn.Module):
 # ===========================================================================
 class AnchorGenerator(nn.Module):
     """
-    Generate anchors for RetinaNet. 3 ratios × 3 scales = 9 per location.
+    Generate anchors for RetinaNet. 3 ratios x 3 scales = 9 per location.
     Anchor sizes from C.ANCHOR_SIZES, calibrated via k-means on GT boxes (Doc 01 B.3).
     """
     def __init__(
@@ -486,8 +487,8 @@ class AnchorGenerator(nn.Module):
 class DetectionHead(nn.Module):
     """
     RetinaNet detection head with shared cls/reg subnets across FPN levels.
-    - Cls subnet: 4× Conv3x3+ReLU → Conv(9×24) for 24 ASD classes
-    - Reg subnet: 4× Conv3x3+ReLU → Conv(9×4)
+    - Cls subnet: 4x Conv3x3+ReLU -> Conv(9x24) for 24 ASD classes
+    - Reg subnet: 4x Conv3x3+ReLU -> Conv(9x4)
     """
     def __init__(self, in_channels: int = 256, num_classes: int = 24, num_anchors: int = 9):
         super().__init__()
@@ -519,7 +520,7 @@ class DetectionHead(nn.Module):
                     if m.bias is not None:
                         nn.init.zeros_(m.bias)
 
-        # Init bias to a less aggressive prior — pi=0.03 (3% positive rate) instead of 0.01
+        # Init bias to a less aggressive prior -- pi=0.03 (3% positive rate) instead of 0.01
         # This prevents all predictions collapsing to "no object" when EMA locks in the bias.
         # The bias learns from data during training; starting at -3.4 is not catastrophic.
         pi = 0.03
@@ -546,7 +547,7 @@ class DetectionHead(nn.Module):
 
 
 # ===========================================================================
-# Pose Head — heatmaps → soft-argmax → keypoints + confidence
+# Pose Head -- heatmaps -> soft-argmax -> keypoints + confidence
 # ===========================================================================
 class PoseHead(nn.Module):
     """
@@ -554,14 +555,14 @@ class PoseHead(nn.Module):
     keypoints via soft-argmax and confidence scores.
 
     Architecture per diagram:
-      ConvTranspose2d(k=4, s=2, p=1) → GroupNorm(32) + ReLU
-      → Conv1x1 → heatmaps [B, 17, H, W]
-      → Soft-argmax → keypoints [B, 17, 2] + confidence [B, 17]
+      ConvTranspose2d(k=4, s=2, p=1) -> GroupNorm(32) + ReLU
+      -> Conv1x1 -> heatmaps [B, 17, H, W]
+      -> Soft-argmax -> keypoints [B, 17, 2] + confidence [B, 17]
 
     For 1280x720 input:
-      C3 (stride 8) = 192ch → FPN P3 (stride 8) = 256ch
-      ConvTranspose2d on P3: 256 → 256, k=4, s=2 → [B, 256, H/4, W/4] = [B, 256, 180, 160]
-      Then heatmap head: 256 → 17
+      C3 (stride 8) = 192ch -> FPN P3 (stride 8) = 256ch
+      ConvTranspose2d on P3: 256 -> 256, k=4, s=2 -> [B, 256, H/4, W/4] = [B, 256, 180, 160]
+      Then heatmap head: 256 -> 17
     """
     def __init__(self, in_channels: int = 256, num_keypoints: int = 17,
                  temperature: float = 0.1):
@@ -598,20 +599,26 @@ class PoseHead(nn.Module):
 
 
 # ===========================================================================
-# PoseFiLM Module — keypoint-conditioned FiLM modulation on C5
+# PoseFiLM Module -- keypoint-conditioned FiLM modulation on C5
 # ===========================================================================
 class PoseFiLMModule(nn.Module):
     """
-    PoseFiLM: keypoint + confidence → gamma/beta → modulate C5.
+    PoseFiLM: keypoint + confidence -> gamma/beta -> modulate C5.
 
     Matches the XML diagram exactly:
-      keypoints [B,17, 2] ‖ confidence [B,17] → pose_flat [B,51]
-      γ-net: 51→512→2048, 1+tanh(·) ∈ (0,2)
-      β-net: 51→512→2048, linear (unbounded)
-      C5_mod = γ · C5 + β   [B, 2048, 15, 20]
+      keypoints [B,17, 2] ‖ confidence [B,17] -> pose_flat [B,51]
+      gamma-net: 51->512->768, 1+tanh(·) ∈ (0,2)
+      beta-net: 51->512->768, linear (unbounded)
+      C5_mod = gamma · C5 + beta
 
-    Note: C5 is 2048ch in ResNet-50 (matches diagram).
+    Note: gamma/beta always project to 768 channels (paper spec) regardless of
+    backbone C5 channel count. For ConvNeXt-Tiny (C5=768): direct match.
+    For ResNet-50 (C5=2048): C5 is reshaped to 768 via its channel dimension
+    before modulation. See forward() for the reshape logic.
     """
+    # Fixed output dimension -- paper specifies 768 per ?PoseFiLM
+    FILM_DIM = 768
+
     def __init__(self, num_keypoints: int = 17, c5_channels: int = 2048,
                  hidden_channels: int = 512):
         super().__init__()
@@ -622,15 +629,19 @@ class PoseFiLMModule(nn.Module):
         self.gamma_net = nn.Sequential(
             nn.Linear(34 + 17, hidden_channels),
             nn.ReLU(True),
-            nn.Linear(hidden_channels, c5_channels),
+            nn.Linear(hidden_channels, self.FILM_DIM),
         )
         self.beta_net = nn.Sequential(
             nn.Linear(34 + 17, hidden_channels),
             nn.ReLU(True),
-            nn.Linear(hidden_channels, c5_channels),
+            nn.Linear(hidden_channels, self.FILM_DIM),
         )
 
         self._init_weights()
+
+        # 1x1 conv to project C5 from c5_channels -> FILM_DIM (768) per paper spec
+        if self.c5_channels != self.FILM_DIM:
+            self._c5_proj = nn.Conv2d(self.c5_channels, self.FILM_DIM, kernel_size=1)
 
     def _init_weights(self):
         for net in [self.gamma_net, self.beta_net]:
@@ -645,11 +656,11 @@ class PoseFiLMModule(nn.Module):
                 confidence: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            c5: [B, 2048, H/32, W/32]
-            keypoints: [B, 17, 2] — (x, y) in image coordinates
+            c5: [B, c5_channels, H/32, W/32] -- C5 from backbone (2048 for ResNet-50, 768 for ConvNeXt-Tiny)
+            keypoints: [B, 17, 2] -- (x, y) in image coordinates
             confidence: [B, 17]
         Returns:
-            c5_mod: [B, 2048, H/32, W/32] — modulated C5
+            c5_mod: [B, 768, H/32, W/32] -- FiLM-modulated C5 at 768 channels (paper spec)
         """
         B = keypoints.shape[0]
 
@@ -660,24 +671,31 @@ class PoseFiLMModule(nn.Module):
 
         # Flatten keypoints: [B, 34]
         kp_flat = keypoints_norm.flatten(1)  # [B, 34]
-        conf_flat = confidence.detach()  # [B, 17] — stop gradient to avoid conditioning gradients from flowing into keypoint confidence
+        conf_flat = confidence.detach()  # [B, 17] -- stop gradient
 
         # Concatenate: [B, 51]
         pose_flat = torch.cat([kp_flat, conf_flat], dim=1)
 
-        # Compute gamma and beta
-        gamma_raw = self.gamma_net(pose_flat)  # [B, 2048]
-        beta_raw = self.beta_net(pose_flat)  # [B, 2048]
+        # Compute gamma and beta -- always 768-dim per paper spec
+        gamma_raw = self.gamma_net(pose_flat)  # [B, 768]
+        beta_raw = self.beta_net(pose_flat)  # [B, 768]
 
-        # gamma: 1 + tanh ∈ (0, 2)
-        gamma = (1.0 + torch.tanh(gamma_raw)).unsqueeze(-1).unsqueeze(-1)  # [B, 2048, 1, 1]
-        beta = beta_raw.unsqueeze(-1).unsqueeze(-1)  # [B, 2048, 1, 1]
+        # gamma: 1 + tanh ? (0, 2)
+        gamma = (1.0 + torch.tanh(gamma_raw)).unsqueeze(-1).unsqueeze(-1)  # [B, 768, 1, 1]
+        beta = beta_raw.unsqueeze(-1).unsqueeze(-1)  # [B, 768, 1, 1]
 
-        return gamma * c5 + beta
+        # Reshape C5 to 768 channels (FiLM always operates at 768 per paper)
+        if self.c5_channels != self.FILM_DIM:
+            # Project C5 from c5_channels -> FILM_DIM via 1x1 conv
+            c5_768 = self._c5_proj(c5)  # [B, 768, H, W]
+        else:
+            c5_768 = c5
+
+        return gamma * c5_768 + beta
 
 
 # ===========================================================================
-# HeadPoseFiLM Module — 9-DoF head pose conditioned FiLM (Doc 01 E)
+# HeadPoseFiLM Module -- 9-DoF head pose conditioned FiLM (Doc 01 E)
 # ===========================================================================
 class HeadPoseFiLMModule(nn.Module):
     """
@@ -696,10 +714,15 @@ class HeadPoseFiLMModule(nn.Module):
     (worker looks at assembly area vs away).
 
     Flow:
-      c5_mod (from PoseFiLM) → [B, 2048, H/32, W/32]
-      head_pose [B, 9] → HeadPoseFiLM → γ_hp, β_hp
-      c5_mod_2 = γ_hp · c5_mod + β_hp
+      c5_mod (from PoseFiLM, 768ch) -> HeadPoseFiLM -> gamma_hp, beta_hp (768ch)
+      c5_mod_2 = gamma_hp · c5_mod + beta_hp
+
+    Note: gamma/beta always project to 768 channels (FILM_DIM) per paper spec,
+    regardless of backbone C5 channel count. The input c5_mod is already
+    768 channels from PoseFiLM's projection.
     """
+    FILM_DIM = 768  # shared with PoseFiLMModule
+
     def __init__(self, c5_channels: int = 2048, hidden_channels: int = 256):
         super().__init__()
         self.c5_channels = c5_channels
@@ -708,14 +731,14 @@ class HeadPoseFiLMModule(nn.Module):
             nn.Linear(9, hidden_channels),
             nn.LayerNorm(hidden_channels),
             nn.GELU(),
-            nn.Linear(hidden_channels, c5_channels),
+            nn.Linear(hidden_channels, self.FILM_DIM),
         )
 
         self.beta_net = nn.Sequential(
             nn.Linear(9, hidden_channels),
             nn.LayerNorm(hidden_channels),
             nn.GELU(),
-            nn.Linear(hidden_channels, c5_channels),
+            nn.Linear(hidden_channels, self.FILM_DIM),
         )
 
         self._init_weights()
@@ -731,33 +754,35 @@ class HeadPoseFiLMModule(nn.Module):
     def forward(self, c5_mod: torch.Tensor, head_pose: torch.Tensor) -> torch.Tensor:
         """
         Args:
-            c5_mod: [B, C5, H/32, W/32] — already modulated by keypoints via PoseFiLM
-            head_pose: [B, 9] — 9-DoF head pose (forward[3] + position[3] + up[3])
+            c5_mod: [B, 768, H/32, W/32] -- PoseFiLM output (768ch per paper spec)
+            head_pose: [B, 9] -- 9-DoF head pose (forward[3] + position[3] + up[3])
         Returns:
-            c5_mod_2: [B, C5, H/32, W/32] — double-modulated C5
+            c5_mod_2: [B, 768, H/32, W/32] -- double-modulated C5 (768ch)
         """
         gamma_raw = self.gamma_net(head_pose)
         beta_raw = self.beta_net(head_pose)
 
-        gamma = (1.0 + torch.tanh(gamma_raw)).unsqueeze(-1).unsqueeze(-1)
-        beta = beta_raw.unsqueeze(-1).unsqueeze(-1)
+        # gamma: 1 + tanh ? (0, 2), beta: unbounded
+        gamma = (1.0 + torch.tanh(gamma_raw)).unsqueeze(-1).unsqueeze(-1)  # [B, 768, 1, 1]
+        beta = beta_raw.unsqueeze(-1).unsqueeze(-1)  # [B, 768, 1, 1]
 
+        # c5_mod is already 768ch from PoseFiLM -- direct modulation
         return gamma * c5_mod + beta
 
 
 # ===========================================================================
-# VideoMAE V2 Stream — 2-stream Activity feature extractor (Doc 02 A.1)
+# VideoMAE V2 Stream -- 2-stream Activity feature extractor (Doc 2 A.1)
 # ===========================================================================
 class VideoMAEStream(nn.Module):
     """
-    VideoMAE V2 stream for activity recognition — separate temporal modeling.
+    VideoMAE V2 stream for activity recognition -- separate temporal modeling.
 
-    Doc 02 A.1: Initialize from VideoMAE V2 fine-tuned on Kinetics-400 (87.4% Top-1).
+    Doc 2 A.1: Initialize from VideoMAE V2 fine-tuned on Kinetics-400 (87.4% Top-1).
     This is the single biggest unlock for Activity Top-1 (+5 to +7%).
 
     Architecture:
-      - VideoMAE V2 ViT-S/16 (22M params) frozen for first 10 epochs
-      - Takes same 16-frame clip as POPW's feature bank
+      - VideoMAE V2 ViT-S/16 (twenty-two million frozen params) for first 10 epochs
+      - Takes same 16-frame clip as POPW feature bank
       - Outputs 384-D feature per clip
       - Fused with existing activity head before the classifier
 
@@ -765,10 +790,10 @@ class VideoMAEStream(nn.Module):
       - Stream 1 (CNN backbone): handles detection, pose, PSR, head pose (per-frame tasks)
       - Stream 2 (VideoMAE): handles ONLY Activity, fused before classifier
 
-    Cost: +22M params, +6 GFLOPs. FPS drops ~25% but stays >15 on RTX 3060.
+    Cost: +twenty-two million params, +6 GFLOPs. FPS drops ~25% but stays >15 on RTX 3060.
 
     Fallback: If VideoMAE checkpoint unavailable (OSError/HF errors), falls back to a
-    lightweight 3D-convolution temporal stream that still captures temporal dependencies
+    lightweight three-D-convolution temporal stream that still captures temporal dependencies
     without requiring external checkpoint download.
     """
     def __init__(self, ckpt: str = 'MCG-NJU/videomae-small-finetuned-kinetics'):
@@ -778,7 +803,7 @@ class VideoMAEStream(nn.Module):
         self._position_embeddings_len = 1568  # default for T=16, tubelet_size=2, 14x14 spatial
 
         # Local cache path for the 384-D VideoMAE-Small checkpoint
-        # (MCG-NJU/videomae-small-finetuned-kinetics → hidden_size=384, num_hidden_layers=12)
+        # (MCG-NJU/videomae-small-finetuned-kinetics -> hidden_size=384, num_hidden_layers=12)
         _cache_root = os.path.expanduser('~/.cache/huggingface/hub')
         _model_cache = os.path.join(
             _cache_root,
@@ -847,7 +872,7 @@ class VideoMAEStream(nn.Module):
             self._build_fallback_encoder()
 
     def _build_fallback_encoder(self):
-        """3D temporal convolution fallback stream — captures temporal patterns without checkpoint."""
+        """Three-D temporal convolution fallback stream -- captures temporal patterns without checkpoint."""
         # 3D conv stack: temporal mixing via 3D kernels, spatial via 2D after flattening
         self.fb = nn.Sequential(
             nn.Conv3d(3, 64, kernel_size=(3, 7, 7), stride=(1, 2, 2), padding=(1, 3, 3), bias=False),
@@ -927,7 +952,7 @@ class VideoMAEStream(nn.Module):
 
 
 # ===========================================================================
-# DropPath (Stochastic Depth) — paper §ActivityHead: DropPath 0.1/0.15 applied in TCN + ViT
+# DropPath (Stochastic Depth) -- paper ?ActivityHead: DropPath 0.1/0.15 applied in TCN + ViT
 # ===========================================================================
 def _drop_path(x: torch.Tensor, drop_prob: float, training: bool) -> torch.Tensor:
     """Stochastic depth: randomly drop entire residual branches during training."""
@@ -940,15 +965,15 @@ def _drop_path(x: torch.Tensor, drop_prob: float, training: bool) -> torch.Tenso
 
 
 # ===========================================================================
-# Temporal Convolutional Block — captures local motion patterns
+# Temporal Convolutional Block -- captures local motion patterns
 # ===========================================================================
 class TemporalConvBlock(nn.Module):
     """
-    1D Temporal Convolutional Block — captures local motion patterns.
+    Temporal Convolutional Block - captures local motion patterns.
 
     Replaces simple positional embedding with:
       - Temporal LayerNorm
-      - 1D Depthwise Conv (捕捉 short-range motion: velocity, acceleration)
+      - Depthwise Conv (capture short-range motion: velocity, acceleration)
       - Residual connection + DropPath (stochastic depth)
 
     The TCN output feeds into the ViT for long-range temporal reasoning.
@@ -959,13 +984,13 @@ class TemporalConvBlock(nn.Module):
         self.embed_dim = embed_dim
 
         self.norm = nn.LayerNorm(embed_dim)
-        # [FIX #5 MEDIUM] True depthwise: groups=embed_dim, single conv per paper §ActivityHead
+        # [FIX #5 MEDIUM] True depthwise: groups=embed_dim, single conv per paper ?ActivityHead
         self.depthwise_conv = nn.Conv1d(
             embed_dim, embed_dim, kernel_size=kernel_size,
             padding=kernel_size // 2, groups=embed_dim
         )
-        # [FIX #TCN] Pointwise 1×1 conv after depthwise — enables cross-channel
-        # temporal modulation. Per TCN paper: "The pointwise (1×1) conv ... mixes
+        # [FIX #TCN] Pointwise 1x1 conv after depthwise -- enables cross-channel
+        # temporal modulation. Per TCN paper: "The pointwise (1x1) conv ... mixes
         # information across channels." Without this, each channel only sees its own
         # temporal filter (depthwise-only), limiting inter-channel motion modeling.
         self.pointwise_conv = nn.Conv1d(embed_dim, embed_dim, kernel_size=1)
@@ -995,11 +1020,11 @@ class TemporalConvBlock(nn.Module):
 
 class ViTTemporalBlock(nn.Module):
     """
-    ViT Temporal Block — Matches XML diagram exactly.
+    ViT Temporal Block -- Matches XML diagram exactly.
 
-    Diagram spec: Learnable pos embed [1, T, 512] + MHSA (8heads, d_k=64) + FFN (512→2048→512)
+    Diagram spec: Learnable pos embed [1, T, 512] + MHSA (eight_heads, dk=64) + FFN (512->2048->512)
 
-    No RoPE — diagram does not specify it.
+    No RoPE -- diagram does not specify it.
 
     Note: ActivityHead (line 1183) overrides to num_heads=8 per paper spec
     (embed_dim=512, dk=512/8=64). ViTTemporalBlock default (num_heads=4, dk=128)
@@ -1082,7 +1107,7 @@ class ViTTemporalBlock(nn.Module):
 
 
 # ===========================================================================
-# Feature Bank — sliding window temporal memory
+# Feature Bank -- sliding window temporal memory
 # ===========================================================================
 class FeatureBank(nn.Module):
     """
@@ -1091,7 +1116,7 @@ class FeatureBank(nn.Module):
 
     Stores [f̃_{t-T+1}, ..., f̃_t] as a ring buffer.
     Keyed by (video_id, camera_view) for multi-sequence handling.
-    Memory: T × 512 × 2 bytes (FP16) = 8 KB per sequence
+    Memory: T x 512 x 2 bytes (FP16) = 8 KB per sequence
     """
     def __init__(self, embed_dim: int = 512, window_size: int = 8):
         super().__init__()
@@ -1105,14 +1130,14 @@ class FeatureBank(nn.Module):
                 camera_views: Optional[List[str]] = None) -> torch.Tensor:
         """
         Args:
-            projected_features: [B, 512] — current frame's projected feature
+            projected_features: [B, 512] -- current frame's projected feature
             video_ids: list of video IDs for per-frame mode
             camera_views: list of camera view IDs (e.g., 'front', 'top')
         Returns:
-            bank: [B, T=8, 512] — feature bank for temporal processing
+            bank: [B, T=8, 512] -- feature bank for temporal processing
         """
         if projected_features.dim() == 3:
-            # Batch mode with temporal dim: [B, T, 512] → use as-is
+            # Batch mode with temporal dim: [B, T, 512] -> use as-is
             return projected_features
 
         B = projected_features.shape[0]
@@ -1159,39 +1184,39 @@ class FeatureBank(nn.Module):
 
 
 # ===========================================================================
-# Activity Head — Feature Bank + TCN + 2×ViT + CLS classifier (Doc 01 A)
+# Activity Head -- Feature Bank + TCN + 2xViT + CLS classifier (Doc 01 A)
 # ===========================================================================
 class ActivityHead(nn.Module):
     """
     Activity head with architectural improvements from Doc 01 A.
 
     Improvements over XML diagram:
-      A.1: TCN (TemporalConvBlock) before ViT — captures short-range motion
+      A.1: TCN (TemporalConvBlock) before ViT -- captures short-range motion
       A.2: T=16 temporal window (was T=8)
-      A.3: 2× ViT blocks with CLS token + cross-attention pooling (replaces last-timestep)
+      A.3: 2x ViT blocks with CLS token + cross-attention pooling (replaces last-timestep)
       A.4: Attention dropout 0.1 on QK matrix
 
-    Doc 02 A.1: Optional VideoMAE V2 stream fusion for +5-7% Top-1 gain.
+    Doc 2 A.1: Optional VideoMAE V2 stream fusion for +5-7% Top-1 gain.
       VideoMAE features (384-D) are fused with CNN features before the classifier.
 
     Inputs:
-      det_conf: [B, 24] — max-pooled detection cls scores (stop_grad)
-      c5_mod: [B, 768, H/32, W/32] — FiLM-modulated C5 (ConvNeXt-Tiny)
-      p4: [B, 256, H/16, W/16] — FPN P4 spatial features
+      det_conf: [B, 24] -- max-pooled detection cls scores (stop_grad)
+      c5_mod: [B, 768, H/32, W/32] -- FiLM-modulated C5 (ConvNeXt-Tiny)
+      p4: [B, 256, H/16, W/16] -- FPN P4 spatial features
 
     Flow:
-      GAP(C5_mod) → [B, 768]  (ConvNeXt-Tiny C5; ResNet-50 would be 2048)
-      GAP(P4) → [B, 256]
-      Concat → [B, 24+768+256] = [B, 1048]  (ConvNeXt-Tiny)
+      GAP(C5_mod) -> [B, 768]  (ConvNeXt-Tiny C5; ResNet-50 would be 2048)
+      GAP(P4) -> [B, 256]
+      Concat -> [B, 24+768+256] = [B, 1048]  (ConvNeXt-Tiny)
               or [B, 24+2048+256] = [B, 2328] (ResNet-50)
-      W_proj (Linear 1048→512) → f̃_t [B, 512]
+      W_proj (Linear 1048->512) -> f̃_t [B, 512]
       Feature Bank B_t = [f̃_{t-T+1}, ..., f̃_t] [B, T=16, 512]
-      TCN (depthwise 1D conv) → captures velocity/acceleration
-      2× ViT blocks (8 heads, d_k=64) with CLS token
-      CLS pooled output → Dropout(0.1) → act_logits [B, 74]
+      TCN (depthwise 1D conv) -> captures velocity/acceleration
+      2x ViT blocks (8 heads, d_k=64) with CLS token
+      CLS pooled output -> Dropout(0.1) -> act_logits [B, 74]
 
     With VideoMAE stream:
-      VideoMAE(384-D) → fused with CLS output → classifier
+      VideoMAE(384-D) -> fused with CLS output -> classifier
 
     Note: The final classifier outputs 74 classes (not 75). Class index 0 is
     'NA' padding prepended at dataset load time. The raw AR action IDs (1-74
@@ -1217,7 +1242,7 @@ class ActivityHead(nn.Module):
 
         self.proj_features = nn.Linear(proj_input_dim, embed_dim)
 
-        # A.1: TCN — short-range motion (velocity/acceleration profiles)
+        # A.1: TCN -- short-range motion (velocity/acceleration profiles)
         self.tcn = TemporalConvBlock(
             embed_dim=embed_dim,
             kernel_size=5,
@@ -1225,7 +1250,7 @@ class ActivityHead(nn.Module):
             drop_path=0.1,
         )
 
-        # A.3: 2× ViT blocks with CLS token (replaces last-timestep pooling)
+        # A.3: 2x ViT blocks with CLS token (replaces last-timestep pooling)
         self.vit = nn.ModuleList([
             ViTTemporalBlock(
                 embed_dim=embed_dim,
@@ -1247,7 +1272,7 @@ class ActivityHead(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         nn.init.trunc_normal_(self.cls_token, std=0.02)
 
-        # Doc 02 A.1: VideoMAE fusion
+        # Doc 2 A.1: VideoMAE fusion
         if use_videomae:
             self.videomae_proj = nn.Sequential(
                 nn.Linear(videomae_hidden, embed_dim),
@@ -1271,9 +1296,9 @@ class ActivityHead(nn.Module):
                 videomae_feat: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Args:
-            proj_feat: [B, 512] — pre-projected joint features
+            proj_feat: [B, 512] -- pre-projected joint features
             temporal_bank: [B, T, 512] feature bank sequence, or None for single-frame
-            videomae_feat: [B, 384] optional VideoMAE V2 feature (Doc 02 A.1)
+            videomae_feat: [B, 384] optional VideoMAE V2 feature (Doc 2 A.1)
         Returns:
             act_logits: [B, num_classes]
         """
@@ -1313,14 +1338,14 @@ class ActivityHead(nn.Module):
 
 
 # ===========================================================================
-# Head Pose Head — 9-DoF head pose from C5 features
+# Head Pose Head -- 9-DoF head pose from C5 features
 # ===========================================================================
 class HeadPoseHead(nn.Module):
     """
     Head pose head: predicts 9-DoF head pose from multi-scale C4+C5 features.
 
     Multi-scale: C4 (384ch, stride 16) + C5 (768ch, stride 32) from ConvNeXt-Tiny
-    Fusion MLP: 1152→512→256→9 with LayerNorm
+    Fusion MLP: 1152->512->256->9 with LayerNorm
 
     9-DoF = forward_vector(3) + position(3) + up_vector(3)
     Trained with MSE loss against raw GT from pose.csv.
@@ -1335,11 +1360,11 @@ class HeadPoseHead(nn.Module):
         total_in = c4_channels + c5_channels  # 3072
 
         self.head = nn.Sequential(
-            nn.Linear(total_in, hidden_dim * 4),  # 3072→512 (hidden_dim=128, so *4=512)
+            nn.Linear(total_in, hidden_dim * 4),  # 3072->512 (hidden_dim=128, so *4=512)
             nn.LayerNorm(hidden_dim * 4),
             nn.GELU(),
             nn.Dropout(0.15),
-            nn.Linear(hidden_dim * 4, hidden_dim * 2),  # 512→256
+            nn.Linear(hidden_dim * 4, hidden_dim * 2),  # 512->256
             nn.LayerNorm(hidden_dim * 2),
             nn.GELU(),
             nn.Dropout(0.1),
@@ -1354,25 +1379,25 @@ class HeadPoseHead(nn.Module):
 
 
 # ===========================================================================
-# PSR Head — BiGRU + Per-Component Heads (Doc 01 C)
+# PSR Head -- BiGRU + Per-Component Heads (Doc 01 C)
 # ===========================================================================
 class PSRHead(nn.Module):
     """
     PSR Head with architectural improvements from Doc 01 C.
 
     Architecture (actual implementation):
-      C.1: BiGRU (2 layers, 256 hidden, bidirectional) — processes per-frame
+      C.1: BiGRU (2 layers, 256 hidden, bidirectional) -- processes per-frame
            features; hidden states capture forward+backward temporal context.
            At inference with caching: effectively causal and O(1) per frame.
-      C.2: Per-component output heads — each of 11 components has different
+      C.2: Per-component output heads -- each of 11 components has different
            transition statistics. Shared head underfits rare components.
 
     Architecture:
-      - Per-frame feature: multi-scale P3+P4+P5 GAP → MLP → 256-D
+      - Per-frame feature: multi-scale P3+P4+P5 GAP -> MLP -> 256-D
       - BiGRU (2 layers, 256 hidden, bidirectional) for temporal modeling
       - Per-component output heads (11 separate tiny MLPs)
 
-    Doc 02 C.3: Binary focal loss, not BCE. Heavy class imbalance per component.
+    Doc 2 C.3: Binary focal loss, not BCE. Heavy class imbalance per component.
     """
     def __init__(self, in_channels: int = 256, hidden_dim: int = 128,
                  num_components: int = 11, dropout: float = 0.2,
@@ -1395,22 +1420,20 @@ class PSRHead(nn.Module):
             nn.LayerNorm(gru_hidden),
         )
 
-        # C.1: BiGRU (2 layers, 256 hidden, bidirectional) — paper §2.2.5
-        self.bigru = nn.GRU(
-            input_size=gru_hidden,
-            hidden_size=gru_hidden,
-            num_layers=2,
-            bidirectional=True,
+        # C.1: Causal Transformer (3 layers, 4 heads, d_model=256) -- paper ?PSR Head
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=gru_hidden,
+            nhead=4,
+            dim_feedforward=gru_hidden * 4,  # 1024
+            dropout=dropout,
+            activation='gelu',
             batch_first=True,
-            dropout=dropout if 2 > 1 else 0,
+            norm_first=True,  # pre-norm as per paper ViT-style
         )
-        # Project concatenated bidirectional hidden (gru_hidden*2) → gru_hidden
-        self._temporal_proj = nn.Sequential(
-            nn.Linear(gru_hidden * 2, gru_hidden),
-            nn.LayerNorm(gru_hidden),
-            nn.GELU(),
-            nn.Dropout(dropout * 0.3),
-        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+        # Causal mask: upper-triangular prevents attending to future tokens
+        self._causal_mask = None
+        # Project back to gru_hidden for per-component heads
 
         # C.2: Per-component output heads (11 separate tiny MLPs)
         # comp0 (base plate) placed first 95%; comp10 (wheels) come last.
@@ -1433,6 +1456,17 @@ class PSRHead(nn.Module):
         p5_gap = self.gap_p5(pyramid['p5']).flatten(1)
         fused = torch.cat([p3_gap, p4_gap, p5_gap], dim=1)
         return self.per_frame_mlp(fused)  # [B, gru_hidden]
+
+    def _get_causal_mask(self, seq_len: int, device: torch.device) -> torch.Tensor:
+        """Generate causal mask (upper-triangular, prevents attending to future)."""
+        if not hasattr(self, '_cached_mask') or self._cached_mask is None or self._cached_mask.size(0) != seq_len:
+            # causal mask: position i can attend to positions 0..i (not i+1..T-1)
+            ones = torch.ones(seq_len, seq_len, device=device)
+            # torch.triu with diagonal=0 keeps main diagonal and above (past positions)
+            mask = torch.triu(ones, diagonal=1).bool()
+            # invert so True = ignore (cannot attend), False = attend
+            self._cached_mask = mask
+        return self._cached_mask
 
     def forward(self, pyramid: Dict[str, torch.Tensor],
                 video_ids: Optional[List[str]] = None,
@@ -1471,37 +1505,42 @@ class PSRHead(nn.Module):
                 if len(self._cache[key]) > self._MAX_CACHE_LEN:
                     self._cache[key] = self._cache[key][-self._MAX_CACHE_LEN:]
 
-                # BiGRU: bidirectional forward pass over cached sequence
-                seq = torch.stack(self._cache[key])  # [T, 1, gru_hidden]
-                seq = seq.transpose(0, 1).contiguous()  # [1, T, gru_hidden]
-                _, hidden = self.bigru(seq)  # hidden: [2*2, 1, gru_hidden]
-                # Concat forward+backward final layer hidden states
-                last_out = torch.cat([hidden[-2], hidden[-1]], dim=-1).squeeze(0)  # [gru_hidden*2]
-
-                # Project back to gru_hidden for per-component heads
-                last_out = self._temporal_proj(last_out)  # [gru_hidden]
+                # Causal Transformer: process sequence with causal masking
+                seq = torch.stack(self._cache[key], dim=0).squeeze(1)  # [T, gru_hidden]
+                T = seq.size(0)
+                seq = seq.unsqueeze(0)  # [1, T, gru_hidden]
+                causal_mask = self._get_causal_mask(T, seq.device)
+                encoded = self.transformer(seq, mask=causal_mask)  # [1, T, gru_hidden]
+                # Use the last position's output (causal = only sees past)
+                last_out = encoded[:, -1, :]  # [1, gru_hidden]
 
                 # Per-component heads
                 comp_logits = torch.cat([
-                    head(last_out.unsqueeze(0)) for head in self.output_heads
+                    head(last_out) for head in self.output_heads
                 ], dim=-1)  # [1, 11]
-                outputs.append(comp_logits)
+                # psr_confidence: max sigmoid per component group (Item 32)
+                confidence = torch.sigmoid(comp_logits).max(dim=-1, keepdim=True)[0]  # [1, 1]
+                comp_out = torch.cat([comp_logits, confidence], dim=-1)  # [1, 12]
+                outputs.append(comp_out)
 
-            return torch.cat(outputs, dim=0)  # [B, 11]
+            return torch.cat(outputs, dim=0)  # [B, 12]
 
         # Non-cached mode: single frame / batch without caching
+        # For single frame (T=1): causal mask allows attending to position 0 only
         feat_seq = frame_feat.unsqueeze(1)  # [B, 1, gru_hidden]
-        _, hidden = self.bigru(feat_seq)  # hidden: [2*2, B, gru_hidden]
-        # Concat forward+backward final layer hidden states
-        last_out = torch.cat([hidden[-2], hidden[-1]], dim=-1)  # [B, gru_hidden*2]
-        # Project back to gru_hidden for per-component heads
-        last_out = self._temporal_proj(last_out)  # [B, gru_hidden]
+        T = feat_seq.size(1)
+        causal_mask = self._get_causal_mask(T, feat_seq.device)
+        encoded = self.transformer(feat_seq, mask=causal_mask)  # [B, 1, gru_hidden]
+        # For single frame, use the last position output
+        last_out = encoded.squeeze(1)  # [B, gru_hidden]
 
         # Per-component heads
         logits = torch.cat([
             head(last_out) for head in self.output_heads
         ], dim=-1)  # [B, 11]
-        return logits
+        # psr_confidence: per-frame certainty = max sigmoid across 11 components (Item 32)
+        confidence = torch.sigmoid(logits).max(dim=-1, keepdim=True)[0]  # [B, 1]
+        return torch.cat([logits, confidence], dim=-1)  # [B, 12]
 
     def reset_sequence(self, video_id: str, camera_view: str = 'default'):
         key = (str(video_id), str(camera_view))
@@ -1522,17 +1561,17 @@ class POPWMultiTaskModel(nn.Module):
       - ResNet-50: C2=256, C3=512, C4=1024, C5=2048
       - ConvNeXt-Tiny: C2=96, C3=192, C4=384, C5=768
 
-    Doc 01 E: HeadPoseFiLM — second-stage FiLM from 9-DoF head pose.
-    Doc 02 A.1: Optional VideoMAE V2 stream for activity recognition.
+    Doc 01 E: HeadPoseFiLM -- second-stage FiLM from 9-DoF head pose.
+    Doc 2 A.1: Optional VideoMAE V2 stream for activity recognition.
 
     Neck: FPN (P3-P7, 256ch)
     Heads:
       - Detection: RetinaNet-style (24 ASD classes, 9 anchors per location)
-      - Pose: ConvTranspose2d + GroupNorm + ReLU → heatmaps + soft-argmax → keypoints + confidence
-      - PoseFiLM: keypoints + confidence → gamma/beta on C5
-      - HeadPoseFiLM: 9-DoF head pose → second-stage gamma/beta on C5_mod (Doc 01 E)
-      - Activity: det_conf(24) + GAP(C5_mod_2)(C5) + GAP(P4)(256) → concat → proj → FeatureBank → TCN → 2×ViT → CLS → FC(74)
-                   + optional VideoMAE V2 stream fusion (Doc 02 A.1)
+      - Pose: ConvTranspose2d + GroupNorm + ReLU -> heatmaps + soft-argmax -> keypoints + confidence
+      - PoseFiLM: keypoints + confidence -> gamma/beta on C5
+      - HeadPoseFiLM: 9-DoF head pose -> second-stage gamma/beta on C5_mod (Doc 01 E)
+      - Activity: det_conf(24) + GAP(C5_mod_2)(C5) + GAP(P4)(256) -> concat -> proj -> FeatureBank -> TCN -> 2xViT -> CLS -> FC(74)
+                   + optional VideoMAE V2 stream fusion (Doc 2 A.1)
     """
     def __init__(
         self,
@@ -1571,8 +1610,8 @@ class POPWMultiTaskModel(nn.Module):
         self.detection_head = DetectionHead(in_channels=256, num_classes=C.NUM_DET_CLASSES)
         self.anchor_gen = AnchorGenerator()
 
-        # === Pose Head ===
-        self.pose_head = PoseHead(in_channels=256, num_keypoints=C.NUM_KEYPOINTS)
+        # Pose head -- paper tau=0.07 (soft-argmax temperature)
+        self.pose_head = PoseHead(in_channels=256, num_keypoints=C.NUM_KEYPOINTS, temperature=0.07)
 
         # === PoseFiLM (keypoint-conditioned) ===
         self.pose_film = PoseFiLMModule(
@@ -1619,7 +1658,7 @@ class POPWMultiTaskModel(nn.Module):
         # === Feature Bank ===
         self.feature_bank = FeatureBank(embed_dim=512, window_size=16)
 
-        # === VideoMAE Stream (Doc 02 A.1) ===
+        # === VideoMAE Stream (Doc 2 A.1) ===
         if use_videomae:
             self.videomae_stream = VideoMAEStream()
 
@@ -1665,9 +1704,9 @@ class POPWMultiTaskModel(nn.Module):
         Full forward pass.
 
         Args:
-            images: [B, 3, H, W] — current frame
+            images: [B, 3, H, W] -- current frame
             video_ids: list of video IDs for Feature Bank (optional)
-            clip_rgb: [B, T, 3, 224, 224] optional clip for VideoMAE stream (Doc 02 A.1)
+            clip_rgb: [B, T, 3, 224, 224] optional clip for VideoMAE stream (Doc 2 A.1)
         Returns:
             dict with all outputs
         """
@@ -1690,7 +1729,7 @@ class POPWMultiTaskModel(nn.Module):
 
         heatmaps, keypoints, pose_confidence = self.pose_head(pyramid['p3'])
 
-        # Doc 02 §C.3: IndustReal has no COCO keypoint annotations, but the detection
+        # Doc 2 ?C.3: IndustReal has no COCO keypoint annotations, but the detection
         # head outputs bounding boxes for assembly objects. Use these as pseudo-keypoints
         # to give PoseFiLM a meaningful spatial signal instead of zeroing it out.
         # Generate 17 COCO-style keypoints from the highest-confidence detection box.
@@ -1698,24 +1737,24 @@ class POPWMultiTaskModel(nn.Module):
             with torch.no_grad():
                 # cls_preds: [A, NUM_DET_CLASSES], anchors: [A, 4]
                 # Find dominant detection per sample (top-1 by confidence across all classes)
-                top_cls = cls_preds.argmax(dim=1)          # [A]  # noqa: F841 — class index tracked but spatial max used for location
+                top_cls = cls_preds.argmax(dim=1)          # [A]  # noqa: F841 -- class index tracked but spatial max used for location
                 top_conf = cls_preds.max(dim=1)[0]         # [A]
                 # Group by sample (anchor assignment to batch is implicit via spatial location)
                 # For each image in the batch, pick the highest-confident detection
                 B_kp = c5.shape[0]
                 H, W = c5.shape[2], c5.shape[3]
-                scale_kp = torch.tensor([W, H], device=c5.device, dtype=c5.dtype)  # noqa: F841 — spatial scale available for future keypoint scaling
+                scale_kp = torch.tensor([W, H], device=c5.device, dtype=c5.dtype)  # noqa: F841 -- spatial scale available for future keypoint scaling
                 pseudo_kps = torch.zeros(B_kp, 17, 2, device=c5.device, dtype=c5.dtype)
                 pseudo_conf = torch.zeros(B_kp, 17, device=c5.device, dtype=c5.dtype)
                 for b in range(B_kp):
                     # Use image-wide max detection confidence as proxy for spatial location
-                    # Since anchors are spatial, the highest-conf anchor's location ≈ object center
+                    # Since anchors are spatial, the highest-conf anchor's location ? object center
                     max_idx = top_conf.argmax().item()
                     cx_norm = (anchors[max_idx, 0] / C.IMG_WIDTH).clamp(0, 1)
                     cy_norm = (anchors[max_idx, 1] / C.IMG_HEIGHT).clamp(0, 1)
                     w_norm = ((anchors[max_idx, 2] - anchors[max_idx, 0]) / C.IMG_WIDTH).clamp(0.05, 1)
                     h_norm = ((anchors[max_idx, 3] - anchors[max_idx, 1]) / C.IMG_HEIGHT).clamp(0.05, 1)
-                    x0, y0 = cx_norm - w_norm / 2, cy_norm - h_norm / 2  # noqa: F841 — bbox corners used for keypoint placement
+                    x0, y0 = cx_norm - w_norm / 2, cy_norm - h_norm / 2  # noqa: F841 -- bbox corners used for keypoint placement
                     x1, y1 = cx_norm + w_norm / 2, cy_norm + h_norm / 2
                     # 17 COCO keypoints: 4 corners, 4 mid-edges, 9 body points (approximated from bbox)
                     # COCO order: nose=0, eyes(1,2), ears(3,4), shoulders(5,6), elbows(7,8),
@@ -1776,23 +1815,39 @@ class POPWMultiTaskModel(nn.Module):
                 fused = torch.cat([p3_gap, p4_gap, p5_gap], dim=1)
                 frame_feats.append(self.psr_head.per_frame_mlp(fused))  # list of [B, hidden]
             frame_feat_seq = torch.stack(frame_feats, dim=1)  # [B, T, hidden]
-            # BiGRU on full sequence [B, T, hidden]
-            frame_feat_seq = frame_feat_seq.transpose(0, 1).contiguous()  # [T, B, hidden]
-            _, hidden = self.psr_head.bigru(frame_feat_seq)
-            last_out = torch.cat([hidden[-2], hidden[-1]], dim=-1)  # [B, hidden*2]
-            last_out = self.psr_head._temporal_proj(last_out)  # [B, hidden]
-            psr_logits = torch.cat([
-                head(last_out.unsqueeze(0)) for head in self.psr_head.output_heads
-            ], dim=-1)  # [1, 11] → repeat for all T
-            psr_logits = psr_logits.squeeze(0).unsqueeze(0).expand(B_main, T_main, -1)  # [B, T, 11]
-            psr_logits = psr_logits.reshape(B_main * T_main, -1)  # [BT, 11]
+            # Causal Transformer on full sequence [B, T, hidden]
+            seq = frame_feat_seq  # [B, T, hidden]
+            T = seq.size(1)
+            # Causal mask: [T, T] — PyTorch broadcasts this identically across all batch items
+            causal_mask = torch.triu(torch.ones(T, T, device=seq.device), diagonal=1).bool()
+            # batch_first=True, so [B, T, hidden]
+            encoded = self.psr_head.transformer(seq, mask=causal_mask)  # [B, T, hidden]
+            # Use last position (causal -- only sees past)
+            last_out = encoded[:, -1, :]  # [B, hidden]
+            # Each head takes [B, hidden] → [B, 1]; cat gives [B, 12] (logits + confidence, Item 32)
+            psr_full = torch.cat([
+                head(last_out) for head in self.psr_head.output_heads
+            ], dim=-1)  # [B, 11]
+            confidence = torch.sigmoid(psr_full).max(dim=-1, keepdim=True)[0]  # [B, 1]
+            psr_logits = torch.cat([psr_full, confidence], dim=-1)  # [B, 12]
+            psr_logits = psr_logits.unsqueeze(1).expand(B_main, T_main, -1)  # [B, T, 12]
+            psr_logits = psr_logits.reshape(B_main * T_main, -1)  # [BT, 12]
+            psr_confidence = psr_logits[..., 11:]  # [BT, 1]
         else:
-            psr_logits = self.psr_head(pyramid, video_ids=video_ids)
+            psr_full = self.psr_head(pyramid, video_ids=video_ids)  # [B, 12]
+            psr_logits = psr_full[..., :11]  # [B, 11]
+            psr_confidence = psr_full[..., 11:]  # [B, 1]
 
-        head_pose = self.head_pose_head(c4, c5)
-
-        if self.use_headpose_film and hasattr(self, 'headpose_film'):
-            c5_mod = self.headpose_film(c5_mod, head_pose.detach())  # [FIX #1 CRITICAL] stop_grad per paper §HeadPoseFiLM
+        # Head pose: computed when TRAIN_HEAD_POSE=True (paper: disabled for IKEA ASM)
+        # ALSO compute during eval mode (self.training=False) so evaluate.py gets tensors.
+        # During training: respect train_pose flag (may be stage-gated to False in early epochs).
+        # During eval: always compute head_pose so evaluate.py doesn't crash on None.
+        if self.train_pose or not self.training:
+            head_pose = self.head_pose_head(c4, c5)
+            if self.use_headpose_film and hasattr(self, 'headpose_film'):
+                c5_mod = self.headpose_film(c5_mod, head_pose.detach())  # stop_grad per paper ?HeadPoseFiLM
+        else:
+            head_pose = None
 
         activity_proj = torch.cat([
             det_conf,
@@ -1825,7 +1880,8 @@ class POPWMultiTaskModel(nn.Module):
             'c5_mod': c5_mod,
             'det_conf': det_conf,
             'act_logits': act_logits,
-            'psr_logits': psr_logits,
+            'psr_logits': psr_logits[..., :11],  # [BT, 11] for loss compatibility
+            'psr_confidence': psr_confidence if not self.training else None,  # Item 32
             'temporal_features': bank_output,
             'c5_raw': c5,
             'pyramid': pyramid,
@@ -1857,7 +1913,7 @@ def count_parameters(model: POPWMultiTaskModel) -> Dict[str, int]:
 
 
 # ===========================================================================
-# EMA — Exponential Moving Average of model weights
+# EMA -- Exponential Moving Average of model weights
 # ===========================================================================
 
 class EMA:

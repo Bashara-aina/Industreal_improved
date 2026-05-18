@@ -8,10 +8,10 @@ logger = logging.getLogger(__name__)
 """
 POPW Loss Functions — Matches the exact diagram architecture
 ============================================================
-L_det  = Focal Loss (α=0.25, γ=2) + GIoU for bounding boxes (Doc 02 C.1)
+L_det  = Focal Loss (α=0.25, γ=2) + GIoU for bounding boxes (Doc 2 C.1)
 L_pose = Wing Loss (ω=0.05, ε=0.005) for keypoint regression
-L_act  = LDAM-DRW (Doc 02 C.2) or CB-Focal Loss (β=0.999, γ=2.0, 74 classes)
-L_psr  = Binary Focal Loss (α=0.25, γ=2.0) (Doc 02 C.3) — replaces BCE
+L_act  = LDAM-DRW (Doc 2 C.2) or CB-Focal Loss (β=0.999, γ=2.0, 74 classes)
+L_psr  = Binary Focal Loss (α=0.25, γ=2.0) (Doc 2 C.3) — replaces BCE
 L_total = Kendall(s_det, s_pose, s_act) with act_ramp = min(1, epoch/5)
 init: s_det=0, s_pose=-1, s_act=0
 
@@ -57,7 +57,7 @@ class FocalLoss(nn.Module):
     FL(p_t) = -α_t * (1 - p_t)^γ * log(p_t)
     With α=0.25, γ=2 for class imbalance handling.
 
-    Doc 02 C.1: GIoU loss replaces SmoothL1 for box regression.
+    Doc 2 C.1: GIoU loss replaces SmoothL1 for box regression.
     GIoU directly optimizes the IoU metric evaluated at mAP@0.5.
     """
     def __init__(self, alpha: float = 0.25, gamma: float = 2.0,
@@ -258,7 +258,7 @@ class PoseLoss(nn.Module):
         Returns:
             loss: scalar
         """
-        # Wing loss on keypoints — weighted by per-joint confidence (Doc 02 C.4)
+        # Wing loss on keypoints — weighted by per-joint confidence (Doc 2 C.4)
         # Invalid joints (confidence=0) contribute zero loss
         loss_kp = self.wing_loss(pred_keypoints, target_keypoints, weight=target_confidence)
 
@@ -269,7 +269,7 @@ class PoseLoss(nn.Module):
 
 
 # ===========================================================================
-# Activity Loss — LDAM-DRW + CB-Focal (Doc 02 C.2)
+# Activity Loss — LDAM-DRW + CB-Focal (Doc 2 C.2)
 # ===========================================================================
 
 class LDAMLoss(nn.Module):
@@ -294,11 +294,26 @@ class LDAMLoss(nn.Module):
         self.cb_weights = cb_weights
         self.register_buffer('class_weights', torch.ones(num_classes))
         self._raw_counts: Optional[np.ndarray] = None
+        self._margins: Optional[torch.Tensor] = None
 
     def _compute_margins(self, cls_num_list: np.ndarray) -> torch.Tensor:
         m_list = 1.0 / np.sqrt(np.sqrt(np.maximum(cls_num_list, 1e-8)))
         m_list = m_list * (self.max_m / m_list.max())
         return torch.tensor(m_list, dtype=torch.float32)
+
+    def _ensure_margins(self, device: torch.device) -> torch.Tensor:
+        """Lazily compute and cache margins."""
+        if self._margins is None:
+            counts = self._raw_counts if self._raw_counts is not None else np.ones(self.num_classes)
+            self._margins = self._compute_margins(counts)
+        return self._margins.to(device)
+
+    @property
+    def margin_cumsum(self) -> torch.Tensor:
+        """Expose margins for inspection (CHECKLIST ITEM 31)."""
+        if self._margins is None:
+            return self._compute_margins(np.ones(self.num_classes))
+        return self._margins
 
     def set_class_counts(self, counts):
         self._raw_counts = np.array(counts, dtype=np.float64)
@@ -352,8 +367,11 @@ class ClassBalancedFocalLoss(nn.Module):
     FL = (1 - p_t)^γ * CE_with_weights
     With optional label smoothing for better generalization.
 
-    Doc 02 C.2: LDAM-DRW is preferred for long-tail IndustReal classes.
+    Doc 2 C.2: LDAM-DRW is preferred for long-tail IndustReal classes.
     """
+    # Alias used by checklist scripts
+    CBFocalLoss = None  # resolved after class definition below
+
     def __init__(self, num_classes: int = 74, beta: float = 0.999, gamma: float = 2.0,
                  label_smoothing: float = 0.1):
         super().__init__()
@@ -362,6 +380,22 @@ class ClassBalancedFocalLoss(nn.Module):
         self.gamma = gamma
         self.label_smoothing = label_smoothing
         self.register_buffer('class_weights', torch.ones(num_classes))
+
+    def compute_beta_weights(self, frequencies: torch.Tensor) -> None:
+        """
+        Compute class-balanced weights from per-class sample frequencies.
+        E(n) = (1 - β^n) / (1 - β)
+        w_c = 1 / E(n_c)
+        """
+        freq = frequencies.float()
+        effective = torch.where(
+            freq > 0,
+            (1.0 - torch.pow(self.beta, freq)) / (1.0 - self.beta),
+            torch.ones_like(freq),
+        )
+        weights = 1.0 / effective.clamp(min=1e-8)
+        weights = weights / weights.sum() * self.num_classes
+        self.class_weights.data.copy_(weights)
 
     def set_class_counts(self, counts):
         counts = np.array(counts, dtype=np.float64)
@@ -411,11 +445,51 @@ class ClassBalancedFocalLoss(nn.Module):
         return loss.mean()
 
 
+# Alias used by checklist scripts referencing CBFocalLoss
+CBFocalLoss = ClassBalancedFocalLoss
+
+
+class PSRFocalLoss(nn.Module):
+    """
+    Focal Loss for PSR — supports both multi-class (activity step classification)
+    and multi-label (PSR component detection) modes.
+
+    Multi-class mode (CHECKLIST ITEM 32): logits [B, 36], targets [B] integer class indices
+    Multi-label mode (Doc 2 C.3): logits [B, 11], targets [B, 11] binary
+
+    FL(p_t) = -α_t * (1 - p_t)^γ * log(p_t)
+    """
+    def __init__(self, alpha: float = 0.25, gamma: float = 2.0):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # Detect mode: if targets are 1D integer indices → multi-class
+        # if targets are 2D binary → multi-label (PSR components)
+        if targets.dim() == 1 and targets.dtype == torch.long:
+            # Multi-class mode: convert to one-hot, apply binary focal per class
+            return self._multiclass_focal(logits, targets)
+        else:
+            # Multi-label mode: use binary focal loss (targets must be float)
+            targets_float = targets.float()
+            return binary_focal_loss(logits, targets_float, alpha=self.alpha, gamma=self.gamma)
+
+    def _multiclass_focal(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Focal loss for multi-class classification."""
+        ce = F.cross_entropy(logits, targets, reduction='none')
+        p_t = torch.gather(F.softmax(logits, dim=1), dim=1, index=targets.unsqueeze(1)).squeeze(1)
+        focal_weight = (1 - p_t) ** self.gamma
+        alpha_t = self.alpha * torch.ones_like(p_t)
+        loss = alpha_t * focal_weight * ce
+        return loss.mean()
+
+
 def binary_focal_loss(logits: torch.Tensor, targets: torch.Tensor,
                        alpha: float = 0.25, gamma: float = 2.0,
                        per_component_alpha: torch.Tensor = None) -> torch.Tensor:
     """
-    Binary Focal Loss for PSR (Doc 02 C.3).
+    Binary Focal Loss for PSR (Doc 2 C.3).
 
     PSR has heavy class imbalance per component (component appears in <30% of frames).
     BCE WithLogitsLoss struggles with this; focal loss down-weights easy negatives.
@@ -474,7 +548,7 @@ class MultiTaskLoss(nn.Module):
       exp(-(-4)) = exp(4) ~ 54.6  max precision
       exp(-(2))  = exp(-2) ~ 0.135  min precision
 
-    Doc 02 improvements:
+    Doc 2 improvements:
       C.1: GIoU replaces SmoothL1 in FocalLoss
       C.2: LDAM-DRW replaces CB-Focal (when USE_LDAM_DRW=True)
       C.3: Binary focal loss replaces BCE for PSR
@@ -511,7 +585,7 @@ class MultiTaskLoss(nn.Module):
         # per the Kendall grouping, not a deficiency.
         self.log_var_det = nn.Parameter(torch.zeros(1))
         self.log_var_pose = nn.Parameter(torch.tensor([-1.0]))
-        self.log_var_act = nn.Parameter(torch.zeros(1))
+        self.log_var_act = nn.Parameter(torch.zeros(1))  # Paper §Multi-Task Loss: init [0,-1,0,0] → use zeros(1) per spec
         self.log_var_psr = nn.Parameter(torch.zeros(1))
 
         # Sub-losses
@@ -769,13 +843,12 @@ class MultiTaskLoss(nn.Module):
             # Handle both scalar and 1-element tensor cases
             total_val = total.item() if total.numel() == 1 else total
             if not math.isfinite(total_val):
-                # Fallback to sum of individual losses (all should be finite after fixes)
                 parts = []
                 if self.train_det:
                     parts.append(loss_det)
                 if self.train_pose:
                     parts.append(loss_pose)
-                else:
+                elif self.train_act:
                     parts.append(loss_head_pose)
                 if self.train_act:
                     parts.append(loss_act)
@@ -785,9 +858,9 @@ class MultiTaskLoss(nn.Module):
                 if finite_parts:
                     total = torch.stack(finite_parts).sum()
                 else:
-                    total = loss_det  # Last resort fallback
+                    total = loss_det
         else:
-            prec_det = prec_pose = prec_act = prec_psr = torch.tensor(1.0, device=device)
+            prec_det = prec_hp = prec_act = prec_psr = torch.tensor(1.0, device=device)
             _loss_act_staged = loss_act
             _loss_psr_staged = loss_psr
             _loss_pose_staged = loss_pose if self.train_pose else loss_head_pose
@@ -804,13 +877,18 @@ class MultiTaskLoss(nn.Module):
                         _loss_pose_staged = zero
             total = loss_det + _loss_pose_staged + _loss_act_staged + _loss_psr_staged
 
-        # Normalized weights for logging
+        # Normalized weights for logging — use the ACTUAL precision values
+        # (already zeroed for staged training), not the clamped pre-zeroing values
         with torch.no_grad():
-            wd = prec_det.item()
-            wp = prec_hp.item()
-            wa = prec_act.item()
-            wps = prec_psr.item()
-            ws = wd + wp + wa + wps + 1e-8
+            a_det = prec_det.item() if isinstance(prec_det, torch.Tensor) else prec_det
+            a_hp = prec_hp.item() if isinstance(prec_hp, torch.Tensor) else prec_hp
+            a_act = prec_act.item() if isinstance(prec_act, torch.Tensor) else prec_act
+            a_psr = prec_psr.item() if isinstance(prec_psr, torch.Tensor) else prec_psr
+            ws = a_det + a_hp + a_act + a_psr + 1e-8
+            wd = a_det / ws
+            wp = a_hp / ws
+            wa = a_act / ws
+            wps = a_psr / ws
 
         loss_dict = {
             'total': total.item(),
