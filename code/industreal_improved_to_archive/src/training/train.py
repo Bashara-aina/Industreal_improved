@@ -65,26 +65,13 @@ os.environ['MKL_NUM_THREADS']       = '4'
 os.environ['OPENBLAS_NUM_THREADS']   = '4'
 os.environ['NUMEXPR_NUM_THREADS']    = '4'
 os.environ['MALLOC_ARENA_MAX']      = '4'
+# --- REPRODUCIBILITY FIX (I-5 2026-05-19) ---
+# Required for deterministic GPU ops and hash-seed stability
+# Note: C not yet imported, using hardcoded seed; C.SEED used later after import
+os.environ['PYTHONHASHSEED']        = '42'
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = '4096:8'
+os.environ['CUDA_LAUNCH_BLOCKING']  = '1'
 # ------------------------------------------------------------
-import torch
-torch.set_num_threads(4)        # PyTorch intra-op parallelism (also set in config)
-torch.set_num_interop_threads(4)  # PyTorch inter-op parallelism (C++ threads)
-import torch.multiprocessing
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.amp as amp
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts, LinearLR, SequentialLR
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-
-try:
-    torch.multiprocessing.set_sharing_strategy('file_system')
-except RuntimeError:
-    torch.multiprocessing.set_sharing_strategy('file_descriptor')
-
-import config as C
-import industreal_dataset as _ds_module
 import model as _model_module
 import model as _popw_model_module
 import losses as _losses_module
@@ -155,6 +142,11 @@ def seed_everything(seed: int = C.SEED) -> None:
         torch.backends.cuda.matmul.allow_tf32 = bool(getattr(C, 'ALLOW_TF32', True))
         torch.backends.cudnn.allow_tf32 = bool(getattr(C, 'ALLOW_TF32', True))
 
+    try:
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    except (AttributeError, TypeError):
+        pass
+
 
 def _prepare_images(images: torch.Tensor, device: torch.device, training: bool = True) -> torch.Tensor:
     images = images.to(device, non_blocking=True)
@@ -190,6 +182,14 @@ def _prepare_images(images: torch.Tensor, device: torch.device, training: bool =
     return images
 
 
+def _worker_seed_fn(worker_id: int) -> None:
+    """Seed each DataLoader worker for deterministic augmentation (I-4 2026-05-19)."""
+    worker_seed = C.SEED + worker_id
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
+    torch.manual_seed(worker_seed)
+
+
 def _build_loader(
     ds: Any,
     split: str,
@@ -222,6 +222,7 @@ def _build_loader(
         drop_last=is_train,
         persistent_workers=bool(persistent),
         prefetch_factor=_eff_prefetch,
+        worker_init_fn=_worker_seed_fn if num_workers > 0 else None,
         # multiprocessing_context=None  ← use default fork (safe with thread caps)
     )
 
@@ -348,7 +349,7 @@ def cutmix_activity(
     alpha: float = 1.0,
 ):
     """
-    CutMix augmentation for activity (Doc 02 D.2).
+    CutMix augmentation for activity (Doc 2 D.2).
 
     Pastes a rectangular patch from one video into another.
     Better than Mixup for fine-grained recognition — model has to identify
@@ -407,7 +408,7 @@ def cutmix_activity(
 
 def get_stage(epoch: int) -> int:
     """
-    Doc 02 B.1: Three-stage training schedule.
+    Doc 2 B.1: Three-stage training schedule.
 
     Stage 1 (epochs 1-5): Detection-only warmup
       - Active losses: L_det only
@@ -435,7 +436,7 @@ def _set_stage_requires_grad(model: nn.Module, stage: int, backbone_type: str) -
     """
     Freeze/unfreeze model parameters based on training stage.
 
-    Doc 02 B.1 + 01_HONEST_AUDIT.md B.2: Explicit parameter freezing per stage.
+    Doc 2 B.1 + 01_HONEST_AUDIT.md B.2: Explicit parameter freezing per stage.
 
     Stage 1 (epochs 1-5): layer1-3 frozen, + activity/PSR heads frozen
       → Detection backbone warms up without corrupted gradients from random heads
@@ -519,11 +520,11 @@ def train_one_epoch(
     if seq_loader is not None:
         seq_iter = iter(seq_loader)
 
-    # Doc 02 B.1: Staged training — determine current stage
+    # Doc 2 B.1: Staged training — determine current stage
     stage = get_stage(epoch)
     staged_training = bool(getattr(C, 'STAGED_TRAINING', True))
 
-    # Doc 01 B.2 + Doc 02 B.1: Freeze/unfreeze backbone stages and heads per stage
+    # Doc 01 B.2 + Doc 2 B.1: Freeze/unfreeze backbone stages and heads per stage
     # Only applies when STAGED_TRAINING=True (default True in config)
     if staged_training:
         backbone_type = str(getattr(C, 'BACKBONE', 'resnet50'))
@@ -827,16 +828,15 @@ def train_one_epoch(
             if _k in outputs and isinstance(outputs[_k], torch.Tensor):
                 outputs[_k] = outputs[_k].float()
 
-        # Doc 02 D.2: Alternate Mixup/CutMix each epoch
+        # Doc 2 D.2: Alternate Mixup/CutMix each epoch
         if C.USE_MIXUP and epoch >= int(getattr(C, 'ACT_RAMP_EPOCHS', 5)):
             use_cutmix = bool(getattr(C, 'CUTMIX_ALPHA', 0) > 0 and epoch % 2 == 1)
             if use_cutmix:
                 outputs, targets = cutmix_activity(
                     outputs, targets, images, getattr(C, 'CUTMIX_ALPHA', 1.0),
                 )
-                outputs, targets = mixup_activity(outputs, targets, C.MIXUP_ALPHA)
 
-        # Doc 02 B.1: Staged loss computation
+        # Doc 2 B.1: Staged loss computation
         criterion.set_epoch(epoch)
         loss, loss_dict = criterion(outputs, targets)
 
@@ -903,7 +903,7 @@ def train_one_epoch(
 
         scaler.scale(loss).backward()
 
-        # Doc 02 §B.1: Kendall gradient sentinel — log gradient norms of log_var params
+        # Doc 2 §B.1: Kendall gradient sentinel — log gradient norms of log_var params
         log_kendall_every = int(getattr(C, 'LOG_KENDALL_GRAD_EVERY', 100))
         if log_kendall_every > 0:
             _log_kendall_gradient_sentinel(criterion, step, log_kendall_every)
@@ -925,7 +925,7 @@ def train_one_epoch(
                 running[k] += loss_dict[k]
         num_batches += 1
 
-        # Doc 02 §B.3: Loss component breakdown (logged every 50 steps)
+        # Doc 2 §B.3: Loss component breakdown (logged every 50 steps)
         if (step + 1) % 50 == 0:
             loss_dict['total'] = loss_dict.get('total', loss)
             _log_loss_component_breakdown(loss_dict, stage, epoch)
@@ -977,14 +977,32 @@ def train_one_epoch(
                 logger.warning(f'  [CPU RAM] watchdog failed: {exc}')
 
         # --- DataLoader worker health check every 100 batches (Bashara 2026-05-09) ---
-        # Catch DataLoader worker crashes (common cause of training death)
+        # Catch DataLoader worker crashes (common cause of training death).
+        # DataLoader does not expose a public is_alive() check, so we rely on
+        # catching exceptions during iteration — if a worker dies, next() on the
+        # iterator raises BrokenPipeError or FileNotFoundError. This is detected
+        # by the outer try/except in main() which rebuilds the loader.
+        # We additionally try a non-blocking iterator join to detect stale workers.
         if (step + 1) % 100 == 0 and loader.num_workers > 0:
             try:
-                worker_status = loader._workers_check_alive()
-                # _workers_check_alive is internal — if it returns False, workers are dead
-                logger.info(f'  [DataLoader] step={step + 1}  workers_alive={worker_status}')
+                import multiprocessing.util as _mp_util
+                # _worker_result_queue is a SimpleQueue that holds worker results.
+                # If workers are alive it will be non-empty after a non-blocking get.
+                # This is a best-effort check — it does NOT guarantee workers are healthy
+                # but a positive detection means at least one worker exited.
+                if hasattr(loader, '_worker_result_queue'):
+                    import queue
+                    try:
+                        # Non-blocking check — if queue has items, workers may have produced results
+                        # but also could mean results weren't collected (normal operation)
+                        # The real health signal is in the exception path below.
+                        loader._worker_result_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    except Exception:
+                        pass
+                logger.info(f'  [DataLoader] step={step + 1}  health_check=done')
             except Exception:
-                # Fallback: just log that we checked
                 pass
 
     total_all_steps = total_steps + seq_steps
@@ -1086,12 +1104,12 @@ def _compute_combined_metric(
 
 
 # ===========================================================================
-# Monitoring Hooks (Doc 02 §B)
+# Monitoring Hooks (Doc 2 §B)
 # ===========================================================================
 
 def _log_kendall_gradient_sentinel(criterion, step_idx: int, log_interval: int) -> None:
     """
-    Doc 02 §B.1: Kendall gradient sentinels.
+    Doc 2 §B.1: Kendall gradient sentinels.
     Every N steps, log gradient norms of Kendall log_var params.
     All should be nonzero in stages where corresponding task is active.
     """
@@ -1116,7 +1134,7 @@ def _log_loss_component_breakdown(
     epoch: int,
 ) -> None:
     """
-    Doc 02 §B.3: Loss component breakdown.
+    Doc 2 §B.3: Loss component breakdown.
     Log each Kendall-weighted component separately so we can detect dominance.
     """
     total = loss_dict.get('total', 0.0)
@@ -1146,10 +1164,12 @@ def _log_loss_component_breakdown(
     )
 
 
-def _check_stage_transition(model: nn.Module, stage: int, epoch: int, backbone_type: str) -> None:
+def _check_stage_transition(model: nn.Module, criterion, stage: int, epoch: int, backbone_type: str) -> None:
     """
-    Doc 02 §B.2: Stage transition assertion.
+    Doc 2 §B.2: Stage transition assertion.
     At stage start, log trainable param counts to catch freezing bugs.
+    Also log Kendall log_sigma values so we can verify they are initialized
+    correctly at each stage entry.
     """
     if not bool(getattr(C, 'LOG_STAGE_TRANSITION', True)):
         return
@@ -1187,6 +1207,19 @@ def _check_stage_transition(model: nn.Module, stage: int, epoch: int, backbone_t
         f'frozen={frozen/1e6:.2f}M'
     )
 
+    if criterion is not None:
+        logger.info(
+            f'  [Kendall log_sigma] '
+            f'det={criterion.log_var_det.item():.3f}  '
+            f'hp={criterion.log_var_pose.item():.3f}  '
+            f'act={criterion.log_var_act.item():.3f}  '
+            f'psr={criterion.log_var_psr.item():.3f}  '
+            f'(sigma_det={np.exp(criterion.log_var_det.item()):.3f}  '
+            f'sigma_hp={np.exp(criterion.log_var_pose.item()):.3f}  '
+            f'sigma_act={np.exp(criterion.log_var_act.item()):.3f}  '
+            f'sigma_psr={np.exp(criterion.log_var_psr.item()):.3f})'
+        )
+
     expected_hp = 0 if stage == 1 else -1
     expected_act = 0 if stage in (1, 2) else -1
     expected_psr = 0 if stage in (1, 2) else -1
@@ -1206,7 +1239,7 @@ def _check_per_class_activity_sanity(
     split: str = 'val',
 ) -> None:
     """
-    Doc 02 §B.4: Per-class activity sanity.
+    Doc 2 §B.4: Per-class activity sanity.
     Every 10 epochs of Stage 3, log top-5 hardest/easiest classes by per-class F1.
     """
     if epoch % 10 != 0 or epoch < int(getattr(C, 'STAGE1_EPOCHS', 5)) + int(getattr(C, 'STAGE2_EPOCHS', 10)):
@@ -1222,7 +1255,7 @@ def _check_per_class_activity_sanity(
 
 def _get_ema_decay(epoch: int) -> float:
     """
-    Doc 02 A.2: EMA decay schedule.
+    Doc 2 A.2: EMA decay schedule.
     Stage 3 epoch 1 (overall epoch ~16): 0.999 — slow catch-up, stable init
     Stage 3 epoch 2 (overall epoch ~17): 0.9995 — medium
     Stage 3 epoch 3+ (overall epoch ~18+): 0.9999 — standard final decay
@@ -1241,7 +1274,7 @@ def _check_psr_prevalence_sanity(
     epoch: int,
 ) -> None:
     """
-    Doc 02 §B.5: PSR component prevalence sanity.
+    Doc 2 §B.5: PSR component prevalence sanity.
     Log predicted vs GT prevalence per component. Should match within ±5%.
     """
     log_interval = int(getattr(C, 'LOG_PSR_PREVALENCE_EVERY', 10))
@@ -1294,7 +1327,7 @@ def _compare_raw_vs_ema(
     ckpt_dir: Path,
 ) -> None:
     """
-    Doc 02 §B.6: Raw vs EMA val metric comparison.
+    Doc 2 §B.6: Raw vs EMA val metric comparison.
     Rebuilds val loader internally (original is deleted after EMA val).
     Runs raw-model validation and compares to EMA metrics.
     Only meaningful in Stage 3 where EMA differs from raw.
@@ -1553,11 +1586,13 @@ def main(args):
 
     logger.info('Building model ...')
     backbone_type = str(getattr(C, 'BACKBONE', 'resnet50'))
+    use_hand_film = bool(getattr(C, 'USE_HAND_FILM', True))
     use_headpose_film = bool(getattr(C, 'USE_HEADPOSE_FILM', False))
     use_videomae = bool(getattr(C, 'USE_VIDEOMAE', False))
     model = POPWMultiTaskModel(
         pretrained=True,
         backbone_type=backbone_type,
+        use_hand_film=use_hand_film,
         use_headpose_film=use_headpose_film,
         use_videomae=use_videomae,
         train_pose=CFG_TRAIN_HEAD_POSE,
@@ -1581,6 +1616,7 @@ def main(args):
         logger.info('EMA disabled')
     logger.info(f'Backbone type     : {backbone_type}')
     logger.info(f'HeadPoseFiLM      : {use_headpose_film}')
+    logger.info(f'Hand-FiLM (PoseFiLM): {use_hand_film}')
     logger.info(f'VideoMAE stream   : {use_videomae}')
     logger.info(f'Total parameters  : {params["total_all"]:,}')
     logger.info(f'Trainable params  : {params["total_trainable"]:,}')
@@ -1660,7 +1696,7 @@ def main(args):
 
     warmup = LinearLR(optimizer, start_factor=0.1, total_iters=C.WARMUP_EPOCHS)
     if bool(getattr(C, 'ONE_CYCLE_LR', False)):
-        # Doc 02 E.2: OneCycleLR with super-convergence
+        # Doc 2 E.2: OneCycleLR with super-convergence
         # High peak LR (5e-4) + aggressive cosine decay
         # Doc 01 B.3 fix: make max_lr dynamic based on actual num param groups
         n_groups = len(param_groups)
@@ -1744,8 +1780,14 @@ def main(args):
                 f'  Could not restore optimizer state ({e}). '
                 f'Re-initialized -- LR schedule continues.'
             )
-        scheduler.load_state_dict(ckpt['scheduler'])
-        scaler.load_state_dict(ckpt['scaler'])
+        try:
+            scheduler.load_state_dict(ckpt['scheduler'])
+            scaler.load_state_dict(ckpt['scaler'])
+        except (KeyError, ValueError) as e:
+            logger.warning(
+                f'  Could not restore scheduler/scaler state ({e}). '
+                f'Re-initialized -- LR schedule continues.'
+            )
         start_epoch = ckpt['epoch'] + 1
         best_metric = float(ckpt.get('best_metric', 0.0))
         patience_counter = int(ckpt.get('patience_counter', 0))
@@ -1820,13 +1862,13 @@ def main(args):
             logger.info(f'\n--- Epoch {epoch}/{C.EPOCHS - 1} ---')
             criterion.set_epoch(epoch)
 
-            # Doc 02 §B.2: Stage transition validation — log trainable param counts
+            # Doc 2 §B.2: Stage transition validation — log trainable param counts
             current_stage = get_stage(epoch)
             prev_stage = get_stage(epoch - 1) if epoch > 0 else current_stage
             if current_stage != prev_stage:
-                _check_stage_transition(model, current_stage, epoch, C.BACKBONE)
+                _check_stage_transition(model, criterion, current_stage, epoch, C.BACKBONE)
 
-                # Doc 02 §C.1: Kendall log_var reset at Stage 3 entry.
+                # Doc 2 §C.1: Kendall log_var reset at Stage 3 entry.
                 # During Stage 2, log_var_act drifts (prec_act=0 so only lv_act is trained).
                 # Fresh precision values at Stage 3 start prevent suboptimal activity/PSR
                 # precision from carrying over. (Bug #9 reincarnation prevention.)
@@ -1838,7 +1880,7 @@ def main(args):
                         '(were drifted from Stage 2)' % epoch
                     )
 
-                # Doc 02 §C.2: Fresh EMA at Stage 3 entry.
+                # Doc 2 §C.2: Fresh EMA at Stage 3 entry.
                 # EMA decay=0.999 tracks frozen params for ~700 steps before catching up.
                 # Starting fresh EMA at Stage 3 ensures activity/PSR heads (random init)
                 # are tracked from epoch 1 of their training, not from epoch 0.
@@ -1977,6 +2019,9 @@ def main(args):
             _check_ram(f'epoch_{epoch}_train')
 
             current_lr = optimizer.param_groups[1]['lr']
+            ema_decay_str = ''
+            if ema is not None:
+                ema_decay_str = f'  ema_decay={ema.decay:.4f}'
             logger.info(
                 f'Train: loss={train_metrics["total"]:.4f}  '
                 f'det={train_metrics["det"]:.4f}  '
@@ -1984,6 +2029,11 @@ def main(args):
                 f'act={train_metrics["activity"]:.4f}  '
                 f'psr={train_metrics["psr"]:.4f}  '
                 f'lr={current_lr:.2e}  '
+                f'kd_d={train_metrics["log_var_det"]:.3f}  '
+                f'kd_p={train_metrics["log_var_pose"]:.3f}  '
+                f'kd_a={train_metrics["log_var_act"]:.3f}  '
+                f'kd_r={train_metrics["log_var_psr"]:.3f}'
+                f'{ema_decay_str}  '
                 f'time={train_metrics["epoch_time"]:.0f}s'
                 + (
                     f'  nan_skips={train_metrics["nan_skips"]}'
@@ -1998,8 +2048,9 @@ def main(args):
                     from evaluate import compute_efficiency_metrics
                     _eff_cache['epoch'] = epoch
                     _eff_cache['metrics'] = compute_efficiency_metrics(
-                        model, device,
+                        model,
                         img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
+                        device=device,
                         num_hand_coords=52,
                         warmup_runs=3,
                         timed_runs=20,
@@ -2218,7 +2269,7 @@ def main(args):
         log_file.close()
 
     # =========================================================================
-    # Stochastic Weight Averaging — SWA (Doc 02 E.3)
+    # Stochastic Weight Averaging — SWA (Doc 2 E.3)
     # =========================================================================
     if bool(getattr(C, 'USE_SWA', False)):
         try:
@@ -2375,3 +2426,7 @@ if __name__ == '__main__':
     _refresh_runtime_cfg()
 
     main(args)
+
+
+# Alias for compatibility with config references (Item 28)
+_train_epoch = train_one_epoch

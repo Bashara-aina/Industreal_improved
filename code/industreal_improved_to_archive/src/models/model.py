@@ -79,7 +79,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import config as C
+from src import config as C
 
 
 # ===========================================================================
@@ -178,7 +178,7 @@ class ConvNeXtBackbone(nn.Module):
     Uses torch.utils.checkpoint.checkpoint_sequential to trade ~20% compute
     for ~50% activation memory reduction during backprop.
     """
-    def __init__(self, pretrained: bool = True, use_checkpoint: bool = True):
+    def __init__(self, pretrained: bool = True, use_checkpoint: bool = False):
         super().__init__()
         from torchvision.models import convnext_tiny, ConvNeXt_Tiny_Weights
         self.model = convnext_tiny(weights=ConvNeXt_Tiny_Weights.DEFAULT if pretrained else None)
@@ -1379,22 +1379,23 @@ class HeadPoseHead(nn.Module):
 
 
 # ===========================================================================
-# PSR Head -- BiGRU + Per-Component Heads (Doc 01 C)
+# PSR Head -- Causal Transformer + Per-Component Heads (Doc 01 C)
 # ===========================================================================
 class PSRHead(nn.Module):
     """
     PSR Head with architectural improvements from Doc 01 C.
 
     Architecture (actual implementation):
-      C.1: BiGRU (2 layers, 256 hidden, bidirectional) -- processes per-frame
-           features; hidden states capture forward+backward temporal context.
-           At inference with caching: effectively causal and O(1) per frame.
+      C.1: Causal Transformer Encoder (3 layers, 4 heads, d_model=256) --
+           processes per-frame features with upper-triangular causal masking.
+           Each position attends only to itself and prior positions (no future).
+           At inference with per-video cache: O(1) new frame cost after warmup.
       C.2: Per-component output heads -- each of 11 components has different
            transition statistics. Shared head underfits rare components.
 
     Architecture:
       - Per-frame feature: multi-scale P3+P4+P5 GAP -> MLP -> 256-D
-      - BiGRU (2 layers, 256 hidden, bidirectional) for temporal modeling
+      - Causal Transformer Encoder (3 layers, 4 heads, d_model=256, gelu, pre-norm)
       - Per-component output heads (11 separate tiny MLPs)
 
     Doc 2 C.3: Binary focal loss, not BCE. Heavy class imbalance per component.
@@ -1578,12 +1579,14 @@ class POPWMultiTaskModel(nn.Module):
         pretrained: bool = True,
         backbone_type: str = 'convnext_tiny',  # [FIX #8 LOW] Paper mandates ConvNeXt-Tiny, not ResNet-50
         use_headpose_film: bool = True,
+        use_hand_film: bool = True,  # [FIX] Hand-FiLM conditional — enables ablation (paper: always on)
         use_videomae: bool = False,
         train_pose: bool = True,
     ):
         super().__init__()
         self.backbone_type = backbone_type
         self.use_headpose_film = use_headpose_film
+        self.use_hand_film = use_hand_film
         self.use_videomae = use_videomae
         self.train_pose = train_pose
 
@@ -1613,12 +1616,15 @@ class POPWMultiTaskModel(nn.Module):
         # Pose head -- paper tau=0.07 (soft-argmax temperature)
         self.pose_head = PoseHead(in_channels=256, num_keypoints=C.NUM_KEYPOINTS, temperature=0.07)
 
-        # === PoseFiLM (keypoint-conditioned) ===
-        self.pose_film = PoseFiLMModule(
-            num_keypoints=C.NUM_KEYPOINTS,
-            c5_channels=c5_ch,
-            hidden_channels=512,
-        )
+        # === PoseFiLM (keypoint-conditioned, hand-keypoint FiLM) ===
+        # [FIX] USE_HAND_FILM now wired: conditional instantiation enables ablation.
+        # Paper default: True (always on). Set False to measure PoseFiLM contribution.
+        if use_hand_film:
+            self.pose_film = PoseFiLMModule(
+                num_keypoints=C.NUM_KEYPOINTS,
+                c5_channels=c5_ch,
+                hidden_channels=512,
+            )
 
         # === HeadPoseFiLM (Doc 01 E) ===
         if use_headpose_film:
@@ -1790,12 +1796,16 @@ class POPWMultiTaskModel(nn.Module):
                 keypoints = pseudo_kps
                 pose_confidence = pseudo_conf
 
-        c5_mod = self.pose_film(c5, keypoints, pose_confidence)
+        # [FIX] pose_film conditional on use_hand_film flag (ablation support)
+        if self.use_hand_film and hasattr(self, 'pose_film'):
+            c5_mod = self.pose_film(c5, keypoints, pose_confidence)
+        else:
+            c5_mod = c5  # No hand-keypoint conditioning when USE_HAND_FILM=False
 
         with torch.no_grad():
             det_conf = cls_preds.max(dim=1)[0]
 
-        # PSR Head: pass full temporal sequence for proper BiGRU/Transformer engagement
+        # PSR Head: pass full temporal sequence for proper Causal Transformer engagement
         # Pyramid dicts have per-level features [BT, C, H, W]. Reshape each to [B, T, C, H, W].
         B_main = BT // seq_len if seq_len > 1 else B
         T_main = seq_len if seq_len > 1 else 1
@@ -1884,7 +1894,6 @@ class POPWMultiTaskModel(nn.Module):
             'psr_confidence': psr_confidence if not self.training else None,  # Item 32
             'temporal_features': bank_output,
             'c5_raw': c5,
-            'pyramid': pyramid,
         }
 
 

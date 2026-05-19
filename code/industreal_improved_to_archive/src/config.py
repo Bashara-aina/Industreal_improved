@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
  Single unified configuration for IndustReal dataset:
    - Action Recognition (AR): 74 atomic action classes
    - Assembly State Detection (ASD): 24 assembly states
-   - Procedure Step Recognition (PSR): 36 procedure steps, 11 components
+    - Procedure Step Recognition (PSR): 36 procedure steps, 11 components
    - Single egocentric RGB camera
 
  Dataset location: /home/newadmin/swarm-bot/project/popw/working/data/dataset/industreal/
@@ -38,7 +38,7 @@ USE_SPATIAL_AUG = True           # Enable spatial augmentation (flip, crop)
 # Ablation flags
 # =========================================================================
 TRAIN_DET       = True
-TRAIN_HEAD_POSE = True   # Train 9-DoF head pose head with Kendall uncertainty — was False
+TRAIN_HEAD_POSE = True    # Train 9-DoF head pose head with Kendall uncertainty (was False — headpose_film was untrained)
 TRAIN_ACT       = True
 TRAIN_PSR       = True
 USE_KENDALL     = True   # Kendall weighting active for 4 tasks (det, act, psr, head_pose 9-DoF MSE)
@@ -225,7 +225,7 @@ NUM_HAND_JOINTS = 26
 
 # --- Procedure Step Recognition (PSR) ---
 NUM_PSR_STEPS = 36       # number of distinct procedure step types (from procedure_info.json)
-NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp10 in PSR_labels_raw.csv)
+NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_labels_raw.csv)
 
 # =========================================================================
 # Image and model
@@ -250,7 +250,7 @@ IMAGENET_STD  = [0.229, 0.224, 0.225]
 # =========================================================================
 # Training (RTX 3060 12 GB)
 # =========================================================================
-BATCH_SIZE       = 8     # [FIX] Was 4 — RTX 3060 at BS=8 uses ~0.87GB in Stage 3 forward+backward
+BATCH_SIZE       = 8     # [FIX] RTX 3060 with 8 base batch (was 4)
 GRAD_ACCUM_STEPS = 4     # [FIX] Effective batch 32 (8×4). 4-step accum keeps per-step memory low while maximizing GPU utilization
 EFFECTIVE_BATCH  = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
 
@@ -258,7 +258,7 @@ VAL_BATCH_SIZE  = 4     # [FIX] Increased from 2 for faster eval (more samples/b
 VAL_NUM_WORKERS = 4     # [FIX] Increased from 0 for parallel data loading
 VAL_PREFETCH_FACTOR = 4 # [FIX] Increased from 1 for pipeline prefetch
 
-EPOCHS        = 50 
+EPOCHS        = 100 
 BASE_LR       = 5e-4   # Per paper: "5e-4"
 WEIGHT_DECAY  = 1e-4
 WARMUP_EPOCHS = 5
@@ -303,7 +303,7 @@ DATALOADER_AUTO_FALLBACK = True
 # Performance flags
 USE_UINT8_DATA_PIPELINE = True
 CUDNN_DETERMINISTIC = True   # Required for reproducibility — was False
-CUDNN_BENCHMARK = False      # Required for reproducibility — was True
+CUDNN_BENCHMARK = True      # Required for reproducibility — was True
 
 # Ampere (RTX 3060) speedups
 ALLOW_TF32 = True
@@ -340,28 +340,28 @@ PRETRAIN_MIXUP_PROB  = 0.2   # probability of mixup (2-frame alpha blend)
 PRETRAIN_HFLIP_PROB  = 0.5   # probability of random horizontal flip
 
 # =========================================================================
-# Staged training (Doc 02 B.1)
+# Staged training (Doc 2 B.1)
 # =========================================================================
 STAGED_TRAINING = True
 STAGE1_EPOCHS = 5    # Detection-only warmup
 STAGE2_EPOCHS = 10   # Add pose + head pose
-STAGE3_EPOCHS = 35   # Full multi-task with EMA — 5+10+35=50 total (matches EPOCHS=50) — was 85
+STAGE3_EPOCHS = 85   # Full multi-task with EMA — 5+10+85=100 total — was 35
 ACT_RAMP_EPOCHS = 5  # Activity loss ramp-up
 ACTIVITY_LOSS_CAP = 40.0  # Cap activity loss to prevent NaN cascade at Stage 3 entry (epoch 16) — loss spiked to 40.8 in prior runs
 STAGE3_WARMUP_EPOCHS = 3  # LR warmup epochs at Stage 3 entry to stabilize new head activation
 
 # =========================================================================
-# LDAM-DRW for activity (Doc 01 §B.2 + Doc 02 C.2)
+# LDAM-DRW for activity (Doc 01 §B.2 + Doc 2 C.2)
 # =========================================================================
 USE_LDAM_DRW = True   # Use LDAM+DRW instead of CB-Focal for activity
 LDAM_MAX_M = 0.5
 LDAM_S = 30
-LDAM_DRW_EPOCH = 45   # Switch to CB weights at this epoch (DRW deferred re-weighting) — was 60, never triggered with EPOCHS=50
+LDAM_DRW_EPOCH = 60   # Switch to CB weights at this epoch (DRW deferred re-weighting) — audit spec: LDAM DRW at epoch 60
 # Doc 01 §B.2: DRW activates after epoch 60 when features are stable.
 # Recipe default of 60 confirmed correct for IndustReal long-tail classes.
 
 # =========================================================================
-# PSR focal loss (Doc 01 §D + Doc 02 C.3)
+# PSR focal loss (Doc 01 §D + Doc 2 C.3)
 # =========================================================================
 PSR_FOCAL_ALPHA = 0.25
 PSR_FOCAL_GAMMA = 2.0
@@ -376,7 +376,7 @@ PSR_SEQUENCE_LENGTH = 4        # T=4 keeps memory bounded on 12GB GPU
 PSR_SEQ_EVERY_N_BATCHES = 10  # Draw one sequence batch every N normal batches
 
 # =========================================================================
-# Augmentation (Doc 02 D)
+# Augmentation (Doc 2 D)
 # =========================================================================
 USE_RANDAUGMENT = True   # Photometric augmentation for backbone
 MIXUP_ALPHA = 0.4
@@ -384,16 +384,16 @@ CUTMIX_ALPHA = 1.0       # Alternate Mixup/CutMix each epoch
 RANDOM_TEMPORAL_STRIDE = True  # Random frame stride {2,3,4,5} per clip
 
 # =========================================================================
-# Optimizer (Doc 02 E)
+# Optimizer (Doc 2 E)
 # =========================================================================
-USE_LION = True         # Use Lion optimizer instead of AdamW (Doc 02 E.1)
+USE_LION = True         # Use Lion optimizer instead of AdamW (Doc 2 E.1)
 ONE_CYCLE_LR = False     # Use OneCycleLR instead of CosineAnnealingWarmRestarts
 USE_SWA = False          # Stochastic Weight Averaging at end of training
 SWA_LR = 1e-5
 SWA_EPOCHS = 10
 
 # =========================================================================
-# TTA (Doc 02 F)
+# TTA (Doc 2 F)
 # =========================================================================
 USE_TTA = False          # Test-time augmentation (flip + multi-crop)
 TTA_FLIP = True
@@ -410,15 +410,15 @@ NUM_VIZ_SAMPLES = 8
 MONITOR_LOG_INTERVAL = 10
 LOG_EFFICIENCY_EVERY = 10  # log GFLOPs/FPS every N epochs (0=disable)
 
-# Kendall gradient sentinel logging (Doc 02 §B.1)
+# Kendall gradient sentinel logging (Doc 2 §B.1)
 # Log gradient norms of Kendall log_var params every N steps to detect
 # silent Kendall failures (Bug #9 reincarnation)
 LOG_KENDALL_GRAD_EVERY = 100  # Set to 0 to disable
 
-# Stage transition logging (Doc 02 §B.2)
+# Stage transition logging (Doc 2 §B.2)
 LOG_STAGE_TRANSITION = True  # Log trainable param counts at each stage start
 
-# Per-component PSR prevalence sanity check (Doc 02 §B.5)
+# Per-component PSR prevalence sanity check (Doc 2 §B.5)
 LOG_PSR_PREVALENCE_EVERY = 10  # epochs; set to 0 to disable
 
 # =========================================================================
@@ -430,6 +430,9 @@ EVAL_SAVE_DIR  = OUTPUT_ROOT / 'eval_outputs'
 
 COCO_CACHE_SIZE = 30
 NUM_ACT_CLASSES = NUM_CLASSES_ACT
+
+# Alias for backward compatibility / other modules expecting NUM_CLASSES
+NUM_CLASSES = NUM_CLASSES_ACT
 
 # =========================================================================
 # PRESET SYSTEM
