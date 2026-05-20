@@ -174,15 +174,17 @@ The detection head follows RetinaNet's architecture because it handles class imb
 
 The body pose head uses soft-argmax for differentiable keypoint extraction, enabling end-to-end training without heuristic grouping. Confidence-weighting allows the loss to ignore low-confidence predictions during training.
 
-\subsubsection{Head Pose Head (9-DoF, IndustReal only)}
+\subsubsection{Procedure Step Recognition Head (PSR --- 11 components)}
 \begin{itemize}
-\item \textbf{Input}: GAP(C4) $\|$ GAP(C5) $\rightarrow$ $[B, 384+768=1152]$
-\item \textbf{MLP}: $1152 \rightarrow 512 \rightarrow 256 \rightarrow 9$ (LayerNorm + GELU + Dropout)
-\item \textbf{Output}: head\_pose $[B, 9]$ = forward[3] $\|$ position[3] $\|$ up[3]
-\item \textbf{Loss}: MSE $\times 0.001$ (meter-scale normalization)
+\item \textbf{Input}: multi-scale FPN features (P3+P4+P5) $\rightarrow$ GAP $\rightarrow$ concat $\rightarrow$ MLP($768 \rightarrow 256$) $\rightarrow$ per-frame feature $[B, 256]$
+\item \textbf{Temporal model}: Causal Transformer Encoder (3 layers, 4 heads, d\_model=256, GELU, pre-norm) with upper-triangular causal mask --- each position attends only to itself and prior positions; no future leakage
+\item \textbf{Per-component heads}: 11 separate tiny MLPs ($256 \rightarrow 64 \rightarrow 1$) --- each component has distinct transition statistics; shared head underfits rare components
+\item \textbf{Cache for inference}: per-video cache of up to 32 frame features; warmup $T$ frames fill the cache; subsequent frames use cached Causal Transformer inference at O(1) per frame cost
+\item \textbf{Output}: psr\_logits $[B, 11]$ + psr\_confidence $[B, 1]$ (max-sigmoid over components, per Item~32)
+\item \textbf{Loss}: Binary Focal Loss ($\alpha=0.25$, $\gamma=2.0$) + temporal smoothness reg ($w=0.05$)
 \end{itemize}
 
-Note: This head is specific to IndustReal (9-DoF head pose); on IKEA ASM only body pose is predicted.
+The PSR head's Causal Transformer replaces the BiGRU from earlier drafts. Upper-triangular causal masking enforces that position $i$ attends only to positions $0\ldots i$, matching the autoregressive nature of procedure step sequences. The per-video cache (max 32 entries) avoids redundant transformer forward passes: during inference, new frames append to the cache and the transformer processes the full sequence; with the cache pre-warmed, only the new entry is processed, yielding O(1) marginal cost per frame for sequences up to 32 frames. For longer videos, the cache slides (oldest entries evicted), maintaining O(1) per-frame cost.
 
 \subsubsection{Activity Recognition Head (74 classes)}
 \begin{itemize}
@@ -206,14 +208,15 @@ We additionally fuse a VideoMAE V2~\cite{wang2023videomae} stream (ViT-S/16, Kin
 
 Two-stage FiLM conditioning modulates the C5 feature before it is used in activity recognition. This is the key architectural innovation enabling cross-task information flow without gradient interference.
 
-\subsubsection{PoseFiLM (1st stage --- body keypoints)}
+\subsubsection{PoseFiLM (1st stage --- body/hand keypoints)}
 \begin{itemize}
-\item \textbf{Confidence extraction}: heatmaps $\rightarrow$ max $\rightarrow$ sigmoid $\rightarrow$ nan\_to\_num(0.5); no gradient
+\item \textbf{Confidence extraction}: heatmaps $\rightarrow$ max $\rightarrow$ sigmoid $\rightarrow$ nan\_to\_num(0.5); stop\_grad
 \item \textbf{Pose encoding}: keypoints $[B, 34]$ $\|$ confidence $[B, 17]$ $\rightarrow$ pose\_flat $[B, 51]$
 \item \textbf{$\gamma$-net}: $51 \rightarrow 512 \rightarrow 768$, output $1 + \tanh(\cdot) \in (0, 2)$
 \item \textbf{$\beta$-net}: $51 \rightarrow 512 \rightarrow 768$, output unbounded
 \item \textbf{C5 direct}: direct from backbone (bypasses FPN) $[B, 768, 23, 40]$
 \item \textbf{Modulation}: $C5_{mod} = \gamma \cdot C5_{direct} + \beta$ $[B, 768, 23, 40]$
+\item \textbf{USE\_HAND\_FILM flag}: when \texttt{False}, PoseFiLM is skipped and $C5_{mod}=C5_{direct}$ (ablation support; paper default \texttt{True})
 \end{itemize}
 
 The $\tanh$ output for $\gamma$ ensures multiplicative modulation stays positive (0 to 2), preventing negative scaling that could invert features. The stop\_grad on confidence extraction prevents activity gradients from backpropagating into the pose network.
@@ -238,7 +241,7 @@ Following Kendall et al.~(2018)~\cite{kendall2018multi}, we weight the four task
 \end{equation}
 where $t \in \{\text{det}, \text{pose+head\_pose}, \text{act}, \text{psr}\}$, $s_t = \text{clamp}(\log \sigma^2_t, -4, 2)$.
 
-Initialization: $s_{det}=0$, $s_{pose}=-1$, $s_{act}=0$, $s_{psr}=0$. Activity ramp: $\min(1, \text{epoch}/5)$.
+Initialization: $s_{det}=0$, $s_{pose}=-1$, $s_{act}=0$, $s_{psr}=0$ (implying 2.7× higher initial precision for pose/head\_pose). Activity ramp: $\min(1, \text{epoch}/5)$.
 
 The combined loss is:
 \begin{align*}
@@ -254,11 +257,11 @@ The $10^{-3}$ scale factors on pose and head pose losses normalize the different
 \subsubsection{Staged Training}
 \begin{enumerate}
 \item \textbf{Stage 1} (epochs 1--5): Detection only; backbone layer1--3 frozen.
-\item \textbf{Stage 2} (epochs 6--15): + Pose + Head Pose; Activity and PSR heads frozen.
-\item \textbf{Stage 3} (epoch 16+): All four task groups active.
+\item \textbf{Stage 2} (epochs 6--15): + Pose + Head Pose (9-DoF); Activity and PSR heads frozen. HeadPoseFiLM trains during this stage.
+\item \textbf{Stage 3} (epoch 16--100): All four task groups active, EMA enabled (decay=0.999). LDAM-DRW switches to class-balanced weights at epoch 60.
 \end{enumerate}
 
-Staged training prevents gradient interference during early optimization. Detection gradients are largest and most stable early in training; gradually enabling other tasks allows their heads to adapt to the pretrained backbone without destabilizing detection learning.
+Staged training prevents gradient interference during early optimization. Detection gradients are largest and most stable early in training; gradually enabling other tasks allows their heads to adapt to the pretrained backbone without destabilizing detection learning. The TRAIN\_HEAD\_POSE config flag (default \texttt{True}) enables the head pose head and HeadPoseFiLM in Stage 2; flipping it to \texttt{False} would leave HeadPoseFiLM untrained.
 
 % =====================================================================
 \section{Datasets}

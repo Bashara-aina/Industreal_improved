@@ -1,0 +1,67 @@
+{
+  "agent_id": "stability-checker-1",
+  "checklist_items": [59, 60, 61, 62, 63, 64, 65, 66],
+  "results": [
+    {
+      "item": 59,
+      "description": "Signal handlers (SIGSEGV, SIGABRT, SIGBUS, SIGFPE, SIGTERM, SIGINT) are registered",
+      "status": "PASS",
+      "evidence": "Lines 664-665: signal.signal for SIGSEGV, SIGABRT, SIGBUS, SIGFPE via loop. Lines 672-673: signal.signal for SIGTERM, SIGINT via loop. Both handlers call _save_crash_recovery before exit."
+    },
+    {
+      "item": 60,
+      "description": "Crash recovery checkpoint is saved at epoch start and every N batches",
+      "status": "PASS",
+      "evidence": "Line 677: _save_crash_recovery(ckpt_dir, 'epoch_start') before first batch. Lines 946-950: periodic checkpoint at step % _checkpoint_interval == 0 (_checkpoint_interval=50). Also saves named checkpoint epoch_N_batch_M.pth."
+    },
+    {
+      "item": 61,
+      "description": "NaN/Inf batches are skipped correctly without crashing",
+      "status": "PASS",
+      "evidence": "Three-stage guard: (1) lines 705-717: image NaN check before forward pass; (2) lines 869-886: loss isfinite check after criterion call, skips batch and zeroes grads; (3) lines 772-777: sequence batch loss isfinite check. nan_skips counter tracks all skips."
+    },
+    {
+      "item": 62,
+      "description": "Data integrity check (finite images) is performed before forward pass",
+      "status": "PASS",
+      "evidence": "Lines 705-717: torch.isfinite check on max-abs of images tensor, skips batch if non-finite detected, skips step 0 (first batch can have weird init values)."
+    },
+    {
+      "item": 63,
+      "description": "GPU memory snapshot is taken every 10 batches",
+      "status": "PASS",
+      "evidence": "Lines 684-691: torch.cuda.memory_allocated and torch.cuda.memory_reserved logged every 10 batches (step > 0 && step % 10 == 0)."
+    },
+    {
+      "item": 64,
+      "description": "CPU RAM watchdog checks available memory every 50 batches",
+      "status": "PASS",
+      "evidence": "Lines 952-977: reads /proc/meminfo, extracts MemAvailable, Buffers, Cached, logs warning if avail_gb < 2.0, runs every 50 batches ((step + 1) % 50 == 0)."
+    },
+    {
+      "item": 65,
+      "description": "DataLoader worker health is checked every 100 batches",
+      "status": "FIXED",
+      "evidence": "Original code used loader._workers_check_alive() which is NOT a real PyTorch DataLoader method (doesn't exist). Fixed: replaced with non-blocking queue probe on loader._worker_result_queue as a health indicator. Real crash detection is via exception handling in main() which catches BrokenPipeError/FileNotFoundError and rebuilds the loader (lines 1924-1945). Worker check now runs every 100 batches as intended."
+    },
+    {
+      "item": 66,
+      "description": "Validation loop does not crash on edge cases (empty predictions, all same class)",
+      "status": "PASS",
+      "evidence": "compute_activity_metrics (evaluate.py lines 631-649): returns zeros for all metrics when arrays are empty. PSR transition: lines 1586-1591 handle n_gt==0 && n_pred==0 case (uninformative) by appending NaN. Clip-level NaN guard: line 587-591 handles pred_clip_valid empty or all-NaN."
+    }
+  ],
+  "issues_found": [
+    {
+      "item": 65,
+      "severity": "medium",
+      "description": "loader._workers_check_alive() does not exist in PyTorch DataLoader",
+      "file": "src/training/train.py",
+      "location": "line ~979",
+      "fix_applied": "Replaced non-existent _workers_check_alive() with a non-blocking get_nowait() on loader._worker_result_queue as a health probe. Real worker crash detection remains via the exception handling retry loop in main() which correctly rebuilds the loader on BrokenPipeError/FileNotFoundError.",
+      "before": "worker_status = loader._workers_check_alive()",
+      "after": "Non-blocking queue probe on _worker_result_queue + comment explaining real crash detection is via exception path"
+    }
+  ],
+  "ready_for_training": true
+}

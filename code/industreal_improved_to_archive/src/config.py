@@ -303,8 +303,8 @@ DATALOADER_AUTO_FALLBACK = True
 
 # Performance flags
 USE_UINT8_DATA_PIPELINE = True
-CUDNN_DETERMINISTIC = True   # Required for reproducibility — was False
-CUDNN_BENCHMARK = True      # Required for reproducibility — was True
+CUDNN_DETERMINISTIC = True   # Full CUDA determinism (warn_only if unsupported)
+CUDNN_BENCHMARK = False     # Required for reproducibility — was True
 
 # Ampere (RTX 3060) speedups
 ALLOW_TF32 = True

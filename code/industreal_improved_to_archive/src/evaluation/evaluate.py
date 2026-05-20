@@ -2927,11 +2927,33 @@ def _print_multi_seed_summary(summary: Dict[str, Any]) -> None:
 
 
 def _print_single_run_results(results: Dict[str, Any], split: str) -> None:
-    """Print formatted single-seed evaluation results."""
+    """Print formatted single-seed evaluation results.
+
+    Order matches paper's tab:industreal-headline table:
+      1. Assembly State Detection (ASD)
+      2. Activity recognition
+      3. Procedure Step Recognition (PSR)
+      4. Assembly state recognition / error verification
+      5. Head pose (9-DoF)
+    """
     print('\n' + '=' * 60)
     print(f'IndustReal Evaluation Results ({split})')
     print('=' * 60)
 
+    # ── 1. Assembly State Detection (ASD) ──────────────────────────────────
+    print('\nASSEMBLY STATE DETECTION (ASD)')
+    print('-' * 40)
+    print(f'  mAP@0.5                : {results["det_mAP50"]:.4f}')
+    print(f'  mAP@[0.5:0.95]         : {results["det_mAP_50_95"]:.4f}')
+
+    det_per_class = cast(Dict[int, float], results.get('det_per_class_ap', {}))
+    if det_per_class:
+        print('\n  Per-class AP@0.5:')
+        for cls_id, ap in sorted(det_per_class.items()):
+            name = C.DET_CLASS_NAMES.get(cls_id + 1, f'class_{cls_id}')
+            print(f'    {name:20s}: {ap:.4f}')
+
+    # ── 2. Activity Recognition ───────────────────────────────────────────
     print('\nACTIVITY RECOGNITION')
     print('-' * 40)
     print(f'  Top-1 (frame)          : {results["act_accuracy"]:.4f}')
@@ -2944,26 +2966,7 @@ def _print_single_run_results(results: Dict[str, Any], split: str) -> None:
     print(f'  Weighted-F1            : {results["act_weighted_f1"]:.4f}')
     print(f'  Macro-Recall          : {results["act_macro_recall"]:.4f}')
 
-    print('\nHEAD POSE (9-DoF)')
-    print('-' * 40)
-    # Paper headline metrics (angular MAE in degrees + position MAE in mm)
-    print(f'  Forward angular MAE (deg): {results["forward_angular_MAE_deg"]:.4f}')
-    print(f'  Up angular MAE (deg)     : {results["up_angular_MAE_deg"]:.4f}')
-    print(f'  Position MAE (mm)        : {results["position_MAE_mm"]:.4f}')
-    print('  --- Detail ---')
-    print(f'  Overall MAE (raw)         : {results["head_pose_MAE"]:.4f}')
-    print(f'  MAE Std                  : {results["head_pose_MAE_std"]:.4f}')
-    print(f'  forward_x MAE (raw)     : {results["forward_x_MAE"]:.4f}')
-    print(f'  forward_y MAE (raw)      : {results["forward_y_MAE"]:.4f}')
-    print(f'  forward_z MAE (raw)     : {results["forward_z_MAE"]:.4f}')
-    print(f'  pos_x MAE (raw)         : {results["pos_x_MAE"]:.4f}')
-    print(f'  pos_y MAE (raw)         : {results["pos_y_MAE"]:.4f}')
-    print(f'  pos_z MAE (raw)         : {results["pos_z_MAE"]:.4f}')
-    print(f'  up_x MAE (raw)          : {results["up_x_MAE"]:.4f}')
-    print(f'  up_y MAE (raw)          : {results["up_y_MAE"]:.4f}')
-    print(f'  up_z MAE (raw)          : {results["up_z_MAE"]:.4f}')
-    print(f'  N samples               : {results.get("n_samples", "N/A")}')
-
+    # ── 3. Procedure Step Recognition (PSR) ─────────────────────────────────
     print('\nPROCEDURE STEP RECOGNITION (PSR)')
     print('-' * 40)
     print(f'  Overall F1 (thresh)    : {results["psr_overall_f1"]:.4f}')
@@ -2984,19 +2987,8 @@ def _print_single_run_results(results: Dict[str, Any], split: str) -> None:
         val = psr_per_comp[comp_name]
         print(f'    {comp_name:12s}: {val:.4f}')
 
-    print('\nASSEMBLY STATE DETECTION (ASD)')
-    print('-' * 40)
-    print(f'  mAP@0.5                : {results["det_mAP50"]:.4f}')
-    print(f'  mAP@[0.5:0.95]         : {results["det_mAP_50_95"]:.4f}')
-
-    det_per_class = cast(Dict[int, float], results.get('det_per_class_ap', {}))
-    if det_per_class:
-        print('\n  Per-class AP@0.5:')
-        for cls_id, ap in sorted(det_per_class.items()):
-            name = C.DET_CLASS_NAMES.get(cls_id + 1, f'class_{cls_id}')
-            print(f'    {name:20s}: {ap:.4f}')
-
-    print('\nASSEMBLY STATE RECOGNITION (Paper 8 — IEEE RAL 2024)')
+    # ── 4. Assembly State Recognition / Error Verification ──────────────────
+    print('\nASSEMBLY STATE RECOGNITION (IEEE RAL 2024)')
     print('-' * 50)
     print(f'  F1@1 (frame-level)     : {results["as_f1"]:.4f}')
     print(f'  Top-1 Accuracy         : {results["as_top1_accuracy"]:.4f}')
@@ -3004,13 +2996,35 @@ def _print_single_run_results(results: Dict[str, Any], split: str) -> None:
     print(f'  Num States (K)         : {results["as_num_states"]}')
     print(f'  Num Transitions        : {results["as_num_transitions"]}')
 
-    print('\nERROR VERIFICATION (Paper 9 — ECCV VISION 2024)')
+    print('\nERROR VERIFICATION (ECCV VISION 2024)')
     print('-' * 50)
     print(f'  Average Precision (AP) : {results["ev_ap"]:.4f}')
     print(f'  F1 (threshold=0.5)     : {results["ev_f1"]:.4f}')
     print(f'  Precision (threshold=0.5): {results["ev_precision"]:.4f}')
     print(f'  Recall (threshold=0.5)   : {results["ev_recall"]:.4f}')
 
+    # ── 5. Head Pose (9-DoF) ───────────────────────────────────────────────
+    print('\nHEAD POSE (9-DoF)')
+    print('-' * 40)
+    # Paper headline metrics (angular MAE in degrees + position MAE in mm)
+    print(f'  Forward angular MAE (deg): {results["forward_angular_MAE_deg"]:.4f}')
+    print(f'  Up angular MAE (deg)     : {results["up_angular_MAE_deg"]:.4f}')
+    print(f'  Position MAE (mm)        : {results["position_MAE_mm"]:.4f}')
+    print('  --- Detail ---')
+    print(f'  Overall MAE (raw)         : {results["head_pose_MAE"]:.4f}')
+    print(f'  MAE Std                  : {results["head_pose_MAE_std"]:.4f}')
+    print(f'  forward_x MAE (raw)     : {results["forward_x_MAE"]:.4f}')
+    print(f'  forward_y MAE (raw)     : {results["forward_y_MAE"]:.4f}')
+    print(f'  forward_z MAE (raw)     : {results["forward_z_MAE"]:.4f}')
+    print(f'  pos_x MAE (raw)          : {results["pos_x_MAE"]:.4f}')
+    print(f'  pos_y MAE (raw)         : {results["pos_y_MAE"]:.4f}')
+    print(f'  pos_z MAE (raw)         : {results["pos_z_MAE"]:.4f}')
+    print(f'  up_x MAE (raw)           : {results["up_x_MAE"]:.4f}')
+    print(f'  up_y MAE (raw)           : {results["up_y_MAE"]:.4f}')
+    print(f'  up_z MAE (raw)           : {results["up_z_MAE"]:.4f}')
+    print(f'  N samples               : {results.get("n_samples", "N/A")}')
+
+    # ── Efficiency (always last) ────────────────────────────────────────────
     print('\nEFFICIENCY METRICS')
     print('-' * 50)
     print(f'  Parameters (M)         : {results["eff_params_m"]:.2f}M')
