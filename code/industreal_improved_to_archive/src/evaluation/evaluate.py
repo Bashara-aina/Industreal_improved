@@ -1,6 +1,18 @@
 import sys
 import os
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from pathlib import Path
+
+# Match train.py's path setup so all imports resolve identically
+# src/evaluation/evaluate.py → parent.parent = src/ → parent = project root
+_SRC = Path(__file__).resolve().parent.parent  # src/
+for _sub in ['models', 'training', 'evaluation', 'data', str(_SRC)]:
+    _p = _SRC / _sub if _sub != str(_SRC) else _SRC
+    _p = str(_p)
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+# Add project root for `from src import config`
+if str(_SRC.parent) not in sys.path:
+    sys.path.insert(0, str(_SRC.parent))
 
 """
 Evaluation Metrics for Multi-Task IndustReal Model
