@@ -69,7 +69,7 @@ USE_HEADPOSE_FILM = True
 # Cost: +22M frozen params, ~600 MB VRAM. FPS drops ~25%.
 # NOTE: When switching from False to True, classifier head reinitializes
 # because act_logits dim doubles. Train from scratch or use strict=False.
-USE_VIDEOMAE = True
+USE_VIDEOMAE = False  # Disabled: saves ~800MB VRAM; +5-7% activity boost not needed for baseline
 VIDEOMAE_CKPT = 'MCG-NJU/videomae-small-finetuned-kinetics'
 VIDEOMAE_NUM_FRAMES = 16   # temporal window size for VideoMAE clip
 VIDEOMAE_SAMPLE_STRIDE = 1  # sample every N frames from the clip window

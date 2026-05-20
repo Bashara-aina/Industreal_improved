@@ -899,7 +899,7 @@ class MultiTaskLoss(nn.Module):
             if self.train_pose:
                 loss_pose = loss_pose.clamp(min=0.0)
                 total = total + prec_hp * loss_pose + lv_hp
-            elif self.train_act:
+            if self.train_act:
                 loss_head_pose = loss_head_pose.clamp(min=0.0)
                 total = total + prec_hp * loss_head_pose + lv_hp
             if self.train_act:

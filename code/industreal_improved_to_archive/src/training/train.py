@@ -775,6 +775,14 @@ def train_one_epoch(
 
                 criterion.set_epoch(epoch)
 
+                # [FIX #1] Save criterion flags BEFORE PSR-only sequence batch —
+                # they are mutated below and must be restored so subsequent normal
+                # batches are not corrupted (criterion persists across all batches).
+                _saved_train_det  = criterion.train_det
+                _saved_train_pose = criterion.train_pose
+                _saved_train_act  = criterion.train_act
+                _saved_train_psr  = criterion.train_psr
+
                 criterion.train_psr = True
                 criterion.train_pose = False
                 criterion.train_act = False
@@ -835,6 +843,11 @@ def train_one_epoch(
                 if ema is not None and stage >= 3:
                     ema.update()
                 optimizer.zero_grad(set_to_none=True)
+            # [FIX #1] Restore criterion flags AFTER PSR-only sequence batch
+            criterion.train_det  = _saved_train_det
+            criterion.train_pose = _saved_train_pose
+            criterion.train_act  = _saved_train_act
+            criterion.train_psr  = _saved_train_psr
             continue
 
         images = _prepare_images(images, device)
@@ -915,8 +928,7 @@ def train_one_epoch(
             del outputs, loss, loss_dict
             torch.cuda.empty_cache()
             continue
-
-# [DEBUG] Per-batch loss + model output shape logging every _debug_interval batches
+            # [DEBUG] Per-batch loss + model output shape logging every _debug_interval batches
             if step > 0 and step % _debug_interval == 0:
                 # Log all individual loss components
                 logger.info(

@@ -89,7 +89,7 @@ os.environ['CUDA_LAUNCH_BLOCKING']  = '1'
 import model as _model_module
 import model as _popw_model_module
 import losses as _losses_module
-import evaluate as _evaluate_module
+import src.evaluation.evaluate as _evaluate_module
 import data as _ds_module
 from src import config as C
 
@@ -1066,6 +1066,8 @@ def train_one_epoch(
     avg['epoch_time'] = time.time() - t_start
     avg['nan_skips'] = nan_skips
     avg['stage'] = stage
+    avg['total_steps'] = total_steps
+    avg['seq_steps'] = seq_steps
     return avg
 
 
@@ -1935,6 +1937,7 @@ def main(args):
     # _resume_batch_info is set in the resume block above.
     _resume_batch = _resume_batch_info[0] if '_resume_batch_info' in dir() and _resume_batch_info[0] > 0 else 0
 
+    _total_steps_acc = 0
     try:
         _train_start_epoch = _override_start_epoch if _override_start_epoch is not None else start_epoch
         for epoch in range(_train_start_epoch, C.EPOCHS):
@@ -2084,6 +2087,12 @@ def main(args):
                     raise
 
             scheduler.step()
+            # [FIX] Update accumulated total_steps after each epoch for early-stop check
+            _total_steps_acc += train_metrics.get('total_steps', 0)
+            _max_steps = int(os.environ.get('TRAIN_MAX_STEPS', 0))
+            if _max_steps > 0 and _total_steps_acc >= _max_steps:
+                logger.info(f'[epoch {epoch}] _total_steps_acc={_total_steps_acc} >= TRAIN_MAX_STEPS={_max_steps} — stopping early')
+                break
             if videomae_warmup_state['active'] and videomae_warmup_state['epochs_remaining'] > 0:
                 vid_idx = videomae_warmup_state['param_group_idx']
                 vid_base = videomae_warmup_state['unfreeze_lr']
@@ -2474,6 +2483,12 @@ if __name__ == '__main__':
              '(avoids shared-memory crashes on some systems).',
     )
     parser.add_argument(
+        '--max-steps',
+        type=int,
+        default=int(os.environ.get('TRAIN_MAX_STEPS', 0)),
+        help='Maximum training steps (early stop). Overridden by TRAIN_MAX_STEPS env var.',
+    )
+    parser.add_argument(
         '--no-staged-training',
         action='store_true',
         help='Disable 3-stage progressive training. Activates ALL 5 heads from epoch 0 '
@@ -2504,6 +2519,9 @@ if __name__ == '__main__':
 
     if args.max_epochs is not None:
         C.EPOCHS = args.max_epochs
+    if args.max_steps > 0:
+        os.environ['TRAIN_MAX_STEPS'] = str(args.max_steps)
+        logger.info(f'[train] max_steps={args.max_steps} — early-stop enabled')
     if args.batch_size is not None:
         C.BATCH_SIZE = args.batch_size
         C.EFFECTIVE_BATCH = C.BATCH_SIZE * C.GRAD_ACCUM_STEPS
