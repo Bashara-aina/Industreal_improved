@@ -232,12 +232,12 @@ NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_la
 # =========================================================================
 # Anchor sizes for RetinaNet detection head (Doc 01 B.3)
 # These are calibrated via k-means on GT boxes: python calibrate_anchors.py
-# Calibrated on 923 GT boxes (2 train recordings on disk):
+# Calibrated via k-means on 923 GT boxes (2 train recordings on disk):
 #   w=146-594px, h=89-463px, w/h ratio=0.82-2.95 (wider than tall)
 #   sqrt(area)=188-436px, k-means centers: 164, 269, 333, 338, 404
-# Coverage with (128,192,256,384,512): 100% IoU>=0.5, 82.6% IoU>=0.75
+# Paper spec (matches RetinaNet P3-P7): (24, 48, 96, 192, 384)
 # =========================================================================
-ANCHOR_SIZES = (128, 192, 256, 384, 512)
+ANCHOR_SIZES = (24, 48, 96, 192, 384)
 IMG_WIDTH       = 1280
 IMG_HEIGHT      = 720
 IMG_SIZE        = (IMG_WIDTH, IMG_HEIGHT)
@@ -248,15 +248,16 @@ IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
 
 # =========================================================================
-# Training (RTX 3060 12 GB)
-# =========================================================================
-BATCH_SIZE       = 8     # [FIX] RTX 3060 with 8 base batch (was 4)
-GRAD_ACCUM_STEPS = 4     # [FIX] Effective batch 32 (8×4). 4-step accum keeps per-step memory low while maximizing GPU utilization
-EFFECTIVE_BATCH  = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
+# Training (RTX 3060 12 GB) — Optimized for VideoMAE + ConvNeXt + 5 heads + TMA + TemporalBank
+# NOTE: BATCH_SIZE=1 is REQUIRED. VideoMAE alone uses +600MB VRAM; batch=2 causes OOM.
+# GRAD_ACCUM=32 maintains effective batch=32 (same as old BATCH_SIZE=8, accum=4).
+BATCH_SIZE           = 1     # [GPU-OOM FIX] batch=1 for VRAM headroom with VideoMAE
+GRAD_ACCUM_STEPS     = 32    # [GPU-OOM FIX] effective batch 32 (was 8×4=32)
+EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
 
-VAL_BATCH_SIZE  = 4     # [FIX] Increased from 2 for faster eval (more samples/batch)
-VAL_NUM_WORKERS = 4     # [FIX] Increased from 0 for parallel data loading
-VAL_PREFETCH_FACTOR = 4 # [FIX] Increased from 1 for pipeline prefetch
+VAL_BATCH_SIZE       = 4     # [GPU-OOM FIX] RTX 3060: val batch=4 prevents OOM (was 8)
+VAL_NUM_WORKERS      = 2     # [GPU-OOM FIX] CPU core contention: workers=2 stable (was 8)
+VAL_PREFETCH_FACTOR  = 4
 
 EPOCHS        = 100 
 BASE_LR       = 5e-4   # Per paper: "5e-4"
@@ -270,8 +271,8 @@ GRAD_CLIP_NORM = 1.0
 VAL_EVERY = 1    # [BENCHMARK] Evaluate every 1 epoch (BENCHMARK_MODE override)
 EVAL_MAX_BATCHES = 15   # [FIX] Reduced from 30 to prevent validation OOM on subset runs
 
-NUM_WORKERS     = 4     # [OPT] 4 workers optimal for parallel data loading
-PIN_MEMORY      = True
+NUM_WORKERS         = 8     # [OPT] 8 workers for parallel data loading (12 CPU cores available)
+PIN_MEMORY          = True
 MIXED_PRECISION = True   # [FIX] Was False — FP16 for RTX 3060 Ampere tensor cores
 SEED            = 42
 
@@ -444,6 +445,8 @@ PRESETS = {
             'USE_TMA_CELL=True, USE_TEMPORAL_BANK=True, temporal ordering + Kendall. '
             'Hand-FiLM conditioning on activity head. '
             'VAL_EVERY=1, all metrics every epoch. '
+            'BATCH_SIZE=1 due to VideoMAE VRAM cost (+600MB, ~25% FPS drop). '
+            'Effective batch 32 via GRAD_ACCUM=32. '
             'Comparable against: MViTv2 Kinetics, YOLOv8m COCO+synth+real, B3 rule-based PSR, STORM-PSR.'
         ),
         'dataset_mode':       'manual_only',
@@ -452,8 +455,8 @@ PRESETS = {
         'use_temporal_bank':  True,
         'use_hand_film':     True,
         'benchmark_mode':     True,
-        'batch_size':        1,   # Hand-FiLM + TMACell + TemporalBank exceeds 12GB at batch=2
-        'grad_accum_steps':  32,  # Keep effective batch ~32
+        'batch_size':        1,   # VideoMAE + ConvNeXt + TMA + TemporalBank exceeds 12GB at batch=2
+        'grad_accum_steps':  32,  # Keep effective batch 32 (same as old 8×4)
     },
     'benchmark_quick': {
         'description': (

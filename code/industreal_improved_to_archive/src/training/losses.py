@@ -28,7 +28,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.ops import box_iou, generalized_box_iou_loss
 
-import config as C
+from src import config as C
 
 
 def _get_kendall_stage(epoch: int) -> int:
@@ -136,9 +136,34 @@ class FocalLoss(nn.Module):
             pred_cy + pred_h / 2,
         ], dim=1)
 
-    def forward(self, cls_preds: torch.Tensor, reg_preds: torch.Tensor,
-                anchors: torch.Tensor, targets: List[Dict]) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Returns cls_loss, reg_loss (both scalars)."""
+    def forward(self, cls_preds: torch.Tensor, reg_preds: torch.Tensor = None,
+                anchors: torch.Tensor = None, targets: List[Dict] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Returns cls_loss, reg_loss (both scalars).
+
+        Two call modes:
+        - Detection (4 args): forward(cls_preds, reg_preds, anchors, targets)
+          Returns (cls_loss, reg_loss) for full detection pipeline.
+        - Standalone (2 args): forward(logits, targets) for simple classification.
+          Returns (loss, zero_reg) where loss is a simple multiclass focal loss.
+        """
+        # --- C-3 standalone focal loss (2-arg mode) ---
+        # 2-arg mode: forward(logits, targets) where targets is a 1D/2D tensor (not List[Dict])
+        # 4-arg detection mode: targets is List[Dict]
+        if anchors is None and (not isinstance(targets, list)):
+            # Simple 2-arg call: forward(logits, targets)
+            logits = cls_preds
+            tgt = reg_preds if isinstance(reg_preds, torch.Tensor) else targets
+            if tgt.dtype != torch.long:
+                tgt = tgt.long()
+            # Multiclass focal: FL = -alpha_t * (1-p_t)^gamma * log(p_t)
+            probs = F.softmax(logits, dim=1)
+            p_t = probs.gather(1, tgt.unsqueeze(1)).squeeze(1)
+            ce = F.cross_entropy(logits, tgt, reduction='none')
+            alpha_t = self.alpha * torch.ones_like(p_t)
+            loss = alpha_t * (1 - p_t).pow(self.gamma) * ce
+            return loss.mean(), torch.tensor(0.0, device=logits.device)
+
+        # --- Full detection mode (4 args) ---
         B = cls_preds.shape[0]
         device = cls_preds.device
         total_cls = torch.tensor(0.0, device=device)
@@ -206,6 +231,20 @@ class FocalLoss(nn.Module):
                 total_reg = total_reg + giou_loss / num_pos
 
         return total_cls / B, total_reg / B
+
+
+# ===========================================================================
+# GIoU Loss (standalone wrapper for C-5)
+# ===========================================================================
+
+class GIoULoss(nn.Module):
+    """Standalone GIoU loss wrapper around torchvision's generalized_box_iou_loss.
+    Directly optimizes IoU metric evaluated at mAP@0.5 (Doc 2 C.1)."""
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
+        return generalized_box_iou_loss(pred_boxes, target_boxes, reduction='mean')
 
 
 # ===========================================================================
@@ -659,12 +698,14 @@ class MultiTaskLoss(nn.Module):
         self._current_epoch = epoch
 
     def forward(self, outputs: Dict, targets: Dict) -> Tuple[torch.Tensor, Dict]:
-        # Find the first available tensor to determine device (PSR-only branch
+        # Find the first available tensor to determine device and dtype (PSR-only branch
         # omits cls_preds, so fall back to psr_logits or any other tensor).
         device = None
+        output_dtype = None
         for key in ('cls_preds', 'psr_logits', 'act_logits', 'head_pose', 'heatmaps'):
             if key in outputs and isinstance(outputs[key], torch.Tensor):
                 device = outputs[key].device
+                output_dtype = outputs[key].dtype
                 break
         if device is None:
             raise RuntimeError(
@@ -679,7 +720,7 @@ class MultiTaskLoss(nn.Module):
             self.log_var_act.data = self.log_var_act.data.to(device)
             self.log_var_psr.data = self.log_var_psr.data.to(device)
 
-        zero = torch.tensor(0.0, device=device)
+        zero = torch.tensor(0.0, device=device, dtype=output_dtype)
 
         # === Detection ===
         if self.train_det:
@@ -689,6 +730,21 @@ class MultiTaskLoss(nn.Module):
             )
             giou_weight = float(getattr(C, 'GIOU_WEIGHT', 2.0))
             loss_det = cls_loss + giou_weight * reg_loss
+            # --- FIX: Floor loss_det at zero to prevent GIoU negative values
+            # causing Kendall divergence. reg_loss can be negative (GIoU ∈ [-1,1]),
+            # and with Kendall prec = exp(-lv_det) up to ~54.6, a loss_det of -1.5
+            # multiplied by prec=54.6 gives ~-82 per detection step → divergence.
+            # Leaky floor: allow small negative gradient (10%) so log_var can still learn.
+            # Full zero-floor would zero detection gradients and prevent log_var recovery.
+            NEG_SLOPE = 0.1
+            loss_det = torch.where(
+                loss_det < 0,
+                NEG_SLOPE * loss_det,
+                loss_det,
+            )
+            # NaN/inf guard on detection loss
+            if not torch.isfinite(loss_det).all():
+                loss_det = torch.tensor(1e-4, device=device, dtype=output_dtype)
         else:
             cls_loss = reg_loss = loss_det = zero
 
@@ -732,9 +788,22 @@ class MultiTaskLoss(nn.Module):
         # Prior runs showed activity loss spiking to 40.8 when head_pose + PSR activate
         # simultaneously at epoch 16, causing log_var explosion and NaN cascade.
         # Cap activity loss to a safe threshold; Kendall will still learn from lower values.
-        # Must keep as tensor for .item() call at line 816 — use clamp() not scalar assignment.
+        #
+        # PROBLEM: hard clamp(max=40.0) zeroes the gradient when loss > 40.
+        # PyTorch clamp backward: at the boundary, subgradient = 0 (hard max).
+        # LDAM loss at epoch 16 ~= 55 > 40 → gradient zeroed → activity head can't learn.
+        #
+        # SOLUTION: fully-differentiable smooth cap that preserves gradient above cap.
+        # loss_capped(x, cap) = x for x <= cap, cap * (1 + log(x/cap)) for x > cap
+        # - Below cap: gradient = 1.0 (passthrough)
+        # - Above cap: gradient = cap/x > 0 (never zeroed)
+        # torch.where preserves the autograd graph through both branches.
         act_cap = float(getattr(C, 'ACTIVITY_LOSS_CAP', 40.0))
-        loss_act = loss_act.clamp(max=act_cap)
+        loss_act = torch.where(
+            loss_act > act_cap,
+            act_cap * (1 + torch.log(loss_act.clamp(min=1e-8) / act_cap)),
+            loss_act
+        )
 
         # === PSR ===
         if self.train_psr:
@@ -824,18 +893,20 @@ class MultiTaskLoss(nn.Module):
             total = torch.tensor(0.0, device=device)
             if self.train_det:
                 total = total + prec_det * loss_det + lv_det
+            # Sanity floor: ensure no component loss is negative enough to cause
+            # Kendall divergence. Soft floor already applied to loss_det above, but
+            # add this as last-resort guard for all components.
             if self.train_pose:
+                loss_pose = loss_pose.clamp(min=0.0)
                 total = total + prec_hp * loss_pose + lv_hp
             elif self.train_act:
-                # Stage 2 (train_pose=False, train_act=True): head pose frozen,
-                # activity loss contributes. Stage 3: all active.
-                # Note: train_head_pose doesn't exist; head pose is controlled via
-                # train_pose (body keypoints) which is set False when TRAIN_HEAD_POSE=True.
+                loss_head_pose = loss_head_pose.clamp(min=0.0)
                 total = total + prec_hp * loss_head_pose + lv_hp
-            # else: train_pose=False AND train_head_pose=False → skip head pose entirely
             if self.train_act:
+                loss_act = loss_act.clamp(min=0.0)
                 total = total + prec_act * loss_act + lv_act
             if self.train_psr:
+                loss_psr = loss_psr.clamp(min=0.0)
                 total = total + prec_psr * loss_psr + lv_psr
             total = total.squeeze()
 
@@ -854,7 +925,7 @@ class MultiTaskLoss(nn.Module):
                     parts.append(loss_act)
                 if self.train_psr:
                     parts.append(loss_psr)
-                finite_parts = [p for p in parts if torch.isfinite(p)]
+                finite_parts = [p for p in parts if torch.isfinite(p) and p >= 0]
                 if finite_parts:
                     total = torch.stack(finite_parts).sum()
                 else:

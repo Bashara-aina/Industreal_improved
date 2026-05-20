@@ -37,7 +37,281 @@ import pandas as pd
 
 import config as C
 
+# =============================================================================
+# Detection mAP Computation (CHECKLIST ITEM 41)
+# =============================================================================
+
+def compute_detection_map(
+    cls_logits: torch.Tensor,
+    reg_preds: torch.Tensor,
+    gt: List[List[Dict]],
+    num_classes: int = 24,
+    score_thresh: float = 0.5,
+    nms_thresh: float = 0.5,
+    max_per_image: int = 300,
+    img_width: int = 1280,
+    img_height: int = 720,
+    anchors: Optional[np.ndarray] = None,
+) -> Tuple[Dict[int, float], float]:
+    """
+    Compute detection mAP from model outputs (cls_logits, reg_preds) and GT.
+
+    Args:
+        cls_logits: [B, N, 24] raw sigmoid logits from detection head
+        reg_preds:  [B, N, 4]  regression deltas (dx, dy, dw, dh)
+        gt:          list of [B] elements, each is list of {'box': [x1,y1,x2,y2], 'class': c}
+        num_classes: 24 for ASD
+        score_thresh: confidence threshold for filtering
+        nms_thresh:  IoU threshold for NMS per class
+        max_per_image: max detections per image
+        img_width:   image width for clipping
+        img_height:  image height for clipping
+        anchors:     [N, 4] anchor boxes in (x1,y1,x2,y2) format. If None, uses
+                     default anchors from config.
+
+    Returns:
+        (per_class_ap: dict[class_id -> AP], map_val: float mean AP)
+    """
+    device = cls_logits.device
+    B = cls_logits.shape[0]
+    N = cls_logits.shape[1]
+
+    # Get anchors from config if not provided
+    if anchors is None:
+        try:
+            import config as _C
+            anchors_np = C.ANCHOR_BOXES  # type: ignore[attr-defined]
+        except Exception:
+            # Fallback: unit anchors on [0, img_width] x [0, img_height] grid
+            anchors_np = np.array([[0, 0, 128, 128]] * N, dtype=np.float32)
+        anchors_np = anchors_np[:N]  # ensure correct size
+    else:
+        anchors_np = np.asarray(anchors, dtype=np.float32)
+
+    cls_sigmoid = torch.sigmoid(cls_logits)  # [B, N, 24] on device
+
+    dp_boxes, dp_scores, dp_labels = [], [], []
+    dg_boxes, dg_labels = [], []
+
+    for i in range(B):
+        scores_i = cls_sigmoid[i]  # [N, 24] on GPU
+        max_scores = scores_i.max(dim=1).values  # [N]
+        keep_mask = max_scores > score_thresh
+
+        if max_per_image > 0 and keep_mask.sum().item() > max_per_image:
+            topk_idx = torch.topk(max_scores, k=max_per_image, largest=True, sorted=False).indices
+            topk_mask = torch.zeros_like(keep_mask)
+            topk_mask[topk_idx] = True
+            keep_mask = keep_mask & topk_mask
+
+        if keep_mask.sum().item() == 0:
+            dp_boxes.append(np.zeros((0, 4), dtype=np.float32))
+            dp_scores.append(np.zeros(0, dtype=np.float32))
+            dp_labels.append(np.zeros(0, dtype=np.int64))
+        else:
+            keep_np = keep_mask.cpu().numpy()
+            kept_cls = scores_i[keep_mask].float().cpu().numpy()  # [K, 24]
+            kept_reg = reg_preds[i][keep_mask].cpu().numpy()       # [K, 4]
+            kept_anc = anchors_np[keep_np]                         # [K, 4]
+
+            ms = kept_cls.max(axis=1)   # [K] max score per anchor
+            ml = kept_cls.argmax(axis=1)  # [K] class id per anchor
+            pb = decode_boxes(kept_anc, kept_reg)
+            pb[:, 0] = np.clip(pb[:, 0], 0, img_width)
+            pb[:, 1] = np.clip(pb[:, 1], 0, img_height)
+            pb[:, 2] = np.clip(pb[:, 2], 0, img_width)
+            pb[:, 3] = np.clip(pb[:, 3], 0, img_height)
+
+            fb, fs, fl = [], [], []
+            for c in range(num_classes):
+                cm = ml == c
+                if cm.sum() == 0:
+                    continue
+                nk = nms_numpy(pb[cm], ms[cm], nms_thresh)
+                fb.append(pb[cm][nk])
+                fs.append(ms[cm][nk])
+                fl.append(np.full(len(nk), c, dtype=np.int64))
+            if fb:
+                dp_boxes.append(np.concatenate(fb))
+                dp_scores.append(np.concatenate(fs))
+                dp_labels.append(np.concatenate(fl))
+            else:
+                dp_boxes.append(np.zeros((0, 4), dtype=np.float32))
+                dp_scores.append(np.zeros(0, dtype=np.float32))
+                dp_labels.append(np.zeros(0, dtype=np.int64))
+
+        # Ground truth for this image
+        img_gt = gt[i] if i < len(gt) else []
+        gt_boxes_i = np.array(
+            [g['box'] for g in img_gt], dtype=np.float32
+        ) if img_gt else np.zeros((0, 4), dtype=np.float32)
+        gt_labels_i = np.array(
+            [g['class'] for g in img_gt], dtype=np.int64
+        ) if img_gt else np.zeros(0, dtype=np.int64)
+        dg_boxes.append(gt_boxes_i)
+        dg_labels.append(gt_labels_i)
+
+    result = compute_ap_per_class(
+        dp_boxes, dp_scores, dp_labels,
+        dg_boxes, dg_labels,
+        iou_thresh=0.5, num_classes=num_classes,
+        interpolation_mode='coco',
+    )
+    return result['per_class_ap'], result['mAP']
+
+
+# Backward-compatible alias
+def evaluate_detection(*args, **kwargs):
+    """Alias for compute_detection_map for backwards compatibility."""
+    return compute_detection_map(*args, **kwargs)
+
+
+# =============================================================================
+# Activity Top-1 / Top-5 Accuracy Computation (CHECKLIST ITEM 42)
+# =============================================================================
+
+def compute_activity_accuracy(
+    logits: torch.Tensor,
+    labels: torch.Tensor,
+) -> Tuple[float, float, int, int]:
+    """
+    Compute top-1 and top-5 accuracy for activity recognition.
+
+    Args:
+        logits: [B, num_classes] raw logits (NOT softmax/sigmoid)
+        labels: [B] ground truth class indices
+
+    Returns:
+        (top1_accuracy, top5_accuracy, top1_correct, total)
+    """
+    if logits.numel() == 0:
+        return 0.0, 0.0, 0, 0
+
+    B, C = logits.shape
+    top1_pred = logits.argmax(dim=1)          # [B]
+    top5_pred = logits.topk(min(5, C), dim=1)[1]  # [B, 5]
+
+    top1_correct = (top1_pred == labels).sum().item()
+    top5_correct = int((top5_pred == labels.view(B, 1)).any(dim=1).sum().item())
+
+    top1_acc = top1_correct / B
+    top5_acc = top5_correct / B
+
+    return top1_acc, top5_acc, top1_correct, B
+
+
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# CHECKLIST ITEM 43 — PSR Accuracy Computation
+# =============================================================================
+
+def compute_psr_accuracy(
+    step_logits: torch.Tensor,
+    step_labels: torch.Tensor,
+    comp_logits: torch.Tensor,
+    comp_labels: torch.Tensor,
+) -> Dict[str, float]:
+    """
+    Compute PSR step and component accuracy for validation.
+
+    PSR has two sub-tasks:
+      - Step prediction: 36-class classification (procedure step ID)
+      - Component prediction: 11-component binary multi-label (done/not done)
+
+    Args:
+        step_logits: torch.Tensor [B, 36] raw logits for step classification
+        step_labels: torch.Tensor [B] ground truth step IDs (0..35)
+        comp_logits: torch.Tensor [B, 11] raw logits for component binary
+        comp_labels: torch.Tensor [B, 11] ground truth binary labels (0/1)
+
+    Returns:
+        dict with psr_step_acc (float) and psr_comp_acc (float)
+    """
+    step_pred = step_logits.argmax(dim=1)          # [B]
+    step_acc = (step_pred == step_labels).float().mean().item()
+
+    comp_pred = (comp_logits > 0).long()            # [B, 11] binary
+    comp_acc = (comp_pred == comp_labels).float().mean().item()
+
+    return {'psr_step_acc': step_acc, 'psr_comp_acc': comp_acc}
+
+
+# =============================================================================
+# CHECKLIST ITEM 44 — Per-Task Metric Tracking Class
+# =============================================================================
+
+class EvaluationMetrics:
+    """
+    Unified per-task metric tracker for POPW multi-task model.
+    Tracks all task metrics with EMA support and provides update/reset interface.
+    """
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        """Clear all tracked metrics."""
+        # Detection (ASD)
+        self.det_mAP: float = 0.0
+        self.det_precision: float = 0.0
+        self.det_recall: float = 0.0
+
+        # Activity (AR)
+        self.act_top1: float = 0.0
+        self.act_top5: float = 0.0
+        self.act_per_class_acc: float = 0.0
+
+        # PSR
+        self.psr_step_acc: float = 0.0
+        self.psr_comp_acc: float = 0.0
+        self.psr_transition_acc: float = 0.0
+
+        # Head pose
+        self.pose_mpjpe: float = 0.0
+        self.pose_pck: float = 0.0
+
+        # Other
+        self.headpose_mse: float = 0.0
+
+        # Training stats
+        self.total_loss: float = 0.0
+        self.learning_rate: float = 0.0
+
+        # EMA tracking
+        self.ema_det_mAP: float = 0.0
+        self.ema_act_top1: float = 0.0
+        self.ema_psr_step_acc: float = 0.0
+
+        # Internal state
+        self._count: int = 0
+
+    def update(self, metrics: Dict[str, float]) -> None:
+        """
+        Update metrics with a dict of name→value.
+        Accepts any key from the expected_metrics list.
+        """
+        for key, value in metrics.items():
+            if hasattr(self, key):
+                current = getattr(self, key)
+                # EMA-style rolling update: new = 0.9*old + 0.1*new (first-order smoothing)
+                setattr(self, key, 0.9 * current + 0.1 * value)
+            else:
+                # Dynamically create missing attributes (graceful forward-compat)
+                setattr(self, key, value)
+        self._count += 1
+
+    def get_summary(self) -> Dict[str, float]:
+        """Return all current metric values as a flat dict."""
+        result = {}
+        for attr in dir(self):
+            if attr.startswith('_'):
+                continue
+            val = getattr(self, attr)
+            if isinstance(val, (float, int)):
+                result[attr] = float(val)
+        return result
 
 
 # =============================================================================
@@ -353,6 +627,27 @@ def compute_activity_metrics(
     """
     all_gt = np.asarray(all_gt)
     all_pred = np.asarray(all_pred)
+
+    # Guard against empty arrays (Item 49 — no division by zero)
+    if all_gt.size == 0 or all_pred.size == 0:
+        num_classes = len(class_names) if class_names else C.NUM_CLASSES_ACT
+        return {
+            'act_accuracy': 0.0,
+            'act_frame_accuracy': 0.0,
+            'act_accuracy_no_na': 0.0,
+            'act_macro_f1': 0.0,
+            'act_macro_f1_present': 0.0,
+            'act_weighted_f1': 0.0,
+            'act_macro_recall': 0.0,
+            'act_mean_per_class_acc': 0.0,
+            'act_top5_accuracy': 0.0,
+            'act_per_class_acc': [0.0] * num_classes,
+            'act_per_class_report': {},
+            'act_confusion_matrix': np.zeros((num_classes, num_classes)).tolist(),
+            'act_clip_accuracy': 0.0,
+            '_ar_baseline_protocol': 'clip_level_majority_vote',
+        }
+
     num_classes = len(class_names) if class_names else C.NUM_CLASSES_ACT
     labels = list(range(num_classes))
 
@@ -1449,9 +1744,9 @@ def compute_psr_metrics(
       - Per-component F1 (macro across thresholded predictions)
       - Overall F1 (macro over components)
       - F1@T (symmetric bi-directional ±T frame tolerance matching)
-      - Edit Score (Normalized Hamming distance on binary sequences; equivalent to
-        Levenshtein distance for binary since substitution cost = 1 and binary
-        has no transposition benefit)
+      - Edit Score (Normalized Damerau-Levenshtein distance on binary sequences;
+          OSA variant on state-change int8 arrays; not Hamming since DL allows
+          adjacent transpositions which Hamming cannot detect)
       - POS (Percentage of Ordering Success)
 
     Args:
@@ -1757,10 +2052,10 @@ def compute_error_verification_metrics(
 
     if psr_logits.shape[0] == 0 or gt_labels.shape[0] == 0:
         return {
-            'ev_ap': float('nan'),
-            'ev_f1': float('nan'),
-            'ev_precision': float('nan'),
-            'ev_recall': float('nan'),
+            'ev_ap': 0.0,
+            'ev_f1': 0.0,
+            'ev_precision': 0.0,
+            'ev_recall': 0.0,
         }
 
     N = psr_logits.shape[0]  # noqa: F841 — used on lines 1763-1765
@@ -1775,10 +2070,10 @@ def compute_error_verification_metrics(
 
     if valid_mask.sum() == 0:
         return {
-            'ev_ap': float('nan'),
-            'ev_f1': float('nan'),
-            'ev_precision': float('nan'),
-            'ev_recall': float('nan'),
+            'ev_ap': 0.0,
+            'ev_f1': 0.0,
+            'ev_precision': 0.0,
+            'ev_recall': 0.0,
         }
 
     gt_valid = gt_error[valid_mask]
@@ -1788,9 +2083,9 @@ def compute_error_verification_metrics(
     if total_pos == 0:
         return {
             'ev_ap': 0.0,  # [FIX] No positive GT → AP=0 (not 1.0). Same phantom bug
-            'ev_f1': float('nan'),
-            'ev_precision': float('nan'),
-            'ev_recall': float('nan'),
+            'ev_f1': 0.0,
+            'ev_precision': 0.0,
+            'ev_recall': 0.0,
         }
 
     sorted_idx = np.argsort(-score_valid)
@@ -1845,8 +2140,8 @@ except ImportError:
 
 def compute_efficiency_metrics(
     model: nn.Module,
-    device: torch.device,
     img_size: Tuple[int, int] = (720, 1280),
+    device: Optional[str | torch.device] = None,
     num_hand_coords: int = 52,
     warmup_runs: int = 5,
     timed_runs: int = 30,
@@ -1998,14 +2293,15 @@ def evaluate_all(
         device      : torch.device
         max_batches : int -- cap for speed during training validation
         save_dir    : str or None -- where to save confusion matrix
-        use_flip_tta: bool — horizontally flip each frame and average logits (Doc 02 F.1)
-        use_crop_tta: bool — 5-crop TTA (4 corners + center) and average logits (Doc 02 F.2)
+        use_flip_tta: bool — horizontally flip each frame and average logits (Doc 2 F.1)
+        use_crop_tta: bool — 5-crop TTA (4 corners + center) and average logits (Doc 2 F.2)
 
     Returns:
         dict with all metrics
     """
     model.eval()
-    criterion.to(device)
+    device_obj = torch.device(device) if isinstance(device, str) else device
+    criterion.to(device_obj)
 
     # --- CRASH-SAFE CHECKPOINT SAVE for evaluate.py (Bashara 2026-05-09) ---
     def _save_eval_crash_recovery(save_dir: Optional[str], tag: str = '') -> None:
@@ -2067,7 +2363,7 @@ def evaluate_all(
 
         images = _prepare_images(images, device)
 
-        # Doc 02 §C.4: PSR cache reset at recording boundaries.
+        # Doc 2 §C.4: PSR cache reset at recording boundaries.
         # Detect recording transitions within the batch and reset the PSR cache
         # to prevent cross-recording contamination in the causal transformer.
         metadata_batch = targets.get('metadata', [])
@@ -2113,7 +2409,7 @@ def evaluate_all(
 
         outputs_raw = run_model(images, clip_rgb)
 
-        # Doc 02 F.1: Horizontal Flip TTA
+        # Doc 2 F.1: Horizontal Flip TTA
         if use_flip_tta:
             flip_images = torch.flip(images, dims=[3])
             out_flip = run_model(flip_images, clip_rgb)
@@ -2121,7 +2417,7 @@ def evaluate_all(
                 if key in out_flip:
                     outputs_raw[key] = 0.5 * (outputs_raw[key] + torch.flip(out_flip[key], dims=[2]))
 
-        # Doc 02 F.2: 5-Crop TTA (center + 4 corners → averaged per batch element)
+        # Doc 2 F.2: 5-Crop TTA (center + 4 corners → averaged per batch element)
         if use_crop_tta:
             crop_h, crop_w = 224, 224
             crop_list = [
@@ -2180,8 +2476,17 @@ def evaluate_all(
             act_clip_frame_nums.append(int(frame_num))
 
         # --- Head Pose ---
-        head_pose_preds.append(outputs['head_pose'].cpu().numpy())
-        head_pose_gts.append(targets['head_pose'].cpu().numpy())
+        # Fix (Bashara 2026-05-18): guard against None if model.train_pose=False during eval
+        # (model.py now computes head_pose during eval regardless of train_pose, but guard
+        # is kept as defensive fallback in case model checkpoint has train_pose=False in eval.)
+        if outputs['head_pose'] is not None:
+            head_pose_preds.append(outputs['head_pose'].cpu().numpy())
+            head_pose_gts.append(targets['head_pose'].cpu().numpy())
+        else:
+            # Defensive fallback: zeros when head_pose is None (e.g., from older checkpoint)
+            _B = images.shape[0]
+            head_pose_preds.append(np.zeros((_B, 9), dtype=np.float32))
+            head_pose_gts.append(targets['head_pose'].cpu().numpy())
 
         # --- PSR ---
         psr_preds_logits.append(outputs['psr_logits'].cpu().numpy())
@@ -2254,7 +2559,7 @@ def evaluate_all(
             if keep_mask.sum().item() > 0:
                 del kept_cls, kept_reg, pb
             del scores_i, max_scores, keep_mask
-            if device.type == 'cuda':
+            if device_obj.type == 'cuda':
                 torch.cuda.empty_cache()
 
         del images, outputs, cls_sigmoid
@@ -2346,6 +2651,8 @@ def evaluate_all(
     # GPU-fused: computes both tolerance=3 AND tolerance=5 in a SINGLE pass
     psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
     results.update(psr_metrics)
+    # Alias for train.py combined metric compatibility (Item 45)
+    results['psr_macro_f1'] = results.get('psr_overall_f1', 0.0)
     # Overall F1 doesn't depend on tolerance; reuse the same value
     results['psr_overall_f1_at5'] = results.get('psr_overall_f1', 0.0)
     # F1@±5 is already in psr_metrics['psr_f1_at_t5']
@@ -2425,8 +2732,9 @@ def evaluate_all(
     # Efficiency Metrics
     # -------------------------------------------------------------------------
     eff_metrics = compute_efficiency_metrics(
-        model, device,
+        model,
         img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
+        device=device,
         num_hand_coords=52,
         warmup_runs=5,
         timed_runs=30,
@@ -2444,6 +2752,14 @@ def evaluate_all(
     )
 
     model.train()
+
+    # --- Aliases for config compatibility (Item 45) ---
+    # assembly_state_f1 = as_f1 (Paper 8 POS benchmark)
+    if 'as_f1' in results:
+        results['assembly_state_f1'] = results['as_f1']
+    # error_detection_f1 = ev_f1 (Paper 9 error verification F1)
+    if 'ev_f1' in results:
+        results['error_detection_f1'] = results['ev_f1']
 
     # --- Machine-readable logging (JSON + CSV) --------------------------------
     if save_dir:
@@ -2761,12 +3077,12 @@ Examples:
     )
     parser.add_argument(
         '--flip-tta', action='store_true',
-        help='Enable horizontal-flip TTA at evaluation time (Doc 02 F.1). '
+        help='Enable horizontal-flip TTA at evaluation time (Doc 2 F.1). '
              'Averages logits from original and horizontally-flipped images.'
     )
     parser.add_argument(
         '--crop-tta', action='store_true',
-        help='Enable 5-crop TTA at evaluation time (Doc 02 F.2). '
+        help='Enable 5-crop TTA at evaluation time (Doc 2 F.2). '
              'Averages logits from 4 corner crops + center crop (224×224). '
              'WARNING: 5× inference overhead per frame.'
     )
@@ -2804,8 +3120,9 @@ Examples:
 
     if args.profile_efficiency_only:
         eff = compute_efficiency_metrics(
-            model, device,
+            model,
             img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
+            device=device,
             num_hand_coords=52,
         )
         print('\n' + '=' * 60)

@@ -5,8 +5,14 @@ works for at least 2 training steps with gradient accumulation.
 """
 import sys
 import os
-# Add src/ to path so "from models import model" etc. work from scripts/
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
+# Add workdir so 'import src' works; also add subdirs for bare 'from models import model'
+WORK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
+SRC_DIR = os.path.join(WORK_DIR, 'src')
+sys.path.insert(0, WORK_DIR)
+sys.path.insert(1, os.path.join(SRC_DIR, 'models'))
+sys.path.insert(2, os.path.join(SRC_DIR, 'training'))
+sys.path.insert(3, os.path.join(SRC_DIR, 'evaluation'))
+sys.path.insert(4, SRC_DIR)
 
 import torch
 import torch.optim as optim
@@ -17,7 +23,7 @@ from training import losses as losses_module
 import config as C
 
 
-def make_dummy_batch(B=4):
+def make_dummy_batch(B=2):  # Reduced from 4 to fit GPU
     """Create a dummy batch matching IndustRealDataset format."""
     images = torch.randn(B, 3, C.IMG_HEIGHT, C.IMG_WIDTH)
 

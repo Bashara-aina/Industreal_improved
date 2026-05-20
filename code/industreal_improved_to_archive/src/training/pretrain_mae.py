@@ -1,7 +1,7 @@
 """
 MAE-Style Pretraining on IndustReal Frames
 ==========================================
-Doc 02 A.2: Masked Image Modeling pretraining as alternative to VideoMAE V2.
+Doc 2 A.2: Masked Image Modeling pretraining as alternative to VideoMAE V2.
 
 This is a cheaper alternative (+2 to +3% Top-1) to the VideoMAE V2 stream.
 Uses the backbone's existing architecture (ResNet-50 or ConvNeXt-Tiny) to

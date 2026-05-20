@@ -16,6 +16,11 @@ for _sub in ['models', 'training', 'evaluation', 'data', str(_SRC)]:
     _p = str(_p)
     if _p not in sys.path:
         sys.path.insert(0, _p)
+# CRITICAL FIX: add project root so `from src import config` resolves correctly
+# in model.py. Without this, `from src import config as C` resolves to src/src/config.py
+# (relative to the src/ entry) which doesn't exist → silent AttributeError on None.
+if str(_SRC.parent) not in sys.path:
+    sys.path.insert(0, str(_SRC.parent))
 
 """
 Training Script for Multi-Task IndustReal Model
@@ -51,10 +56,19 @@ import random
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 import psutil
+from tqdm import tqdm
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import torch.amp as amp
+from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts, LinearLR, SequentialLR
+from torch.optim.swa_utils import AveragedModel
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 # --- THREAD CONVOVOY FIX (Bashara 2026-05-07) ---
 # Reduce OpenMP/numpy/PyTorch thread counts to eliminate lock convoy.
@@ -76,6 +90,8 @@ import model as _model_module
 import model as _popw_model_module
 import losses as _losses_module
 import evaluate as _evaluate_module
+import data as _ds_module
+from src import config as C
 
 IndustRealMultiTaskDataset = getattr(_ds_module, 'IndustRealMultiTaskDataset')
 # Doc 01 §D.2: When USE_PSR_SEQUENCE_MODE=True, use collate_fn_sequence which
@@ -511,6 +527,8 @@ def train_one_epoch(
     accum_steps: int = C.GRAD_ACCUM_STEPS,
     ema=None,
     seq_loader=None,
+    resume_batch: int = 0,   # FIX: skip N batches for mid-epoch resume
+    best_metric: float = 0.0,  # FIX: pass best_metric explicitly to avoid closure scoping issue
 ):
     model.train()
     optimizer.zero_grad(set_to_none=True)
@@ -586,6 +604,7 @@ def train_one_epoch(
                 'tag': tag,
                 'epoch': epoch,
                 'step': num_batches,
+                'batch': num_batches,   # 1-indexed batch counter within epoch (for mid-epoch resume)
                 'total_steps': total_steps,
                 'seq_steps': seq_steps,
                 'model': model.state_dict(),
@@ -626,6 +645,7 @@ def train_one_epoch(
                 'tag': tag,
                 'epoch': epoch,
                 'step': num_batches,
+                'batch': 0,   # Always 0: force epoch-boundary resume (avoids DataLoader pin_memory race during islice fast-forward)
                 'total_steps': total_steps,
                 'seq_steps': seq_steps,
                 'model': model.state_dict(),
@@ -633,12 +653,13 @@ def train_one_epoch(
                 'scaler': scaler.state_dict(),
                 'nan_skips': nan_skips,
                 'running': running,
-                'num_batches': num_batches,
+                'best_metric': best_metric,   # Closure variable from main(); default 0.0 if not yet set
                 'timestamp': time.time(),
             }
             if ema is not None:
                 save_dict['ema_shadow'] = {k: v.clone() for k, v in ema.shadow.items()}
             # FIX: Save criterion (Kendall log_vars) for full state recovery
+            # FIX: Save best_metric so resume doesn't regress on model selection
             if criterion is not None:
                 save_dict['criterion'] = {
                     'log_var_det': criterion.log_var_det.data.clone(),
@@ -678,6 +699,16 @@ def train_one_epoch(
     _save_crash_recovery(ckpt_dir, 'epoch_start')
 
     _checkpoint_interval = 50  # Save crash checkpoint every 50 batches
+
+    # FIX: Mid-epoch resume — fast-forward DataLoader to resume_batch without any compute.
+    # All model/optimizer/EMA/criterion state is already restored from checkpoint.
+    # We just need to advance the iterator to the correct position.
+    if resume_batch > 0:
+        logger.info(f'  Fast-forwarding DataLoader to batch {resume_batch} (no compute)...')
+        from itertools import islice
+        # Consume resume_batch items without processing (no GPU compute, no optimizer step)
+        _ = list(islice(pbar, resume_batch))
+        logger.info(f'  DataLoader positioned at batch {resume_batch}. Starting training.')
 
     for step, (images, targets) in enumerate(pbar):
         total_steps = step + 1
@@ -1748,7 +1779,9 @@ def main(args):
 
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
-        load_result, skipped_keys = _load_model_compat(model, ckpt['model'])
+        # FIX: Accept both 'model' (named checkpoints) and 'model_state' (crash_recovery)
+        model_state = ckpt.get('model_state', ckpt.get('model'))
+        load_result, skipped_keys = _load_model_compat(model, model_state)
         if skipped_keys:
             logger.warning(
                 f'  Skipped {len(skipped_keys)} checkpoint key(s) (shape mismatch):'
@@ -1764,16 +1797,19 @@ def main(args):
             )
 
         # Restore EMA shadow if present in checkpoint
-        if ema is not None and 'ema_shadow' in ckpt and ckpt['ema_shadow']:
+        # FIX: Accept both 'ema_shadow' (named checkpoints) and 'ema_state' (crash_recovery)
+        ema_key = 'ema_state' if 'ema_state' in ckpt else 'ema_shadow'
+        if ema is not None and ema_key in ckpt and ckpt[ema_key]:
             ema.shadow.update({
                 k: v.to(ema.device) if ema.device else v
-                for k, v in ckpt['ema_shadow'].items()
+                for k, v in ckpt[ema_key].items()
                 if k in ema.shadow
             })
             logger.info('  EMA shadow weights restored from checkpoint.')
 
         try:
-            optimizer.load_state_dict(ckpt['optimizer'])
+            # FIX: Accept both 'optimizer' (named checkpoints) and 'optimizer_state' (crash_recovery)
+            optimizer.load_state_dict(ckpt.get('optimizer_state', ckpt.get('optimizer')))
             logger.info('  Optimizer state restored.')
         except ValueError as e:
             logger.warning(
@@ -1781,8 +1817,9 @@ def main(args):
                 f'Re-initialized -- LR schedule continues.'
             )
         try:
-            scheduler.load_state_dict(ckpt['scheduler'])
-            scaler.load_state_dict(ckpt['scaler'])
+            # FIX: Accept 'scheduler' (named checkpoint) and 'lr_scheduler_state' (crash_recovery)
+            scheduler.load_state_dict(ckpt.get('scheduler', ckpt.get('lr_scheduler_state', {})))
+            scaler.load_state_dict(ckpt.get('scaler_state', ckpt.get('scaler', {})))
         except (KeyError, ValueError) as e:
             logger.warning(
                 f'  Could not restore scheduler/scaler state ({e}). '
@@ -1792,6 +1829,24 @@ def main(args):
         best_metric = float(ckpt.get('best_metric', 0.0))
         patience_counter = int(ckpt.get('patience_counter', 0))
         logger.info(f'Resumed from epoch {start_epoch}, best={best_metric:.4f}')
+
+        # FIX: Mid-epoch resume — skip batches already processed in the partially-completed epoch.
+        # batch > 0 means we crashed mid-epoch (not at epoch boundary). We need to resume from
+        # the saved batch position in train_one_epoch instead of restarting the epoch from batch 0.
+        resume_batch = int(ckpt.get('batch', 0))
+        if resume_batch > 0:
+            # Mid-epoch crash: keep same epoch, skip ahead to resume_batch.
+            # start_epoch stays at ckpt['epoch'] (NOT +1) so we continue the same epoch.
+            start_epoch = ckpt['epoch']
+            _resume_batch_info = [resume_batch]
+            logger.info(
+                f'  Mid-epoch resume: epoch {start_epoch}, will skip {resume_batch} batches '
+                f'(recreating DataLoader iterator to position {resume_batch})'
+            )
+        else:
+            # Epoch-boundary or no batch info: normal resume from next epoch.
+            start_epoch = ckpt['epoch'] + 1
+            _resume_batch_info = [0]
 
         # FIX: Restore criterion (Kendall log_vars) from checkpoint if present
         if 'criterion' in ckpt and ckpt['criterion']:
@@ -1857,8 +1912,14 @@ def main(args):
 
     _eff_cache: Dict[str, Any] = {'epoch': -1, 'metrics': None}
 
+    # FIX: If resuming mid-epoch, pass resume_batch to train_one_epoch so it can
+    # fast-forward the DataLoader iterator without re-computing forward passes.
+    # _resume_batch_info is set in the resume block above.
+    _resume_batch = _resume_batch_info[0] if '_resume_batch_info' in dir() and _resume_batch_info[0] > 0 else 0
+
     try:
-        for epoch in range(start_epoch, C.EPOCHS):
+        _train_start_epoch = _override_start_epoch if _override_start_epoch is not None else start_epoch
+        for epoch in range(_train_start_epoch, C.EPOCHS):
             logger.info(f'\n--- Epoch {epoch}/{C.EPOCHS - 1} ---')
             criterion.set_epoch(epoch)
 
@@ -1938,6 +1999,8 @@ def main(args):
                         accum_steps=train_accum_steps,
                         ema=ema,
                         seq_loader=seq_train_loader,
+                        resume_batch=_resume_batch,
+                        best_metric=best_metric,
                     )
                     break
                 except Exception as exc:
@@ -2295,9 +2358,12 @@ def main(args):
                     scaler,
                     device,
                     swa_epoch,
+                    ckpt_dir,
                     accum_steps=train_accum_steps,
                     ema=None,
                     seq_loader=seq_train_loader,
+                    resume_batch=0,
+                    best_metric=best_metric,
                 )
                 swa_scheduler.step()
                 logger.info(
@@ -2389,6 +2455,20 @@ if __name__ == '__main__':
         help='Override DataLoader num_workers. Use 0 to disable multiprocessing '
              '(avoids shared-memory crashes on some systems).',
     )
+    parser.add_argument(
+        '--no-staged-training',
+        action='store_true',
+        help='Disable 3-stage progressive training. Activates ALL 5 heads from epoch 0 '
+             '(equivalent to being in stage 3). Use for quick smoke tests.',
+    )
+    parser.add_argument(
+        '--start-epoch',
+        type=int,
+        default=None,
+        help='Override starting epoch (e.g., 16 to jump to stage-3 equivalent). '
+             'Does NOT load checkpoint — model starts fresh. '
+             'Use with --no-staged-training to bypass stage gates.',
+    )
 
     args = parser.parse_args()
 
@@ -2412,6 +2492,14 @@ if __name__ == '__main__':
     if args.num_workers is not None:
         C.NUM_WORKERS = args.num_workers
         logger.info(f'[train] num_workers overridden to {args.num_workers}')
+
+    _override_start_epoch = None  # set by --start-epoch
+    if args.no_staged_training:
+        C.STAGED_TRAINING = False
+        logger.info('[train] STAGED_TRAINING=False — all 5 heads active from epoch 0')
+    if args.start_epoch is not None:
+        _override_start_epoch = args.start_epoch
+        logger.info(f'[train] start_epoch override: {_override_start_epoch} (fresh init, no checkpoint)')
 
     if args.debug:
         C.DEBUG_MODE = True

@@ -68,7 +68,7 @@ loader = DataLoader(
 from models.model import POPWMultiTaskModel
 model = POPWMultiTaskModel(
     pretrained=True,
-    backbone_type=getattr(C, 'BACKBONE_TYPE', 'convnext_tiny'),
+    backbone_type=getattr(C, 'BACKBONE', 'convnext_tiny'),
     use_headpose_film=True,
     use_videomae=False,
     train_pose=False,  # TRAIN_HEAD_POSE=False

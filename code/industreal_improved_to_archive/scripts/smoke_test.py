@@ -12,11 +12,15 @@ import warnings
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 # Modules are in subdirectories: src/models/model.py, src/training/losses.py,
 # src/evaluation/evaluate.py, src/config.py
-SRC_DIR = os.path.join(SCRIPTS_DIR, os.pardir, 'src')
-sys.path.insert(0, os.path.normpath(os.path.join(SRC_DIR, 'models')))
-sys.path.insert(0, os.path.normpath(os.path.join(SRC_DIR, 'training')))
-sys.path.insert(0, os.path.normpath(os.path.join(SRC_DIR, 'evaluation')))
-sys.path.insert(0, os.path.normpath(SRC_DIR))
+# Add workdir so we can import src.models.model, src.training.losses etc.
+WORK_DIR = os.path.normpath(os.path.join(SCRIPTS_DIR, os.pardir))
+SRC_DIR = os.path.join(WORK_DIR, 'src')
+sys.path.insert(0, WORK_DIR)
+# Also add subdirs for bare 'import model/losses/config' calls
+sys.path.insert(1, os.path.join(SRC_DIR, 'models'))
+sys.path.insert(2, os.path.join(SRC_DIR, 'training'))
+sys.path.insert(3, os.path.join(SRC_DIR, 'evaluation'))
+sys.path.insert(4, SRC_DIR)
 
 import torch
 import torch.nn as nn
@@ -1012,8 +1016,9 @@ def test_compute_efficiency_metrics_string_device():
         # compute_efficiency_metrics expects torch.device but callers pass str
         device_str = 'cuda' if torch.cuda.is_available() else 'cpu'
         eff = compute_efficiency_metrics(
-            model, device_str,
+            model,
             img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
+            device=device_str,
         )
 
         has_keys = all(k in eff for k in ['eff_params_m', 'eff_gflops', 'eff_fps'])

@@ -12,8 +12,8 @@ Date: 2026-05-15
 
 import sys, os, re
 work_dir = os.path.join(os.path.dirname(__file__), '..')
-sys.path.insert(0, work_dir)
-sys.path.insert(0, os.path.join(work_dir, 'src'))
+sys.path.insert(0, os.path.join(work_dir, 'src'))  # src/ at index 0 → 'import training' finds src/training/
+sys.path.insert(1, work_dir)  # project root at index 1
 
 import torch
 import training.losses as _L
