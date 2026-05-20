@@ -2801,6 +2801,15 @@ def _save_results_json(results: Dict[str, Any], save_dir: str) -> None:
         json.dump(safe, f, indent=2)
     logger.info(f'  [RESULTS] JSON saved: {fname}')
 
+    # [2% AUDIT] Also write metrics.jsonl for machine-readable consumption
+    import json as _json
+    metrics_path = os.path.join(save_dir, 'metrics.jsonl')
+    metrics_to_write = {k: v for k, v in safe.items()
+                        if isinstance(v, (int, float, str, bool)) and not k.startswith('_')}
+    with open(metrics_path, 'a') as f:
+        f.write(_json.dumps(metrics_to_write) + '\n')
+    logger.info(f'  [2pct] metrics.jsonl appended: {metrics_path}')
+
 
 def _save_results_csv(results: Dict[str, Any], save_dir: str) -> None:
     """Append evaluation results as a row in a CSV log (one row per run)."""
