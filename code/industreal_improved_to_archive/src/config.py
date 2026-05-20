@@ -343,7 +343,7 @@ PRETRAIN_HFLIP_PROB  = 0.5   # probability of random horizontal flip
 # =========================================================================
 # Staged training (Doc 2 B.1)
 # =========================================================================
-STAGED_TRAINING = True
+STAGED_TRAINING = False  # Disabled: train all heads from epoch 0
 STAGE1_EPOCHS = 5    # Detection-only warmup
 STAGE2_EPOCHS = 10   # Add pose + head pose
 STAGE3_EPOCHS = 85   # Full multi-task with EMA — 5+10+85=100 total — was 35
