@@ -2093,6 +2093,17 @@ def main(args):
                 )
             _check_ram(f'epoch_{epoch}_train')
 
+            # [2% AUDIT] TRAIN_MAX_STEPS: break epoch loop if step limit reached
+            if getattr(C, 'TRAIN_MAX_STEPS', 0) > 0:
+                _batch_count = train_metrics.get('num_batches', 0)
+                if not hasattr(C, '_global_step'):
+                    C._global_step = 0
+                C._global_step += _batch_count
+                logger.info(f'  [2pct] global_step={C._global_step}/{C.TRAIN_MAX_STEPS}')
+                if C._global_step >= C.TRAIN_MAX_STEPS:
+                    logger.info(f'  [2pct] TRAIN_MAX_STEPS limit reached ({C._global_step}). Stopping training.')
+                    break
+
             current_lr = optimizer.param_groups[1]['lr']
             ema_decay_str = ''
             if ema is not None:
@@ -2504,6 +2515,12 @@ if __name__ == '__main__':
     if args.num_workers is not None:
         C.NUM_WORKERS = args.num_workers
         logger.info(f'[train] num_workers overridden to {args.num_workers}')
+
+    # TRAIN_MAX_STEPS: limit total optimizer steps for quick runs (env var)
+    _env_max_steps = int(os.environ.get('TRAIN_MAX_STEPS', '0'))
+    if _env_max_steps > 0:
+        C.TRAIN_MAX_STEPS = _env_max_steps
+        logger.info(f'[train] TRAIN_MAX_STEPS={_env_max_steps} — will early-stop at this step count')
 
     _override_start_epoch = None  # set by --start-epoch
     if args.no_staged_training:
