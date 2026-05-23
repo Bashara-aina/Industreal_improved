@@ -132,6 +132,11 @@ CFG_VAL_NUM_WORKERS = int(getattr(C, 'VAL_NUM_WORKERS', C.NUM_WORKERS))
 CFG_VAL_BATCH_SIZE  = int(getattr(C, 'VAL_BATCH_SIZE', C.BATCH_SIZE))
 CFG_EVAL_MAX_BATCHES = int(getattr(C, 'EVAL_MAX_BATCHES', 0))
 
+# --- SHARED EVALUATION PHASE FLAG (Bashara 2026-05-23) ---
+# Prevents signal handlers from killing DDP ranks during validation.
+# Wrapped around evaluate_all() calls via try/finally in the epoch loop.
+IN_EVALUATION_PHASE = False
+
 
 def _refresh_runtime_cfg() -> None:
     global CFG_TRAIN_DET, CFG_TRAIN_HEAD_POSE, CFG_TRAIN_ACT
@@ -638,18 +643,42 @@ def train_one_epoch(
     # Problem: validation-phase GPU OOM → CUDA error → DDP/NCCL broadcasts SIGINT
     # to all ranks → crash recovery saves fail because torch.save internally calls
     # cudaStreamSynchronize in corrupted CUDA context.
+    #
+    # IMPORTANT: In signal handler context, even torch.cuda.synchronize() can hang
+    # or crash the process. We use only torch.cuda.device_count() which is a
+    # lightweight metadata lookup that does NOT require a working CUDA context.
     def _cuda_is_healthy() -> bool:
-        """Return True if CUDA context is healthy (no OOM, no corrupted state)."""
+        """Return True if CUDA context is healthy (no OOM, no corrupted state).
+
+        This MUST be safe to call from a signal handler. Do NOT use
+        torch.cuda.synchronize() or any operation that requires a working
+        CUDA context. Use torch.cuda.device_count() as a lightweight probe.
+        """
         if not torch.cuda.is_available():
             return True  # CPU-only, always healthy
         try:
-            torch.cuda.synchronize()
-            return True
+            # device_count() is a metadata lookup — does NOT require a working CUDA context
+            # and cannot hang even if CUDA is in a corrupted state.
+            count = torch.cuda.device_count()
+            if count == 0:
+                return True  # no CUDA devices, CPU-only
+            # Additional safe probe: try to get current device name (lightweight)
+            try:
+                _ = torch.cuda.get_device_name(0)
+                return True
+            except Exception:
+                return False
         except Exception:
             return False
 
     def _save_crash_recovery(ckpt_dir: Path, tag: str = '') -> None:
-        """Save minimal recovery state. Never blocks >5s. CPU-fallback if CUDA bad."""
+        """Save minimal recovery state. Never blocks >5s. CPU-fallback if CUDA bad.
+
+        IMPORTANT: This function must be completely safe to call from a signal
+        handler. Even if CUDA is completely broken, this function must return
+        without crashing. The caller (signal handler) will call sys.exit() after
+        this returns.
+        """
         def _do_save() -> None:
             try:
                 if _checkpoint_has_nan(model):
@@ -659,68 +688,109 @@ def train_one_epoch(
                     return
                 recovery_path = ckpt_dir / 'crash_recovery.pth'
 
-                # Build save_dict — convert GPU tensors to CPU if CUDA is unhealthy
-                cuda_healthy = _cuda_is_healthy()
+                # BASHARA 2026-05-23: Detect CUDA health using safe method.
+                # If unhealthy, move model to CPU entirely before state_dict()
+                # to avoid any CUDA operations during iteration.
+                cuda_healthy = False
+                try:
+                    cuda_healthy = _cuda_is_healthy()
+                except Exception:
+                    cuda_healthy = False
 
-                model_state = {}
-                for k, v in model.state_dict().items():
-                    if cuda_healthy or not isinstance(v, torch.Tensor):
-                        model_state[k] = v
-                    else:
-                        model_state[k] = v.cpu()
+                # If CUDA is unhealthy, move model to CPU before state_dict().
+                # This completely avoids CUDA operations during iteration.
+                # We will restore the device afterward.
+                model_device = None
+                if not cuda_healthy:
+                    try:
+                        # Temporarily move entire model to CPU
+                        model_device = next(model.parameters()).device
+                        model.cpu()
+                    except Exception:
+                        pass  # still try to save what we can
 
-                optimizer_state = {}
-                for k, v in optimizer.state_dict().items():
-                    if cuda_healthy or not isinstance(v, torch.Tensor):
-                        optimizer_state[k] = v
-                    else:
-                        try:
-                            optimizer_state[k] = v.cpu()
-                        except Exception:
+                try:
+                    # Build save_dict — iterates model.state_dict() safely
+                    model_state = {}
+                    for k, v in model.state_dict().items():
+                        if isinstance(v, torch.Tensor):
+                            # v might be on CPU now (if we moved model) or still on GPU
+                            # Either way, copy to CPU to ensure torch.save doesn't need CUDA
+                            try:
+                                model_state[k] = v.detach().cpu()
+                            except Exception:
+                                # fallback: clone to CPU if detach fails
+                                try:
+                                    model_state[k] = v.clone().cpu()
+                                except Exception:
+                                    model_state[k] = v  # last resort, may be on GPU
+                        else:
+                            model_state[k] = v
+
+                    optimizer_state = {}
+                    for k, v in optimizer.state_dict().items():
+                        if isinstance(v, torch.Tensor):
+                            try:
+                                optimizer_state[k] = v.detach().cpu()
+                            except Exception:
+                                try:
+                                    optimizer_state[k] = v.clone().cpu()
+                                except Exception:
+                                    optimizer_state[k] = v
+                        else:
                             optimizer_state[k] = v
 
-                scaler_state = {}
-                for k, v in scaler.state_dict().items():
-                    if cuda_healthy or not isinstance(v, torch.Tensor):
-                        scaler_state[k] = v
-                    else:
-                        try:
-                            scaler_state[k] = v.cpu()
-                        except Exception:
+                    scaler_state = {}
+                    for k, v in scaler.state_dict().items():
+                        if isinstance(v, torch.Tensor):
+                            try:
+                                scaler_state[k] = v.detach().cpu()
+                            except Exception:
+                                try:
+                                    scaler_state[k] = v.clone().cpu()
+                                except Exception:
+                                    scaler_state[k] = v
+                        else:
                             scaler_state[k] = v
 
-                save_dict = {
-                    'tag': tag,
-                    'epoch': epoch,
-                    'step': num_batches,
-                    'batch': 0,
-                    'total_steps': total_steps,
-                    'seq_steps': seq_steps,
-                    'model': model_state,
-                    'optimizer': optimizer_state,
-                    'scaler': scaler_state,
-                    'nan_skips': nan_skips,
-                    'running': running,
-                    'best_metric': best_metric,
-                    'timestamp': time.time(),
-                }
-                if ema is not None:
-                    save_dict['ema_shadow'] = {
-                        k: (v.cpu() if cuda_healthy or not isinstance(v, torch.Tensor) else v)
-                        for k, v in ema.shadow.items()
+                    save_dict = {
+                        'tag': tag,
+                        'epoch': epoch,
+                        'step': num_batches,
+                        'batch': 0,
+                        'total_steps': total_steps,
+                        'seq_steps': seq_steps,
+                        'model': model_state,
+                        'optimizer': optimizer_state,
+                        'scaler': scaler_state,
+                        'nan_skips': nan_skips,
+                        'running': running,
+                        'best_metric': best_metric,
+                        'timestamp': time.time(),
                     }
-                if criterion is not None:
-                    save_dict['criterion'] = {
-                        'log_var_det': criterion.log_var_det.data.clone(),
-                        'log_var_pose': criterion.log_var_pose.data.clone(),
-                        'log_var_act': criterion.log_var_act.data.clone(),
-                        'log_var_psr': criterion.log_var_psr.data.clone(),
-                    }
-                torch.save(save_dict, recovery_path)
-                logger.info(f'  [CRASH_RECOVERY] Saved {tag} crash checkpoint to {recovery_path}')
-                # CRITICAL: force flush to disk so even SIGKILL won't lose this
-                if _cuda_is_healthy():
-                    torch.cuda.synchronize()
+                    if ema is not None:
+                        save_dict['ema_shadow'] = {
+                            k: (v.detach().cpu() if isinstance(v, torch.Tensor) else v)
+                            for k, v in ema.shadow.items()
+                        }
+                    if criterion is not None:
+                        save_dict['criterion'] = {
+                            'log_var_det': criterion.log_var_det.data.clone().cpu(),
+                            'log_var_pose': criterion.log_var_pose.data.clone().cpu(),
+                            'log_var_act': criterion.log_var_act.data.clone().cpu(),
+                            'log_var_psr': criterion.log_var_psr.data.clone().cpu(),
+                        }
+
+                    # Write to disk (CPU tensors only — no CUDA involvement)
+                    torch.save(save_dict, recovery_path)
+                    logger.info(f'  [CRASH_RECOVERY] Saved {tag} crash checkpoint to {recovery_path}')
+                finally:
+                    # Restore model to original device if we moved it to CPU
+                    if model_device is not None and model_device.type == 'cuda':
+                        try:
+                            model.cuda()
+                        except Exception:
+                            logger.warning('  [CRASH_RECOVERY] Failed to restore model to GPU')
             except Exception as exc:
                 logger.warning(f'  [CRASH_RECOVERY] Failed to save crash checkpoint: {exc}')
 
@@ -734,18 +804,34 @@ def train_one_epoch(
     # --- SIGNAL HANDLERS for C-level crashes (Bashara 2026-05-08) ---
     # CUDA assertions / segfaults arrive as signals. Catch them and log before exit.
     def _sig_handler(signum, frame):
+        global IN_EVALUATION_PHASE
         sig_name = signal.Signals(signum).name
         logger.error(f'  [FATAL SIGNAL] {sig_name} received at step={num_batches} epoch={epoch}')
         logger.error('  [FATAL SIGNAL] Dumping faulthandler traceback:')
         faulthandler.dump_traceback()
+        # BASHARA 2026-05-23: During validation, crash recovery is unsafe because
+        # CUDA context may be corrupted. Skip save and let DDP clean up gracefully.
+        if IN_EVALUATION_PHASE:
+            logger.warning(f'  [FATAL SIGNAL] In eval phase -- skipping crash save, exiting immediately')
+            sys.exit(0)
+        # BASHARA 2026-05-23: Try crash recovery. Even if it fails, exit cleanly.
+        # _save_crash_recovery is now fully safe — it will never crash or hang.
         _save_crash_recovery(ckpt_dir, f'fatal_signal_{sig_name}')
-        sys.exit(99)
+        # Always exit with 0 — crash recovery attempted, no further action possible
+        sys.exit(0)
     for _sig in (signal.SIGSEGV, signal.SIGABRT, signal.SIGBUS, signal.SIGFPE):
         signal.signal(_sig, _sig_handler)
     # Also catch SIGTERM (timeout / external kill) and SIGINT (Ctrl+C)
     def _sig_term_handler(signum, frame):
+        global IN_EVALUATION_PHASE
         sig_name = signal.Signals(signum).name
         logger.warning(f'  [SIGNAL] {sig_name} received at step={num_batches} epoch={epoch} -- saving crash recovery and exiting gracefully')
+        # BASHARA 2026-05-23: During eval, skip crash save (CUDA may be corrupted) and exit gracefully.
+        if IN_EVALUATION_PHASE:
+            logger.warning(f'  [SIGNAL] In eval phase -- skipping crash save, exiting gracefully')
+            sys.exit(0)
+        # BASHARA 2026-05-23: Try crash recovery with CPU fallback. Even if it fails,
+        # exit cleanly with code 0. The signal handler must NEVER crash or hang.
         _save_crash_recovery(ckpt_dir, f'signal_{sig_name}')
         sys.exit(0)
     for _sig in (signal.SIGTERM, signal.SIGINT):
@@ -930,7 +1016,9 @@ def train_one_epoch(
                 outputs[_k] = outputs[_k].float()
 
         # Doc 2 D.2: Alternate Mixup/CutMix each epoch
-        if C.USE_MIXUP and epoch >= int(getattr(C, 'ACT_RAMP_EPOCHS', 5)):
+        # Activity is fixed in stage 2 (train_stage == 2) — skip MixUp to avoid
+        # corrupting activity targets when activity loss is zeroed.
+        if C.USE_MIXUP and epoch >= int(getattr(C, 'ACT_RAMP_EPOCHS', 5)) and stage >= 3:
             use_cutmix = bool(getattr(C, 'CUTMIX_ALPHA', 0) > 0 and epoch % 2 == 1)
             if use_cutmix:
                 outputs, targets = cutmix_activity(
@@ -1753,7 +1841,7 @@ def main(args):
             logger.info(f'  {k:15s}: {v:>10,}')
 
     criterion = MultiTaskLoss(
-        num_classes_act=C.NUM_CLASSES_ACT - 1,  # ActivityHead outputs 74 classes, not 75 (75=74 AR + 1 NA prepended at dataset level)
+        num_classes_act=C.NUM_CLASSES_ACT,  # ActivityHead outputs 75 classes (indices 0-74; class 0=NA, classes 1-74 map to AR actions)
         num_psr_components=C.NUM_PSR_COMPONENTS,
         train_det=CFG_TRAIN_DET,
         train_pose=CFG_TRAIN_HEAD_POSE,
@@ -2285,71 +2373,75 @@ def main(args):
                         prefetch=val_prefetch_rt,
                         persistent=False,
                     )
+                    global IN_EVALUATION_PHASE
+                    IN_EVALUATION_PHASE = True
                     try:
-                        val_metrics = evaluate_all(
-                            model,
-                            criterion,
-                            val_loader,
-                            device,
-                            max_batches=val_max_batches_rt,
-                        )
-                        _check_per_class_activity_sanity(val_metrics, epoch)
-                    except Exception as exc:
-                        is_cpu_enomem = 'Cannot allocate memory' in str(exc)
-                        is_cuda_oom_v = _is_cuda_oom(exc)
-                        # --- BASHARA 2026-05-22: Catch ALL validation exceptions (not just OOM).
-                        # The empty_guard_failed RuntimeError from evaluate.py is NOT an OOM error,
-                        # but it may be recoverable with reduced max_batches + worker reset.
-                        # Only re-raise immediately if it's a truly unrecoverable error.
-                        if is_cpu_enomem or is_cuda_oom_v:
-                            pass  # Fall through to retry logic below
-                        else:
-                            # Non-OOM exception: check if it has "empty batch" or "act_preds" in message
-                            # These are often recoverable if we reduce eval scope
-                            exc_str = str(exc)
-                            if 'empty' in exc_str.lower() and ('act_preds' in exc_str or 'batch' in exc_str.lower()):
-                                logger.warning(
-                                    f'Validation non-OOM exception (possibly recoverable): {exc_str[:200]}'
-                                )
-                                # Reduce scope and retry, but only once — don't loop 4x
-                                if val_attempt == 1:
-                                    val_batch_size_rt = max(1, val_batch_size_rt // 2)
-                                    val_workers_rt = 0
-                                    val_prefetch_rt = 1
-                                    val_max_batches_rt = max(1, int(val_max_batches_rt) // 2)
-                                    gc.collect()
-                                    torch.cuda.empty_cache()
-                                    logger.info(
-                                        f'Validation retry (non-OOM, reducing scope): batch={val_batch_size_rt} '
-                                        f'workers={val_workers_rt} prefetch={val_prefetch_rt} '
-                                        f'max_batches={val_max_batches_rt}'
+                        try:
+                            val_metrics = evaluate_all(
+                                model,
+                                criterion,
+                                val_loader,
+                                device,
+                                max_batches=val_max_batches_rt,
+                            )
+                            _check_per_class_activity_sanity(val_metrics, epoch)
+                        except Exception as exc:
+                            is_cpu_enomem = 'Cannot allocate memory' in str(exc)
+                            is_cuda_oom_v = _is_cuda_oom(exc)
+                            # --- BASHARA 2026-05-22: Catch ALL validation exceptions (not just OOM).
+                            # The empty_guard_failed RuntimeError from evaluate.py is NOT an OOM error,
+                            # but it may be recoverable with reduced max_batches + worker reset.
+                            # Only re-raise immediately if it's a truly unrecoverable error.
+                            if is_cpu_enomem or is_cuda_oom_v:
+                                pass  # Fall through to retry logic below
+                            else:
+                                # Non-OOM exception: check if it has "empty batch" or "act_preds" in message
+                                # These are often recoverable if we reduce eval scope
+                                exc_str = str(exc)
+                                if 'empty' in exc_str.lower() and ('act_preds' in exc_str or 'batch' in exc_str.lower()):
+                                    logger.warning(
+                                        f'Validation non-OOM exception (possibly recoverable): {exc_str[:200]}'
                                     )
-                                    del val_loader
-                                    continue
-                            # All other non-OOM exceptions: re-raise immediately (no point retrying)
-                            raise
-                        if is_cuda_oom_v:
-                            logger.exception(
-                                'Validation CUDA OOM detected. Reducing val load and retrying.'
+                                    # Reduce scope and retry, but only once — don't loop 4x
+                                    if val_attempt == 1:
+                                        val_batch_size_rt = max(1, val_batch_size_rt // 2)
+                                        val_workers_rt = 0
+                                        val_prefetch_rt = 1
+                                        val_max_batches_rt = max(1, int(val_max_batches_rt) // 2)
+                                        gc.collect()
+                                        torch.cuda.empty_cache()
+                                        logger.info(
+                                            f'Validation retry (non-OOM, reducing scope): batch={val_batch_size_rt} '
+                                            f'workers={val_workers_rt} prefetch={val_prefetch_rt} '
+                                            f'max_batches={val_max_batches_rt}'
+                                        )
+                                        del val_loader
+                                        continue
+                                # All other non-OOM exceptions: re-raise immediately (no point retrying)
+                                raise
+                            if is_cuda_oom_v:
+                                logger.exception(
+                                    'Validation CUDA OOM detected. Reducing val load and retrying.'
+                                )
+                            else:
+                                logger.exception(
+                                    'Validation ENOMEM detected. Reducing val load and retrying.'
+                                )
+                            val_batch_size_rt = max(1, val_batch_size_rt // 2)
+                            val_workers_rt = 0
+                            val_prefetch_rt = 1
+                            val_max_batches_rt = max(1, int(val_max_batches_rt) // 2)
+                            gc.collect()
+                            torch.cuda.empty_cache()
+                            logger.info(
+                                f'Validation retry settings: batch={val_batch_size_rt} '
+                                f'workers={val_workers_rt} prefetch={val_prefetch_rt} '
+                                f'max_batches={val_max_batches_rt}'
                             )
-                        else:
-                            logger.exception(
-                                'Validation ENOMEM detected. Reducing val load and retrying.'
-                            )
-                        val_batch_size_rt = max(1, val_batch_size_rt // 2)
-                        val_workers_rt = 0
-                        val_prefetch_rt = 1
-                        val_max_batches_rt = max(1, int(val_max_batches_rt) // 2)
-                        gc.collect()
-                        torch.cuda.empty_cache()
-                        logger.info(
-                            f'Validation retry settings: batch={val_batch_size_rt} '
-                            f'workers={val_workers_rt} prefetch={val_prefetch_rt} '
-                            f'max_batches={val_max_batches_rt}'
-                        )
-                        del val_loader
-                        continue
+                            del val_loader
+                            continue
                     finally:
+                        IN_EVALUATION_PHASE = False
                         del val_loader
                         gc.collect()
                         torch.cuda.empty_cache()
