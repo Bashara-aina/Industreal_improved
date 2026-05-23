@@ -385,6 +385,8 @@ class LDAMLoss(nn.Module):
         index.scatter_(1, hard_targets.view(-1, 1), True)
         batch_m = m_list[hard_targets].view(-1, 1)
         x_m = logits - batch_m * index.float()
+        # Clamp x_m to prevent overflow when s=30 and logits are large
+        x_m = x_m.clamp(-10.0, 10.0)
 
         if epoch >= drw_epoch and self.cb_weights is not None:
             w = self.cb_weights.to(device)[hard_targets]
@@ -392,8 +394,11 @@ class LDAMLoss(nn.Module):
             w = torch.ones(B, device=device)
 
         # [FIX #C] Paper §2.2.4: label_smooth=0.1 for LDAM-DRW
+        # [FIX #D] Clamp s*x_m to prevent softmax overflow (inf → NaN cascade)
+        # softmax(±50) is numerically stable; beyond ±100 causes inf → NaN
+        logits_safe = (self.s * x_m).clamp(-50.0, 50.0)
         return (w * F.cross_entropy(
-            self.s * x_m, hard_targets, reduction='none',
+            logits_safe, hard_targets, reduction='none',
             label_smoothing=0.1
         )).mean()
 
@@ -734,9 +739,8 @@ class MultiTaskLoss(nn.Module):
             # causing Kendall divergence. reg_loss can be negative (GIoU ∈ [-1,1]),
             # and with Kendall prec = exp(-lv_det) up to ~54.6, a loss_det of -1.5
             # multiplied by prec=54.6 gives ~-82 per detection step → divergence.
-            # Leaky floor: allow small negative gradient (10%) so log_var can still learn.
-            # Full zero-floor would zero detection gradients and prevent log_var recovery.
-            NEG_SLOPE = 0.1
+            # Full zero-floor: GIoU<0 gets 0 gradient (no negative signal to log_var).
+            NEG_SLOPE = 0.0
             loss_det = torch.where(
                 loss_det < 0,
                 NEG_SLOPE * loss_det,
@@ -780,8 +784,24 @@ class MultiTaskLoss(nn.Module):
         else:
             loss_act = zero
 
+        # [FIX #1] Preventive NaN guard — catch inf before smooth cap propagates it.
+        # LDAM can produce inf if logits are extreme (e.g., all zeros → softamax → NaN from log).
+        # LDAM forward: F.cross_entropy with label_smoothing=0.1 and s=30 — any
+        # inf in logits will create NaN in cross_entropy output.
+        # This guard is BEFORE the smooth cap so NaN cannot corrupt the cap formula.
+        if not torch.isfinite(loss_act).all():
+            loss_act = torch.where(
+                torch.isfinite(loss_act),
+                loss_act,
+                zero.expand_as(loss_act) if loss_act.numel() > 1 else zero,
+            )
+            # Fallback: if entire tensor is non-finite, use zero (activity contributes nothing this batch).
+            if not torch.isfinite(loss_act).all():
+                loss_act = zero
+
         # Activity warmup ramp
-        act_ramp = min(1.0, self._current_epoch / max(self._act_warmup_epochs, 1))
+        # NOTE: +1 so epoch 0 gets ramp=1/5=0.2 instead of 0/5=0 (which zeroed loss_act entirely)
+        act_ramp = min(1.0, (self._current_epoch + 1) / max(self._act_warmup_epochs, 1))
         loss_act = loss_act * act_ramp
 
         # --- FIX: Activity loss cap to prevent NaN cascade at Stage 3 entry ---
@@ -798,10 +818,15 @@ class MultiTaskLoss(nn.Module):
         # - Below cap: gradient = 1.0 (passthrough)
         # - Above cap: gradient = cap/x > 0 (never zeroed)
         # torch.where preserves the autograd graph through both branches.
+        # [FIX #2] Clamp smooth cap log input to prevent extreme value instability.
+        # log(x) is only defined for x > 0. clamp(min=1e-6) guards against x ≤ 0 from prior
+        # numerical errors. clamp(max=1e6) prevents overflow in exp(log(x)) downstream.
+        # The outer torch.where still passes gradient through when loss_act <= act_cap.
         act_cap = float(getattr(C, 'ACTIVITY_LOSS_CAP', 40.0))
+        loss_act_safe = loss_act.clamp(min=1e-6, max=1e6)
         loss_act = torch.where(
             loss_act > act_cap,
-            act_cap * (1 + torch.log(loss_act.clamp(min=1e-8) / act_cap)),
+            act_cap * (1 + torch.log(loss_act_safe / act_cap)),
             loss_act
         )
 
@@ -901,10 +926,8 @@ class MultiTaskLoss(nn.Module):
                 total = total + prec_hp * loss_pose + lv_hp
             if self.train_act:
                 loss_head_pose = loss_head_pose.clamp(min=0.0)
-                total = total + prec_hp * loss_head_pose + lv_hp
-            if self.train_act:
                 loss_act = loss_act.clamp(min=0.0)
-                total = total + prec_act * loss_act + lv_act
+                total = total + prec_act * loss_head_pose + lv_act + prec_act * loss_act + lv_act
             if self.train_psr:
                 loss_psr = loss_psr.clamp(min=0.0)
                 total = total + prec_psr * loss_psr + lv_psr
@@ -919,9 +942,8 @@ class MultiTaskLoss(nn.Module):
                     parts.append(loss_det)
                 if self.train_pose:
                     parts.append(loss_pose)
-                elif self.train_act:
-                    parts.append(loss_head_pose)
                 if self.train_act:
+                    parts.append(loss_head_pose)
                     parts.append(loss_act)
                 if self.train_psr:
                     parts.append(loss_psr)

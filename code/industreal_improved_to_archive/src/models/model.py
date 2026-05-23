@@ -288,7 +288,7 @@ def set_backbone_stage_requires_grad(
             0: [0, 1],
             1: [2, 3],
             2: [4, 5],
-            3: [6],
+            3: [6, 7],
         }
         if stage in stage_to_features:
             for feat_idx in stage_to_features[stage]:
