@@ -959,12 +959,10 @@ class MultiTaskLoss(nn.Module):
             # add this as last-resort guard for all components.
             if self.train_pose:
                 loss_pose = loss_pose.clamp(min=0.0)
-            if self.train_pose:
-                loss_pose = loss_pose.clamp(min=0.0)
             if self.train_act:
                 loss_head_pose = loss_head_pose.clamp(min=0.0)
                 loss_act = loss_act.clamp(min=0.0)
-                total = total + prec_act * loss_head_pose + lv_act + prec_act * loss_act + lv_act
+                total = total + prec_hp * loss_head_pose + lv_hp + prec_act * loss_act + lv_act
             if self.train_psr:
                 loss_psr = loss_psr.clamp(min=0.0)
                 total = total + prec_psr * loss_psr + lv_psr
