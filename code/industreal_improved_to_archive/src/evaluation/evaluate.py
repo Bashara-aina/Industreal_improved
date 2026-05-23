@@ -244,7 +244,7 @@ def compute_psr_accuracy(
     step_pred = step_logits.argmax(dim=1)          # [B]
     step_acc = (step_pred == step_labels).float().mean().item()
 
-    comp_pred = (comp_logits > 0).long()            # [B, 11] binary
+    comp_pred = (torch.sigmoid(comp_logits) > 0.5).long()  # [B, 11] binary
     comp_acc = (comp_pred == comp_labels).float().mean().item()
 
     return {'psr_step_acc': step_acc, 'psr_comp_acc': comp_acc}
@@ -1376,7 +1376,9 @@ def _symmetric_prf_at_t(
         Tuple of (precision, recall, f1) at tolerance T
     """
     if len(gt_changes) == 0 and len(pred_changes) == 0:
-        return 1.0, 1.0, 1.0
+        # Both GT and pred have no state changes → no procedure activity.
+        # F1=0.0 (not 1.0) since the model is not detecting any changes.
+        return 0.0, 0.0, 0.0
     if len(gt_changes) == 0:
         return 0.0, 0.0, 0.0
     if len(pred_changes) == 0:
@@ -1384,21 +1386,25 @@ def _symmetric_prf_at_t(
 
     # Build symmetric windows: each GT change at position tg gets a set of
     # admissible predicted positions {pg | |pg - tg| <= tolerance}
+    # NOTE: Both gt_changes and pred_changes come from iterating over torch tensors,
+    # yielding tensor scalars. We convert to Python int for dict keys to avoid
+    # hash mismatch (tensor scalar hash differs from Python int hash even though ==).
     tg_to_admissible = {}
     for tg in gt_changes:
-        tg_to_admissible[tg] = {
-            pg for pg in pred_changes if abs(pg - tg) <= tolerance
+        tg_int = int(tg)
+        tg_to_admissible[tg_int] = {
+            int(pg) for pg in pred_changes if abs(int(pg) - tg_int) <= tolerance
         }
 
     # Greedy matching: find maximum bipartite match between
     # GT changes and predicted changes within ±T window
     matched_gt = set()
     matched_pred = set()
-    for tg in sorted(gt_changes, key=lambda x: -len(tg_to_admissible.get(x, set()))):
-        admissible = tg_to_admissible.get(tg, set()) - matched_pred
+    for tg_int in sorted(tg_to_admissible.keys(), key=lambda x: -len(tg_to_admissible.get(x, set()))):
+        admissible = tg_to_admissible.get(tg_int, set()) - matched_pred
         if admissible:
             best_pg = min(admissible)  # pick earliest predicted change
-            matched_gt.add(tg)
+            matched_gt.add(tg_int)
             matched_pred.add(best_pg)
 
     tp = len(matched_gt)
@@ -1526,7 +1532,9 @@ def _symmetric_prf_at_t_numpy(
     ~4x faster than the dict-based _symmetric_prf_at_t via numpy broadcasting.
     """
     if len(gt_changes) == 0 and len(pred_changes) == 0:
-        return 1.0, 1.0, 1.0
+        # Both GT and pred have no state changes → no procedure activity.
+        # F1=0.0 (not 1.0) since the model is not detecting any changes.
+        return 0.0, 0.0, 0.0
     if len(gt_changes) == 0 or len(pred_changes) == 0:
         return 0.0, 0.0, 0.0
 
@@ -1637,7 +1645,7 @@ def _compute_psr_f1_at_t_fused_cuda(
             else:
                 f1_t5.append(f1); prec_t5.append(prec); rec_t5.append(rec)
 
-    def mean(lst): return float(np.mean(lst)) if lst else 0.0
+    def mean(lst): return float(np.nanmean(lst)) if lst else 0.0
     return {
         'f1_t3': mean(f1_t3), 'prec_t3': mean(prec_t3), 'rec_t3': mean(rec_t3),
         'f1_t5': mean(f1_t5), 'prec_t5': mean(prec_t5), 'rec_t5': mean(rec_t5),
@@ -1780,8 +1788,9 @@ def compute_psr_metrics(
     gt_safe = gt_labels.copy()
     gt_safe[~valid_mask] = 0
 
-    # Binarize predictions (threshold=0.5)
-    pred_binary = (pred_logits > 0.5).astype(np.int64)
+    # Binarize predictions: apply sigmoid to raw logits first, then threshold
+    pred_probs = 1 / (1 + np.exp(-pred_logits))  # sigmoid
+    pred_binary = (pred_probs > 0.5).astype(np.int64)
 
     # --- Per-component F1 (vectorized across components) ---
     per_component_f1 = {}
@@ -1909,7 +1918,9 @@ def _psr_logits_to_state_ids(
     Frames with unknown patterns get state_id = K (beyond last known state).
     """
     K = len(vocab)
-    pred_binary = (logits > threshold).astype(np.int32)
+    # Apply sigmoid to convert raw logits to probabilities before thresholding
+    pred_probs = 1 / (1 + np.exp(-logits))  # sigmoid
+    pred_binary = (pred_probs > threshold).astype(np.int32)
     state_ids = np.full(len(logits), K, dtype=np.int32)
     for i, vec in enumerate(pred_binary):
         key = tuple(int(v) for v in vec)
@@ -2468,7 +2479,14 @@ def evaluate_all(
         act_logits_batch = outputs['act_logits'].cpu().numpy()
         if act_logits_all is not None:
             act_logits_all.append(act_logits_batch)
-        act_preds.append(act_logits_batch.argmax(axis=1))
+        act_pred_batch = act_logits_batch.argmax(axis=1)
+        # BASHARA 2026-05-22: Debug logging — track every batch's act_preds shape
+        if (bi % 50 == 0) or act_pred_batch.size == 0:
+            logger.info(
+                f'  [EVAL batch {bi}] act_logits shape={act_logits_batch.shape}, '
+                f'act_pred shape={act_pred_batch.shape}, B={B}'
+            )
+        act_preds.append(act_pred_batch)
         act_labels.append(targets['activity'].cpu().numpy())
         for i in range(B):
             metadata_item = targets['metadata'][i] if i < len(targets['metadata']) else {}
@@ -2598,20 +2616,64 @@ def evaluate_all(
                     break
     except Exception:
         pass
-        dataset_len = len(loader.dataset) if hasattr(loader, 'dataset') else -1
-        raise RuntimeError(
-            f'No batches were produced by DataLoader (dataset_len={dataset_len}). '
-            f'Check split paths and filtering logic.'
-        )
+    finally:
+        # Guard: detect empty DataLoader OR all-empty batches (act_preds stays [] or has only empty arrays)
+        # BASHARA 2026-05-22: Improved handling — only fail if ALL batches are empty.
+        # If SOME batches are empty, log warning and skip activity metrics rather than crashing.
+        empty_guard_failed = False
+        empty_batch_indices = []
+        non_empty_count = 0
+        if not act_preds:
+            empty_guard_failed = True
+        else:
+            for idx, arr in enumerate(act_preds):
+                if arr.size == 0:
+                    empty_batch_indices.append(idx)
+                else:
+                    non_empty_count += 1
+            all_empty = non_empty_count == 0 and len(act_preds) > 0
+            if all_empty:
+                empty_guard_failed = True
 
-    results: Dict[str, Any] = {'loss': total_loss / max(lc, 1)}
+        if empty_guard_failed:
+            dataset_len = len(loader.dataset) if hasattr(loader, 'dataset') else -1
+            batch_count = len(act_preds)
+            # BASHARA 2026-05-22: Log which batches were empty for debugging
+            logger.error(
+                f'CRITICAL: All activity prediction batches are empty. '
+                f'act_preds len={batch_count}, empty_indices={empty_batch_indices[:10]}... '
+                f'dataset_len={dataset_len}. '
+                f'Check model output handling and data pipeline.'
+            )
+            raise RuntimeError(
+                f'No valid activity predictions: act_preds has {batch_count} empty batch(es) '
+                f'(dataset_len={dataset_len}). Check split paths and NaN handling in model outputs.'
+            )
+        if empty_batch_indices:
+            # Some batches empty, some not — log warning but continue
+            logger.warning(
+                f'WARNING: {len(empty_batch_indices)}/{len(act_preds)} batches have empty act_preds. '
+                f'First few empty indices: {empty_batch_indices[:5]}. '
+                f'Proceeding with {non_empty_count} valid batches.'
+            )
+        results: Dict[str, Any] = {'loss': total_loss / max(lc, 1)}
 
     # -------------------------------------------------------------------------
     # Activity Metrics
     # -------------------------------------------------------------------------
-    all_act_pred = np.concatenate(act_preds)
-    all_act_gt = np.concatenate(act_labels)
-    all_act_logits = np.concatenate(act_logits_all) if act_logits_all else None
+    # Safe concatenate: if act_preds is list of empty arrays, concatenate on first non-empty dim
+    def _safe_concat(lst):
+        if not lst:
+            raise ValueError(f'Cannot concatenate empty list.')
+        # If all arrays are 1D empty, return empty with right dtype
+        non_empty = [arr for arr in lst if arr.size > 0]
+        if not non_empty:
+            return lst[0]  # Return first (empty) array as fallback
+        return np.concatenate(lst)
+
+    all_act_pred = _safe_concat(act_preds)
+    all_act_gt = _safe_concat(act_labels)
+    all_act_logits = _safe_concat(act_logits_all) if act_logits_all else None
     del act_preds, act_labels, act_logits_all
 
     act_metrics = compute_activity_metrics(
@@ -3137,146 +3199,165 @@ Examples:
             collate_fn=collate_fn,
         )
 
-    args = parser.parse_args()
+    # =============================================================================
+    # Main evaluation entry point
+    # =============================================================================
 
-    logging.basicConfig(level=logging.INFO)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    @torch.no_grad()
+    def main():
+        # Set up sys.path identically to train.py so all imports resolve
+        # src/evaluation/evaluate.py → parent.parent = src/ → parent = project root
+        _src = Path(__file__).resolve().parent.parent
+        for _sub in ['models', 'training', 'evaluation', 'data', str(_src)]:
+            _p = _src / _sub if _sub != str(_src) else _src
+            _p = str(_p)
+            if _p not in sys.path:
+                sys.path.insert(0, _p)
+        if str(_src.parent) not in sys.path:
+            sys.path.insert(0, str(_src.parent))
 
-    from model import POPWMultiTaskModel
-    from losses import MultiTaskLoss
-    from industreal_dataset import IndustRealMultiTaskDataset, collate_fn
+        args = parser.parse_args()
 
-    model = POPWMultiTaskModel(
-        pretrained=False,
-        backbone_type=str(getattr(C, 'BACKBONE', 'resnet50')),
-        use_headpose_film=bool(getattr(C, 'USE_HEADPOSE_FILM', False)),
-        use_videomae=bool(getattr(C, 'USE_VIDEOMAE', False)),
-    ).to(device)
+        logging.basicConfig(level=logging.INFO)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    if args.profile_efficiency_only:
-        eff = compute_efficiency_metrics(
-            model,
-            img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
-            device=device,
-            num_hand_coords=52,
-        )
-        print('\n' + '=' * 60)
-        print('Efficiency Profile — IndustReal Multi-Task Model')
-        print('=' * 60)
-        print(f'  Parameters (M)       : {eff["eff_params_m"]:.2f}M')
-        print(f'  Trainable Params (M) : {eff["eff_trainable_params_m"]:.2f}M')
-        print(f'  GFLOPs               : {eff["eff_gflops"]:.2f}G')
-        print(f'  FPS (batched, bs=1)  : {eff["eff_fps"]:.2f}')
-        print(f'  FPS (streaming)       : {eff["eff_fps_streaming"]:.2f}')
-        print(f'  Resolution           : {eff["eff_resolution"]}')
-        print('  --- Sequential pipeline (YOLOv8m+MViTv2+STORM-PSR) ---')
-        print(f'  Pipeline Params (M)  : {eff["pipeline_params_m"]:.1f}M')
-        print(f'  Pipeline GFLOPs      : {eff["pipeline_gflops"]:.0f}G')
-        print(f'  Pipeline FPS (min)   : ~{eff["pipeline_fps"]:.0f}')
-        print('\n  Benchmark comparison targets:')
-        print('    PTMA (IKEA):  12.9M params, 1.96G FLOPs, 291 FPS')
-        print('    MiniROAD (IKEA): 10.5M params, 1.08G FLOPs, 325 FPS')
-        print('    ActionFormer (IKEA): 27.70M params, 83.28G FLOPs, ~21 FPS')
-        print('=' * 60)
-    else:
-        save_dir = args.save_dir or str(C.EVAL_SAVE_DIR)
-        Path(save_dir).mkdir(parents=True, exist_ok=True)
+        from model import POPWMultiTaskModel  # noqa: E402
+        from losses import MultiTaskLoss  # noqa: E402
+        from industreal_dataset import IndustRealMultiTaskDataset, collate_fn  # noqa: E402
 
-        criterion = MultiTaskLoss(
-            num_classes_act=C.NUM_CLASSES_ACT,
-            num_psr_components=C.NUM_PSR_COMPONENTS,
+        model = POPWMultiTaskModel(
+            pretrained=False,
+            backbone_type=str(getattr(C, 'BACKBONE', 'resnet50')),
+            use_headpose_film=bool(getattr(C, 'USE_HEADPOSE_FILM', False)),
+            use_videomae=bool(getattr(C, 'USE_VIDEOMAE', False)),
         ).to(device)
 
-        if args.checkpoint:
-            ckpt = torch.load(args.checkpoint, map_location=device)
-            if 'model' in ckpt:
-                model.load_state_dict(ckpt['model'], strict=False)
-            else:
-                model.load_state_dict(ckpt, strict=False)
-
-        # Doc 03 C: Multi-seed evaluation
-        seed_list = [int(s.strip()) for s in args.seeds.split(',')]
-
-        if len(seed_list) > 1:
-            summary = run_multi_seed_evaluation(
-                model=model,
-                criterion=criterion,
-                base_loader_fn=lambda seed: _make_loader(args.split, seed),
+        if args.profile_efficiency_only:
+            eff = compute_efficiency_metrics(
+                model,
+                img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
                 device=device,
-                seeds=seed_list,
-                max_batches=args.max_batches,
-                save_dir=save_dir,
-                use_flip_tta=args.flip_tta,
-                use_crop_tta=args.crop_tta,
+                num_hand_coords=52,
             )
-            _print_multi_seed_summary(summary)
-            if args.ablation:
-                print(print_ablation_table(summary, summary))
+            print('\n' + '=' * 60)
+            print('Efficiency Profile — IndustReal Multi-Task Model')
+            print('=' * 60)
+            print(f'  Parameters (M)       : {eff["eff_params_m"]:.2f}M')
+            print(f'  Trainable Params (M) : {eff["eff_trainable_params_m"]:.2f}M')
+            print(f'  GFLOPs               : {eff["eff_gflops"]:.2f}G')
+            print(f'  FPS (batched, bs=1)  : {eff["eff_fps"]:.2f}')
+            print(f'  FPS (streaming)       : {eff["eff_fps_streaming"]:.2f}')
+            print(f'  Resolution           : {eff["eff_resolution"]}')
+            print('  --- Sequential pipeline (YOLOv8m+MViTv2+STORM-PSR) ---')
+            print(f'  Pipeline Params (M)  : {eff["pipeline_params_m"]:.1f}M')
+            print(f'  Pipeline GFLOPs      : {eff["pipeline_gflops"]:.0f}G')
+            print(f'  Pipeline FPS (min)   : ~{eff["pipeline_fps"]:.0f}')
+            print('\n  Benchmark comparison targets:')
+            print('    PTMA (IKEA):  12.9M params, 1.96G FLOPs, 291 FPS')
+            print('    MiniROAD (IKEA): 10.5M params, 1.08G FLOPs, 325 FPS')
+            print('    ActionFormer (IKEA): 27.70M params, 83.28G FLOPs, ~21 FPS')
+            print('=' * 60)
         else:
-            ds = IndustRealMultiTaskDataset(
-                split=args.split, img_size=C.IMG_SIZE,
-                augment=False, seed=seed_list[0],
-            )
-            loader = _make_loader(args.split, seed_list[0])
-            criterion.set_class_counts(ds.class_counts)
-            results = evaluate_all(
-                model, criterion, loader, device,
-                max_batches=args.max_batches, save_dir=save_dir,
-                use_flip_tta=args.flip_tta,
-                use_crop_tta=args.crop_tta,
-            )
-            _print_single_run_results(results, args.split)
-            if args.ablation:
-                print(print_ablation_table(results, results))
+            save_dir = args.save_dir or str(C.EVAL_SAVE_DIR)
+            Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-            # Doc 03 Phase 3: Per-class F1 CSV + top-k/bottom-k plots
-            if 'act_per_class_report' in results and 'act_per_class_acc' in results:
-                _save_per_class_f1_csv(
-                    results['act_per_class_report'],
-                    results['act_per_class_acc'],
-                    C.ACT_CLASS_NAMES,
-                    Path(save_dir),
-                    split=args.split,
+            criterion = MultiTaskLoss(
+                num_classes_act=C.NUM_CLASSES_ACT,
+                num_psr_components=C.NUM_PSR_COMPONENTS,
+            ).to(device)
+
+            if args.checkpoint:
+                ckpt = torch.load(args.checkpoint, map_location=device)
+                if 'model' in ckpt:
+                    model.load_state_dict(ckpt['model'], strict=False)
+                else:
+                    model.load_state_dict(ckpt, strict=False)
+
+            # Doc 03 C: Multi-seed evaluation
+            seed_list = [int(s.strip()) for s in args.seeds.split(',')]
+
+            if len(seed_list) > 1:
+                summary = run_multi_seed_evaluation(
+                    model=model,
+                    criterion=criterion,
+                    base_loader_fn=lambda seed: _make_loader(args.split, seed),
+                    device=device,
+                    seeds=seed_list,
+                    max_batches=args.max_batches,
+                    save_dir=save_dir,
+                    use_flip_tta=args.flip_tta,
+                    use_crop_tta=args.crop_tta,
                 )
-                act_f1 = np.array([
-                    results['act_per_class_report'].get(C.ACT_CLASS_NAMES[i], {}).get('f1-score', float('nan'))
-                    for i in range(len(C.ACT_CLASS_NAMES))
-                ])
-                if not np.all(np.isnan(act_f1)):
-                    _plot_topk_bottomk_classes(
-                        act_f1,
+                _print_multi_seed_summary(summary)
+                if args.ablation:
+                    print(print_ablation_table(summary, summary))
+            else:
+                ds = IndustRealMultiTaskDataset(
+                    split=args.split, img_size=C.IMG_SIZE,
+                    augment=False, seed=seed_list[0],
+                )
+                loader = _make_loader(args.split, seed_list[0])
+                criterion.set_class_counts(ds.class_counts)
+                results = evaluate_all(
+                    model, criterion, loader, device,
+                    max_batches=args.max_batches, save_dir=save_dir,
+                    use_flip_tta=args.flip_tta,
+                    use_crop_tta=args.crop_tta,
+                )
+                _print_single_run_results(results, args.split)
+                if args.ablation:
+                    print(print_ablation_table(results, results))
+
+                # Doc 03 Phase 3: Per-class F1 CSV + top-k/bottom-k plots
+                if 'act_per_class_report' in results and 'act_per_class_acc' in results:
+                    _save_per_class_f1_csv(
+                        results['act_per_class_report'],
+                        results['act_per_class_acc'],
                         C.ACT_CLASS_NAMES,
-                        'Activity_F1',
                         Path(save_dir),
-                        k=5,
+                        split=args.split,
                     )
+                    act_f1 = np.array([
+                        results['act_per_class_report'].get(C.ACT_CLASS_NAMES[i], {}).get('f1-score', float('nan'))
+                        for i in range(len(C.ACT_CLASS_NAMES))
+                    ])
+                    if not np.all(np.isnan(act_f1)):
+                        _plot_topk_bottomk_classes(
+                            act_f1,
+                            C.ACT_CLASS_NAMES,
+                            'Activity_F1',
+                            Path(save_dir),
+                            k=5,
+                        )
 
-            if 'det_per_class_ap' in results and results['det_per_class_ap']:
-                asd_names = C.ASD_CLASS_NAMES if hasattr(C, 'ASD_CLASS_NAMES') else [f'asd_{i}' for i in range(24)]
-                det_ap = np.array([
-                    results['det_per_class_ap'].get(i, float('nan'))
-                    for i in range(len(asd_names))
-                ])
-                if not np.all(np.isnan(det_ap)):
-                    _plot_topk_bottomk_classes(
-                        det_ap,
-                        asd_names,
-                        'ASD_mAP',
-                        Path(save_dir),
-                        k=5,
-                    )
+                if 'det_per_class_ap' in results and results['det_per_class_ap']:
+                    asd_names = C.ASD_CLASS_NAMES if hasattr(C, 'ASD_CLASS_NAMES') else [f'asd_{i}' for i in range(24)]
+                    det_ap = np.array([
+                        results['det_per_class_ap'].get(i, float('nan'))
+                        for i in range(len(asd_names))
+                    ])
+                    if not np.all(np.isnan(det_ap)):
+                        _plot_topk_bottomk_classes(
+                            det_ap,
+                            asd_names,
+                            'ASD_mAP',
+                            Path(save_dir),
+                            k=5,
+                        )
 
-            if 'psr_per_component_f1' in results and results['psr_per_component_f1']:
-                psr_comp_f1 = np.array([
-                    results['psr_per_component_f1'].get(f'comp{i}', float('nan'))
-                    for i in range(11)
-                ])
-                psr_comp_names = [f'comp{i}' for i in range(11)]
-                if not np.all(np.isnan(psr_comp_f1)):
-                    _plot_topk_bottomk_classes(
-                        psr_comp_f1,
-                        psr_comp_names,
-                        'PSR_Component_F1',
-                        Path(save_dir),
-                        k=3,
-                    )
+                if 'psr_per_component_f1' in results and results['psr_per_component_f1']:
+                    psr_comp_f1 = np.array([
+                        results['psr_per_component_f1'].get(f'comp{i}', float('nan'))
+                        for i in range(11)
+                    ])
+                    psr_comp_names = [f'comp{i}' for i in range(11)]
+                    if not np.all(np.isnan(psr_comp_f1)):
+                        _plot_topk_bottomk_classes(
+                            psr_comp_f1,
+                            psr_comp_names,
+                            'PSR_Component_F1',
+                            Path(save_dir),
+                            k=3,
+                        )
+
+        main()
