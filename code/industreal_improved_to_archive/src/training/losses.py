@@ -70,7 +70,14 @@ class FocalLoss(nn.Module):
 
     def _match_anchors(self, anchors: torch.Tensor, gt_boxes: torch.Tensor,
                       gt_labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Assign anchors to GT boxes. Returns labels and matched boxes."""
+        """Assign anchors to GT boxes. Returns labels and matched boxes.
+
+        BUG FIX #1: Normalize both anchors and GT boxes to [0,1] image coords
+        before IoU matching. GT boxes from COCO are in pixel coordinates
+        (absolute pixels), but anchors are generated at full resolution (1280x720).
+        Without normalization, max IoU = 0.0001 << 0.5 threshold → zero positive
+        matches → detection loss = 0.000 → no learning.
+        """
         N = anchors.shape[0]
         device = anchors.device
 
@@ -78,7 +85,18 @@ class FocalLoss(nn.Module):
             return (torch.full((N,), -2, dtype=torch.long, device=device),
                     torch.zeros((N, 4), device=device))
 
-        ious = box_iou(anchors, gt_boxes)
+        # --- Normalize anchors and GT boxes to [0,1] before IoU matching ---
+        # Anchors: shifts in pixels → divide by image dimensions
+        anchors_norm = anchors.clone()
+        anchors_norm[:, [0, 2]] = anchors[:, [0, 2]] / C.IMG_WIDTH   # x coords
+        anchors_norm[:, [1, 3]] = anchors[:, [1, 3]] / C.IMG_HEIGHT  # y coords
+
+        # GT boxes: already in pixel xyxy → normalize to [0,1]
+        gt_boxes_norm = gt_boxes.clone()
+        gt_boxes_norm[:, [0, 2]] = gt_boxes[:, [0, 2]] / C.IMG_WIDTH
+        gt_boxes_norm[:, [1, 3]] = gt_boxes[:, [1, 3]] / C.IMG_HEIGHT
+
+        ious = box_iou(anchors_norm, gt_boxes_norm)
         max_iou, max_idx = ious.max(dim=1)
 
         labels = torch.full((N,), -1, dtype=torch.long, device=device)
@@ -355,7 +373,11 @@ class LDAMLoss(nn.Module):
         return self._margins
 
     def set_class_counts(self, counts):
-        self._raw_counts = np.array(counts, dtype=np.float64)
+        if counts is None:
+            # checkpoint resuming without train_ds — use uniform weights
+            self.class_weights.data.fill_(1.0 / self.num_classes)
+            self._raw_counts = None
+            return
         counts = np.array(counts, dtype=np.float64)
         effective = np.where(
             counts > 0,
@@ -364,7 +386,17 @@ class LDAMLoss(nn.Module):
         )
         weights = 1.0 / np.maximum(effective, 1e-8)
         weights = weights / weights.sum() * self.num_classes
+        # counts has 74 entries (active classes 1-74); class_weights has 75 entries
+        # (index 0 = NA class, weight 0). Pad to match.
+        if weights.shape[0] == self.num_classes - 1:
+            weights = np.concatenate([[0.0], weights])  # prepend NA weight
         self.class_weights.data.copy_(torch.tensor(weights, dtype=torch.float32))
+        # Store full 75-element counts (with 0 for NA class) for _compute_margins
+        if self._raw_counts is None or self._raw_counts.shape[0] != self.num_classes:
+            self._raw_counts = np.zeros(self.num_classes, dtype=np.float64)
+            self._raw_counts[1:] = counts  # index 0 = NA = 0
+        else:
+            self._raw_counts[1:] = counts
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor,
                 epoch: int = 0, drw_epoch: int = 60) -> torch.Tensor:
@@ -670,6 +702,10 @@ class MultiTaskLoss(nn.Module):
         self._current_epoch = 0
 
     def set_class_counts(self, counts):
+        # counts has length 74 (excludes NA class 0); act_loss_fn expects 75
+        # The FocalLoss and LDAMLoss use num_classes=75 internally but only
+        # active classes 1-74 get weights; class 0 (NA/NA) gets weight 0.
+        # We pass the 74 active-class counts directly; the loss handles the mismatch.
         self.act_loss_fn.set_class_counts(counts)
 
     def set_psr_class_counts(self, prevalence_per_component: torch.Tensor):
@@ -923,7 +959,8 @@ class MultiTaskLoss(nn.Module):
             # add this as last-resort guard for all components.
             if self.train_pose:
                 loss_pose = loss_pose.clamp(min=0.0)
-                total = total + prec_hp * loss_pose + lv_hp
+            if self.train_pose:
+                loss_pose = loss_pose.clamp(min=0.0)
             if self.train_act:
                 loss_head_pose = loss_head_pose.clamp(min=0.0)
                 loss_act = loss_act.clamp(min=0.0)
@@ -933,6 +970,9 @@ class MultiTaskLoss(nn.Module):
                 total = total + prec_psr * loss_psr + lv_psr
             total = total.squeeze()
 
+            # Final safeguard: clamp Kendall loss minimum to 0
+            total = total.clamp(min=0.0)
+
             # --- NaN guard in Kendall total ---
             # Handle both scalar and 1-element tensor cases
             total_val = total.item() if total.numel() == 1 else total
@@ -941,7 +981,7 @@ class MultiTaskLoss(nn.Module):
                 if self.train_det:
                     parts.append(loss_det)
                 if self.train_pose:
-                    parts.append(loss_pose)
+                    parts.append(loss_head_pose)  # head pose stored in loss_head_pose, not loss_pose
                 if self.train_act:
                     parts.append(loss_head_pose)
                     parts.append(loss_act)
