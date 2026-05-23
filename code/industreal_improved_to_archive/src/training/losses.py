@@ -1004,8 +1004,7 @@ class MultiTaskLoss(nn.Module):
                 elif stage == 2:
                     _loss_act_staged = zero
                     _loss_psr_staged = zero
-                    if self.train_pose:
-                        _loss_pose_staged = zero
+                    _loss_pose_staged = zero
             total = loss_det + _loss_pose_staged + _loss_act_staged + _loss_psr_staged
 
         # Normalized weights for logging — use the ACTUAL precision values
