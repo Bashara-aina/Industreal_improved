@@ -928,6 +928,13 @@ def train_one_epoch(
             del outputs, loss, loss_dict
             torch.cuda.empty_cache()
             continue
+        # Guard: clamp per-component losses to prevent NaN from propagating into Kendall total
+        # (only needed when Kendall is active; staged non-Kendall losses are already scalar tensors)
+        if criterion.use_kendall:
+            for key in ['det', 'head_pose', 'activity', 'psr']:
+                v = loss_dict.get(key)
+                if v is not None and not torch.isfinite(torch.tensor(v, dtype=torch.float32)):
+                    loss_dict[key] = 0.0
             # [DEBUG] Per-batch loss + model output shape logging every _debug_interval batches
             if step > 0 and step % _debug_interval == 0:
                 # Log all individual loss components
@@ -963,10 +970,31 @@ def train_one_epoch(
                 ema.update()
             optimizer.zero_grad(set_to_none=True)
 
+        # --- NaN/ZERO GUARD: zero per-component losses that are NaN before accumulating.
+        # Prevents NaN from propagating into running averages (logged every epoch).
+        for k in ('det', 'det_cls', 'det_reg', 'head_pose', 'activity', 'psr',
+                  'w_det', 'w_pose', 'w_act', 'w_psr',
+                  'log_var_det', 'log_var_pose', 'log_var_act', 'log_var_psr'):
+            v = loss_dict.get(k)
+            if v is not None and not (isinstance(v, float) and math.isfinite(v)):
+                loss_dict[k] = 0.0
         for k in running:
             if k in loss_dict:
-                running[k] += loss_dict[k]
+                v = loss_dict[k]
+                if isinstance(v, float) and math.isfinite(v):
+                    running[k] += v
+                else:
+                    running[k] += 0.0  # NaN/Inf contribution zeroed
         num_batches += 1
+
+        # [2% FIX] Enforce TRAIN_MAX_STEPS at batch granularity — BEFORE logging
+        if getattr(C, 'TRAIN_MAX_STEPS', 0) > 0:
+            if not hasattr(C, '_global_step'):
+                C._global_step = 0
+            C._global_step += 1
+            if C._global_step >= C.TRAIN_MAX_STEPS:
+                logger.info(f'  [2pct] batch-level TRAIN_MAX_STEPS limit reached ({C._global_step}). Stopping.')
+                break
 
         # Doc 2 §B.3: Loss component breakdown (logged every 50 steps)
         if (step + 1) % 50 == 0:
@@ -1615,7 +1643,7 @@ def main(args):
             f'samples ({seq_len} frames/window, stride=1)'
         )
 
-    class_counts = train_ds.class_counts[:C.NUM_CLASSES_ACT]
+    class_counts = train_ds.class_counts[:C.NUM_CLASSES_ACT - 1]  # ActivityHead outputs 74, not 75
 
     logger.info(f'Training samples  : {len(train_ds):,}')
     logger.info(f'Validation samples: {len(val_ds):,}')
@@ -1668,7 +1696,7 @@ def main(args):
             logger.info(f'  {k:15s}: {v:>10,}')
 
     criterion = MultiTaskLoss(
-        num_classes_act=C.NUM_CLASSES_ACT,
+        num_classes_act=C.NUM_CLASSES_ACT - 1,  # ActivityHead outputs 74 classes, not 75 (75=74 AR + 1 NA prepended at dataset level)
         num_psr_components=C.NUM_PSR_COMPONENTS,
         train_det=CFG_TRAIN_DET,
         train_pose=CFG_TRAIN_HEAD_POSE,
@@ -1791,8 +1819,8 @@ def main(args):
 
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
-        # FIX: Accept both 'model' (named checkpoints) and 'model_state' (crash_recovery)
-        model_state = ckpt.get('model_state', ckpt.get('model'))
+        # FIX: Accept 'model' (named checkpoints), 'model_state' (crash_recovery), 'model_state_dict' (crash_recovery v2)
+        model_state = ckpt.get('model_state_dict', ckpt.get('model_state', ckpt.get('model')))
         load_result, skipped_keys = _load_model_compat(model, model_state)
         if skipped_keys:
             logger.warning(
@@ -1820,19 +1848,27 @@ def main(args):
             logger.info('  EMA shadow weights restored from checkpoint.')
 
         try:
-            # FIX: Accept both 'optimizer' (named checkpoints) and 'optimizer_state' (crash_recovery)
-            optimizer.load_state_dict(ckpt.get('optimizer_state', ckpt.get('optimizer')))
-            logger.info('  Optimizer state restored.')
-        except ValueError as e:
+            # FIX: Accept 'optimizer' (named checkpoints), 'optimizer_state' (crash_recovery), 'optimizer_state_dict' (crash_recovery v2)
+            opt_state = ckpt.get('optimizer_state_dict', ckpt.get('optimizer_state', ckpt.get('optimizer')))
+            if opt_state is not None:
+                optimizer.load_state_dict(opt_state)
+                logger.info('  Optimizer state restored.')
+            else:
+                logger.warning('  No optimizer state found in checkpoint — re-initialized.')
+        except (ValueError, AttributeError, KeyError) as e:
             logger.warning(
                 f'  Could not restore optimizer state ({e}). '
                 f'Re-initialized -- LR schedule continues.'
             )
         try:
-            # FIX: Accept 'scheduler' (named checkpoint) and 'lr_scheduler_state' (crash_recovery)
-            scheduler.load_state_dict(ckpt.get('scheduler', ckpt.get('lr_scheduler_state', {})))
-            scaler.load_state_dict(ckpt.get('scaler_state', ckpt.get('scaler', {})))
-        except (KeyError, ValueError) as e:
+            # FIX: Accept 'scheduler' (named checkpoint), 'lr_scheduler_state' (crash_recovery), 'scheduler_state_dict'
+            sched_state = ckpt.get('scheduler_state_dict', ckpt.get('scheduler', ckpt.get('lr_scheduler_state', {})))
+            scaler_state = ckpt.get('scaler_state_dict', ckpt.get('scaler_state', ckpt.get('scaler', {})))
+            if sched_state:
+                scheduler.load_state_dict(sched_state)
+            if scaler_state:
+                scaler.load_state_dict(scaler_state)
+        except (KeyError, ValueError, AttributeError) as e:
             logger.warning(
                 f'  Could not restore scheduler/scaler state ({e}). '
                 f'Re-initialized -- LR schedule continues.'
@@ -2204,7 +2240,36 @@ def main(args):
                     except Exception as exc:
                         is_cpu_enomem = 'Cannot allocate memory' in str(exc)
                         is_cuda_oom_v = _is_cuda_oom(exc)
-                        if not (is_cpu_enomem or is_cuda_oom_v):
+                        # --- BASHARA 2026-05-22: Catch ALL validation exceptions (not just OOM).
+                        # The empty_guard_failed RuntimeError from evaluate.py is NOT an OOM error,
+                        # but it may be recoverable with reduced max_batches + worker reset.
+                        # Only re-raise immediately if it's a truly unrecoverable error.
+                        if is_cpu_enomem or is_cuda_oom_v:
+                            pass  # Fall through to retry logic below
+                        else:
+                            # Non-OOM exception: check if it has "empty batch" or "act_preds" in message
+                            # These are often recoverable if we reduce eval scope
+                            exc_str = str(exc)
+                            if 'empty' in exc_str.lower() and ('act_preds' in exc_str or 'batch' in exc_str.lower()):
+                                logger.warning(
+                                    f'Validation non-OOM exception (possibly recoverable): {exc_str[:200]}'
+                                )
+                                # Reduce scope and retry, but only once — don't loop 4x
+                                if val_attempt == 1:
+                                    val_batch_size_rt = max(1, val_batch_size_rt // 2)
+                                    val_workers_rt = 0
+                                    val_prefetch_rt = 1
+                                    val_max_batches_rt = max(1, int(val_max_batches_rt) // 2)
+                                    gc.collect()
+                                    torch.cuda.empty_cache()
+                                    logger.info(
+                                        f'Validation retry (non-OOM, reducing scope): batch={val_batch_size_rt} '
+                                        f'workers={val_workers_rt} prefetch={val_prefetch_rt} '
+                                        f'max_batches={val_max_batches_rt}'
+                                    )
+                                    del val_loader
+                                    continue
+                            # All other non-OOM exceptions: re-raise immediately (no point retrying)
                             raise
                         if is_cuda_oom_v:
                             logger.exception(
@@ -2225,6 +2290,7 @@ def main(args):
                             f'workers={val_workers_rt} prefetch={val_prefetch_rt} '
                             f'max_batches={val_max_batches_rt}'
                         )
+                        del val_loader
                         continue
                     finally:
                         del val_loader
@@ -2235,16 +2301,22 @@ def main(args):
                     ema.restore()
                     logger.info('  [EMA] Restored original weights after val')
 
+                def _s(v, alt=0.0):
+                    """Safe numeric: replace NaN/Inf with alt."""
+                    if isinstance(v, float) and math.isfinite(v):
+                        return v
+                    return alt
+
                 logger.info(
-                    f'Val: loss={val_metrics.get("loss", 0):.4f}  '
-                    f'mAP50={val_metrics.get("det_mAP50", 0):.4f}  '
-                    f'mAP50_all={val_metrics.get("det_mAP50_all_frames", 0):.4f}  '
-                    f'act_clip={val_metrics.get("act_accuracy", 0):.4f}  '
-                    f'act_frame={val_metrics.get("act_frame_accuracy", 0):.4f}  '
-                    f'act_macro_f1={val_metrics.get("act_macro_f1", 0):.4f}  '
-                    f'head_pose_mae={val_metrics.get("head_pose_MAE", 0):.4f}  '
-                    f'psr_f1={val_metrics.get("psr_overall_f1", 0):.4f}  '
-                    f'psr_f1_tol5={val_metrics.get("psr_overall_f1_at5", 0):.4f}'
+                    f'Val: loss={_s(val_metrics.get("loss")):.4f}  '
+                    f'mAP50={_s(val_metrics.get("det_mAP50")):.4f}  '
+                    f'mAP50_all={_s(val_metrics.get("det_mAP50_all_frames")):.4f}  '
+                    f'act_clip={_s(val_metrics.get("act_accuracy")):.4f}  '
+                    f'act_frame={_s(val_metrics.get("act_frame_accuracy")):.4f}  '
+                    f'act_macro_f1={_s(val_metrics.get("act_macro_f1")):.4f}  '
+                    f'head_pose_mae={_s(val_metrics.get("head_pose_MAE")):.4f}  '
+                    f'psr_f1={_s(val_metrics.get("psr_overall_f1")):.4f}  '
+                    f'psr_f1_tol5={_s(val_metrics.get("psr_overall_f1_at5")):.4f}'
                 )
 
                 if ema is not None and current_stage == 3:
