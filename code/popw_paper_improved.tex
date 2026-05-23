@@ -82,56 +82,54 @@
 \newcommand{\tabulatecite}[1]{\cite{#1}}
 
 % ---------- PDF metadata ----------
-\title{\popw{}: A Unified Multi-Task Architecture for Egocentric Assembly Understanding}
-\author{(Author names omitted for review)}
+\title{\popw{}: A Unified Multi-Task Architecture for Assembly Understanding}
+\author{Bashara Aina}
 \date{}
 
 \begin{document}
 \maketitle
 
-\begin{abstract}
-Egocentric video understanding for assembly tasks demands simultaneous solving of heterogeneous tasks: object/state detection, body pose estimation, head pose tracking, activity recognition, and procedure step recognition (PSR). Current state-of-the-art approaches deploy dedicated models for each task---YOLOv8m for assembly state detection, MViTv2 for activity recognition, STORM-PSR for procedure step recognition---resulting in fragmented pipelines with redundant feature extraction and inefficient inference. We present \popw{}, a single unified architecture that performs all five tasks in one forward pass. A shared ConvNeXt-Tiny backbone with Feature Pyramid Network (FPN) feeds five task-specific heads, connected through a novel two-stage FiLM conditioning mechanism that propagates pose and viewpoint information into activity recognition. We employ Kendall homoscedastic uncertainty weighting for multi-task loss balancing and staged training to avoid gradient interference. Evaluated on IKEA ASM and IndustReal datasets, \popw{} achieves competitive accuracy against dedicated baselines while eliminating redundant computation.
-\end{abstract}
-
 % =====================================================================
 \section{Introduction}
 \label{sec:intro}
 
-Egocentric video analysis for assembly environments presents a uniquely challenging multi-task problem. A worker assembling furniture or industrial components generates visual data that must be interpreted simultaneously across multiple levels of abstraction: What objects are present and in what state? Where is the worker's body and head oriented? What action is being performed? Which procedure step has been completed?
+Video analysis for assembly environments presents a uniquely challenging multi-task problem. A worker assembling furniture or industrial components generates visual data that must be interpreted simultaneously across multiple levels of abstraction: What objects are present and in what state? Where is the worker's body and head oriented? What action is being performed? Which procedure step has been completed?
 
-Current approaches handle these tasks independently. The IndustReal benchmark~\cite{schoonbeek2024industreal} establishes YOLOv8m as the strongest detector for 24-class assembly state detection (ASD), achieving 83.80\% mAP@0.5 on the full test set (83.80\% bbox mAP@0.5, 64.1\% video-level mAP@0.5). Activity recognition relies on MViTv2 pretrained on Kinetics-400, achieving 65.25\% Top-1 on RGB-only and 66.45\% Top-1 with an RGB+VL+stereo ensemble~\cite{schoonbeek2024industreal}. Procedure step recognition employs the STORM-PSR dual-stream framework~\cite{schoonbeek2025storm}, which achieves POS=0.812 and F1=0.506 on IndustReal ($\tau$=15.5s), while the best baseline from the original PSRT paper (B2, combining ASD confidence accumulation with procedure-order constraints) achieves POS=0.816 and F1=0.731 on IndustReal~\cite{schoonbeek2024industreal}. This fragmentation means each deployment requires running multiple large models, with no sharing of visual features across tasks.
+Assembly video datasets take two distinct forms. Egocentric assembly video (e.g., IndustReal~\cite{schoonbeek2024industreal}) captures footage from a head-mounted or body-worn camera, providing close-up hand-object views that make fine-grained state discrimination feasible but introduce severe self-occlusion and viewpoint instability. Third-person assembly video (e.g., IKEA ASM~\cite{benshabat2021ikea}) captures footage from a fixed external camera mounted above or beside the workspace, providing a broader overview of the assembler's actions but with reduced resolution on hand-object interactions and increased occlusion from the assembler's body. Both settings require the same four interpretable tasks — assembly state detection, body/head pose estimation, activity recognition, and procedure step recognition — but the visual characteristics of each task differ substantially between camera modalities.
 
-The multi-task learning paradigm offers a compelling alternative. Recent work on hierarchical temporal transformers for egocentric pose and action understanding~\cite{wen2022hierarchical} demonstrates that sharing features across pose and action tasks improves both. Similarly, MECCANO~\cite{ragusa2022meccano} shows that multimodal egocentric datasets enable joint modeling of behavior and environment in industrial settings. The key insight is that assembly tasks share rich structural dependencies: object states constrain possible actions, head pose indicates gaze direction and focus, and temporal progression constrains procedure steps.
+Current approaches handle these tasks independently. The IndustReal benchmark~\cite{schoonbeek2024industreal} establishes YOLOv8m as the strongest detector for 24-class assembly state detection (ASD), achieving 83.80\% mAP@0.5 on the full test set (83.80\% bbox mAP@0.5, 64.1\% video-level mAP@0.5). Activity recognition relies on MViTv2 pretrained on Kinetics-400, achieving 65.25\% Top-1 on RGB-only and 66.45\% Top-1 with an RGB+VL+stereo ensemble~\cite{schoonbeek2024industreal}. Procedure step recognition employs the STORM-PSR dual-stream framework~\cite{schoonbeek2025storm}, which achieves POS=0.812 and F1=0.506 on IndustReal ($\tau$=15.5s), while the best baseline from the original PSRT paper (B2, combining ASD confidence accumulation with procedure-order constraints) achieves POS=0.816 and F1=0.731 on IndustReal~\cite{schoonbeek2024industreal}. For IKEA ASM, prior work establishes I3D-based methods for activity recognition and ActionFormer variants for temporal action localization (see Section~\ref{sec:datasets} for full details). This fragmentation means each deployment requires running multiple large models, with no sharing of visual features across tasks.
+
+The multi-task learning paradigm offers an alternative. Recent work on hierarchical temporal transformers for egocentric pose and action understanding~\cite{wen2022hierarchical} explores sharing features across pose and action tasks. Similarly, MECCANO~\cite{ragusa2022meccano} uses multimodal egocentric datasets for joint modeling of behavior and environment in industrial settings. The key insight is that assembly tasks share structural dependencies: object states constrain possible actions, head pose indicates gaze direction and focus, and temporal progression constrains procedure steps.
 
 \textbf{Problem:} Deploying separate specialized models for detection, pose, activity, and PSR leads to (1) redundant convolutional feature extraction at each model backbone, (2) difficulty in jointly optimizing for heterogeneous tasks with different loss landscapes, and (3) inefficient inference requiring multiple forward passes or model parallel execution.
 
-\textbf{Gap:} While multi-task video understanding has been explored in surgical video analysis~\cite{kim2025surgical} and temporal action localization~\cite{duong2025multitask}, no prior work demonstrates a unified architecture for the specific combination of assembly state detection, body/head pose estimation, activity recognition, and procedure step recognition in industrial egocentric video.
+\textbf{Gap:} While multi-task video understanding has been explored in surgical video analysis~\cite{kim2025surgical} and temporal action localization~\cite{duong2025multitask}, no prior work demonstrates a unified architecture for the specific combination of assembly state detection, body/head pose estimation, activity recognition, and procedure step recognition in industrial assembly video.
 
 \textbf{Contributions:}
 \begin{enumerate}
-\item We present \popw{}, the first unified architecture for multi-task egocentric assembly understanding, performing detection, pose, activity, and PSR in a single forward pass with shared ConvNeXt-Tiny + FPN backbone.
+\item We present \popw{}, the first unified architecture for multi-task assembly understanding, performing detection, pose, activity, and PSR in a single forward pass with shared ConvNeXt-Tiny + FPN backbone.
 \item We introduce a two-stage FiLM conditioning mechanism: PoseFiLM modulates high-level features using body keypoint confidence, and HeadPoseFiLM further refines features using 9-DoF head pose predictions, enabling cross-task information flow without gradient interference.
-\item We demonstrate that Kendall homoscedastic uncertainty weighting combined with staged training enables stable joint optimization across heterogeneous task losses.
-\item We evaluate \popw{} on IKEA ASM and IndustReal datasets, showing competitive accuracy against dedicated baselines while achieving computational efficiency through weight sharing.
+\item Kendall homoscedastic uncertainty weighting combined with staged training enables stable joint optimization across heterogeneous task losses~\todo.
+\item Evaluate \popw{} on IKEA ASM and IndustReal datasets~\todo: competitive accuracy against dedicated baselines, computational efficiency through weight sharing~\todo.
 \end{enumerate}
 
 % =====================================================================
 \section{Related Work}
 \label{sec:related}
 
-\subsection{Egocentric Video Understanding}
+\subsection{Video Understanding for Assembly}
 
-Egocentric (first-person) video presents unique challenges for computer vision. Unlike third-person video, the camera is worn by the performer, providing an natural view of hand-object interactions but introducing challenges like frequent motion blur, self-occlusion, and limited field of view.
+Third-person (fixed-view) video presents distinct challenges compared to egocentric video: the camera is positioned external to the performer, providing a broader overview of the workspace but requiring different visual reasoning for hand-object interactions, occlusions, and action recognition~\cite{benshabat2021ikea}.
 
 The IKEA ASM dataset~\cite{benshabat2021ikea} established a multi-task benchmark for furniture assembly with 371 videos covering object segmentation, body pose, activity recognition, and temporal localization. Following work on multimodal egocentric datasets for industrial behavior understanding, MECCANO~\cite{ragusa2022meccano} extended this domain with gaze, depth, and RGB modalities for human behavior analysis.
 
-Recent advances in hierarchical temporal modeling for egocentric video show that joint modeling of hand pose and action recognition improves performance on both tasks~\cite{wen2022hierarchical}. Similarly, Ego-Only models~\cite{wang2023ego} demonstrate that egocentric action detection can be performed without transferring from exocentric pretrained features, suggesting that egocentric-specific representations are beneficial. STEPs~\cite{shah2023steps} extends this by learning self-supervised temporal perception from unlabeled procedural videos, enabling multi-view online action detection without explicit labeled training data for temporal structure.
+Recent advances in hierarchical temporal modeling for egocentric video explore joint modeling of hand pose and action recognition~\cite{wen2022hierarchical}. Similarly, Ego-Only models~\cite{wang2023ego} perform egocentric action detection without transferring from exocentric pretrained features, indicating that egocentric-specific representations are beneficial. STEPs~\cite{shah2023steps} extends this by learning self-supervised temporal perception from unlabeled procedural videos, enabling multi-view online action detection without explicit labeled training data for temporal structure.
 
 \subsection{Single-Task Baselines for Assembly Understanding}
 
 \textbf{Object and Assembly State Detection:} The IndustReal dataset~\cite{schoonbeek2024industreal} establishes YOLOv8m fine-tuned on synthetic and real assembly imagery as the strongest detector for 24-class ASD, achieving 83.80\% bbox mAP@0.5 on annotated frames and 64.1\% video-level mAP@0.5 on full videos. The key insight is that assembly state detection requires fine-grained discrimination between states like "bolt tightened" vs "bolt loose," necessitating high-resolution input and task-specific training.
 
-\textbf{Activity Recognition:} For activity recognition on IndustReal, MViTv2 (Kinetics-400 pretrained) achieves 65.25\% Top-1 and 87.93\% Top-5 on RGB-only, improving to 66.45\% Top-1 and 88.43\% Top-5 with an RGB+VL+stereo ensemble~\cite{schoonbeek2024industreal}. On the TVSeries cross-view online action detection benchmark, PTMA (Probabilistic Temporal Masked Attention) achieves 86.99\% mcAP (cross-subject) and 84.47\% mcAP (cross-subject-view)~\cite{xie2025ptma}; notably, these PTMA numbers are from TVSeries, not IKEA ASM, so cross-dataset comparisons should be interpreted with caution. For IKEA ASM activity recognition, I3D-based methods remain the standard baselines (see Table~\ref{tab:ikea-headline}).
+\textbf{Activity Recognition:} For activity recognition on IndustReal, MViTv2 (Kinetics-400 pretrained) achieves 65.25\% Top-1 and 87.93\% Top-5 on RGB-only, improving to 66.45\% Top-1 and 88.43\% Top-5 with an RGB+VL+stereo ensemble~\cite{schoonbeek2024industreal}. For IKEA ASM activity recognition, I3D-based methods remain the standard baselines (see Table~\ref{tab:ikea-headline}). \todo{Fill in POPW activity recognition results when training completes.}
 
 \textbf{Temporal Action Localization:} ActionFormer~\cite{zhang2022actionformer} (ECCV 2022) achieves 71.0\% mAP@0.5 on THUMOS14 using multiscale features with local self-attention. Gated SRM~\cite{gatedsrm2026} extends this with confidence-aware multimodal fusion for robust localization under occlusion, achieving 21.77\% mAP@0.5 on IKEA ASM with RGB+pose input (and 21.49\% RGB-only), using 33.5M parameters and 121.09 GFLOPs on GTX\,1080.
 
@@ -139,15 +137,15 @@ Recent advances in hierarchical temporal modeling for egocentric video show that
 
 \subsection{Multi-Task Learning for Video Understanding}
 
-Multi-task learning in video understanding has shown promise when tasks share structural dependencies. TempR1~\cite{wu2025tempr1} demonstrates that joint temporal understanding across multiple tasks improves sample efficiency via multi-task GRPO reinforcement learning. Surgical video understanding with label interpolation~\cite{kim2025surgical} shows that multi-task learning reduces annotation burden while maintaining accuracy through optical flow-based label propagation across frames. Multi-task extended temporal shift modules (ETSM) for temporal action localization~\cite{duong2025multitask} achieve state-of-the-art on the BinEgo360 challenge by learning shared temporal representations across pose, action, and localization tasks simultaneously.
+Multi-task learning in video understanding is explored when tasks share structural dependencies. TempR1~\cite{wu2025tempr1} uses joint temporal understanding across multiple tasks via multi-task GRPO reinforcement learning. Surgical video understanding with label interpolation~\cite{kim2025surgical} applies multi-task learning to reduce annotation burden through optical flow-based label propagation across frames. Multi-task extended temporal shift modules (ETSM) for temporal action localization~\cite{duong2025multitask} achieve state-of-the-art on the BinEgo360 challenge by learning shared temporal representations across pose, action, and localization tasks simultaneously.
 
-Beyond task-specific multi-task approaches, general architectural innovations enable efficient parameter sharing across heterogeneous video understanding tasks. ConvNeXt-V2~\cite{liu2022convnet,mao2024convnextv2} extends the ConvNeXt architecture with full-GPU-aware design and masked autoencoder pretraining, achieving up to 88.2\% top-1 on Kinetics-400 (V2-L at 384$\times$384 resolution, 198M parameters); the V2-Tiny variant achieves 83.0\% top-1 at 224$\times$224 with 28.6M parameters, providing a stronger frozen feature extractor backbone than the standard ConvNeXt-Tiny used in POPW. The FiLM conditioning mechanism (Section~\ref{sec:method}) builds on the feature-wise linear modulation approach of Perez et al.~(2018)~\cite{perez2018film}, which showed that conditioning intermediate features via learned affine transformations improves visual reasoning across task boundaries.
+Beyond task-specific multi-task approaches, general architectural innovations enable efficient parameter sharing across heterogeneous video understanding tasks. ConvNeXt-V2~\cite{liu2022convnet,mao2024convnextv2} extends the ConvNeXt architecture with full-GPU-aware design and masked autoencoder pretraining, achieving up to 88.2\% top-1 on Kinetics-400 (V2-L at 384$\times$384 resolution, 198M parameters) and 83.0\% top-1 at 224$\times$224 with 28.6M parameters (V2-Tiny). The FiLM conditioning mechanism (Section~\ref{sec:method}) builds on the feature-wise linear modulation approach of Perez et al.~(2018)~\cite{perez2018film}, which uses learned affine transformations to modulate intermediate features for visual reasoning across task boundaries.
 
 \subsection{FiLM Conditioning for Cross-Task Information Flow}
 
 FiLM (Feature-wise Linear Modulation)~\cite{dumoulin2016learned} modulates intermediate features via learned affine transformations $\gamma(\mathbf{z}) \cdot \mathbf{x} + \beta(\mathbf{z})$, where $\gamma$ and $\beta$ are predicted from a conditioning signal. This has been applied successfully in visual reasoning~\cite{perez2018film} and pose-conditioned activity recognition.
 
-The key advantage of FiLM is that it enables conditioning without requiring gradient flow through the conditioning network, preventing feedback loops while still allowing semantic information to modulate features. This makes it ideal for cross-task information flow where we want pose estimates to influence activity features without backpropagating activity gradients into the pose network.
+The key advantage of FiLM is that it enables conditioning without requiring gradient flow through the conditioning network, preventing feedback loops while still allowing semantic information to modulate features. This makes FiLM suitable for cross-task information flow where pose estimates influence activity features without backpropagating activity gradients into the pose network.
 
 % =====================================================================
 \section{Proposed Approach: \popw{}}
@@ -236,7 +234,7 @@ The detection head follows RetinaNet's architecture because it handles class imb
 \begin{itemize}
 \item \textbf{Upsampling}: ConvTranspose2d (k=4, s=2, p=1) + GroupNorm(32) + ReLU $\rightarrow$ $[B, 256, 180, 320]$
 \item \textbf{Heatmaps}: Conv $1\times1$ $\rightarrow$ $[B, 17, 180, 320]$
-\item \textbf{Keypoints}: Soft-argmax ($T=0.1$) $\rightarrow$ kpts $[B, 17, 2]$ + conf $[B, 17]$
+\item \textbf{Keypoints}: Soft-argmax ($T=0.07$) $\rightarrow$ kpts $[B, 17, 2]$ + conf $[B, 17]$
 \item \textbf{Loss}: Wing Loss ($\omega=0.05$, $\varepsilon=0.005$), confidence-weighted
 \end{itemize}
 
@@ -244,7 +242,7 @@ The body pose head uses soft-argmax for differentiable keypoint extraction, enab
 
 \subsubsection{Procedure Step Recognition Head (PSR --- 11 components)}
 \begin{itemize}
-\item \textbf{Input}: multi-scale FPN features (P3+P4+P5) $\rightarrow$ GAP $\rightarrow$ concat $\rightarrow$ MLP($768 \rightarrow 256$) $\rightarrow$ per-frame feature $[B, 256]$
+\item \textbf{Input}: multi-scale FPN features (P3+P4+P5) $\rightarrow$ GAP $\rightarrow$ concat $\rightarrow$ MLP($768 \rightarrow 512 \rightarrow 256$) $\rightarrow$ per-frame feature $[B, 256]$
 \item \textbf{Temporal model}: Causal Transformer Encoder (3 layers, 4 heads, d\_model=256, GELU, pre-norm) with upper-triangular causal mask --- each position attends only to itself and prior positions; no future leakage
 \item \textbf{Per-component heads}: 11 separate tiny MLPs ($256 \rightarrow 64 \rightarrow 1$) --- each component has distinct transition statistics; shared head underfits rare components
 \item \textbf{Cache for inference}: per-video cache of up to 32 frame features; warmup $T$ frames fill the cache; subsequent frames use cached Causal Transformer inference at O(1) per frame cost
@@ -288,7 +286,7 @@ The head pose head predicts a 9-dimensional continuous vector representing the w
 
 The activity head combines multiple information streams: (1) detection confidence provides object state context, (2) FiLM-conditioned features provide pose/viewpoint context, (3) temporal modeling via TCN+ViT captures action dynamics, (4) VideoMAE V2~\cite{wang2023videomae} provides complementary video-level temporal cues. The feature bank enables variable-length temporal context without recomputing backbone features.
 
-We additionally fuse a VideoMAE V2~\cite{wang2023videomae} stream (ViT-S/16, Kinetics-400 fine-tuned, 384-D) with the CNN features before the classifier, yielding +5--7\% Top-1 improvement over CNN-only fusion. VideoMAE V2 features are projected (384→512) and concatenated with the CNN feature vector prior to classification.
+VideoMAE V2 features are projected (384→512) and concatenated with the CNN feature vector prior to classification \todo.
 
 \subsection{FiLM Conditioning: PoseFiLM and HeadPoseFiLM}
 
@@ -333,7 +331,7 @@ The two-stage design is intentional: first conditioning on body pose (when avail
 \subsection{Multi-Task Loss and Training Strategy}
 
 \subsubsection{Kendall Homoscedastic Uncertainty Weighting}
-Following Kendall et al.~(2018)~\cite{kendall2018multi}, we weight the four task losses:
+Following Kendall et al.~(2018)~\cite{kendall2018multi}, the four task losses are weighted:
 \begin{equation}
 \mathcal{L} = \sum_{t} \exp(-s_t) \cdot \mathcal{L}_t \cdot \text{ramp}_t + s_t
 \end{equation}
@@ -354,7 +352,7 @@ The $10^{-3}$ scale factors on pose and head pose losses normalize the different
 
 \subsubsection{Staged Training}
 
-To prevent gradient interference during early optimization, we define three training stages with progressively expanding active task sets $\mathcal{T}_s$:
+Three training stages are defined with progressively expanding active task sets $\mathcal{T}_s$:
 \begin{equation}
 \mathcal{T}_s = \begin{cases}
 \{\text{det}\} & s = 1 \;\;(\text{epochs 1--5}) \\
@@ -396,7 +394,7 @@ Algorithm~\ref{alg:training} summarizes the complete training procedure.
 \section{Datasets}
 \label{sec:datasets}
 
-We evaluate on two egocentric assembly video datasets:
+Evaluation is performed on two assembly video datasets: one third-person multi-view dataset (IKEA ASM) and one egocentric dataset (IndustReal).
 
 \subsection{IKEA ASM~\cite{benshabat2021ikea}}
 \begin{itemize}
@@ -477,14 +475,14 @@ Seed & 42 (deterministic mode) \\
 \end{tabular}
 \end{table}
 
-\noindent\textbf{Optimizer choice.} We use the Lion optimizer~\cite{chen2024lion} instead of AdamW. Lion uses sign-based updates with decoupled weight decay, reducing memory footprint (no second moment) while providing comparable convergence. The backbone receives $0.1\times$ the head learning rate to preserve ImageNet pretraining; bias parameters receive $0.3\times$ to prevent EMA-locked collapse observed in preliminary experiments.
+\noindent\textbf{Optimizer choice.} The Lion optimizer~\cite{chen2024lion} is used instead of AdamW. Lion uses sign-based updates with decoupled weight decay, reducing memory footprint (no second moment) while providing comparable convergence. The backbone receives $0.1\times$ the head learning rate to preserve ImageNet pretraining; bias parameters receive $0.3\times$ to prevent EMA-locked collapse observed in preliminary experiments.
 
-\noindent\textbf{Gradient accumulation.} With batch size 1 (VideoMAE + ConvNeXt + 5 heads + Feature Bank exceeds 12\,GB at batch${\geq}$2), we accumulate gradients over 32 steps to achieve an effective batch of 32 --- matching the $8 \times 4$ accumulation used in single-task baselines.
+\noindent\textbf{Gradient accumulation.} With batch size 1 (VideoMAE + ConvNeXt + 5 heads + Feature Bank exceeds 12\,GB at batch${\geq}$2), gradients are accumulated over 32 steps to achieve an effective batch of 32 --- matching the $8 \times 4$ accumulation used in single-task baselines.
 
 \subsection{Data Augmentation}
 \label{sec:augmentation}
 
-We apply the following augmentations during training:
+The following augmentations are applied during training:
 \begin{itemize}[nosep,leftmargin=*]
 \item \textbf{Spatial}: Random horizontal flip ($p{=}0.5$) with keypoint pair swapping; Random crop ($\pm10\%$ jitter).
 \item \textbf{Photometric}: RandAugment (magnitude 9, 2 operations) on the backbone input.
@@ -513,7 +511,7 @@ To properly engage the Causal Transformer in the PSR head, we alternate standard
 
 \subsection{Reproducibility}
 
-All random seeds (Python, NumPy, PyTorch, CUDA) are fixed at 42. cuDNN deterministic mode is enabled. Training logs, configuration files, and evaluation scripts will be released upon acceptance. We report results from single runs; standard deviations across 3 seeds are provided where noted (denoted $\pm$).
+All random seeds (Python, NumPy, PyTorch, CUDA) are fixed at 42. cuDNN deterministic mode is enabled. Training logs, configuration files, and evaluation scripts will be released upon acceptance. Results are reported from single runs; standard deviations across 3 seeds are provided where noted (denoted $\pm$).
 
 % =====================================================================
 \section{Experiments and Results}
@@ -554,23 +552,11 @@ All views, all obj.     & 2D-CNN~\cite{aganian2023ikea}        & Top-1 & 79.70 &
 Front view (RGB+pose)   & \popw{} (ours)       & Top-1   & \popwres & --- \\
 All views               & \popw{} (ours)       & Top-1   & \popwres & --- \\
 \midrule
-\multicolumn{5}{l}{\textit{Online action detection (cross-view OAD on TVSeries, not IKEA ASM)}} \\
-TVSeries (cross-subject)       & MiniROAD~\cite{an2023miniroad}     & mcAP    & 80.84 & \cite{an2023miniroad} \\
-TVSeries (cross-subject)       & PTMA~\cite{xie2025ptma}         & mcAP    & 86.99 & \cite{xie2025ptma} \\
-TVSeries (cross-subj.+view)   & PTMA~\cite{xie2025ptma}         & mcAP    & 84.47 & \cite{xie2025ptma} \\
-Online (mcAP)                  & \popw{} (ours)                  & mcAP    & \popwres & --- \\
-\midrule
 \multicolumn{5}{l}{\textit{Temporal localization}} \\
 All views & I3D                       & \map{}@0.5 & 20.00 & \cite{benshabat2021ikea} \\
 RGB-only  & ActionFormer~\cite{zhang2022actionformer}              & \map{}@0.5 & 21.49 & \cite{gatedsrm2026} \\
 RGB+pose  & Gated SRM                 & \map{}@0.5 & 21.77 & \cite{gatedsrm2026} \\
            & \popw{} (ours)            & \map{}@0.5 & \popwres & --- \\
-\midrule
-\multicolumn{5}{l}{\textit{Phase classification \& temporal order}} \\
-Self-supervised & STEPs~\cite{shah2023steps}               & Acc@1.0          & 37.02 & \cite{shah2023steps} \\
-Self-supervised & STEPs               & Kendall's $\tau$ &  0.91 & \cite{shah2023steps} \\
-                & \popw{} (ours)      & Acc@1.0          & \popwres & --- \\
-                & \popw{} (ours)      & Kendall's $\tau$ & \popwres & --- \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -646,7 +632,7 @@ To ensure fair and protocol-correct comparisons with published baselines, every 
 \toprule
 \textbf{Task} & \textbf{Protocol source} & \textbf{Key parameter} & \textbf{Notes} \\
 \midrule
-ASD mAP & Schoonbeek~2024~\tabulatecite{schoonbeek2024industreal} Table~3 & mAP (b-boxed) & Evaluated on \textit{annotated frames only}, not full videos. ``mAP (entire videos) = 0.641'' is a different protocol. Our implementation uses COCO 101-point all-point interpolation (mAP@[0.5:0.95]) as the primary metric. \\
+ASD mAP & Schoonbeek~2024~\tabulatecite{schoonbeek2024industreal} Table~3 & mAP (b-boxed) & Evaluated on \textit{annotated frames only}, not full videos. ``mAP (entire videos) = 0.641'' is a different protocol. The implementation uses COCO 101-point all-point interpolation (mAP@[0.5:0.95]) as the primary metric. \\
 ASD mAP@0.5 & --- & IoU$=0.5$ & Convenience metric on same frame set. Also report mAP@[0.5:0.95] (COCO standard). \\
 Activity Top-1/5 & Schoonbeek~2024~\tabulatecite{schoonbeek2024industreal} §5.1 & clip-level, 16 uniform frames & Single prediction per clip (majority vote or CLS readout). POPW uses RGB modality only; MViTv2 multi-modal uses RGB+VL+stereo. See Section~\ref{sec:activity-modality} for modality discussion. \\
 PSR F1 & PSRT paper~\tabulatecite{schoonbeek2024industreal} & $\pm3$-frame tolerance, full test set & POPW uses $\pm3$/$\pm5$-frame tolerance bi-directional greedy matching per PSRT paper definition. Best PSRT baseline (B2) achieves F1=0.731 on full IndustReal test set; STORM-PSR achieves F1=0.506. The PSRT supplementary reports B3 F1=0.883 on error-free recordings. POPW's PSR F1 is directly comparable to the PSRT paper protocol. \\
@@ -660,14 +646,14 @@ Head pose & (no baseline) & angular MAE ($^\circ$) & Forward and up vectors L2-n
 \end{table}
 
 \vspace{0.5em}
-\noindent\textbf{Detection mAP reporting convention.} The YOLOv8m 83.80\% result from Schoonbeek~2024 Table~3 is ``mAP (b-boxed),'' meaning \textit{frames with ground-truth bounding boxes only}. We report two POPW detection numbers: (1) ``mAP (b-boxed)'' under the same protocol for direct comparison, and (2) ``mAP@0.5 (all frames)'' as an additional reference.
+\noindent\textbf{Detection mAP reporting convention.} The YOLOv8m 83.80\% result from Schoonbeek~2024 Table~3 is ``mAP (b-boxed),'' meaning \textit{frames with ground-truth bounding boxes only}. Two POPW detection numbers are reported: (1) ``mAP (b-boxed)'' under the same protocol for direct comparison, and (2) ``mAP@0.5 (all frames)'' as an additional reference \todo.
 
 \vspace{0.5em}
-\noindent\textbf{Activity evaluation convention.} The MViTv2 baseline numbers are \textit{clip-level} Top-1/Top-5, where each action clip produces a single prediction from 16 uniformly-sampled frames. RGB-only: 65.25\%/87.93\%; RGB+VL+stereo: 66.45\%/88.43\%. Our headline activity metric follows this clip-level convention and is directly comparable to the PSRT paper protocol. We additionally report frame-level Top-1 as a secondary metric. See Section~\ref{sec:activity-modality} for modality considerations when comparing RGB-only vs.\ multi-modal baselines.
+\noindent\textbf{Activity evaluation convention.} The MViTv2 baseline numbers are \textit{clip-level} Top-1/Top-5, where each action clip produces a single prediction from 16 uniformly-sampled frames. RGB-only: 65.25\%/87.93\%; RGB+VL+stereo: 66.45\%/88.43\%. The headline activity metric follows this clip-level convention and is directly comparable to the PSRT paper protocol. Frame-level Top-1 is additionally reported as a secondary metric. See Section~\ref{sec:activity-modality} for modality considerations when comparing RGB-only vs.\ multi-modal baselines.
 
 \label{sec:activity-modality}
 \vspace{0.5em}
-\noindent\textbf{Activity modality note.} The IndustReal MViTv2 baseline uses RGB+VL (vision-language) + stereo depth as input modalities. POPW uses RGB only. Comparing RGB-only Top-1 against the multi-modal MViTv2 is not fully fair; the VL and stereo modalities provide additional spatial/depth cues that the RGB-only POPW cannot leverage. We note this modality gap explicitly when comparing against MViTv2.
+\noindent\textbf{Activity modality note.} The IndustReal MViTv2 baseline uses RGB+VL (vision-language) + stereo depth as input modalities. POPW uses RGB only. Comparing RGB-only Top-1 against the multi-modal MViTv2 is not fully fair; the VL and stereo modalities provide additional spatial/depth cues that the RGB-only POPW cannot leverage. This modality gap is noted explicitly when comparing against MViTv2.
 
 \vspace{0.5em}
 \noindent\textbf{PSR F1 tolerance and POS definition.} POPW's PSR F1 uses $\pm3$/$\pm5$-frame tolerance bi-directional greedy matching per the PSRT paper definition (F1@T = fraction of GT transitions detected within T frames, matched symmetrically). Best PSRT baseline (B2) achieves F1=0.731 and POS=0.816 on full IndustReal test set; STORM-PSR achieves F1=0.506, POS=0.812. For PSR POS, POPW follows the PSRT paper definition (runs-based adjacent pair ordering, POS = fraction of correctly ordered adjacent action pairs), which differs from STORM-PSR's published code that computes Damerau-Levenshtein distance on action ID sequences. Both metrics are reported to enable comparison.
@@ -713,19 +699,15 @@ STORM-PSR~\cite{schoonbeek2025storm}           & $\sim$15 & --- & --- & --- & --
 \toprule
 \textbf{Dataset} & \textbf{Method} & \textbf{Top-1} & \textbf{Top-5} & \textbf{mcAP} \\
 \midrule
-\ikea{} (front, RGB)    & P3D~\cite{benshabat2021ikea}                 & 60.40 & 83.13 & 38.70 \\
-\ikea{} (front, RGB+pose) & I3D~\cite{benshabat2021ikea}               & 64.15 & 76.55 & 45.23 \\
-\ikea{} (all views)     & I3D~\cite{benshabat2021ikea}                 & 47.00 & 80.54 & 32.37 \\
+\ikea{} (front, RGB)    & P3D~\cite{benshabat2021ikea}                 & 60.40 & 83.13 & --- \\
+\ikea{} (front, RGB+pose) & I3D~\cite{benshabat2021ikea}               & 64.15 & 76.55 & --- \\
+\ikea{} (all views)     & I3D~\cite{benshabat2021ikea}                 & 47.00 & 80.54 & --- \\
 \ikea{} (all views)     & PC3D~\cite{aganian2023ikea}                  & 80.20 & 91.80 & --- \\
-\ikea{} (online, csv)   & MiniROAD~\cite{an2023miniroad}                  & --- & --- & 80.84 \\
-\ikea{}                 & \popw{} (ours)                               & \popwres & \popwres & \popwres \\
+\ikea{} (all views)     & \popw{} (ours)                               & \popwres & \popwres & --- \\
 \midrule
-\multicolumn{5}{l}{\textit{TVSeries cross-view OAD (PTMA benchmark, not IKEA ASM)~\cite{xie2025ptma}}} \\
-TVSeries (cross-subject)       & PTMA                 & 84.47 & 95.00 & --- \\
-TVSeries (cross-subj.+view)    & PTMA                 & 86.99 & 96.00 & --- \\
-\midrule
-\industreal{}           & MViTv2~\cite{schoonbeek2024industreal}       & 66.45 & 88.43 & --- \\
-\industreal{}           & \popw{} (ours)                               & \popwres & \popwres & \popwres \\
+\industreal{} (RGB-only) & MViTv2 (K400 pretrain)~\cite{schoonbeek2024industreal}       & 65.25 & 87.93 & --- \\
+\industreal{} (RGB+VL+stereo) & MViTv2 (K400 pretrain)~\cite{schoonbeek2024industreal}       & 66.45 & 88.43 & --- \\
+\industreal{}           & \popw{} (ours)                               & \popwres & \popwres & --- \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -747,14 +729,12 @@ Table~\ref{tab:efficiency} compares the number of parameters, FLOPs, and through
 \textbf{Dataset} & \textbf{Method} & \textbf{Params (M)} & \textbf{GFLOPs} & \textbf{FPS} & \textbf{Hardware} \\
 \midrule
 \multicolumn{6}{l}{\textit{\ikea{} --- $640\times480$}} \\
- & MiniROAD~\cite{xie2025ptma}              & 10.5 &   1.08 & 325 & --- \\
- & PTMA~\cite{xie2025ptma}                  & 12.9 &   1.96 & 291 & --- \\
- & ActionFormer (RGB)~\cite{zhang2022actionformer}   & 27.7 &  83.28 &  21 & GTX\,1080 \\
- & Gated SRM~\cite{gatedsrm2026}            & 33.5 & 121.09 &  16 & GTX\,1080 \\
- & \popw{} (ours, batched)                  & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
- & \popw{} (ours, streaming)                & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
-\midrule
-\multicolumn{6}{l}{\textit{\industreal{} --- $1280\times720$}} \\
+& ActionFormer (RGB)~\cite{zhang2022actionformer}   & 27.7 &  83.28 &  21 & GTX\,1080 \\
+  & Gated SRM~\cite{gatedsrm2026}            & 33.5 & 121.09 &  16 & GTX\,1080 \\
+  & \popw{} (ours, batched)                  & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
+& \popw{} (ours, streaming)                & {\popwres} & {\popwres} & {\popwres} & RTX\,3060$^\dagger$ \\
+  \midrule
+  \multicolumn{6}{l}{\textit{\industreal{} --- $1280\times720$}} \\
  & YOLOv8m (COCO+synth+real)~\cite{schoonbeek2024industreal}     & 25.9 & 79.3 & --- & --- \\
  & MViTv2 (K400 pretrain)~\cite{schoonbeek2024industreal} & 34.5 & 64 & --- & --- \\
  & STORM-PSR (dual-stream)~\cite{schoonbeek2025storm}   & N/A & N/A & --- & --- \\
@@ -798,7 +778,7 @@ ConvNeXt-Tiny$^\dagger$ & 53.3 & \todo & \todo & \todo & \todo \\
 \subsubsection{Ablation: Head Contributions (Task Dropout)}
 \label{sec:ablation-heads}
 
-We isolate each task head's contribution by training single-task variants with the same backbone and FPN. ``All heads'' is the full \popw{} model. Table~\ref{tab:abl-heads} shows results.
+Each task head's contribution is isolated by training single-task variants with the same backbone and FPN. ``All heads'' is the full \popw{} model. Table~\ref{tab:abl-heads} shows results.
 
 \begin{table}[!htbp]
 \centering
@@ -864,7 +844,7 @@ Kendall + staged (ours)    & \todo & \todo & \todo & \todo & \todo \\
 \subsubsection{Ablation: Temporal Modeling}
 \label{sec:ablation-temporal}
 
-We ablate the activity head's temporal components (Feature Bank, TCN, ViT blocks, VideoMAE V2) to quantify each contribution.
+The activity head's temporal components (Feature Bank, TCN, ViT blocks, VideoMAE V2) are ablated to quantify each contribution.
 
 \begin{table}[!htbp]
 \centering
@@ -918,9 +898,9 @@ Expected behavior: $\exp(-s_\text{det})$ dominates in Stage~1; $\exp(-s_\text{po
 
 \noindent\textbf{Key observations} (to be filled after benchmark run):
 \begin{enumerate}[nosep,leftmargin=*]
-\item Stage transitions: detection mAP typically dips 1--3\% when new tasks activate (gradient competition), then recovers within 5 epochs.
-\item Kendall auto-balancing: the learned precisions converge to a ratio that reflects each task's noise level, with detection receiving the highest precision (lowest loss variance) and activity the lowest (highest class imbalance).
-\item LDAM-DRW transition at epoch 60: expect a 2--4\% jump in activity macro-F1 as class-balanced weights activate for tail classes.
+\item Stage transitions: detection mAP typically dips when new tasks activate (gradient competition), then recovers within \todo epochs.
+\item Kendall auto-balancing: the learned precisions converge to a ratio reflecting each task's noise level, with detection receiving \todo and activity receiving \todo (highest loss variance).
+\item LDAM-DRW transition at epoch \todo: expect a \todo jump in activity macro-F1 as class-balanced weights activate for tail classes.
 \end{enumerate}
 
 \FloatBarrier
@@ -1016,7 +996,7 @@ VideoMAE V2 (frozen)    & +22.0 & \todo & --- \\
 \end{tabular}
 \end{table}
 
-\noindent\textbf{Comparison with separate baselines.} Running YOLOv8m (25.9M, 79.3 GFLOPs) + MViTv2 (34.5M, 64 GFLOPs) + STORM-PSR ($\sim$15M, est.) separately requires $\sim$75.4M parameters and $\sim$143+ GFLOPs for three forward passes. \popw{} (53.3M without VideoMAE) performs all five tasks in a single pass, representing a 29\% parameter reduction and an estimated 40--50\% FLOP reduction versus the multi-model pipeline. With VideoMAE V2 enabled (75.3M), the parameter count is comparable, but inference remains a single pass.
+\noindent\textbf{Comparison with separate baselines.} Running YOLOv8m (25.9M, 79.3 GFLOPs) + MViTv2 (34.5M, 64 GFLOPs) + STORM-PSR ($\sim$15M, est.) separately requires $\sim$75.4M parameters and $\sim$143+ GFLOPs for three forward passes. \popw{} (53.3M without VideoMAE) performs all five tasks in a single pass, representing a \todo parameter reduction and an estimated \todo FLOP reduction vs.\ the multi-model pipeline. With VideoMAE V2 enabled (75.3M), the parameter count is comparable, but inference remains a single pass.
 
 \noindent\textbf{Inference latency.} On an RTX 3060 with batch size 1, \popw{} (without VideoMAE) runs at approximately \todo{} FPS for the full five-task forward pass. With VideoMAE V2 enabled, throughput drops by approximately 25\% due to the additional transformer forward pass on the 16-frame clip.
 
@@ -1028,85 +1008,107 @@ VideoMAE V2 (frozen)    & +22.0 & \todo & --- \\
 
 \subsection{Trade-offs: Accuracy vs.\ Efficiency}
 
-The design of POPW reflects a fundamental trade-off in multi-task learning: sharing features across tasks reduces computation but may degrade per-task accuracy compared to dedicated models. A single YOLOv8m + MViTv2 + STORM-PSR pipeline requires three separate backbones, each extracting features independently. POPW's shared backbone eliminates this redundancy, reducing total parameters and FLOPs.
+The design of POPW reflects a fundamental trade-off in multi-task learning: sharing features across tasks reduces computation but may degrade per-task accuracy compared to dedicated models.
 
-However, the shared representation must capture task-agnostic features useful for all heads, which may require larger backbone capacity than any single-task model. The efficiency gains from sharing must be weighed against potential accuracy losses from representation constraints.
+\begin{itemize}[nosep,leftmargin=*]
+\item Parameter efficiency: POPW shares a single ConvNeXt-Tiny backbone for all five tasks vs.\ separate backbones in multi-model baseline
+\item FLOPs efficiency: single forward pass vs.\ three separate backbones (YOLOv8m + MViTv2 + STORM-PSR)
+\item Representation constraints: shared features must capture task-agnostic patterns useful for all heads
+\end{itemize}
 
 \subsection{Which Tasks Benefit Most from Shared Representation?}
 
-The FiLM conditioning mechanism enables cross-task information flow that would not be possible with purely shared features. Detection context ($f_{det}$) provides object state information to activity recognition, helping distinguish similar poses in different assembly contexts. Similarly, head pose conditioning captures gaze direction, which is critical for understanding where the worker's attention is focused.
-
-The PSR head maintains an independent input path (multi-scale FPN features), avoiding interference from other tasks. This architectural choice reflects the intuition that procedure step recognition requires different visual cues than detection or activity recognition.
+The FiLM conditioning mechanism enables cross-task information flow~\todo:
+\begin{itemize}
+    \item PoseFiLM: body keypoint confidence modulates high-level features ($\gamma, \beta$)~\todo
+    \item HeadPoseFiLM: 9-DoF gaze modulates activity features before ActivityHead~\todo
+    \item Detection context provides object state information to activity recognition~\todo
+    \item Head pose conditioning captures gaze direction~\todo
+    \item PSR head: independent multi-scale FPN path avoids interference from other tasks~\todo
+\end{itemize}
 
 \subsection{Quantitative Cross-Method Comparison}
+\label{sec:quant-comparison}
 
-To understand where POPW's multi-task design provides the greatest benefit, we compare efficiency-normalized accuracy across all tasks (Table~\ref{tab:main-results}).
+Efficiency-normalized accuracy comparison across all tasks~\todo:
+\begin{itemize}
+    \item Detect where POPW's multi-task design provides greatest benefit~\todo
+    \item Compare accuracy-per-parameter across tasks~\todo
+\end{itemize}
 
-\textbf{Detection (ASD):} YOLOv8m achieves 83.80\% mAP@0.5 with 25.9M parameters and 79.3 GFLOPs. POPW's shared backbone (without VideoMAE) achieves comparable detection accuracy while reducing per-task parameter count by 46\% compared to running YOLOv8m separately, because the ConvNeXt-Tiny backbone (28M params) plus detection head serves all tasks. The GFLOPs efficiency of POPW is particularly notable: a single forward pass covers detection, activity, head pose, and PSR, versus three separate backbones (YOLOv8m + MViTv2 + STORM-PSR) in the multi-model baseline.
+\textbf{Detection (ASD):} YOLOv8m achieves 83.80\% mAP@0.5 with 25.9M parameters and 79.3 GFLOPs on annotated frames. POPW's shared backbone (without VideoMAE) achieves \todo{} mAP@0.5 on the same protocol, representing \todo vs.\ YOLOv8m. Per-task parameter reduction vs.\ running YOLOv8m separately: \todo.
 
-\textbf{Activity recognition:} MViTv2 achieves 65.25\% Top-1 on IndustReal with 34.5M params and 64 GFLOPs. POPW underperforms MViTv2 by approximately 7--10\% in raw Top-1, reflecting the well-known accuracy trade-off of shared representations in multi-task learning. However, normalized by FLOPs, POPW's activity head operates at a substantially lower compute cost since the backbone is evaluated once per frame rather than twice (as required by running separate detection and activity models).
+\textbf{Activity recognition:} MViTv2 achieves 65.25\% Top-1 on IndustReal (RGB-only) with 34.5M params and 64 GFLOPs. POPW achieves \todo Top-1 on the same protocol, a gap of \todo compared to MViTv2. Comparison is not fully fair since MViTv2 uses RGB+VL+stereo; see modality discussion in Section~\ref{sec:activity-modality}.
 
-\textbf{Procedure step recognition:} STORM-PSR achieves F1=0.506 and POS=0.812 with a dual-stream approach on IKEA ASM. POPW's PSR head achieves competitive POS (Procedure State Accuracy) but lower F1, particularly on videos with rapid action transitions. This is expected: the independent multi-scale FPN path in POPW's PSR head captures spatial cues but lacks the dual-stream temporal modeling that enables STORM-PSR to handle rapid transitions. POPW's feature bank (T=16 frames) provides within-window temporal context but does not match the extended temporal horizon of STORM-PSR's dual-stream architecture.
+\textbf{Procedure step recognition:} STORM-PSR achieves F1=0.506 and POS=0.812 on IndustReal. POPW achieves \todo F1 (\todo-frame tolerance) and \todo POS on the same dataset, \todo vs.\ STORM-PSR.
 
-\textbf{Head pose:} No published supervised baseline exists for 9-DoF head pose estimation in industrial assembly contexts, making comparison impossible. POPW's head pose head therefore represents a new capability, and absolute accuracy numbers (forward angular MAE, position MAE) are reported without relative comparison. The HeadPoseFiLM conditioning mechanism shows measurable benefit for activity recognition in ablation studies (Section~\ref{sec:ablation}), suggesting that accurate head pose estimation contributes indirectly to overall multi-task performance.
+\textbf{Head pose:} No published supervised baseline exists for 9-DoF head pose estimation in industrial assembly contexts. POPW's head pose head therefore represents a new capability. Forward angular MAE: \todo$^\circ$. Position MAE: \todo mm.
 
-Overall, the efficiency-normalized comparison shows that POPW provides the largest accuracy-per-parameter benefit for detection, moderate benefit for activity, and marginal benefit for PSR. This pattern guides the ablation analysis in Section~\ref{sec:ablation}, which systematically removes each FiLM stage to quantify cross-task benefit.
+Overall efficiency-normalized comparison~\todo:
+\begin{itemize}
+    \item Detection: POPW may provide largest accuracy-per-parameter benefit~\todo
+    \item Activity: moderate benefit expected~\todo
+    \item PSR: moderate benefit expected~\todo
+\end{itemize}
+This pattern guides the ablation analysis in Section~\ref{sec:ablation}. Results pending full training completion.
 
 \subsection{Failure Cases}
 
-Multi-task models exhibit failure modes distinct from single-task models. We analyze three primary failure categories observed in validation experiments:
+Multi-task models exhibit failure modes distinct from single-task models. Three primary failure categories observed in validation experiments:
+\begin{itemize}
+    \item Heavily occluded assemblies
+    \item Rare action classes
+    \item Cross-view generalization on IKEA ASM
+\end{itemize}
 
-\textbf{Heavily occluded assemblies.} When the worker's hands occlude the assembly workspace for extended periods (e.g., during tightening or alignment actions), the detection head's confidence drops below the threshold needed to trigger pose conditioning. In these cases, PoseFiLM receives near-zero confidence signals, effectively disabling the cross-task information flow that normally boosts activity recognition. The activity head falls back to body-pose-independent features, degrading Top-1 accuracy by an estimated 12--18\% on occlusion-heavy sequences.
+\textbf{Heavily occluded assemblies:}~\todo
+\begin{itemize}
+    \item Hands occlude workspace during tightening/alignment actions
+    \item Detection head confidence drops below pose conditioning threshold
+    \item PoseFiLM receives near-zero confidence → cross-task flow disabled
+    \item Activity head falls back to body-pose-independent features
+    \item Estimated Top-1 accuracy degradation on occlusion-heavy sequences: \todo
+\end{itemize}
 
-\textbf{Rare action classes.} The 74 activity classes in IndustReal include several rare transitions (e.g., "adjust bracket," "flip panel") with fewer than 15 training examples each. The LDAM-DRW loss mechanism partially addresses class imbalance, but rare classes still show 20--25\% lower recall than frequent classes (e.g., "align," "insert"). The multi-task setting amplifies this: since activity gradients compete with detection gradients during joint training, rare class features may be overwritten by the more dominant detection optimization.
+\textbf{Rare action classes:}~\todo
+\begin{itemize}
+    \item 74 activity classes in IndustReal include transitions (<15 training examples): ``adjust bracket,'' ``flip panel''
+    \item LDAM-DRW partially addresses class imbalance
+    \item Rare classes may show lower recall than frequent classes (e.g., ``align,'' ``insert'')
+    \item Expected recall gap between rare and frequent classes: \todo
+    \item Amplification effect in multi-task setting vs.\ single-task: \todo
+\end{itemize}
 
-\textbf{Cross-view generalization on IKEA ASM.} When trained exclusively on the front view, POPW's activity head shows a 9.3\% drop in Top-1 when evaluated on top-view or side-view sequences from the same furniture type. This cross-view degradation is larger than that observed for single-task methods like I3D+pose (5.1\% drop), suggesting that the shared backbone learns view-specific features that do not transfer. Adding multi-view training data mitigates this but does not eliminate it entirely.
+\textbf{Cross-view generalization on IKEA ASM:}~\todo
+\begin{itemize}
+    \item Front-view-only training may degrade top-view/side-view sequences
+    \item Expected cross-view Top-1 degradation (front-only training): \todo
+    \item Comparison vs.\ single-task methods (e.g., I3D+pose): \todo
+    \item Mitigation via multi-view training data: \todo
+\end{itemize}
 
-Additionally, the PSR head is sensitive to temporal misalignment in the feature bank. When the temporal bank slides across action boundaries, stale features from the previous step can persist for 1--2 frames, causing PSR predictions to lag behind the true procedure state. This manifests as false-positive early transitions, particularly on videos with rapid action changes (e.g., "remove bolt" followed immediately by "insert washer").
+PSR head temporal misalignment~\todo:
+\begin{itemize}
+    \item Feature bank slides across action boundaries
+    \item Stale features from previous step persist 1--2 frames
+    \item PSR predictions lag behind true procedure state
+\end{itemize}
 
 \FloatBarrier
 
 % =====================================================================
-\section{Conclusion}
-\label{sec:conclusion}
-
-We presented \popw{}, a unified multi-task architecture for egocentric assembly understanding that performs assembly state detection, body pose estimation, head pose tracking, activity recognition, and procedure step recognition in a single forward pass. The architecture introduces three key technical contributions:
-
-First, the shared ConvNeXt-Tiny backbone with FPN neck eliminates redundant feature extraction across tasks, reducing parameter count by approximately 29\% compared to running dedicated baselines (YOLOv8m + MViTv2 + STORM-PSR) separately, while producing all five output modalities from a single inference pass.
-
-Second, the two-stage FiLM conditioning mechanism (PoseFiLM and HeadPoseFiLM) establishes a novel cross-task information flow path: body keypoint and head pose predictions modulate high-level features before activity recognition, allowing pose-awareness to improve action discrimination without gradient interference via stop-gradient isolation.
-
-Third, Kendall homoscedastic uncertainty weighting combined with a three-stage training schedule (detection $\rightarrow$ pose $\rightarrow$ all tasks) provides stable convergence across tasks with loss magnitudes spanning three orders of magnitude (detection $\sim$1, activity $\sim$10--50, pose $\sim$0.001).
-
-\noindent\textbf{Broader impact.} Multi-task architectures for industrial assembly monitoring have direct applications in manufacturing quality assurance, worker safety, and training. By consolidating five tasks into a single deployable model, \popw{} reduces the engineering complexity of real-time assembly monitoring systems. However, egocentric monitoring raises legitimate privacy concerns. We emphasize that the system processes visual features without identity recognition, and we advocate for transparent deployment policies that inform workers about monitoring scope and purpose. Additionally, biases in training data (limited assembly scenarios, predominantly specific demographics in recording sessions) may reduce generalization to diverse manufacturing contexts.
-
-\subsection{Limitations}
-\label{sec:limitations}
-
-\textbf{Edge device deployment.} POPW operates at $1280\times720$ resolution, significantly higher than the $640\times480$ native resolution of IKEA ASM or the typical $224\times224$ input size used by many single-task baselines. This high resolution is essential for detecting fine-grained assembly states (e.g., distinguishing "bolt tightened" from "bolt loose") but limits deployment on memory-constrained edge devices such as Jetson Nano (4GB VRAM). Competitive single-task models like YOLOv8m can be quantized to INT8 and run at significantly lower resolution, whereas POPW's multi-head design makes aggressive quantization more challenging due to the varying numerical ranges across detection, pose, and activity heads.
-
-\textbf{Head pose specificity.} The head pose head (9-DoF) requires ground-truth head pose annotations for training, limiting transferability to new egocentric datasets. Unlike body pose datasets (COCO-WholeBody, MPII) that provide abundant labeled data, head pose annotations in industrial assembly are scarce. This prevents POPW from being directly fine-tuned on other assembly datasets without expensive new annotation campaigns.
-
-\textbf{Long-horizon temporal reasoning.} The feature bank uses a fixed window of $T=16$ frames, which limits temporal context for long-duration assembly videos. While the ViT temporal blocks capture within-window dynamics, procedures exceeding 16 frames (e.g., complex furniture with 20+ steps) cannot be fully reasoned about. This is a particular gap for IKEA ASM videos which average 23 segmented actions per video, potentially exceeding the 16-frame window when sampling at typical FPS.
-
-\textbf{Staged training complexity.} The three-stage training pipeline (detection-only $\rightarrow$ +pose/head-pose $\rightarrow$ all heads) adds engineering complexity and hyperparameter sensitivity. End-to-end training from scratch with Kendall weighting alone results in gradient interference that degrades detection accuracy by 8--12\% in ablation experiments. This makes reproducibility challenging for groups without prior multi-task training infrastructure.
-
-\textbf{Dataset-specific feature extraction.} The backbone is initialized from ImageNet-pretrained ConvNeXt-Tiny weights, which assumes natural image distributions. Assembly-specific visual patterns (e.g., metallic reflections, repeated furniture parts, tool textures) may not be well-captured by ImageNet pretraining. Single-task baselines like YOLOv8m and MViTv2 are pretrained on much larger video datasets (COCO+IndustReal-synth, Kinetics-400), giving them domain-appropriate feature representations that POPW's ImageNet initialization cannot match.
-
-\textbf{Cross-view generalization.} POPW's multi-view capability is limited to training data: the model learns to combine front/top/side views when all are available during training, but cannot generalize to unseen camera configurations. This is a fundamental limitation of the architecture, since the feature pyramid and activity head assume a fixed number of input views at training time.
-
-\subsection{Future Work}
-\label{sec:future}
-
-\textbf{Adaptive feature bank for long-horizon procedures.} The fixed $T=16$ feature bank limits temporal context for complex assemblies exceeding 16 frames. Future work will explore adaptive-length banks that dynamically extend context when detection confidence indicates mid-procedure activity. Potential approaches include sparse attention over a longer feature queue or a lightweight LSTM that maintains a compressed representation of far-past frames. This is particularly relevant for IKEA ASM's average of 23 segmented actions per video.
-
-\textbf{Early-layer VideoMAE V2 integration.} While VideoMAE V2~\cite{wang2023videomae} is fused at the classification layer (yielding +5--7\% Top-1 improvement), integrating video transformers earlier in the pipeline could capture finer temporal dynamics. Specifically, replacing the ConvNeXt-Tiny backbone with a VideoMAE-pretrained ViT-Small and fine-tuning end-to-end may provide better motion features for assembly actions, at the cost of increased pretraining data requirements. The trade-off between ImageNet-pretrained ConvNeXt and task-specific video pretraining warrants systematic evaluation.
-
-\textbf{Knowledge distillation from single-task teachers.} The staged training partially mitigates gradient interference, but accuracy gaps remain compared to dedicated single-task baselines (e.g., YOLOv8m 83.80\% vs. POPW detection). Knowledge distillation from frozen teacher models (YOLOv8m for detection, MViTv2 for activity) could transfer task-specific representations into the shared backbone without requiring separate model deployments. This requires careful alignment of intermediate feature distributions, potentially via intermediate KL-divergence losses between teacher and student activations.
-
-\textbf{Cross-domain generalization: synthetic-to-real transfer.} IndustReal provides both synthetic and real recordings of the same assembly procedures. POPW trained on real data shows degraded performance when evaluated on synthetic data (12.3\% lower detection mAP@0.5), suggesting domain shift. Future work will investigate domain-adaptive normalization layers and self-supervised pretraining on synthetic frames to improve cross-domain generalization. The synthetic data provides abundant labeled examples at low cost; leveraging it effectively is key to reducing real-world annotation requirements.
-
-\textbf{Real-time inference optimization.} POPW as described targets research evaluation; production deployment requires optimization for real-time inference on edge hardware. Approaches include INT8 quantization with per-channel scaling for the ConvNeXt backbone, structured pruning of the FPN (removing P6/P7 for smaller objects), and temporal batching across consecutive frames to amortize backbone costs. The dual-FiLM conditioning also introduces overhead that may be reducible through cache reuse of pose encodings across frames.
+% SECTION: CONCLUSION — OMITTED FOR PROFESSOR REVIEW
+% Results pending full training run completion.
+% =====================================================================
+% Conclusion section to be written after model training and evaluation.
+% Expected content:
+%   • POPW summary: unified 5-task architecture, shared backbone
+%   • Key contributions: FiLM conditioning, Kendall weighting, staged training
+%   • Results summary: comparison vs dedicated baselines on IndustReal
+%   • Broader impact: industrial assembly monitoring, privacy considerations
+%   • Limitations: edge deployment, head pose specificity, long-horizon reasoning
+%   • Future work: adaptive feature bank, VideoMAE integration, KD from teachers
+% =====================================================================
 
 \FloatBarrier
 
@@ -1120,64 +1122,64 @@ Third, Kendall homoscedastic uncertainty weighting combined with a three-stage t
 Y.~Ben-Shabat, X.~Yu, F.~Saleh, D.~Campbell, C.~Rodriguez-Opazo, H.~Li, and S.~Gould,
 ``The IKEA ASM Dataset: Understanding people assembling furniture through actions, objects and pose,''
 in \emph{Proc.\ IEEE/CVF Winter Conf.\ on Applications of Computer Vision (WACV)}, 2021.
-arXiv:2007.00394.
+\href{https://arxiv.org/abs/2007.00394}{arXiv:2007.00394}.
 
 % STEPs
 \bibitem{shah2023steps}
 A.~Shah, B.~Lundell, H.~Sawhney, and R.~Chellappa,
 ``STEPs: Self-Supervised Key Step Extraction and Localization from Unlabeled Procedural Videos,''
 in \emph{Proc.\ IEEE/CVF Int.\ Conf.\ on Computer Vision (ICCV)}, 2023.
-arXiv:2306.14536. ICCV 2023.
+\href{https://arxiv.org/abs/2306.14536}{arXiv:2306.14536}.
 
 % PC3D
 \bibitem{aganian2023ikea}
 D.~Aganian, M.~K\"ohler, S.~Baake, M.~Eisenbach, and H.-M.~Gross,
 ``How Object Information Improves Skeleton-based Human Action Recognition in Assembly Tasks,''
 in \emph{Proc.\ Int.\ Joint Conf.\ on Neural Networks (IJCNN)}, 2023.
-arXiv:2306.05844.
+\href{https://arxiv.org/abs/2306.05844}{arXiv:2306.05844}.
 
 % PTMA / MiniROAD
 \bibitem{xie2025ptma}
 L.~Xie, Y.~Tan, S.~Jing, H.~Lu, and K.~Zhang,
 ``Probabilistic Temporal Masked Attention for Cross-view Online Action Detection,''
 in \emph{Proc.\ IEEE/CVF Winter Conf.\ on Applications of Computer Vision (WACV)}, 2025.
-arXiv:2508.17025.
+\href{https://arxiv.org/abs/2508.17025}{arXiv:2508.17025}.
 
 % MiniROAD
 \bibitem{an2023miniroad}
 J.~An, H.~Kang, S.~H.~Han, M.-H.~Yang, and S.~J.~Kim,
 ``MiniROAD: Minimal RNN Framework for Online Action Detection,''
 in \emph{Proc.\ IEEE/CVF Int.\ Conf.\ on Computer Vision (ICCV)}, 2023.
-GitHub: \url{https://github.com/jbistanbul/MiniROAD}.
+\href{https://github.com/jbistanbul/MiniROAD}{GitHub: jbistanbul/MiniROAD}.
 
 % Gated SRM
 \bibitem{gatedsrm2026}
 M.~Takami and T.~Fukuda,
 ``Confidence-Aware Gated Multimodal Fusion for Robust Temporal Action Localization in Occluded Environments,''
 \textit{Sensors}, vol.~26, no.~8, article 2454, 2026.
-doi: 10.3390/s26082454.
+\href{https://doi.org/10.3390/s26082454}{doi: 10.3390/s26082454}.
 
 % ActionFormer
 \bibitem{zhang2022actionformer}
 C.-L.~Zhang, J.-X.~Wu, and Y.~Li,
 ``ActionFormer: Localizing Moments of Actions with Transformers,''
 in \emph{Proc.\ European Conf.\ on Computer Vision (ECCV)}, 2022.
-arXiv:2202.07925.
-Code: \url{https://github.com/happyharrycn/actionformer_release}.
+\href{https://arxiv.org/abs/2202.07925}{arXiv:2202.07925}.
+\href{https://github.com/happyharrycn/actionformer_release}{Code: actionformer_release}.
 
 % IndustReal
 \bibitem{schoonbeek2024industreal}
 T.~J.~Schoonbeek, T.~Houben, H.~Onvlee, P.~H.~N.~de~With, and F.~van~der~Sommen,
 ``IndustReal: A Dataset for Procedure Step Recognition Handling Execution Errors in Egocentric Videos in an Industrial-Like Setting,''
 in \emph{Proc.\ IEEE/CVF Winter Conf.\ on Applications of Computer Vision (WACV)}, 2024.
-arXiv:2310.17323.
+\href{https://arxiv.org/abs/2310.17323}{arXiv:2310.17323}.
 
 % STORM-PSR
 \bibitem{schoonbeek2025storm}
 T.~J.~Schoonbeek, S.-H.~Hung, J.~Kustra, P.~H.~N.~de~With, and F.~van~der~Sommen,
 ``STORM-PSR: Spatio-Temporal Reasoning for Procedure Step Recognition,''
 \textit{Computer Vision and Image Understanding (CVIU)}, 2025.
-arXiv:2510.12385.
+\href{https://arxiv.org/abs/2510.12385}{arXiv:2510.12385}.
 
 % SupCon+ISIL
 \bibitem{schoonbeek2024supcon}
@@ -1185,118 +1187,123 @@ T.~J.~Schoonbeek, G.~Balachandran, H.~Onvlee, T.~Houben, S.-H.~Hung, J.~Kustra,
 P.~H.~N.~de~With, and F.~van~der~Sommen,
 ``Supervised Representation Learning towards Generalizable Assembly State Recognition,''
 \textit{IEEE Robotics and Automation Letters (RAL)}, 2024.
-arXiv:2408.11700.
+\href{https://arxiv.org/abs/2408.11700}{arXiv:2408.11700}.
 
 % StateDiffNet
 \bibitem{lehman2024statediffnet}
 D.~Lehman, T.~J.~Schoonbeek, S.-H.~Hung, J.~Kustra, P.~H.~N.~de~With, and F.~van~der~Sommen,
 ``Find the Assembly Mistakes: Error Segmentation for Industrial Applications,''
 in \emph{Proc.\ IEEE/CVF Conf.\ on Computer Vision and Pattern Recognition (CVPR)}, 2024.
-arXiv:2402.06121.
+\href{https://arxiv.org/abs/2402.06121}{arXiv:2402.06121}.
 
 % Multi-task learning
 \bibitem{kendall2018multi}
 A.~Kendall, Y.~Gal, and R.~Cipolla,
 ``Multi-Task Learning Using Uncertainty to Weigh Losses for Scene Geometry and Semantics,''
 in \emph{Proc.\ IEEE Conf.\ on Computer Vision and Pattern Recognition (CVPR)}, 2018.
+\href{https://openaccess.thecvf.com/content_cvpr_2018/papers/Kendall_Multi-Task_Learning_Using_CVPR_2018_paper.pdf}{CVPR 2018 openaccess}.
 
 % Lion Optimizer
 \bibitem{chen2024lion}
 X.~Chen, C.~Liang, D.~Huang, E.~Real, K.~Wang, Y.~Liu, H.~Pham, X.~Dong, T.~Luong, C.-J.~Hsieh, Y.~Lu, and Q.~V.~Le,
 ``Symbolic Discovery of Optimization Algorithms,''
 in \emph{Proc.\ Advances in Neural Information Processing Systems (NeurIPS)}, 2023.
-arXiv:2302.06675.
+\href{https://arxiv.org/abs/2302.06675}{arXiv:2302.06675}.
 
 % LDAM-DRW
 \bibitem{cao2019ldam}
 K.~Cao, C.~Wei, A.~Gaidon, N.~Arechiga, and T.~Ma,
 ``Learning Imbalanced Datasets with Label-Distribution-Aware Margin Loss,''
 in \emph{Proc.\ Advances in Neural Information Processing Systems (NeurIPS)}, 2019.
-arXiv:1906.07413.
+\href{https://arxiv.org/abs/1906.07413}{arXiv:1906.07413}.
 
 % Wing Loss
 \bibitem{feng2018wing}
 Z.-H.~Feng, J.~Kittler, M.~Awais, P.~Huber, and X.-J.~Wu,
 ``Wing Loss for Robust Facial Landmark Localisation with Convolutional Neural Networks,''
 in \emph{Proc.\ IEEE/CVF Conf.\ on Computer Vision and Pattern Recognition (CVPR)}, 2018.
+\href{https://openaccess.thecvf.com/content_cvpr_2018/papers/Feng_Wing_Loss_for_CVPR_2018_paper.pdf}{CVPR 2018 openaccess}.
 
 % ConvNeXt
 \bibitem{liu2022convnet}
 Z.~Liu, H.~Mao, C.-Y.~Wu, C.~Feichtenhofer, T.~Darrell, and S.~Xie,
 ``A ConvNet for the 2020s,''
 in \emph{Proc.\ IEEE/CVF Conf.\ on Computer Vision and Pattern Recognition (CVPR)}, 2022.
+\href{https://openaccess.thecvf.com/content/CVPR2022/papers/Liu_A_ConvNet_for_the_2020s_CVPR_2022_paper.pdf}{CVPR 2022 openaccess}.
 
 % ConvNeXt-V2
 \bibitem{mao2024convnextv2}
 W.~Mao, Y.~Ge, C.-Y.~Wu, et al.,
 ``ConvNeXt V2: Co-designing and Scaling ConvNets with Masked Autoencoders,''
 in \emph{Proc.\ IEEE/CVF Conf.\ on Computer Vision and Pattern Recognition (CVPR)}, 2023.
-GitHub: \url{https://github.com/facebookresearch/ConvNeXt-V2}.
+\href{https://github.com/facebookresearch/ConvNeXt-V2}{GitHub: facebookresearch/ConvNeXt-V2}.
 
 % Focal Loss / RetinaNet
 \bibitem{lin2017focal}
 T.-Y.~Lin, P.~Goyal, R.~Girshick, K.~He, and P.~Doll\'ar,
 ``Focal Loss for Dense Object Detection,''
 in \emph{Proc.\ IEEE Int.\ Conf.\ on Computer Vision (ICCV)}, 2017.
+\href{https://openaccess.thecvf.com/content_ICCV_2017/papers/Lin_Focal_Loss_for_ICCV_2017_paper.pdf}{ICCV 2017 openaccess}.
 
 % FiLM
 \bibitem{dumoulin2016learned}
 V.~Dumoulin, E.~Perez, N.~Schlaug, et al.,
 ``Feature-wise Linear Modulation,''
-arXiv:1610.04402, 2016.
+\href{https://arxiv.org/abs/1610.04402}{arXiv:1610.04402}, 2016.
 
 \bibitem{perez2018film}
 E.~Perez, F.~Strub, H.~de~Vries, V.~Dumoulin, and A.~Courville,
 ``FiLM: Visual Reasoning with a General Conditioning Layer,''
 in \emph{Proc.\ AAAI Conf.\ on Artificial Intelligence (AAAI)}, 2018.
+\href{https://arxiv.org/abs/1709.07871}{arXiv:1709.07871}.
 
 % Related work papers
 \bibitem{wen2022hierarchical}
 Y.~Wen, H.~Pan, L.~Yang, J.~Pan, T.~Komura, and W.~Wang,
 ``Hierarchical Temporal Transformer for 3D Hand Pose Estimation and Action Recognition from Egocentric RGB Videos,''
 in \emph{Proc.\ IEEE/CVF Conf.\ on Computer Vision and Pattern Recognition (CVPR)}, 2023.
-arXiv:2209.09484.
+\href{https://arxiv.org/abs/2209.09484}{arXiv:2209.09484}.
 
 \bibitem{ragusa2022meccano}
 F.~Ragusa, A.~Furnari, and G.~M.~Farinella,
 ``MECCANO: A Multimodal Egocentric Dataset for Humans Behavior Understanding in the Industrial-like Domain,''
 \textit{Computer Vision and Image Understanding (CVIU)}, 2023.
-arXiv:2209.08691.
+\href{https://arxiv.org/abs/2209.08691}{arXiv:2209.08691}.
 
 \bibitem{wang2023ego}
 H.~Wang, M.~K.~Singh, and L.~Torresani,
 ``Ego-Only: Egocentric Action Detection without Exocentric Transferring,''
 in \emph{Proc.\ IEEE/CVF Conf.\ on Computer Vision and Pattern Recognition (CVPR)}, 2023.
-arXiv:2301.01380.
+\href{https://arxiv.org/abs/2301.01380}{arXiv:2301.01380}.
 
 \bibitem{ke2020rise}
 T.~Ke, K.~J.~Wu, and S.~I.~Roumeliotis,
 ``RISE-SLAM: A Resource-aware Inverse Schmidt Estimator for SLAM,''
 in \emph{Proc.\ IEEE/RSJ Int.\ Conf.\ on Intelligent Robots and Systems (IROS)}, 2020.
-arXiv:2011.11730.
+\href{https://arxiv.org/abs/2011.11730}{arXiv:2011.11730}.
 
 \bibitem{duong2025multitask}
 A.-K.~Duong and P.~Gomez-Kr\"amer,
 ``Multi-task Learning with Extended Temporal Shift Module for Temporal Action Localization,''
 in \emph{Proc.\ IEEE/CVF Int.\ Conf.\ on Computer Vision (ICCV) -- BinEgo360 Challenge}, 2025.
-arXiv:2512.11189.
+\href{https://arxiv.org/abs/2512.11189}{arXiv:2512.11189}.
 
 \bibitem{kim2025surgical}
 G.~Kim, T.~K.~Jeong, and J.~Park,
 ``Surgical Video Understanding with Label Interpolation,''
 in \emph{Proc.\ IEEE Int.\ Conf.\ on Robotics and Automation (ICRA)}, 2025.
-arXiv:2509.18802 (revised March 2026).
+\href{https://arxiv.org/abs/2509.18802}{arXiv:2509.18802} (revised March 2026).
 
 \bibitem{wang2023videomae}
 Y.~Wang, K.~Li, et al.,
 ``VideoMAE V2: Scaling Video Masked Autoencoders for Efficient Video Understanding,''
 in \emph{Proc.\ IEEE/CVF Conf.\ on Computer Vision and Pattern Recognition (CVPR)}, 2023.
-GitHub: OpenGVLab/VideoMAEv2.
+\href{https://github.com/OpenGVLab/VideoMAEv2}{GitHub: OpenGVLab/VideoMAEv2}.
 
 \bibitem{wu2025tempr1}
 T.~Wu, L.~Yang, G.~Zhan, et al.,
 ``TempR1: Improving Temporal Understanding of MLLMs via Temporal-Aware Multi-Task Reinforcement Learning,''
-arXiv:2512.03963, 2025.
+\href{https://arxiv.org/abs/2512.03963}{arXiv:2512.03963}, 2025.
 
 \end{thebibliography}
 

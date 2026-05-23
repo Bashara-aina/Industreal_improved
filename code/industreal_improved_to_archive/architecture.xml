@@ -1,0 +1,610 @@
+<mxGraphModel dx="2712" dy="1596" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+  <root>
+    <mxCell id="0" />
+    <mxCell id="1" parent="0" />
+    <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontStyle=1;fontSize=15;" value="POPW: Pose-Conditioned Multi-Task Architecture for IndustReal Assembly Recognition" vertex="1">
+      <mxGeometry height="28" width="950" x="150" y="14" as="geometry" />
+    </mxCell>
+    <mxCell id="legend_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f9f9f9;strokeColor=#aaaaaa;arcSize=4;" value="" vertex="1">
+      <mxGeometry height="273" width="175" x="960" y="10" as="geometry" />
+    </mxCell>
+    <mxCell id="legend_title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=11;" value="Color legend" vertex="1">
+      <mxGeometry height="20" width="175" x="960" y="13" as="geometry" />
+    </mxCell>
+    <mxCell id="leg1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1e6fa8;strokeColor=#185886;fontColor=#ffffff;fontSize=10;" value="Detection branch" vertex="1">
+      <mxGeometry height="20" width="159" x="968" y="37" as="geometry" />
+    </mxCell>
+    <mxCell id="leg2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a7a4a;strokeColor=#15623b;fontColor=#ffffff;fontSize=10;" value="Pose branch / FPN" vertex="1">
+      <mxGeometry height="20" width="159" x="968" y="61" as="geometry" />
+    </mxCell>
+    <mxCell id="leg3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c0392b;strokeColor=#9a2e22;fontColor=#ffffff;fontSize=10;" value="Loss functions" vertex="1">
+      <mxGeometry height="20" width="159" x="968" y="85" as="geometry" />
+    </mxCell>
+    <mxCell id="leg4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b8860b;strokeColor=#936b09;fontColor=#ffffff;fontSize=10;" value="FiLM module" vertex="1">
+      <mxGeometry height="20" width="159" x="968" y="109" as="geometry" />
+    </mxCell>
+    <mxCell id="leg5" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6a0dad;strokeColor=#550a8a;fontColor=#ffffff;fontSize=10;" value="C5 / semantic feature" vertex="1">
+      <mxGeometry height="20" width="159" x="968" y="133" as="geometry" />
+    </mxCell>
+    <mxCell id="leg6" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#5b2d8e;strokeColor=#3d1a6e;fontColor=#ffffff;fontSize=10;" value="ViT / TCN / Temporal" vertex="1">
+      <mxGeometry height="20" width="159" x="968" y="157" as="geometry" />
+    </mxCell>
+    <mxCell id="leg7" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#37306b;strokeColor=#2a2550;fontColor=#ffffff;fontSize=10;" value="Feature Bank / Memory" vertex="1">
+      <mxGeometry height="20" width="159" x="968" y="181" as="geometry" />
+    </mxCell>
+    <mxCell id="leg8" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1e6fa8;strokeColor=#185886;fontColor=#ffffff;fontSize=10;fontStyle=2;" value="Cross-task Det→Act signal" vertex="1">
+      <mxGeometry height="20" width="159" x="968" y="205" as="geometry" />
+    </mxCell>
+    <mxCell id="leg9" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0f766e;strokeColor=#0a5852;fontColor=#ffffff;fontSize=10;" value="Head pose head / branch" vertex="1">
+      <mxGeometry height="20" width="159" x="968" y="229" as="geometry" />
+    </mxCell>
+    <mxCell id="leg10" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#a83279;strokeColor=#831f5f;fontColor=#ffffff;fontSize=10;" value="PSR head / Causal Trans." vertex="1">
+      <mxGeometry height="20" width="159" x="968" y="253" as="geometry" />
+    </mxCell>
+    <mxCell id="input_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#555555;strokeColor=#333333;fontColor=#ffffff;arcSize=6;fontSize=12;fontStyle=1;" value="Input [B, 3, 720, 1280]" vertex="1">
+      <mxGeometry height="42" width="230" x="490" y="55" as="geometry" />
+    </mxCell>
+    <mxCell id="backbone_header" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#eeeeee;strokeColor=#aaaaaa;fontColor=#333333;arcSize=4;fontSize=11;fontStyle=2;" value="ConvNeXt-Tiny Backbone  (ImageNet pretrained, LayerNorm internal — no frozen BN)" vertex="1">
+      <mxGeometry height="24" width="860" x="80" y="107" as="geometry" />
+    </mxCell>
+    <mxCell id="c2_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#555555;strokeColor=#333333;fontColor=#ffffff;arcSize=6;fontSize=12;" value="C2  ·  stride 4&lt;br/&gt;&lt;font style=&#39;font-size:10px;font-style:italic;&#39;&gt;96 × 180 × 320&lt;/font&gt;" vertex="1">
+      <mxGeometry height="48" width="180" x="80" y="150" as="geometry" />
+    </mxCell>
+    <mxCell id="c3_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#555555;strokeColor=#333333;fontColor=#ffffff;arcSize=6;fontSize=12;" value="C3  ·  stride 8&lt;br/&gt;&lt;font style=&#39;font-size:10px;font-style:italic;&#39;&gt;192 × 90 × 160&lt;/font&gt;" vertex="1">
+      <mxGeometry height="48" width="180" x="290" y="150" as="geometry" />
+    </mxCell>
+    <mxCell id="c4_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#555555;strokeColor=#333333;fontColor=#ffffff;arcSize=6;fontSize=12;" value="C4  ·  stride 16&lt;br/&gt;&lt;font style=&#39;font-size:10px;font-style:italic;&#39;&gt;384 × 45 × 80&lt;/font&gt;" vertex="1">
+      <mxGeometry height="48" width="180" x="500" y="150" as="geometry" />
+    </mxCell>
+    <mxCell id="c5_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6a0dad;strokeColor=#550a8a;fontColor=#ffffff;arcSize=6;fontSize=12;" value="C5  ·  stride 32&lt;br/&gt;&lt;font style=&#39;font-size:10px;font-style:italic;&#39;&gt;768 × 23 × 40&lt;/font&gt;" vertex="1">
+      <mxGeometry height="48" width="220" x="720" y="150" as="geometry" />
+    </mxCell>
+    <mxCell id="fpn_neck" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a7a4a;strokeColor=#15623b;fontColor=#ffffff;arcSize=4;fontSize=12;" value="Feature Pyramid Network (FPN)&lt;br/&gt;&lt;font style=&#39;font-size:10px;font-style:italic;&#39;&gt;lateral 1×1 (192/384/768→256)  ·  top-down upsample  ·  3×3 smooth  ·  P6/P7 via stride-2 conv on C5&lt;/font&gt;" vertex="1">
+      <mxGeometry height="46" width="860" x="80" y="245" as="geometry" />
+    </mxCell>
+    <mxCell id="p3_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a7a4a;strokeColor=#15623b;fontColor=#ffffff;arcSize=6;fontSize=12;" value="P3&lt;br/&gt;&lt;i&gt;256×90×160&lt;/i&gt;" vertex="1">
+      <mxGeometry height="44" width="140" x="80" y="330" as="geometry" />
+    </mxCell>
+    <mxCell id="p4_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a7a4a;strokeColor=#15623b;fontColor=#ffffff;arcSize=6;fontSize=12;" value="P4&lt;br/&gt;&lt;i&gt;256×45×80&lt;/i&gt;" vertex="1">
+      <mxGeometry height="44" width="140" x="250" y="330" as="geometry" />
+    </mxCell>
+    <mxCell id="p5_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a7a4a;strokeColor=#15623b;fontColor=#ffffff;arcSize=6;fontSize=12;" value="P5&lt;br/&gt;&lt;i&gt;256×23×40&lt;/i&gt;" vertex="1">
+      <mxGeometry height="44" width="140" x="430" y="330" as="geometry" />
+    </mxCell>
+    <mxCell id="p6_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a7a4a;strokeColor=#15623b;fontColor=#ffffff;arcSize=6;fontSize=11;" value="P6  &lt;i&gt;256×12×20&lt;/i&gt;" vertex="1">
+      <mxGeometry height="44" width="120" x="600" y="330" as="geometry" />
+    </mxCell>
+    <mxCell id="p7_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a7a4a;strokeColor=#15623b;fontColor=#ffffff;arcSize=6;fontSize=11;" value="P7  &lt;i&gt;256×6×10&lt;/i&gt;" vertex="1">
+      <mxGeometry height="44" width="120" x="750" y="330" as="geometry" />
+    </mxCell>
+    <mxCell id="det_container" parent="1" style="swimlane;startSize=28;rounded=1;arcSize=4;fillColor=#dbeafe;strokeColor=#1e6fa8;fontColor=#1e6fa8;fontStyle=1;fontSize=13;" value="Detection Head  (24 ASD classes)" vertex="1">
+      <mxGeometry height="300" width="330" x="20" y="440" as="geometry" />
+    </mxCell>
+    <mxCell id="cls_subnet" parent="det_container" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1e6fa8;strokeColor=#185886;fontColor=#ffffff;arcSize=4;fontSize=11;" value="Cls subnet  (shared P3–P7)&lt;br/&gt;&lt;i&gt;4× Conv 3×3 + ReLU  →  Conv(9×24)&lt;/i&gt;" vertex="1">
+      <mxGeometry height="42" width="135" x="180" y="52" as="geometry" />
+    </mxCell>
+    <mxCell id="reg_subnet" parent="det_container" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1e6fa8;strokeColor=#185886;fontColor=#ffffff;arcSize=4;fontSize=11;" value="Reg subnet  (shared P3–P7)&lt;br/&gt;&lt;i&gt;4× Conv 3×3 + ReLU  →  Conv(9×4)&lt;/i&gt;" vertex="1">
+      <mxGeometry height="42" width="145" x="15" y="52" as="geometry" />
+    </mxCell>
+    <mxCell id="det_outputs" parent="det_container" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1e6fa8;strokeColor=#185886;fontColor=#ffffff;arcSize=4;fontSize=11;" value="cls_preds [B, N, 24]   ·   reg_preds [B, N, 4]" vertex="1">
+      <mxGeometry height="32" width="300" x="15" y="134" as="geometry" />
+    </mxCell>
+    <mxCell id="e22" edge="1" parent="det_container" source="reg_subnet" style="edgeStyle=orthogonalEdgeStyle;" target="det_outputs">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="7H-avgJbxov-LIze4vbV-5" edge="1" parent="det_container" source="cls_subnet" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;curved=0;" target="det_outputs">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="l_det" parent="det_container" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c0392b;strokeColor=#9a2e22;fontColor=#ffffff;arcSize=4;fontSize=11;" value="𝓛det  =  Focal (α=0.25, γ=2) + GIoU" vertex="1">
+      <mxGeometry height="36" width="300" x="15" y="180" as="geometry" />
+    </mxCell>
+    <mxCell id="e23" edge="1" parent="det_container" source="det_outputs" style="edgeStyle=orthogonalEdgeStyle;" target="l_det">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="anchors_note" parent="det_container" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0f0f0;strokeColor=#cccccc;fontColor=#555555;arcSize=4;fontSize=10;" value="3 ratios × 3 scales · sizes (24,48,96,192,384) · k-means calibrated" vertex="1">
+      <mxGeometry height="28" width="300" x="15" y="230" as="geometry" />
+    </mxCell>
+    <mxCell id="pose_container" parent="1" style="swimlane;startSize=28;rounded=1;arcSize=4;fillColor=#d1fae5;strokeColor=#1a7a4a;fontColor=#1a7a4a;fontStyle=1;fontSize=13;" value="Pose Head  (17 keypoints)" vertex="1">
+      <mxGeometry height="300" width="330" x="390" y="440" as="geometry" />
+    </mxCell>
+    <mxCell id="pose_heatmaps" parent="pose_container" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a7a4a;strokeColor=#15623b;fontColor=#ffffff;arcSize=4;fontSize=11;" value="Conv 1×1  →  heatmaps  [B, 17, 180, 320]" vertex="1">
+      <mxGeometry height="34" width="300" x="15" y="120" as="geometry" />
+    </mxCell>
+    <mxCell id="pose_kpts" parent="pose_container" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a7a4a;strokeColor=#15623b;fontColor=#ffffff;arcSize=4;fontSize=11;" value="Soft-argmax (T=0.1)  →  kpts [B,17,2] + conf [B,17]" vertex="1">
+      <mxGeometry height="34" width="300" x="15" y="180" as="geometry" />
+    </mxCell>
+    <mxCell id="e19" edge="1" parent="pose_container" source="pose_heatmaps" style="edgeStyle=orthogonalEdgeStyle;" target="pose_kpts">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="l_pose" parent="pose_container" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c0392b;strokeColor=#9a2e22;fontColor=#ffffff;arcSize=4;fontSize=11;" value="𝓛pose  =  Wing Loss (ω=0.05, ε=0.005)  ·  conf-weighted" vertex="1">
+      <mxGeometry height="36" width="300" x="15" y="240" as="geometry" />
+    </mxCell>
+    <mxCell id="e20" edge="1" parent="pose_container" source="pose_kpts" style="edgeStyle=orthogonalEdgeStyle;" target="l_pose">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="pose_convt" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a7a4a;strokeColor=#15623b;fontColor=#ffffff;arcSize=4;fontSize=11;" value="ConvTranspose2d  (k=4, s=2, p=1)&lt;br/&gt;GroupNorm(32) + ReLU&lt;br/&gt;&lt;i&gt;[B, 256, 180, 320]&lt;/i&gt;" vertex="1">
+      <mxGeometry height="50" width="300" x="405" y="480" as="geometry" />
+    </mxCell>
+    <mxCell id="act_container" parent="1" style="swimlane;startSize=28;rounded=1;arcSize=4;fillColor=#f3f4f6;strokeColor=#555555;fontColor=#333333;fontStyle=1;fontSize=13;" value="Activity Head  (Feature Bank + TCN + 2× ViT, 74 cls)" vertex="1">
+      <mxGeometry height="617" width="340" x="760" y="420" as="geometry" />
+    </mxCell>
+    <mxCell id="vmae_box" parent="act_container" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#5b2d8e;strokeColor=#3d1a6e;fontColor=#ffffff;arcSize=4;fontSize=10;dashed=1;" value="&lt;b&gt;[Optional]  VideoMAE V2 Stream&lt;/b&gt;&lt;br&gt;&lt;i&gt;clip [B, T=16, 3, 224, 224] → ViT-S/16 (frozen ckpt)&lt;/i&gt;&lt;br&gt;&lt;i&gt;mean-pool last_hidden_state → [B, 384]&lt;/i&gt;&lt;br&gt;&lt;i&gt;proj 384→512 → concat with y&lt;sub&gt;cls&lt;/sub&gt; → [B, 1024]&lt;/i&gt;&lt;br&gt;&lt;i&gt;USE_VIDEOMAE=False by default&lt;/i&gt;" vertex="1">
+      <mxGeometry height="76" width="317" x="13" y="512" as="geometry" />
+    </mxCell>
+    <mxCell id="det_conf" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1e6fa8;strokeColor=#185886;fontColor=#ffffff;arcSize=4;fontSize=11;" value="MaxPool(cls_preds)  →  f&lt;sub&gt;det&lt;/sub&gt;  [B, 24]&lt;br/&gt;&lt;i&gt;stop_grad — no gradient back to detection&lt;/i&gt;" vertex="1">
+      <mxGeometry height="32" width="317" x="773" y="453" as="geometry" />
+    </mxCell>
+    <mxCell id="gap_c5mod" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6a0dad;strokeColor=#550a8a;fontColor=#ffffff;arcSize=4;fontSize=11;" value="GAP(C5_mod₂)  [B, 768]" vertex="1">
+      <mxGeometry height="34" width="152" x="773" y="495" as="geometry" />
+    </mxCell>
+    <mxCell id="gap_p4" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#1a7a4a;strokeColor=#15623b;fontColor=#ffffff;arcSize=4;fontSize=11;" value="GAP(P4)  [B, 256]" vertex="1">
+      <mxGeometry height="34" width="152" x="938" y="495" as="geometry" />
+    </mxCell>
+    <mxCell id="act_concat" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#555555;strokeColor=#333333;fontColor=#ffffff;arcSize=4;fontSize=11;" value="Concat  →  f&lt;sub&gt;joint&lt;/sub&gt;  [B, 1048]&lt;br/&gt;&lt;i&gt;[f&lt;sub&gt;det&lt;/sub&gt; 24  ‖  f&lt;sub&gt;app&lt;/sub&gt; 768  ‖  f&lt;sub&gt;spatial&lt;/sub&gt; 256]&lt;/i&gt;" vertex="1">
+      <mxGeometry height="34" width="317" x="773" y="539" as="geometry" />
+    </mxCell>
+    <mxCell id="act_proj" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#555555;strokeColor=#185886;fontColor=#ffffff;arcSize=4;fontSize=11;" value="W_proj  (1048→512)  →  f̃&lt;sub&gt;t&lt;/sub&gt;  [B, 512]" vertex="1">
+      <mxGeometry height="34" width="317" x="773" y="583" as="geometry" />
+    </mxCell>
+    <mxCell id="feat_bank" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#37306b;strokeColor=#2a2550;fontColor=#ffffff;arcSize=4;fontSize=11;" value="Feature Bank  B&lt;sub&gt;t&lt;/sub&gt;  =  [f̃&lt;sub&gt;t−T+1&lt;/sub&gt; , … , f̃&lt;sub&gt;t&lt;/sub&gt;]  [B, T=16, 512]&lt;br/&gt;&lt;i&gt;sliding window  ·  keyed by (video_id, camera_view)  ·  16 KB/seq (FP16)&lt;/i&gt;" vertex="1">
+      <mxGeometry height="44" width="317" x="773" y="627" as="geometry" />
+    </mxCell>
+    <mxCell id="tcn_block" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#5b2d8e;strokeColor=#3d1a6e;fontColor=#ffffff;arcSize=4;fontSize=10;" value="&lt;b&gt;TCN Block&lt;/b&gt;  [B, T=16, 512]  →  [B, T=16, 512]&lt;br&gt;&lt;i&gt;1D Depthwise Conv (k=5, dilation=1)  ·  short-range motion&lt;/i&gt;&lt;br&gt;&lt;i&gt;LayerNorm → GELU → Linear  ·  DropPath=0.1&lt;/i&gt;" vertex="1">
+      <mxGeometry height="60" width="317" x="773" y="681" as="geometry" />
+    </mxCell>
+    <mxCell id="cls_token" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#37306b;strokeColor=#2a2550;fontColor=#ffffff;arcSize=4;fontSize=10;" value="Prepend CLS token  [1, 1, 512]  →  [B, T+1=17, 512]" vertex="1">
+      <mxGeometry height="26" width="317" x="773" y="746" as="geometry" />
+    </mxCell>
+    <mxCell id="vit_block" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#5b2d8e;strokeColor=#3d1a6e;fontColor=#ffffff;arcSize=4;fontSize=10;" value="&lt;b&gt;2× ViT Temporal Blocks&lt;/b&gt;  [B, 17, 512]  →  [B, 17, 512]&lt;br&gt;&lt;i&gt;+ Learnable pos. embed  [1, T+1, 512]&lt;/i&gt;&lt;br&gt;&lt;i&gt;MHSA: 8 heads, d&lt;sub&gt;k&lt;/sub&gt;=64  ·  attn_dropout=0.1&lt;/i&gt;&lt;br&gt;&lt;i&gt;FFN: LayerNorm → Linear(512→2048) → GELU → Linear(2048→512)&lt;/i&gt;&lt;br&gt;&lt;i&gt;DropPath: 0.10, 0.15  ·  pre-norm&lt;/i&gt;" vertex="1">
+      <mxGeometry height="92" width="317" x="773" y="777" as="geometry" />
+    </mxCell>
+    <mxCell id="act_agg" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#555555;strokeColor=#333333;fontColor=#ffffff;arcSize=4;fontSize=11;" value="CLS-token readout  y&lt;sub&gt;cls&lt;/sub&gt; = bank_seq[:,0,:]  [B, 512]&lt;br/&gt;Dropout(0.1)" vertex="1">
+      <mxGeometry height="38" width="317" x="773" y="874" as="geometry" />
+    </mxCell>
+    <mxCell id="film_container" parent="1" style="swimlane;startSize=28;rounded=1;arcSize=4;fillColor=#fef3c7;strokeColor=#b8860b;fontColor=#b8860b;fontStyle=1;fontSize=13;" value="PoseFiLM Module  (1st FiLM stage — body keypoints)" vertex="1">
+      <mxGeometry height="220" width="710" y="1200" as="geometry" />
+    </mxCell>
+    <mxCell id="film_conf" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0f0f0;strokeColor=#cccccc;fontColor=#333333;arcSize=4;fontSize=11;" value="Confidence extraction  [no_grad]&lt;br/&gt;&lt;i&gt;heatmaps → max → sigmoid → nan_to_num(0.5)&lt;/i&gt;" vertex="1">
+      <mxGeometry height="44" width="340" x="15" y="1236" as="geometry" />
+    </mxCell>
+    <mxCell id="film_pose_flat" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0f0f0;strokeColor=#cccccc;fontColor=#333333;arcSize=4;fontSize=11;" value="pose_flat  [B, 51]&lt;br/&gt;&lt;i&gt;keypoints [B,34] ‖ confidence [B,17]&lt;/i&gt;" vertex="1">
+      <mxGeometry height="40" width="340" x="15" y="1288" as="geometry" />
+    </mxCell>
+    <mxCell id="film_gamma" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b8860b;strokeColor=#936b09;fontColor=#ffffff;arcSize=4;fontSize=11;" value="γ-net&lt;br/&gt;&lt;i&gt;51→512→768&lt;br/&gt;1 + tanh(·) ∈ (0,2)&lt;/i&gt;" vertex="1">
+      <mxGeometry height="55" width="155" x="15" y="1354" as="geometry" />
+    </mxCell>
+    <mxCell id="film_beta" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b8860b;strokeColor=#936b09;fontColor=#ffffff;arcSize=4;fontSize=11;" value="β-net&lt;br/&gt;&lt;i&gt;51→512→768&lt;br/&gt;linear (unbounded)&lt;/i&gt;" vertex="1">
+      <mxGeometry height="55" width="155" x="190" y="1354" as="geometry" />
+    </mxCell>
+    <mxCell id="film_c5_direct" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6a0dad;strokeColor=#550a8a;fontColor=#ffffff;arcSize=4;fontSize=11;" value="C5  [B, 768, 23, 40]&lt;br/&gt;&lt;i&gt;direct from backbone (bypasses FPN)&lt;/i&gt;" vertex="1">
+      <mxGeometry height="44" width="290" x="410" y="1236" as="geometry" />
+    </mxCell>
+    <mxCell id="film_c5mod" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b8860b;strokeColor=#936b09;fontColor=#ffffff;arcSize=4;fontSize=12;" value="C5_mod  =  γ · C5 + β&lt;br/&gt;&lt;i&gt;[B, 768, 23, 40]&lt;/i&gt;" vertex="1">
+      <mxGeometry height="44" width="290" x="410" y="1298" as="geometry" />
+    </mxCell>
+    <mxCell id="hpfilm_container" parent="1" style="swimlane;startSize=28;rounded=1;arcSize=4;fillColor=#fff7ed;strokeColor=#b8860b;fontColor=#b8860b;fontStyle=1;fontSize=13;" value="HeadPoseFiLM  (2nd FiLM stage — 9-DoF head pose)" vertex="1">
+      <mxGeometry height="220" width="350" x="730" y="1200" as="geometry" />
+    </mxCell>
+    <mxCell id="hpfilm_in" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0f766e;strokeColor=#0a5852;fontColor=#ffffff;arcSize=4;fontSize=11;" value="head_pose  [B, 9]&lt;br/&gt;&lt;i&gt;forward[3] ‖ position[3] ‖ up[3]  ·  stop_grad&lt;/i&gt;" vertex="1">
+      <mxGeometry height="40" width="320" x="745" y="1236" as="geometry" />
+    </mxCell>
+    <mxCell id="hpfilm_gamma" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b8860b;strokeColor=#936b09;fontColor=#ffffff;arcSize=4;fontSize=11;" value="γ_hp&lt;br/&gt;&lt;i&gt;9→256→768&lt;br/&gt;1 + tanh(·)&lt;/i&gt;" vertex="1">
+      <mxGeometry height="50" width="150" x="745" y="1288" as="geometry" />
+    </mxCell>
+    <mxCell id="hpfilm_beta" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b8860b;strokeColor=#936b09;fontColor=#ffffff;arcSize=4;fontSize=11;" value="β_hp&lt;br/&gt;&lt;i&gt;9→256→768&lt;br/&gt;linear&lt;/i&gt;" vertex="1">
+      <mxGeometry height="50" width="150" x="915" y="1288" as="geometry" />
+    </mxCell>
+    <mxCell id="hpfilm_c5mod2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#b8860b;strokeColor=#936b09;fontColor=#ffffff;arcSize=4;fontSize=12;" value="C5_mod₂  =  γ_hp · C5_mod + β_hp&lt;br/&gt;&lt;i&gt;[B, 768, 23, 40]&lt;/i&gt;" vertex="1">
+      <mxGeometry height="44" width="320" x="745" y="1350" as="geometry" />
+    </mxCell>
+    <mxCell id="hp_head_box" parent="1" style="swimlane;startSize=28;rounded=1;arcSize=4;fillColor=#ccfbf1;strokeColor=#0f766e;fontColor=#0f766e;fontStyle=1;fontSize=13;" value="Head Pose Head  (9-DoF)" vertex="1">
+      <mxGeometry height="156" width="280" x="20" y="780" as="geometry" />
+    </mxCell>
+    <mxCell id="hp_gap" parent="hp_head_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0f766e;strokeColor=#0a5852;fontColor=#ffffff;arcSize=4;fontSize=10;" value="GAP(C4) ‖ GAP(C5)  [B, 384+768=1152]" vertex="1">
+      <mxGeometry height="34" width="260" x="10" y="38" as="geometry" />
+    </mxCell>
+    <mxCell id="hp_mlp" parent="hp_head_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0f766e;strokeColor=#0a5852;fontColor=#ffffff;arcSize=4;fontSize=10;" value="MLP  1152→512→256→9&lt;br/&gt;&lt;i&gt;LayerNorm + GELU + Dropout(0.15→0.1)&lt;/i&gt;" vertex="1">
+      <mxGeometry height="42" width="260" x="10" y="78" as="geometry" />
+    </mxCell>
+    <mxCell id="hp_out" parent="hp_head_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0f766e;strokeColor=#0a5852;fontColor=#ffffff;arcSize=4;fontSize=11;" value="head_pose  [B, 9]" vertex="1">
+      <mxGeometry height="28" width="260" x="10" y="124" as="geometry" />
+    </mxCell>
+    <mxCell id="e_hp_gap_mlp" edge="1" parent="hp_head_box" source="hp_gap" style="edgeStyle=orthogonalEdgeStyle;" target="hp_mlp">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_hp_mlp_out" edge="1" parent="hp_head_box" source="hp_mlp" style="edgeStyle=orthogonalEdgeStyle;" target="hp_out">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="l_hp" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c0392b;strokeColor=#9a2e22;fontColor=#ffffff;arcSize=4;fontSize=11;" value="𝓛hp  =  MSE × 0.001  (meter-scale norm)" vertex="1">
+      <mxGeometry height="30" width="280" x="20" y="945" as="geometry" />
+    </mxCell>
+    <mxCell id="e_hp_loss" edge="1" parent="1" source="hp_out" style="edgeStyle=orthogonalEdgeStyle;" target="l_hp">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="psr_head_box" parent="1" style="swimlane;startSize=28;rounded=1;arcSize=4;fillColor=#fce7f3;strokeColor=#a83279;fontColor=#a83279;fontStyle=1;fontSize=13;" value="PSR Head  (Causal Transformer + per-component, 11 cls)" vertex="1">
+      <mxGeometry height="350" width="370" x="320" y="780" as="geometry" />
+    </mxCell>
+    <mxCell id="psr_gap" parent="psr_head_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#a83279;strokeColor=#831f5f;fontColor=#ffffff;arcSize=4;fontSize=10;" value="Multi-scale GAP(P3) ‖ GAP(P4) ‖ GAP(P5)  [B, 768]" vertex="1">
+      <mxGeometry height="36" width="350" x="10" y="38" as="geometry" />
+    </mxCell>
+    <mxCell id="psr_mlp" parent="psr_head_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#a83279;strokeColor=#831f5f;fontColor=#ffffff;arcSize=4;fontSize=10;" value="Per-frame MLP  768→512→256&lt;br/&gt;&lt;i&gt;LayerNorm + GELU + Dropout(0.1)&lt;/i&gt;" vertex="1">
+      <mxGeometry height="42" width="350" x="10" y="80" as="geometry" />
+    </mxCell>
+    <mxCell id="psr_transformer" parent="psr_head_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#a83279;strokeColor=#831f5f;fontColor=#ffffff;arcSize=4;fontSize=10;" value="&lt;b&gt;Causal Transformer Encoder&lt;/b&gt;&lt;br&gt;&lt;i&gt;3 layers · 4 heads · d_model=256 · ffn=1024  ·  pre-norm&lt;/i&gt;&lt;br&gt;&lt;i&gt;causal mask (upper-triangular, eval mode)&lt;/i&gt;&lt;br&gt;&lt;i&gt;identical at train and inference (KV-cache friendly)&lt;/i&gt;" vertex="1">
+      <mxGeometry height="76" width="350" x="10" y="128" as="geometry" />
+    </mxCell>
+    <mxCell id="psr_cache_note" parent="psr_head_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fdf2f8;strokeColor=#fbcfe8;fontColor=#831f5f;arcSize=4;fontSize=9;" value="Per-sequence cache (eval only)  ·  bounded MAX_LEN=32&lt;br/&gt;&lt;i&gt;keyed by (video_id, camera_view) · disabled at training&lt;/i&gt;" vertex="1">
+      <mxGeometry height="32" width="350" x="10" y="208" as="geometry" />
+    </mxCell>
+    <mxCell id="psr_per_comp" parent="psr_head_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#a83279;strokeColor=#831f5f;fontColor=#ffffff;arcSize=4;fontSize=10;" value="Per-component output heads  ×11&lt;br/&gt;&lt;i&gt;each: Linear(256→64) → GELU → Dropout → Linear(64→1)&lt;/i&gt;" vertex="1">
+      <mxGeometry height="42" width="350" x="10" y="244" as="geometry" />
+    </mxCell>
+    <mxCell id="psr_out" parent="psr_head_box" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#a83279;strokeColor=#831f5f;fontColor=#ffffff;arcSize=4;fontSize=11;" value="psr_logits  [B, 11]" vertex="1">
+      <mxGeometry height="28" width="350" x="10" y="294" as="geometry" />
+    </mxCell>
+    <mxCell id="e_psr_gap_mlp" edge="1" parent="psr_head_box" source="psr_gap" style="edgeStyle=orthogonalEdgeStyle;" target="psr_mlp">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_psr_mlp_tr" edge="1" parent="psr_head_box" source="psr_mlp" style="edgeStyle=orthogonalEdgeStyle;" target="psr_transformer">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_psr_tr_per" edge="1" parent="psr_head_box" source="psr_transformer" style="edgeStyle=orthogonalEdgeStyle;" target="psr_per_comp">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_psr_per_out" edge="1" parent="psr_head_box" source="psr_per_comp" style="edgeStyle=orthogonalEdgeStyle;" target="psr_out">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="l_psr" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c0392b;strokeColor=#9a2e22;fontColor=#ffffff;arcSize=4;fontSize=11;" value="𝓛psr  =  Binary Focal (α=0.25, γ=2.0) + temporal smoothness (w=0.05)" vertex="1">
+      <mxGeometry height="30" width="370" x="320" y="1140" as="geometry" />
+    </mxCell>
+    <mxCell id="e_psr_loss" edge="1" parent="1" source="psr_out" style="edgeStyle=orthogonalEdgeStyle;" target="l_psr">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="kendall_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c0392b;strokeColor=#999999;fontColor=#ffffff;arcSize=4;fontSize=11;" value="Kendall Homoscedastic Uncertainty Weighting  (Kendall et al., 2018)  ·  4 tasks&lt;br/&gt;&lt;i&gt;𝓛 = Σ_t  exp(−s_t)·𝓛_t · ramp_t  +  s_t&lt;/i&gt;&lt;br/&gt;&lt;i&gt;t ∈ {det, pose+head_pose, act, psr}  ·  s_t = clamp(log σ²_t , −4, 2)&lt;/i&gt;&lt;br/&gt;&lt;i&gt;init: s_det=0, s_pose=−1, s_act=0, s_psr=0  ·  act_ramp = min(1, epoch/5)&lt;/i&gt;" vertex="1">
+      <mxGeometry height="78" width="1080" y="1450" as="geometry" />
+    </mxCell>
+    <mxCell id="staged_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#b8860b;fontColor=#444;arcSize=4;fontSize=10;" value="&lt;b&gt;Staged training:&lt;/b&gt;  Stage 1 (ep 1–5): det only · layer1–3 frozen.  Stage 2 (ep 6–15): + pose + head_pose · activity/PSR frozen.  Stage 3 (ep 16+): all 4 tasks active." vertex="1">
+      <mxGeometry height="32" width="1080" y="1535" as="geometry" />
+    </mxCell>
+    <mxCell id="e1" edge="1" parent="1" source="input_box" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;" target="c2_box">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e2" edge="1" parent="1" source="input_box" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;" target="c3_box">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e3" edge="1" parent="1" source="input_box" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;" target="c4_box">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e4" edge="1" parent="1" source="input_box" style="edgeStyle=orthogonalEdgeStyle;fontSize=10;" target="c5_box">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="830" y="76" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e_c2_fpn" edge="1" parent="1" source="c2_box" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#555555;" target="fpn_neck">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e5" edge="1" parent="1" source="c3_box" style="edgeStyle=orthogonalEdgeStyle;" target="fpn_neck">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e6" edge="1" parent="1" source="c4_box" style="edgeStyle=orthogonalEdgeStyle;" target="fpn_neck">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e7" edge="1" parent="1" source="c5_box" style="edgeStyle=orthogonalEdgeStyle;" target="fpn_neck">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e8" edge="1" parent="1" source="c5_box" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#6a0dad;fontColor=#6a0dad;fontSize=10;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" target="film_c5_direct" value="direct bypass">
+      <mxGeometry relative="1" x="-0.1711" as="geometry">
+        <mxPoint as="offset" />
+        <Array as="points">
+          <mxPoint x="1135" y="174" />
+          <mxPoint x="1135" y="1118" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e_c4_hp" edge="1" parent="1" source="c4_box" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#0f766e;fontColor=#0f766e;fontSize=10;" target="hp_gap" value="C4 to HeadPoseHead">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="55" y="225" />
+          <mxPoint x="55" y="800" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e_c5_hp" edge="1" parent="1" source="c5_box" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#0f766e;fontColor=#0f766e;fontSize=10;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" target="hp_gap" value="C5">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="65" y="174" />
+          <mxPoint x="65" y="800" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e9" edge="1" parent="1" source="fpn_neck" style="edgeStyle=orthogonalEdgeStyle;" target="p3_box">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e10" edge="1" parent="1" source="fpn_neck" style="edgeStyle=orthogonalEdgeStyle;" target="p4_box">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e11" edge="1" parent="1" source="fpn_neck" style="edgeStyle=orthogonalEdgeStyle;" target="p5_box">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e12" edge="1" parent="1" source="fpn_neck" style="edgeStyle=orthogonalEdgeStyle;" target="p6_box">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e13" edge="1" parent="1" source="fpn_neck" style="edgeStyle=orthogonalEdgeStyle;" target="p7_box">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_p3_convt" edge="1" parent="1" source="p3_box" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#1a7a4a;fontColor=#1a7a4a;fontSize=10;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="pose_convt" value="P3">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="150" y="395" />
+          <mxPoint x="390" y="395" />
+          <mxPoint x="390" y="505" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e17" edge="1" parent="1" source="pose_convt" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#1a7a4a;" target="pose_heatmaps">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="555" y="530" />
+          <mxPoint x="555" y="575" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e14" edge="1" parent="1" source="p3_box" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#1a7a4a;fontColor=#1a7a4a;fontSize=10;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="pose_container" value="P3 only">
+      <mxGeometry relative="1" x="0.9151" as="geometry">
+        <mxPoint as="offset" />
+        <Array as="points">
+          <mxPoint x="150" y="380" />
+          <mxPoint x="555" y="380" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e_p3_psr" edge="1" parent="1" source="p3_box" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#a83279;fontColor=#a83279;fontSize=10;dashed=1;" target="psr_gap" value="P3 → PSR">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="150" y="408" />
+          <mxPoint x="340" y="408" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e_p4_psr" edge="1" parent="1" source="p4_box" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#a83279;fontColor=#a83279;fontSize=10;dashed=1;" target="psr_gap" value="P4">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="320" y="416" />
+          <mxPoint x="445" y="416" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e_p5_psr" edge="1" parent="1" source="p5_box" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#a83279;fontColor=#a83279;fontSize=10;dashed=1;" target="psr_gap" value="P5">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="500" y="424" />
+          <mxPoint x="585" y="424" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="7H-avgJbxov-LIze4vbV-22" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#1E6FA8;curved=0;">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="320" y="410" />
+          <mxPoint x="185" y="410" />
+        </Array>
+        <mxPoint x="320" y="375" as="sourcePoint" />
+        <mxPoint x="185" y="441" as="targetPoint" />
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="7H-avgJbxov-LIze4vbV-24" edge="1" parent="1" source="p5_box" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;curved=0;strokeColor=#1E6FA8;" target="det_container">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="500" y="410" />
+          <mxPoint x="185" y="410" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="7H-avgJbxov-LIze4vbV-25" edge="1" parent="1" source="p6_box" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;curved=0;strokeColor=#1E6FA8;" target="det_container">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="660" y="410" />
+          <mxPoint x="185" y="410" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="7H-avgJbxov-LIze4vbV-26" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;curved=0;strokeColor=#1E6FA8;">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="810" y="410" />
+          <mxPoint x="185" y="410" />
+        </Array>
+        <mxPoint x="810" y="384" as="sourcePoint" />
+        <mxPoint x="185" y="443" as="targetPoint" />
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="7H-avgJbxov-LIze4vbV-4" edge="1" parent="1" source="p3_box" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#1e6fa8;fontColor=#1e6fa8;fontSize=10;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="det_container" value="P3–P7">
+      <mxGeometry relative="1" x="0.6039" as="geometry">
+        <mxPoint as="offset" />
+        <Array as="points">
+          <mxPoint x="150" y="410" />
+          <mxPoint x="185" y="410" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e16" edge="1" parent="1" source="p4_box" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#1a7a4a;fontColor=#1a7a4a;fontSize=10;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="act_container" value="P4">
+      <mxGeometry relative="1" x="0.938" as="geometry">
+        <mxPoint as="offset" />
+        <Array as="points">
+          <mxPoint x="320" y="390" />
+          <mxPoint x="930" y="390" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e_det_cross" edge="1" parent="1" source="det_outputs" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#1e6fa8;fontColor=#1e6fa8;fontSize=10;" target="det_conf" value="stop_grad">
+      <mxGeometry relative="1" x="-0.15" as="geometry">
+        <mxPoint as="offset" />
+        <Array as="points">
+          <mxPoint x="720" y="602" />
+          <mxPoint x="720" y="469" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e_dc_ac" edge="1" parent="1" source="det_conf" style="edgeStyle=orthogonalEdgeStyle;" target="act_concat">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e25" edge="1" parent="1" source="gap_c5mod" style="edgeStyle=orthogonalEdgeStyle;" target="act_concat">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e26" edge="1" parent="1" source="gap_p4" style="edgeStyle=orthogonalEdgeStyle;" target="act_concat">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e27" edge="1" parent="1" source="act_concat" style="edgeStyle=orthogonalEdgeStyle;" target="act_proj">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_ap_fb" edge="1" parent="1" source="act_proj" style="edgeStyle=orthogonalEdgeStyle;" target="feat_bank">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_fb_tcn" edge="1" parent="1" source="feat_bank" style="edgeStyle=orthogonalEdgeStyle;" target="tcn_block">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_tcn_cls" edge="1" parent="1" source="tcn_block" style="edgeStyle=orthogonalEdgeStyle;" target="cls_token">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_cls_vit" edge="1" parent="1" source="cls_token" style="edgeStyle=orthogonalEdgeStyle;" target="vit_block">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_vit_aa" edge="1" parent="1" source="vit_block" style="edgeStyle=orthogonalEdgeStyle;" target="act_agg">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_aa_vmae" edge="1" parent="1" source="act_agg" style="edgeStyle=orthogonalEdgeStyle;dashed=1;" target="vmae_box">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_vmae_al" edge="1" parent="1" source="vmae_box" style="edgeStyle=orthogonalEdgeStyle;" target="act_logits">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e30" edge="1" parent="1" source="pose_kpts" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#c0392b;fontColor=#c0392b;fontSize=10;" target="film_conf" value="no_grad">
+      <mxGeometry relative="1" x="0.1111" as="geometry">
+        <mxPoint as="offset" />
+        <Array as="points">
+          <mxPoint x="555" y="750" />
+          <mxPoint x="205" y="1050" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e31" edge="1" parent="1" source="film_conf" style="edgeStyle=orthogonalEdgeStyle;" target="film_pose_flat">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e32" edge="1" parent="1" source="film_pose_flat" style="edgeStyle=orthogonalEdgeStyle;" target="film_gamma">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e33" edge="1" parent="1" source="film_pose_flat" style="edgeStyle=orthogonalEdgeStyle;" target="film_beta">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e34" edge="1" parent="1" source="film_gamma" style="edgeStyle=orthogonalEdgeStyle;" target="film_c5mod">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="93" y="1430" />
+          <mxPoint x="380" y="1430" />
+          <mxPoint x="380" y="1320" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e35" edge="1" parent="1" source="film_beta" style="edgeStyle=orthogonalEdgeStyle;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="film_c5mod">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="268" y="1430" />
+          <mxPoint x="380" y="1430" />
+          <mxPoint x="380" y="1320" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e36" edge="1" parent="1" source="film_c5_direct" style="edgeStyle=orthogonalEdgeStyle;" target="film_c5mod">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_c5mod_to_hpfilm" edge="1" parent="1" source="film_c5mod" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#b8860b;fontColor=#b8860b;fontSize=10;" target="hpfilm_c5mod2" value="C5_mod">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="720" y="1320" />
+          <mxPoint x="720" y="1372" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e_hp_to_hpfilm" edge="1" parent="1" source="hp_out" style="edgeStyle=orthogonalEdgeStyle;dashed=1;strokeColor=#0f766e;fontColor=#0f766e;fontSize=10;" target="hpfilm_in" value="head_pose (stop_grad)">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="290" y="932" />
+          <mxPoint x="290" y="1116" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e_hpfilm_in_g" edge="1" parent="1" source="hpfilm_in" style="edgeStyle=orthogonalEdgeStyle;" target="hpfilm_gamma">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_hpfilm_in_b" edge="1" parent="1" source="hpfilm_in" style="edgeStyle=orthogonalEdgeStyle;" target="hpfilm_beta">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_hpfilm_g_c5" edge="1" parent="1" source="hpfilm_gamma" style="edgeStyle=orthogonalEdgeStyle;" target="hpfilm_c5mod2">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e_hpfilm_b_c5" edge="1" parent="1" source="hpfilm_beta" style="edgeStyle=orthogonalEdgeStyle;" target="hpfilm_c5mod2">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+    <mxCell id="e38" edge="1" parent="1" source="hpfilm_c5mod2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6a0dad;fontColor=#6a0dad;fontSize=10;" target="gap_c5mod" value="GAP → activity">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="1130" y="1232" />
+          <mxPoint x="1130" y="512" />
+          <mxPoint x="850" y="512" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e39" edge="1" parent="1" source="l_det" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#c0392b;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="kendall_box">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="185" y="860" />
+          <mxPoint x="185" y="1310" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e40" edge="1" parent="1" source="l_pose" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#c0392b;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" target="kendall_box">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="405" y="700" />
+          <mxPoint x="405" y="1310" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e_l_hp_kendall" edge="1" parent="1" source="l_hp" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#c0392b;" target="kendall_box">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="160" y="1010" />
+          <mxPoint x="160" y="1310" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e41" edge="1" parent="1" source="l_act" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#c0392b;" target="kendall_box">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="930" y="1080" />
+          <mxPoint x="930" y="1310" />
+        </Array>
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="e_l_psr_kendall" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#c0392b;" target="kendall_box">
+      <mxGeometry relative="1" as="geometry">
+        <Array as="points">
+          <mxPoint x="485" y="1320" />
+          <mxPoint x="485" y="1450" />
+        </Array>
+        <mxPoint x="485" y="1310" as="sourcePoint" />
+      </mxGeometry>
+    </mxCell>
+    <mxCell id="act_logits" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#555555;strokeColor=#333333;fontColor=#ffffff;arcSize=4;fontSize=12;" value="act_logits  [B, 74]" vertex="1">
+      <mxGeometry height="28" width="317" x="773" y="1050" as="geometry" />
+    </mxCell>
+    <mxCell id="l_act" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#c0392b;strokeColor=#9a2e22;fontColor=#ffffff;arcSize=4;fontSize=11;" value="𝓛act  =  LDAM-DRW Loss  (74 cls, label_smooth=0.1)" vertex="1">
+      <mxGeometry height="36" width="317" x="773" y="1084" as="geometry" />
+    </mxCell>
+    <mxCell id="e29" edge="1" parent="1" source="act_logits" style="edgeStyle=orthogonalEdgeStyle;" target="l_act">
+      <mxGeometry relative="1" as="geometry" />
+    </mxCell>
+  </root>
+</mxGraphModel>

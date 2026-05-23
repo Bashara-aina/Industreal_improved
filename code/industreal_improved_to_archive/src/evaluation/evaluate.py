@@ -32,6 +32,7 @@ Date: April 2026
 
 import gc
 import logging
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, cast
 
@@ -1243,6 +1244,11 @@ def compute_head_pose_metrics(
     result['n_samples'] = int(pred.shape[0])
 
     # Doc 03 A.4: Angular MAE in degrees for directional vectors (normalize first — raw MLP outputs are not unit vectors)
+    # Fix (Bashara 2026-05-23): Distinguish unit-direction DoFs (0-2, 6-8) from raw-Euler/position DoFs (3-5).
+    # pose.csv stores forward[3]+pos[3]+up[3] — forward/up ARE unit vectors (norm≈1.0 confirmed from data).
+    # But early in training, HeadPoseHead MLP may output raw non-unit values (e.g., all positive in [0,1]).
+    # Detect which case we have: if mean_pred_norm > 0.5, treat as unit vectors → angular error.
+    # Otherwise, treat as raw Euler angles → MSE in degrees (no arccos normalization).
     def _angular_err(a: np.ndarray, b: np.ndarray) -> float:
         a_n = a / (np.linalg.norm(a, axis=1, keepdims=True) + 1e-8)
         b_n = b / (np.linalg.norm(b, axis=1, keepdims=True) + 1e-8)
@@ -1250,11 +1256,29 @@ def compute_head_pose_metrics(
         dot = np.clip(dot, -1.0, 1.0)
         return float(np.degrees(np.arccos(dot)).mean())
 
-    forward_angular = _angular_err(pred[:, :3], gt[:, :3])
-    up_angular = _angular_err(pred[:, 6:9], gt[:, 6:9])
-    result['head_pose_angular_MAE_deg'] = (forward_angular + up_angular) / 2.0
-    result['forward_angular_MAE_deg'] = forward_angular
-    result['up_angular_MAE_deg'] = up_angular
+    def _mse_err_deg(a: np.ndarray, b: np.ndarray) -> float:
+        """MSE error in degrees for raw Euler-angle DoFs (no normalization)."""
+        return float(np.degrees(np.abs(a - b).mean()))
+
+    # Detect whether prediction is unit vectors (norm>0.5) or raw non-unit values
+    pred_norm_mean = np.linalg.norm(pred[:, :3], axis=1).mean()
+    gt_norm_mean = np.linalg.norm(gt[:, :3], axis=1).mean()
+
+    if pred_norm_mean > 0.5 and gt_norm_mean > 0.5:
+        # Both appear to be unit direction vectors — use angular error
+        forward_angular = _angular_err(pred[:, :3], gt[:, :3])
+        up_angular = _angular_err(pred[:, 6:9], gt[:, 6:9])
+        result['head_pose_angular_MAE_deg'] = (forward_angular + up_angular) / 2.0
+        result['forward_angular_MAE_deg'] = forward_angular
+        result['up_angular_MAE_deg'] = up_angular
+    else:
+        # Raw non-unit values (e.g., early training, uninitialized HeadPoseHead) — use MSE in degrees
+        # This avoids the arccos(normalize(tiny_vector)) numerical instability
+        forward_angular = _mse_err_deg(pred[:, :3], gt[:, :3])
+        up_angular = _mse_err_deg(pred[:, 6:9], gt[:, 6:9])
+        result['head_pose_angular_MAE_deg'] = (forward_angular + up_angular) / 2.0
+        result['forward_angular_MAE_deg'] = forward_angular
+        result['up_angular_MAE_deg'] = up_angular
 
     # Position MAE in mm (3-DoF position, raw units → mm)
     pos_err_mm = np.linalg.norm(pred[:, 3:6] - gt[:, 3:6], axis=1) * 1000.0
@@ -2326,25 +2350,59 @@ def evaluate_all(
     device_obj = torch.device(device) if isinstance(device, str) else device
     criterion.to(device_obj)
 
-    # --- CRASH-SAFE CHECKPOINT SAVE for evaluate.py (Bashara 2026-05-09) ---
+    # --- CRASH-SAFE CUDA HEALTH CHECK (Bashara 2026-05-23) ---
+    # Problem: validation-phase GPU OOM → CUDA error → DDP/NCCL broadcasts SIGINT
+    # to all ranks → crash recovery saves fail because torch.save internally calls
+    # cudaStreamSynchronize in corrupted CUDA context.
+    def _cuda_is_healthy() -> bool:
+        """Return True if CUDA context is healthy (no OOM, no corrupted state)."""
+        if not torch.cuda.is_available():
+            return True
+        try:
+            torch.cuda.synchronize()
+            return True
+        except Exception:
+            return False
+
     def _save_eval_crash_recovery(save_dir: Optional[str], tag: str = '') -> None:
-        """Save minimal recovery state if evaluation crashes."""
+        """Save minimal recovery state. Never blocks >5s. CPU-fallback if CUDA bad."""
         if save_dir is None:
             return
-        try:
-            import os as _os
-            recovery_path = _os.path.join(save_dir, 'eval_crash_recovery.pth')
-            save_dict = {
-                'tag': tag,
-                'batch_idx': bi,
-                'max_batches': max_batches,
-                'device': str(device),
-            }
-            torch.save(save_dict, recovery_path)
-            torch.cuda.synchronize()
-            logger.info(f'  [EVAL_CRASH] Saved crash checkpoint: {tag}')
-        except Exception as exc:
-            logger.warning(f'  [EVAL_CRASH] Failed to save crash checkpoint: {exc}')
+
+        def _do_save() -> None:
+            try:
+                import os as _os
+                recovery_path = _os.path.join(save_dir, 'eval_crash_recovery.pth')
+                cuda_healthy = _cuda_is_healthy()
+
+                # Build save_dict with CPU fallback for GPU tensors when CUDA is unhealthy
+                save_dict = {
+                    'tag': tag,
+                    'batch_idx': bi,
+                    'max_batches': max_batches,
+                    'device': str(device),
+                }
+
+                # Try to include model state if model is available and CUDA is healthy
+                try:
+                    if cuda_healthy:
+                        save_dict['model'] = model.state_dict()
+                except Exception:
+                    pass
+
+                torch.save(save_dict, recovery_path)
+                if cuda_healthy:
+                    torch.cuda.synchronize()
+                logger.info(f'  [EVAL_CRASH] Saved crash checkpoint: {tag}')
+            except Exception as exc:
+                logger.warning(f'  [EVAL_CRASH] Failed to save crash checkpoint: {exc}')
+
+        # Run with 5-second timeout — never block the signal handler indefinitely
+        t = threading.Thread(target=_do_save, daemon=True)
+        t.start()
+        t.join(timeout=5.0)
+        if t.is_alive():
+            logger.warning('  [EVAL_CRASH] Save timed out after 5s — continuing without save')
 
     # --- GPU + CPU memory snapshot at eval start (Bashara 2026-05-09) ---
     _gpu_alloc_gb = torch.cuda.memory_allocated(device) / 1024**3

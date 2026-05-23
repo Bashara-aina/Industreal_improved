@@ -54,6 +54,7 @@ import logging
 import math
 import random
 import shutil
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
@@ -633,46 +634,102 @@ def train_one_epoch(
             logger.warning(f'  [CHECKPOINT] Failed to save {tag}: {exc}')
             return None
 
-    def _save_crash_recovery(ckpt_dir: Path, tag: str = '') -> None:
+    # --- CRASH-SAFE CUDA HEALTH CHECK (Bashara 2026-05-23) ---
+    # Problem: validation-phase GPU OOM → CUDA error → DDP/NCCL broadcasts SIGINT
+    # to all ranks → crash recovery saves fail because torch.save internally calls
+    # cudaStreamSynchronize in corrupted CUDA context.
+    def _cuda_is_healthy() -> bool:
+        """Return True if CUDA context is healthy (no OOM, no corrupted state)."""
+        if not torch.cuda.is_available():
+            return True  # CPU-only, always healthy
         try:
-            if _checkpoint_has_nan(model):
-                logger.warning(
-                    '  [CRASH_RECOVERY] Skipping save -- model has NaN/Inf params'
-                )
-                return
-            recovery_path = ckpt_dir / 'crash_recovery.pth'
-            save_dict = {
-                'tag': tag,
-                'epoch': epoch,
-                'step': num_batches,
-                'batch': 0,   # Always 0: force epoch-boundary resume (avoids DataLoader pin_memory race during islice fast-forward)
-                'total_steps': total_steps,
-                'seq_steps': seq_steps,
-                'model': model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'scaler': scaler.state_dict(),
-                'nan_skips': nan_skips,
-                'running': running,
-                'best_metric': best_metric,   # Closure variable from main(); default 0.0 if not yet set
-                'timestamp': time.time(),
-            }
-            if ema is not None:
-                save_dict['ema_shadow'] = {k: v.clone() for k, v in ema.shadow.items()}
-            # FIX: Save criterion (Kendall log_vars) for full state recovery
-            # FIX: Save best_metric so resume doesn't regress on model selection
-            if criterion is not None:
-                save_dict['criterion'] = {
-                    'log_var_det': criterion.log_var_det.data.clone(),
-                    'log_var_pose': criterion.log_var_pose.data.clone(),
-                    'log_var_act': criterion.log_var_act.data.clone(),
-                    'log_var_psr': criterion.log_var_psr.data.clone(),
-                }
-            torch.save(save_dict, recovery_path)
-            logger.info(f'  [CRASH_RECOVERY] Saved {tag} crash checkpoint to {recovery_path}')
-            # CRITICAL: force flush to disk so even SIGKILL won't lose this
             torch.cuda.synchronize()
-        except Exception as exc:
-            logger.warning(f'  [CRASH_RECOVERY] Failed to save crash checkpoint: {exc}')
+            return True
+        except Exception:
+            return False
+
+    def _save_crash_recovery(ckpt_dir: Path, tag: str = '') -> None:
+        """Save minimal recovery state. Never blocks >5s. CPU-fallback if CUDA bad."""
+        def _do_save() -> None:
+            try:
+                if _checkpoint_has_nan(model):
+                    logger.warning(
+                        '  [CRASH_RECOVERY] Skipping save -- model has NaN/Inf params'
+                    )
+                    return
+                recovery_path = ckpt_dir / 'crash_recovery.pth'
+
+                # Build save_dict — convert GPU tensors to CPU if CUDA is unhealthy
+                cuda_healthy = _cuda_is_healthy()
+
+                model_state = {}
+                for k, v in model.state_dict().items():
+                    if cuda_healthy or not isinstance(v, torch.Tensor):
+                        model_state[k] = v
+                    else:
+                        model_state[k] = v.cpu()
+
+                optimizer_state = {}
+                for k, v in optimizer.state_dict().items():
+                    if cuda_healthy or not isinstance(v, torch.Tensor):
+                        optimizer_state[k] = v
+                    else:
+                        try:
+                            optimizer_state[k] = v.cpu()
+                        except Exception:
+                            optimizer_state[k] = v
+
+                scaler_state = {}
+                for k, v in scaler.state_dict().items():
+                    if cuda_healthy or not isinstance(v, torch.Tensor):
+                        scaler_state[k] = v
+                    else:
+                        try:
+                            scaler_state[k] = v.cpu()
+                        except Exception:
+                            scaler_state[k] = v
+
+                save_dict = {
+                    'tag': tag,
+                    'epoch': epoch,
+                    'step': num_batches,
+                    'batch': 0,
+                    'total_steps': total_steps,
+                    'seq_steps': seq_steps,
+                    'model': model_state,
+                    'optimizer': optimizer_state,
+                    'scaler': scaler_state,
+                    'nan_skips': nan_skips,
+                    'running': running,
+                    'best_metric': best_metric,
+                    'timestamp': time.time(),
+                }
+                if ema is not None:
+                    save_dict['ema_shadow'] = {
+                        k: (v.cpu() if cuda_healthy or not isinstance(v, torch.Tensor) else v)
+                        for k, v in ema.shadow.items()
+                    }
+                if criterion is not None:
+                    save_dict['criterion'] = {
+                        'log_var_det': criterion.log_var_det.data.clone(),
+                        'log_var_pose': criterion.log_var_pose.data.clone(),
+                        'log_var_act': criterion.log_var_act.data.clone(),
+                        'log_var_psr': criterion.log_var_psr.data.clone(),
+                    }
+                torch.save(save_dict, recovery_path)
+                logger.info(f'  [CRASH_RECOVERY] Saved {tag} crash checkpoint to {recovery_path}')
+                # CRITICAL: force flush to disk so even SIGKILL won't lose this
+                if _cuda_is_healthy():
+                    torch.cuda.synchronize()
+            except Exception as exc:
+                logger.warning(f'  [CRASH_RECOVERY] Failed to save crash checkpoint: {exc}')
+
+        # Run with 5-second timeout — never block the signal handler indefinitely
+        t = threading.Thread(target=_do_save, daemon=True)
+        t.start()
+        t.join(timeout=5.0)
+        if t.is_alive():
+            logger.warning('  [CRASH_RECOVERY] Save timed out after 5s — continuing without save')
 
     # --- SIGNAL HANDLERS for C-level crashes (Bashara 2026-05-08) ---
     # CUDA assertions / segfaults arrive as signals. Catch them and log before exit.

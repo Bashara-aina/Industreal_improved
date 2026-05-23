@@ -24,12 +24,12 @@ _cfg_logger = logging.getLogger(__name__)
 # =========================================================================
 # Debug / profiling flags
 # =========================================================================
-BENCHMARK_MODE = True  # When True: VAL_EVERY=1, full metrics every epoch
+BENCHMARK_MODE = True   # VAL_EVERY=1 every epoch
 DEBUG_MODE         = False
 DEBUG_MAX_VIDEOS   = 2  # smoke test: 2 recordings only
 DEBUG_FRAME_STRIDE = 10
 
-SUBSET_RATIO = 1.0  # [FIX] Was 0.05 — full dataset for full benchmark
+SUBSET_RATIO = 0.10   # 10% subset for quick training
 
 TRAIN_FRAME_STRIDE = 3  # A.2: stride 3 → T=16 covers 1.6s at 30FPS (median action)
 EVAL_FRAME_STRIDE  = 1
@@ -252,11 +252,11 @@ IMAGENET_STD  = [0.229, 0.224, 0.225]
 # NOTE: BATCH_SIZE=1 is REQUIRED. VideoMAE alone uses +600MB VRAM; batch=2 causes OOM.
 # GRAD_ACCUM=32 maintains effective batch=32 (same as old BATCH_SIZE=8, accum=4).
 BATCH_SIZE           = 1     # [GPU-OOM FIX] batch=1 for VRAM headroom with VideoMAE
-GRAD_ACCUM_STEPS     = 32    # [GPU-OOM FIX] effective batch 32 (was 8×4=32)
-EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
+GRAD_ACCUM_STEPS     = 16    # [GPU-OOM FIX] effective batch 16 (was 32, halved to avoid OOM on RTX 3060)
+EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 16
 
-VAL_BATCH_SIZE       = 4     # [GPU-OOM FIX] RTX 3060: val batch=4 prevents OOM (was 8)
-VAL_NUM_WORKERS      = 2     # [GPU-OOM FIX] CPU core contention: workers=2 stable (was 8)
+VAL_BATCH_SIZE = 2   # RTX 3060 stable
+VAL_NUM_WORKERS = 0   # No subprocess workers
 VAL_PREFETCH_FACTOR  = 4
 
 EPOCHS        = 100 
@@ -269,7 +269,7 @@ T_mult = 2
 PATIENCE      = 10
 GRAD_CLIP_NORM = 1.0
 VAL_EVERY = 1    # [BENCHMARK] Evaluate every 1 epoch (BENCHMARK_MODE override)
-EVAL_MAX_BATCHES = 15   # [FIX] Reduced from 30 to prevent validation OOM on subset runs
+EVAL_MAX_BATCHES = 500   # ~4 min eval per epoch
 
 NUM_WORKERS         = 8     # [OPT] 8 workers for parallel data loading (12 CPU cores available)
 PIN_MEMORY          = True
@@ -343,7 +343,7 @@ PRETRAIN_HFLIP_PROB  = 0.5   # probability of random horizontal flip
 # =========================================================================
 # Staged training (Doc 2 B.1)
 # =========================================================================
-STAGED_TRAINING = False  # Disabled: train all heads from epoch 0
+STAGED_TRAINING = False   # All 5 heads active from epoch 0
 STAGE1_EPOCHS = 5    # Detection-only warmup
 STAGE2_EPOCHS = 10   # Add pose + head pose
 STAGE3_EPOCHS = 85   # Full multi-task with EMA — 5+10+85=100 total — was 35
