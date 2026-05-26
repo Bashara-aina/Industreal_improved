@@ -2511,8 +2511,8 @@ def main(args):
                     logger.info('  [EMA] Using exponential-moving-average weights for val')
 
                 val_batch_size_rt = CFG_VAL_BATCH_SIZE
-                val_workers_rt = val_workers
-                val_prefetch_rt = val_prefetch
+                val_workers_rt = 0          # HARDENED: always 0 — no worker management
+                val_prefetch_rt = 1
                 val_max_batches_rt = CFG_EVAL_MAX_BATCHES
 
                 val_attempt = 0
@@ -2565,7 +2565,7 @@ def main(args):
                                     # Reduce scope and retry, but only once — don't loop 4x
                                     if val_attempt == 1:
                                         val_batch_size_rt = max(1, val_batch_size_rt // 2)
-                                        val_workers_rt = 0
+                                        val_workers_rt = 0  # HARDENED: workers only used on retried OOM path
                                         val_prefetch_rt = 1
                                         val_max_batches_rt = max(1, int(val_max_batches_rt) // 2)
                                         gc.collect()
@@ -2610,8 +2610,8 @@ def main(args):
                             continue
                     finally:
                         IN_EVALUATION_PHASE = False
-                        # BASHARA 2026-05-26: HARDENENED worker shutdown with timeout +
-                        # explicit signal so eval path NEVER blocks indefinitely.
+                        # HARDENED: val_workers_rt=0, but call shutdown anyway to be safe.
+                        # With 0 workers the function returns immediately (no-op).
                         _shutdown_loader_workers(val_loader, logger)
                         del val_loader
                         gc.collect()
