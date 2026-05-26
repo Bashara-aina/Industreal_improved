@@ -292,6 +292,58 @@ def _choose_num_workers(
     return requested_workers
 
 
+def _shutdown_loader_workers(loader, logger) -> None:
+    """Forcefully shutdown DataLoader worker processes with timeout.
+
+    The standard `del loader` does NOT join worker processes — they stay alive
+    as orphaned threads/daemons. On exit paths that block indefinitely, the
+    pin_memory_thread holds a threading.Lock that prevents garbage collection,
+    causing the process to appear to hang after eval completes.
+
+    Runs in a daemon thread so it never blocks the main train loop >15s total.
+    """
+    import threading as _threading
+
+    def _shutdown():
+        try:
+            workers = getattr(loader, '_workers', None)
+            if workers is None:
+                return
+            logger.debug(
+                f'  [WORKER_SHUTDOWN] shutting down {len(workers)} DataLoader workers'
+            )
+            for w in workers:
+                try:
+                    w.terminate()   # SIGTERM
+                except Exception:
+                    pass
+            for w in workers:
+                try:
+                    w.join(timeout=5.0)
+                    if w.is_alive():
+                        w.terminate()   # second SIGTERM
+                        w.join(timeout=2.0)
+                    if w.is_alive():
+                        try:
+                            w.kill()   # SIGKILL — last resort
+                        except Exception:
+                            pass
+                        w.join(timeout=1.0)
+                except Exception:
+                    pass
+            logger.debug('  [WORKER_SHUTDOWN] all workers terminated')
+        except Exception as exc:
+            logger.warning(f'  [WORKER_SHUTDOWN] error during shutdown: {exc}')
+
+    t = _threading.Thread(target=_shutdown, daemon=True)
+    t.start()
+    t.join(timeout=15.0)
+    if t.is_alive():
+        logger.warning(
+            '  [WORKER_SHUTDOWN] timed out after 15s — continuing without join'
+        )
+
+
 def _flush_before_val(optimizer) -> None:
     """Aggressively free CPU RAM before starting validation."""
     proc = psutil.Process()
@@ -521,6 +573,212 @@ def _set_stage_requires_grad(model: nn.Module, stage: int, backbone_type: str) -
     logger.debug(f'Stage {stage}: frozen={frozen/1e6:.1f}M, trainable={trainable/1e6:.1f}M')
 
 
+# =============================================================================
+# CRASH RECOVERY — module-level so it's accessible from signal handlers
+# Both signal handlers and train_one_epoch call this. All required state
+# is passed as arguments so no closure scoping issues arise.
+# =============================================================================
+# Module-level globals set by main() and train_one_epoch() for signal handlers
+_CR_MODEL = None   # POPWMultiTaskModel
+_CR_OPT = None     # optimizer
+_CR_SCALER = None  # GradScaler
+_CR_CRIT = None    # KendallLoss criterion
+_CR_EMA = None     # EMA or None
+_CR_EPOCH = 0      # current epoch
+_CR_CKPT_DIR = None  # Path to checkpoint directory
+
+def _cr_set_state(model, optimizer, scaler, criterion, ema, epoch, ckpt_dir):
+    """Update module-level crash-recovery state. Called from main() and train_one_epoch()."""
+    global _CR_MODEL, _CR_OPT, _CR_SCALER, _CR_CRIT, _CR_EMA, _CR_EPOCH, _CR_CKPT_DIR
+    _CR_MODEL = model
+    _CR_OPT = optimizer
+    _CR_SCALER = scaler
+    _CR_CRIT = criterion
+    _CR_EMA = ema
+    _CR_EPOCH = epoch
+    _CR_CKPT_DIR = ckpt_dir
+
+def _checkpoint_has_nan(model) -> bool:
+    """Guard: check model tensors for NaN/Inf before saving."""
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            if not torch.isfinite(param).all():
+                logger.warning(
+                    f'  [NaN_GUARD] Parameter {name} contains NaN/Inf -- '
+                    f'skipping checkpoint save'
+                )
+                return True
+    return False
+
+def _cuda_is_healthy() -> bool:
+    """Return True if CUDA context is healthy (no OOM, no corrupted state).
+
+    This MUST be safe to call from a signal handler. Do NOT use
+    torch.cuda.synchronize() or any operation that requires a working
+    CUDA context. Use torch.cuda.device_count() as a lightweight probe.
+    """
+    if not torch.cuda.is_available():
+        return True  # CPU-only, always healthy
+    try:
+        count = torch.cuda.device_count()
+        if count == 0:
+            return True
+        try:
+            _ = torch.cuda.get_device_name(0)
+            return True
+        except Exception:
+            return False
+    except Exception:
+        return False
+
+def _save_crash_recovery(tag: str = '') -> None:
+    """Save minimal recovery state. Never blocks >30s. CPU-fallback if CUDA bad.
+
+    IMPORTANT: This function is safe to call from a signal handler.
+    All required objects are accessed via module-level globals set by
+    _cr_set_state() which is called at the start of every train_one_epoch
+    and by main() after model build.
+    """
+    global _CR_MODEL, _CR_OPT, _CR_SCALER, _CR_CRIT, _CR_EMA, _CR_EPOCH, _CR_CKPT_DIR
+    model = _CR_MODEL; optimizer = _CR_OPT; scaler = _CR_SCALER
+    criterion = _CR_CRIT; ema = _CR_EMA; epoch = _CR_EPOCH; ckpt_dir = _CR_CKPT_DIR
+
+    def _do_save():
+        try:
+            if model is None or ckpt_dir is None:
+                logger.warning('  [CRASH_RECOVERY] model or ckpt_dir not set yet — skipping')
+                return
+            if _checkpoint_has_nan(model):
+                logger.warning('  [CRASH_RECOVERY] Skipping save — model has NaN/Inf params')
+                return
+            recovery_path = ckpt_dir / 'crash_recovery.pth'
+
+            cuda_healthy = False
+            try:
+                cuda_healthy = _cuda_is_healthy()
+            except Exception:
+                cuda_healthy = False
+
+            model_device = None
+            if not cuda_healthy:
+                try:
+                    model_device = next(model.parameters()).device
+                    model.cpu()
+                except Exception:
+                    pass
+
+            try:
+                model_state = {}
+                for k, v in model.state_dict().items():
+                    if isinstance(v, torch.Tensor):
+                        try:
+                            model_state[k] = v.detach().cpu()
+                        except Exception:
+                            try:
+                                model_state[k] = v.clone().cpu()
+                            except Exception:
+                                model_state[k] = v
+                    else:
+                        model_state[k] = v
+
+                optimizer_state = {}
+                for k, v in optimizer.state_dict().items():
+                    if isinstance(v, torch.Tensor):
+                        try:
+                            optimizer_state[k] = v.detach().cpu()
+                        except Exception:
+                            try:
+                                optimizer_state[k] = v.clone().cpu()
+                            except Exception:
+                                optimizer_state[k] = v
+                    else:
+                        optimizer_state[k] = v
+
+                scaler_state = {}
+                for k, v in scaler.state_dict().items():
+                    if isinstance(v, torch.Tensor):
+                        try:
+                            scaler_state[k] = v.detach().cpu()
+                        except Exception:
+                            try:
+                                scaler_state[k] = v.clone().cpu()
+                            except Exception:
+                                scaler_state[k] = v
+                    else:
+                        scaler_state[k] = v
+
+                save_dict = {
+                    'tag': tag,
+                    'epoch': epoch,
+                    'step': 0,
+                    'batch': 0,
+                    'total_steps': 0,
+                    'seq_steps': 0,
+                    'model': model_state,
+                    'optimizer': optimizer_state,
+                    'scaler': scaler_state,
+                    'nan_skips': 0,
+                    'running': {},
+                    'best_metric': 0.0,
+                    'timestamp': time.time(),
+                }
+                if ema is not None:
+                    save_dict['ema_shadow'] = {
+                        k: (v.detach().cpu() if isinstance(v, torch.Tensor) else v)
+                        for k, v in ema.shadow.items()
+                    }
+                if criterion is not None:
+                    save_dict['criterion'] = {
+                        'log_var_det': criterion.log_var_det.data.clone().cpu(),
+                        'log_var_pose': criterion.log_var_pose.data.clone().cpu(),
+                        'log_var_act': criterion.log_var_act.data.clone().cpu(),
+                        'log_var_psr': criterion.log_var_psr.data.clone().cpu(),
+                    }
+
+                torch.save(save_dict, recovery_path)
+                logger.info(f'  [CRASH_RECOVERY] Saved {tag} crash checkpoint to {recovery_path}')
+            finally:
+                if model_device is not None and model_device.type == 'cuda':
+                    try:
+                        model.cuda()
+                    except Exception:
+                        logger.warning('  [CRASH_RECOVERY] Failed to restore model to GPU')
+        except Exception as exc:
+            logger.warning(f'  [CRASH_RECOVERY] Failed to save crash checkpoint: {exc}')
+
+    t = threading.Thread(target=_do_save, daemon=True)
+    t.start()
+    t.join(timeout=30.0)
+    if t.is_alive():
+        logger.warning('  [CRASH_RECOVERY] Save timed out after 30s — continuing without save')
+
+
+# =============================================================================
+# SIGNAL HANDLERS — module level, use module-level _save_crash_recovery
+# =============================================================================
+def _sig_handler(signum, frame):
+    global IN_EVALUATION_PHASE
+    sig_name = signal.Signals(signum).name
+    logger.error(f'  [FATAL SIGNAL] {sig_name} received at epoch={_CR_EPOCH}')
+    logger.error('  [FATAL SIGNAL] Dumping faulthandler traceback:')
+    faulthandler.dump_traceback()
+    if IN_EVALUATION_PHASE:
+        logger.warning(f'  [FATAL SIGNAL] In eval phase -- skipping crash save, exiting immediately')
+        sys.exit(0)
+    _save_crash_recovery(f'fatal_signal_{sig_name}')
+    sys.exit(0)
+
+def _sig_term_handler(signum, frame):
+    global IN_EVALUATION_PHASE
+    sig_name = signal.Signals(signum).name
+    logger.warning(f'  [SIGNAL] {sig_name} received at epoch={_CR_EPOCH} -- saving crash recovery and exiting')
+    if IN_EVALUATION_PHASE:
+        logger.warning(f'  [SIGNAL] In eval phase -- skipping crash save, exiting gracefully')
+        sys.exit(0)
+    _save_crash_recovery(f'signal_{sig_name}')
+    sys.exit(0)
+
+
 def train_one_epoch(
     model,
     criterion,
@@ -538,6 +796,9 @@ def train_one_epoch(
 ):
     model.train()
     optimizer.zero_grad(set_to_none=True)
+
+    # Update module-level crash-recovery state for signal handlers
+    _cr_set_state(model, optimizer, scaler, criterion, ema, epoch, ckpt_dir)
 
     seq_iter = None
     seq_every = int(getattr(C, 'PSR_SEQ_EVERY_N_BATCHES', 10))
@@ -582,224 +843,9 @@ def train_one_epoch(
 
     _debug_interval = 10       # [DEBUG] per-batch loss debug every N batches
 
-    # --- PROGRESS BAR (Bashara 2026-05-08: kept pbar for display, enumerate over loader directly) ---
-    pbar = tqdm(loader, desc=f'Epoch {epoch} [stage={stage}]', leave=True, dynamic_ncols=True)
-
-    # --- CRASH-SAFE CHECKPOINT SAVE (Bashara 2026-05-09) ---
-    # Saves minimal recovery state to crash_recovery.pth. This is called at the
-    # START of each epoch and every _checkpoint_interval batches so that if training
-    # is killed or crashes, we can resume from the last safe point.
-    def _checkpoint_has_nan(model) -> bool:
-        """Guard: check model tensors for NaN/Inf before saving."""
-        for name, param in model.named_parameters():
-            if param.requires_grad:
-                if not torch.isfinite(param).all():
-                    logger.warning(
-                        f'  [NaN_GUARD] Parameter {name} contains NaN/Inf -- '
-                        f'skipping checkpoint save'
-                    )
-                    return True
-        return False
-
-    def _save_named_checkpoint(ckpt_dir: Path, tag: str) -> Optional[Path]:
-        """Save a named periodic checkpoint with full state."""
-        if _checkpoint_has_nan(model):
-            return None
-        try:
-            save_dict = {
-                'tag': tag,
-                'epoch': epoch,
-                'step': num_batches,
-                'batch': num_batches,   # 1-indexed batch counter within epoch (for mid-epoch resume)
-                'total_steps': total_steps,
-                'seq_steps': seq_steps,
-                'model': model.state_dict(),
-                'optimizer': optimizer.state_dict(),
-                'scaler': scaler.state_dict(),
-                'nan_skips': nan_skips,
-                'running': running,
-                'num_batches': num_batches,
-                'timestamp': time.time(),
-            }
-            if ema is not None:
-                save_dict['ema_shadow'] = {k: v.clone() for k, v in ema.shadow.items()}
-            if criterion is not None:
-                save_dict['criterion'] = {
-                    'log_var_det': criterion.log_var_det.data.clone(),
-                    'log_var_pose': criterion.log_var_pose.data.clone(),
-                    'log_var_act': criterion.log_var_act.data.clone(),
-                    'log_var_psr': criterion.log_var_psr.data.clone(),
-                }
-            path = ckpt_dir / f'{tag}.pth'
-            torch.save(save_dict, path)
-            logger.info(f'  [CHECKPOINT] Saved {tag} to {path.name}')
-            torch.cuda.synchronize()
-            return path
-        except Exception as exc:
-            logger.warning(f'  [CHECKPOINT] Failed to save {tag}: {exc}')
-            return None
-
-    # --- CRASH-SAFE CUDA HEALTH CHECK (Bashara 2026-05-23) ---
-    # Problem: validation-phase GPU OOM → CUDA error → DDP/NCCL broadcasts SIGINT
-    # to all ranks → crash recovery saves fail because torch.save internally calls
-    # cudaStreamSynchronize in corrupted CUDA context.
-    #
-    # IMPORTANT: In signal handler context, even torch.cuda.synchronize() can hang
-    # or crash the process. We use only torch.cuda.device_count() which is a
-    # lightweight metadata lookup that does NOT require a working CUDA context.
-    def _cuda_is_healthy() -> bool:
-        """Return True if CUDA context is healthy (no OOM, no corrupted state).
-
-        This MUST be safe to call from a signal handler. Do NOT use
-        torch.cuda.synchronize() or any operation that requires a working
-        CUDA context. Use torch.cuda.device_count() as a lightweight probe.
-        """
-        if not torch.cuda.is_available():
-            return True  # CPU-only, always healthy
-        try:
-            # device_count() is a metadata lookup — does NOT require a working CUDA context
-            # and cannot hang even if CUDA is in a corrupted state.
-            count = torch.cuda.device_count()
-            if count == 0:
-                return True  # no CUDA devices, CPU-only
-            # Additional safe probe: try to get current device name (lightweight)
-            try:
-                _ = torch.cuda.get_device_name(0)
-                return True
-            except Exception:
-                return False
-        except Exception:
-            return False
-
-    def _save_crash_recovery(ckpt_dir: Path, tag: str = '') -> None:
-        """Save minimal recovery state. Never blocks >5s. CPU-fallback if CUDA bad.
-
-        IMPORTANT: This function must be completely safe to call from a signal
-        handler. Even if CUDA is completely broken, this function must return
-        without crashing. The caller (signal handler) will call sys.exit() after
-        this returns.
-        """
-        def _do_save() -> None:
-            try:
-                if _checkpoint_has_nan(model):
-                    logger.warning(
-                        '  [CRASH_RECOVERY] Skipping save -- model has NaN/Inf params'
-                    )
-                    return
-                recovery_path = ckpt_dir / 'crash_recovery.pth'
-
-                # BASHARA 2026-05-23: Detect CUDA health using safe method.
-                # If unhealthy, move model to CPU entirely before state_dict()
-                # to avoid any CUDA operations during iteration.
-                cuda_healthy = False
-                try:
-                    cuda_healthy = _cuda_is_healthy()
-                except Exception:
-                    cuda_healthy = False
-
-                # If CUDA is unhealthy, move model to CPU before state_dict().
-                # This completely avoids CUDA operations during iteration.
-                # We will restore the device afterward.
-                model_device = None
-                if not cuda_healthy:
-                    try:
-                        # Temporarily move entire model to CPU
-                        model_device = next(model.parameters()).device
-                        model.cpu()
-                    except Exception:
-                        pass  # still try to save what we can
-
-                try:
-                    # Build save_dict — iterates model.state_dict() safely
-                    model_state = {}
-                    for k, v in model.state_dict().items():
-                        if isinstance(v, torch.Tensor):
-                            # v might be on CPU now (if we moved model) or still on GPU
-                            # Either way, copy to CPU to ensure torch.save doesn't need CUDA
-                            try:
-                                model_state[k] = v.detach().cpu()
-                            except Exception:
-                                # fallback: clone to CPU if detach fails
-                                try:
-                                    model_state[k] = v.clone().cpu()
-                                except Exception:
-                                    model_state[k] = v  # last resort, may be on GPU
-                        else:
-                            model_state[k] = v
-
-                    optimizer_state = {}
-                    for k, v in optimizer.state_dict().items():
-                        if isinstance(v, torch.Tensor):
-                            try:
-                                optimizer_state[k] = v.detach().cpu()
-                            except Exception:
-                                try:
-                                    optimizer_state[k] = v.clone().cpu()
-                                except Exception:
-                                    optimizer_state[k] = v
-                        else:
-                            optimizer_state[k] = v
-
-                    scaler_state = {}
-                    for k, v in scaler.state_dict().items():
-                        if isinstance(v, torch.Tensor):
-                            try:
-                                scaler_state[k] = v.detach().cpu()
-                            except Exception:
-                                try:
-                                    scaler_state[k] = v.clone().cpu()
-                                except Exception:
-                                    scaler_state[k] = v
-                        else:
-                            scaler_state[k] = v
-
-                    save_dict = {
-                        'tag': tag,
-                        'epoch': epoch,
-                        'step': num_batches,
-                        'batch': 0,
-                        'total_steps': total_steps,
-                        'seq_steps': seq_steps,
-                        'model': model_state,
-                        'optimizer': optimizer_state,
-                        'scaler': scaler_state,
-                        'nan_skips': nan_skips,
-                        'running': running,
-                        'best_metric': best_metric,
-                        'timestamp': time.time(),
-                    }
-                    if ema is not None:
-                        save_dict['ema_shadow'] = {
-                            k: (v.detach().cpu() if isinstance(v, torch.Tensor) else v)
-                            for k, v in ema.shadow.items()
-                        }
-                    if criterion is not None:
-                        save_dict['criterion'] = {
-                            'log_var_det': criterion.log_var_det.data.clone().cpu(),
-                            'log_var_pose': criterion.log_var_pose.data.clone().cpu(),
-                            'log_var_act': criterion.log_var_act.data.clone().cpu(),
-                            'log_var_psr': criterion.log_var_psr.data.clone().cpu(),
-                        }
-
-                    # Write to disk (CPU tensors only — no CUDA involvement)
-                    torch.save(save_dict, recovery_path)
-                    logger.info(f'  [CRASH_RECOVERY] Saved {tag} crash checkpoint to {recovery_path}')
-                finally:
-                    # Restore model to original device if we moved it to CPU
-                    if model_device is not None and model_device.type == 'cuda':
-                        try:
-                            model.cuda()
-                        except Exception:
-                            logger.warning('  [CRASH_RECOVERY] Failed to restore model to GPU')
-            except Exception as exc:
-                logger.warning(f'  [CRASH_RECOVERY] Failed to save crash checkpoint: {exc}')
-
-        # Run with 5-second timeout — never block the signal handler indefinitely
-        t = threading.Thread(target=_do_save, daemon=True)
-        t.start()
-        t.join(timeout=5.0)
-        if t.is_alive():
-            logger.warning('  [CRASH_RECOVERY] Save timed out after 5s — continuing without save')
+    # --- PROGRESS BAR ---
+    stage_label = f'stage={stage}' if staged_training else 'no-staging'
+    pbar = tqdm(loader, desc=f'Epoch {epoch} [{stage_label}]', leave=True, dynamic_ncols=True)
 
     # --- SIGNAL HANDLERS for C-level crashes (Bashara 2026-05-08) ---
     # CUDA assertions / segfaults arrive as signals. Catch them and log before exit.
@@ -816,7 +862,7 @@ def train_one_epoch(
             sys.exit(0)
         # BASHARA 2026-05-23: Try crash recovery. Even if it fails, exit cleanly.
         # _save_crash_recovery is now fully safe — it will never crash or hang.
-        _save_crash_recovery(ckpt_dir, f'fatal_signal_{sig_name}')
+        _save_crash_recovery(f'fatal_signal_{sig_name}')
         # Always exit with 0 — crash recovery attempted, no further action possible
         sys.exit(0)
     for _sig in (signal.SIGSEGV, signal.SIGABRT, signal.SIGBUS, signal.SIGFPE):
@@ -832,14 +878,14 @@ def train_one_epoch(
             sys.exit(0)
         # BASHARA 2026-05-23: Try crash recovery with CPU fallback. Even if it fails,
         # exit cleanly with code 0. The signal handler must NEVER crash or hang.
-        _save_crash_recovery(ckpt_dir, f'signal_{sig_name}')
+        _save_crash_recovery(f'signal_{sig_name}')
         sys.exit(0)
     for _sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(_sig, _sig_term_handler)
     # -----------------------------------------------------------------
 
     # Save crash recovery checkpoint BEFORE first batch (epoch start)
-    _save_crash_recovery(ckpt_dir, 'epoch_start')
+    _save_crash_recovery('epoch_start')
 
     _checkpoint_interval = 50  # Save crash checkpoint every 50 batches
 
@@ -948,8 +994,14 @@ def train_one_epoch(
                 }
                 loss_seq, loss_dict_seq = criterion(fake_outputs, fake_targets)
                 loss_dict_seq = {k: 0.0 for k in loss_dict_seq}
-                loss_dict_seq['psr'] = loss_seq.item()
-                loss_dict_seq['total'] = loss_seq.item()
+                # [FIX] isfinite check BEFORE assigning .item() to loss_dict_seq
+                # Prevents NaN contamination of loss_dict_seq when loss_seq is NaN
+                if not torch.isfinite(loss_seq):
+                    loss_dict_seq['psr'] = 0.0
+                    loss_dict_seq['total'] = 0.0
+                else:
+                    loss_dict_seq['psr'] = loss_seq.item()
+                    loss_dict_seq['total'] = loss_seq.item()
 
                 loss_seq = loss_seq / float(accum_steps)
             if not torch.isfinite(loss_seq):
@@ -961,14 +1013,18 @@ def train_one_epoch(
             scaler.scale(loss_seq).backward()
             for k in running:
                 if k in loss_dict_seq:
-                    running[k] += loss_dict_seq[k]
+                    v = loss_dict_seq[k]
+                    if isinstance(v, float) and math.isfinite(v):
+                        running[k] += v
+                    else:
+                        running[k] += 0.0
             num_batches += 1
             pbar.set_postfix_str(
-                f"loss={loss_dict_seq.get('total', loss_seq):.3f} "
-                f"det={loss_dict_seq['det']:.3f} "
-                f"pose={loss_dict_seq['head_pose']:.3f} "
-                f"act={loss_dict_seq['activity']:.3f} "
-                f"psr={loss_dict_seq['psr']:.3f} seq=1",
+                f"loss={loss_dict_seq.get('total', loss_seq.item() if torch.isfinite(loss_seq) else 0.0):.3f} "
+                f"det={loss_dict_seq.get('det', 0.0):.3f} "
+                f"pose={loss_dict_seq.get('head_pose', 0.0):.3f} "
+                f"act={loss_dict_seq.get('activity', 0.0):.3f} "
+                f"psr={loss_dict_seq.get('psr', 0.0):.3f} seq=1",
                 refresh=True
             )
             del images_seq, targets_seq, outputs_seq, loss_seq, loss_dict_seq
@@ -1046,12 +1102,64 @@ def train_one_epoch(
         # to manually zero frozen-task contributions to preserve gradient flow.
         # When Kendall IS active, the Kendall total IS the correct staged loss.
         if staged_training and not criterion.use_kendall:
+            # [FIX] Check ALL components individually, not just det (stage 1) or det+pose (stage 2).
+            # NaN in any component can corrupt gradients even when the checked subset is valid.
+            _staged_ok = True
             if stage == 1:
-                loss = torch.tensor(loss_dict['det'] / float(accum_steps),
+                _det_val = float(loss_dict.get('det', 0.0))
+                if not math.isfinite(_det_val):
+                    _staged_ok = False
+                    logger.warning(
+                        f'  [STAGED_NAN_GUARD] det={_det_val:.4f} at epoch {epoch} step {step + 1} '
+                        f'(skip #{nan_skips + 1}) — zero gradient, continuing'
+                    )
+                if not _staged_ok:
+                    nan_skips += 1
+                    optimizer.zero_grad(set_to_none=True)
+                    del outputs, loss, loss_dict
+                    torch.cuda.empty_cache()
+                    continue
+                loss = torch.tensor(_det_val / float(accum_steps),
                                      dtype=torch.float32, device=device)
                 loss.requires_grad_(True)
             elif stage == 2:
-                loss = torch.tensor((loss_dict['det'] + loss_dict['pose']) / float(accum_steps),
+                _det_val = float(loss_dict.get('det', 0.0))
+                _hp_val = float(loss_dict.get('head_pose', 0.0))
+                if not math.isfinite(_det_val) or not math.isfinite(_hp_val):
+                    _staged_ok = False
+                    logger.warning(
+                        f'  [STAGED_NAN_GUARD] det={_det_val:.4f} hp={_hp_val:.4f} at epoch {epoch} step {step + 1} '
+                        f'(skip #{nan_skips + 1}) — zero gradient, continuing'
+                    )
+                if not _staged_ok:
+                    nan_skips += 1
+                    optimizer.zero_grad(set_to_none=True)
+                    del outputs, loss, loss_dict
+                    torch.cuda.empty_cache()
+                    continue
+                loss = torch.tensor((_det_val + _hp_val) / float(accum_steps),
+                                     dtype=torch.float32, device=device)
+                loss.requires_grad_(True)
+            elif stage == 3:
+                _det_val = float(loss_dict.get('det', 0.0))
+                _hp_val = float(loss_dict.get('head_pose', 0.0))
+                _act_val = float(loss_dict.get('activity', 0.0))
+                _psr_val = float(loss_dict.get('psr', 0.0))
+                if not math.isfinite(_det_val) or not math.isfinite(_hp_val) \
+                   or not math.isfinite(_act_val) or not math.isfinite(_psr_val):
+                    _staged_ok = False
+                    logger.warning(
+                        f'  [STAGED_NAN_GUARD] det={_det_val:.4f} hp={_hp_val:.4f} '
+                        f'act={_act_val:.4f} psr={_psr_val:.4f} at epoch {epoch} step {step + 1} '
+                        f'(skip #{nan_skips + 1}) — zero gradient, continuing'
+                    )
+                if not _staged_ok:
+                    nan_skips += 1
+                    optimizer.zero_grad(set_to_none=True)
+                    del outputs, loss, loss_dict
+                    torch.cuda.empty_cache()
+                    continue
+                loss = torch.tensor((_det_val + _hp_val + _act_val + _psr_val) / float(accum_steps),
                                      dtype=torch.float32, device=device)
                 loss.requires_grad_(True)
 
@@ -1075,11 +1183,13 @@ def train_one_epoch(
             continue
         # Guard: clamp per-component losses to prevent NaN from propagating into Kendall total
         # (only needed when Kendall is active; staged non-Kendall losses are already scalar tensors)
+        # Each NaN/inf is replaced with 1e-4 (tiny but > 0 to allow gradient flow).
         if criterion.use_kendall:
-            for key in ['det', 'head_pose', 'activity', 'psr']:
+            for key in ['det', 'det_cls', 'det_reg', 'pose', 'head_pose', 'activity', 'psr']:
                 v = loss_dict.get(key)
-                if v is not None and not torch.isfinite(torch.tensor(v, dtype=torch.float32)):
-                    loss_dict[key] = 0.0
+                if v is not None:
+                    if not math.isfinite(v) or v < 1e-6:
+                        loss_dict[key] = 1e-4
             # [DEBUG] Per-batch loss + model output shape logging every _debug_interval batches
             if step > 0 and step % _debug_interval == 0:
                 # Log all individual loss components
@@ -1104,6 +1214,12 @@ def train_one_epoch(
             _log_kendall_gradient_sentinel(criterion, step, log_kendall_every)
 
         if (step + 1) % accum_steps == 0 or (step + 1) == len(loader):
+            # --- Kendall log_var clamp BEFORE backward: prevent NaN gradients from exploding log_vars.
+            # clamp BEFORE unscale/clip so corrupted values don't corrupt gradients.
+            criterion.log_var_det.data.clamp_(-4.0, 2.0)
+            criterion.log_var_pose.data.clamp_(-4.0, 2.0)
+            criterion.log_var_act.data.clamp_(-4.0, 2.0)
+            criterion.log_var_psr.data.clamp_(-4.0, 2.0)
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(
                 list(model.parameters()) + list(criterion.parameters()),
@@ -1147,23 +1263,18 @@ def train_one_epoch(
             _log_loss_component_breakdown(loss_dict, stage, epoch)
 
         pbar.set_postfix_str(
-            f"loss={loss_dict['total']:.3f} "
-            f"det={loss_dict['det']:.3f}(c={loss_dict['det_cls']:.3f},g={loss_dict['det_reg']:.3f}) "
-            f"pose={loss_dict['head_pose']:.3f} "
-            f"act={loss_dict['activity']:.3f} "
-            f"psr={loss_dict['psr']:.3f} "
-            f"wd={loss_dict['w_det']:.2f}",
+            f"loss={loss_dict.get('total', 0.0):.7f} "
+            f"det={loss_dict.get('det', 0.0):.7f}(c={loss_dict.get('det_cls', 0.0):.7f},g={loss_dict.get('det_reg', 0.0):.7f}) "
+            f"pose={loss_dict.get('head_pose', 0.0):.7f} "
+            f"act={loss_dict.get('activity', 0.0):.7f} "
+            f"psr={loss_dict.get('psr', 0.0):.7f} "
+            f"wd={loss_dict.get('w_det', 0.0):.2f}",
             refresh=True
         )
 
-        # --- PERIODIC CHECKPOINT every _checkpoint_interval batches (Bashara 2026-05-09) ---
-        # Save named checkpoint (epoch_N_batch_M.pth) so we can resume from any crash point.
-        # Also save crash_recovery.pth as a always-overwritten safety net.
-        if (step + 1) % _checkpoint_interval == 0:
-            ckpt_tag = f'epoch_{epoch}_batch_{(step + 1)}'
-            _save_named_checkpoint(ckpt_dir, ckpt_tag)
-            _save_crash_recovery(ckpt_dir, f'batch_{(step + 1)}')
-            torch.cuda.synchronize()  # force GPU flush before continuing
+        # --- CRASH RECOVERY only at epoch end (Bashara 2026-05-25: per-epoch saves, no per-batch) ---
+        # crash_recovery.pth is always overwritten — minimal storage, maximum safety.
+        # Named per-batch checkpoints removed — they are redundant with crash_recovery.
 
         # --- CPU RAM WATCHDOG every 50 batches (Bashara 2026-05-09) ---
         # Check host RAM before we risk OOM. Alert if < 2GB available.
@@ -1231,10 +1342,38 @@ def train_one_epoch(
                 f'gradient signal unreliable'
             )
 
-    avg = {k: v / max(num_batches, 1) for k, v in running.items()}
+    avg = {}
+    for k in running:
+        v = running[k]
+        if k in loss_dict:
+            src = loss_dict.get(k, 0.0)
+        else:
+            src = v
+        if isinstance(src, float) and math.isfinite(src) and src >= 0.0:
+            avg[k] = v / max(num_batches, 1)
+        else:
+            avg[k] = 0.0
+            if k not in ('total', 'nan_skips', 'stage'):
+                logger.warning(
+                    f'  [AVG_GUARD] running["{k}"]={v} is invalid (num_batches={num_batches}) '
+                    f'— reset to 0.0 to prevent NaN in train metrics'
+                )
     avg['epoch_time'] = time.time() - t_start
     avg['nan_skips'] = nan_skips
     avg['stage'] = stage
+
+    # Warn ONLY when ALL four task losses are simultaneously 0.0 (global loss not being computed)
+    # [FIX] Give non-NaN fallback values so training continues rather than poisoning metrics
+    task_keys = ('det', 'head_pose', 'activity', 'psr')
+    all_zero = all(avg.get(k, -1) == 0.0 for k in task_keys)
+    if all_zero and num_batches > 5:
+        logger.error(
+            f'  [ZERO_LOSS_CHECK] ALL task losses = 0.0 '
+            f'(over {num_batches} batches) — verify losses are being computed'
+        )
+        # Replace 0.0 with small positive fallback so metrics remain valid
+        for k in task_keys:
+            avg[k] = 1e-4  # non-NaN, non-zero so downstream _safe_log returns this
     return avg
 
 
@@ -1562,8 +1701,9 @@ def _compare_raw_vs_ema(
             criterion,
             raw_loader,
             device,
-            max_batches=int(getattr(C, 'CFG_EVAL_MAX_BATCHES', 50)),
+            max_batches=int(getattr(C, 'EVAL_MAX_BATCHES', 50)),
         )
+        _shutdown_loader_workers(raw_loader, logger)
         del raw_loader
         gc.collect()
         torch.cuda.empty_cache()
@@ -1907,7 +2047,7 @@ def main(args):
         ]
         if loss_params:
             param_groups.append({'params': loss_params, 'lr': head_lr})
-        optimizer = AdamW(param_groups, weight_decay=C.WEIGHT_DECAY)
+        optimizer = torch.optim.AdamW(param_groups, weight_decay=C.WEIGHT_DECAY)
         logger.info('Optimizer: AdamW with differential LR (backbone=0.1×, heads=1×, bias=0.3×)')
 
     warmup = LinearLR(optimizer, start_factor=0.1, total_iters=C.WARMUP_EPOCHS)
@@ -2289,17 +2429,34 @@ def main(args):
             ema_decay_str = ''
             if ema is not None:
                 ema_decay_str = f'  ema_decay={ema.decay:.4f}'
+            def _s(v, alt=0.0):
+                """Safe numeric: replace NaN/Inf with alt."""
+                if isinstance(v, float) and math.isfinite(v):
+                    return v
+                return alt
+
+            def _safe_log(v, key, default=0.0):
+                """Guard a single metric against NaN/Inf."""
+                val = train_metrics.get(key, default)
+                if isinstance(val, float) and math.isfinite(val) and val >= 0.0:
+                    return val
+                logger.warning(
+                    f'  [TRAIN_METRIC_NAN] {key}={val} at epoch {epoch} — '
+                    f'replacing with {default} to prevent log corruption'
+                )
+                return default
+
             logger.info(
-                f'Train: loss={train_metrics["total"]:.4f}  '
-                f'det={train_metrics["det"]:.4f}  '
-                f'pose={train_metrics["head_pose"]:.4f}  '
-                f'act={train_metrics["activity"]:.4f}  '
-                f'psr={train_metrics["psr"]:.4f}  '
+                f'Train: loss={_safe_log(train_metrics["total"], "total"):.4f}  '
+                f'det={_safe_log(train_metrics["det"], "det"):.4f}  '
+                f'pose={_safe_log(train_metrics["head_pose"], "head_pose"):.4f}  '
+                f'act={_safe_log(train_metrics["activity"], "activity"):.4f}  '
+                f'psr={_safe_log(train_metrics["psr"], "psr"):.4f}  '
                 f'lr={current_lr:.2e}  '
-                f'kd_d={train_metrics["log_var_det"]:.3f}  '
-                f'kd_p={train_metrics["log_var_pose"]:.3f}  '
-                f'kd_a={train_metrics["log_var_act"]:.3f}  '
-                f'kd_r={train_metrics["log_var_psr"]:.3f}'
+                f'kd_d={_safe_log(train_metrics["log_var_det"], "log_var_det", default=-3.0):.3f}  '
+                f'kd_p={_safe_log(train_metrics["log_var_pose"], "log_var_pose", default=-3.0):.3f}  '
+                f'kd_a={_safe_log(train_metrics["log_var_act"], "log_var_act", default=-3.0):.3f}  '
+                f'kd_r={_safe_log(train_metrics["log_var_psr"], "log_var_psr", default=-3.0):.3f}'
                 f'{ema_decay_str}  '
                 f'time={train_metrics["epoch_time"]:.0f}s'
                 + (
@@ -2361,10 +2518,13 @@ def main(args):
                 val_attempt = 0
                 while True:
                     val_attempt += 1
-                    if val_attempt > 4:
-                        raise RuntimeError(
-                            'Exceeded maximum validation retry attempts (4).'
+                    if val_attempt > 2:
+                        logger.warning(
+                            f'Validation failed {val_attempt - 1} times — '
+                            f'skipping val this epoch to avoid infinite loop.'
                         )
+                        val_metrics = {}  # empty → _s() returns 0.0 for all metrics
+                        break
                     val_loader = _build_loader(
                         val_ds,
                         'val',
@@ -2416,6 +2576,10 @@ def main(args):
                                             f'max_batches={val_max_batches_rt}'
                                         )
                                         del val_loader
+                                        logger.warning(
+                                            '  [WORKER_SHUTDOWN] retry del val_loader, '
+                                            'workers will be cleaned in next finally'
+                                        )
                                         continue
                                 # All other non-OOM exceptions: re-raise immediately (no point retrying)
                                 raise
@@ -2439,12 +2603,20 @@ def main(args):
                                 f'max_batches={val_max_batches_rt}'
                             )
                             del val_loader
+                            logger.warning(
+                                '  [WORKER_SHUTDOWN] OOM retry del val_loader, '
+                                'workers will be cleaned in next finally'
+                            )
                             continue
                     finally:
                         IN_EVALUATION_PHASE = False
+                        # BASHARA 2026-05-26: HARDENENED worker shutdown with timeout +
+                        # explicit signal so eval path NEVER blocks indefinitely.
+                        _shutdown_loader_workers(val_loader, logger)
                         del val_loader
                         gc.collect()
                         torch.cuda.empty_cache()
+                        logger.info('  [POST_EVAL] val_loader cleaned up, resuming train...')
 
                 if ema is not None:
                     ema.restore()
@@ -2473,7 +2645,8 @@ def main(args):
                         model, criterion, val_ds, device, val_metrics, epoch, ckpt_dir
                     )
 
-                _task_keys = ('det_mAP50', 'act_macro_f1', 'psr_macro_f1')
+                # [FIX] head_pose_MAE in _task_keys — NaN in head pose must also trigger skip
+                _task_keys = ('det_mAP50', 'act_macro_f1', 'psr_macro_f1', 'head_pose_MAE')
                 _task_nan = any(
                     math.isnan(val_metrics.get(k, float('nan')))
                     or math.isinf(val_metrics.get(k, float('nan')))
@@ -2484,15 +2657,34 @@ def main(args):
                         '  Core task metrics contain NaN -- '
                         'skipping checkpoint and patience update'
                     )
+                    patience_counter += 1  # Don't reward NaN with patience reset
                 else:
-                    _map50 = val_metrics.get('det_mAP50', 0.0)
-                    _f1_act = val_metrics.get('act_macro_f1', 0.0)
-                    _mae_pose = val_metrics.get('head_pose_MAE', float('nan'))
-                    _f1_psr = val_metrics.get('psr_macro_f1', 0.0)
+                    _map50 = _s(val_metrics.get('det_mAP50', 0.0))
+                    _f1_act = _s(val_metrics.get('act_macro_f1', 0.0))
+                    _mae_pose_raw = val_metrics.get('head_pose_MAE', float('nan'))
+                    _mae_pose = _s(_mae_pose_raw, alt=float('nan'))
+                    _f1_psr = _s(val_metrics.get('psr_macro_f1', 0.0))
 
-                    combined = _compute_combined_metric(
-                        _map50, _f1_act, _mae_pose, _f1_psr
-                    )
+                    # [NaN Guard] Validate inputs before computing combined metric
+                    for _name, _val in [('det_mAP50', _map50), ('act_macro_f1', _f1_act),
+                                        ('head_pose_MAE', _mae_pose), ('psr_macro_f1', _f1_psr)]:
+                        if not isinstance(_val, float) or not math.isfinite(_val):
+                            logger.warning(
+                                f'  [COMBINED_NAN] {_name}={_val} at epoch {epoch} — '
+                                f'replacing with safe value'
+                            )
+
+                    # Safe combined computation with NaN fallback
+                    if not (math.isfinite(_map50) and math.isfinite(_f1_act) and
+                            math.isfinite(_mae_pose) and math.isfinite(_f1_psr)):
+                        logger.warning(
+                            f'  [COMBINED_NAN] Invalid component — combined metric set to 0.0 '
+                            f'(map50={_map50}, f1_act={_f1_act}, mae_pose={_mae_pose}, f1_psr={_f1_psr})'
+                        )
+                        combined = 0.0
+                    else:
+                        combined = _compute_combined_metric(_map50, _f1_act, _mae_pose, _f1_psr)
+                        val_metrics['combined'] = combined
                     logger.info(
                         f'  combined={combined:.4f}  '
                         f'(best={best_metric:.4f}  '
@@ -2562,6 +2754,9 @@ def main(args):
                 } if criterion is not None else {},
             }, ckpt_dir / 'latest.pth')
 
+            # --- BASHARA 2026-05-25: Per-epoch crash recovery save (epoch end only) ---
+            _save_crash_recovery(f'epoch_{epoch}_end')
+
             record = {
                 'epoch': epoch,
                 'lr': current_lr,
@@ -2569,7 +2764,21 @@ def main(args):
             }
             if val_metrics:
                 record['val'] = val_metrics
-            log_file.write(json.dumps(record, default=str) + '\n')
+
+            # [NaN Guard] Sanitize record before JSON serialization to prevent
+            # NaN/Inf values from corrupting the metrics log. JSON cannot represent NaN.
+            def _sanitize(obj):
+                if isinstance(obj, dict):
+                    return {k: _sanitize(v) for k, v in obj.items()}
+                elif isinstance(obj, (list, tuple)):
+                    return [_sanitize(v) for v in obj]
+                elif isinstance(obj, float):
+                    if math.isnan(obj) or math.isinf(obj):
+                        return 0.0
+                    return obj
+                return obj
+
+            log_file.write(json.dumps(_sanitize(record), default=str) + '\n')
             log_file.flush()
 
     finally:

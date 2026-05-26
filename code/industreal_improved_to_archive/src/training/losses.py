@@ -391,11 +391,15 @@ class LDAMLoss(nn.Module):
         if weights.shape[0] == self.num_classes - 1:
             weights = np.concatenate([[0.0], weights])  # prepend NA weight
         self.class_weights.data.copy_(torch.tensor(weights, dtype=torch.float32))
-        # Store full 75-element counts (with 0 for NA class) for _compute_margins
+        # Store full 75-element counts (with 1 for NA class) for _compute_margins
+        # [FIX] NA class (index 0) gets count=1 so margin is finite (1/sqrt(sqrt(1))=1)
+        # instead of infinity (which suppresses all NA predictions)
         if self._raw_counts is None or self._raw_counts.shape[0] != self.num_classes:
             self._raw_counts = np.zeros(self.num_classes, dtype=np.float64)
-            self._raw_counts[1:] = counts  # index 0 = NA = 0
+            self._raw_counts[0] = 1  # NA class gets balanced weight, not infinite margin
+            self._raw_counts[1:] = counts  # active classes 1-74
         else:
+            self._raw_counts[0] = 1
             self._raw_counts[1:] = counts
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor,
@@ -782,11 +786,56 @@ class MultiTaskLoss(nn.Module):
                 NEG_SLOPE * loss_det,
                 loss_det,
             )
-            # NaN/inf guard on detection loss
-            if not torch.isfinite(loss_det).all():
-                loss_det = torch.tensor(1e-4, device=device, dtype=output_dtype)
         else:
             cls_loss = reg_loss = loss_det = zero
+
+        # NaN/inf guard on ALL individual losses before smooth cap.
+        # A single batch with corrupted loss (e.g., from extreme GIoU or LDAM overflow)
+        # propagates NaN into Kendall and crashes training.
+        #
+        # FIX: Use locals() check instead of dir() — loss_pose and loss_head_pose are
+        # assigned AFTER this guard block (lines 831 and 950), so dir() always returns
+        # False and they get incorrectly zeroed. locals() gives us the current vars
+        # actually in scope at this point.
+        _local = locals()
+        loss_pose = _local.get('loss_pose', zero)
+        loss_head_pose = _local.get('loss_head_pose', zero)
+        # Initialize loss_act and loss_psr before the NaN guard loop
+        # (they may not be assigned yet if train_act/train_psr are False,
+        # but we still include them in the loop to avoid UnboundLocalError)
+        loss_act = zero
+        loss_psr = zero
+        for _loss, _name, _zero in [
+            (loss_det, 'det', zero),
+            (loss_pose, 'pose', zero),
+            (loss_act, 'act', zero),
+            (loss_psr, 'psr', zero),
+            (loss_head_pose, 'head_pose', zero),
+        ]:
+            if not torch.isfinite(_loss).all():
+                _fallback = torch.tensor(1e-4, device=device, dtype=output_dtype) if _name in ('det', 'pose', 'psr', 'head_pose') else _zero
+                if _name == 'det':
+                    loss_det = _fallback
+                elif _name == 'pose':
+                    loss_pose = _fallback
+                elif _name == 'act':
+                    loss_act = _fallback
+                elif _name == 'psr':
+                    loss_psr = _fallback
+                elif _name == 'head_pose':
+                    loss_head_pose = _fallback
+
+        # --- FIX: Per-component smooth loss caps to prevent NaN cascade into Kendall.
+        # A single batch with extreme loss (e.g., det=100+, pose=200+) can cause
+        # Kendall divergence: exp(-lv) * loss can produce inf, which then propagates
+        # through all log_vars. Soft cap formula: x if x<=cap, cap*(1+log(x/cap)) if x>cap.
+        # Gradient: 1.0 below cap, cap/x above cap (never zero → no gradient death).
+        def _smooth_cap(x, cap):
+            x_safe = x.clamp(min=1e-6, max=1e6)
+            return torch.where(x > cap, cap * (1 + torch.log(x_safe / cap)), x.clamp(min=1e-6))
+
+        det_cap = float(getattr(C, 'DET_LOSS_CAP', 50.0))
+        loss_det = _smooth_cap(loss_det, det_cap)
 
         # === Pose (Wing Loss on keypoints) ===
         # Note: When TRAIN_HEAD_POSE=True, train_pose=True controls head pose head
@@ -803,6 +852,10 @@ class MultiTaskLoss(nn.Module):
             ) * 0.001  # Kendall exp(-lv_pose)=exp(1)≈2.7 amplifies
         else:
             loss_pose = zero
+
+        # --- FIX: Pose loss cap to prevent NaN cascade ---
+        pose_cap = float(getattr(C, 'POSE_LOSS_CAP', 30.0))
+        loss_pose = _smooth_cap(loss_pose, pose_cap)
 
         # === Activity ===
         if self.train_act:
@@ -897,7 +950,14 @@ class MultiTaskLoss(nn.Module):
                     diff_p = (p_i[1:] - p_i[:-1]).abs().mean()
                     diff_l = (l_i[1:] - l_i[:-1]).abs().mean()
 
-                    pred_change = torch.sigmoid(diff_p)
+                    # [FIX #5 MEDIUM] sigmoid(diff_p) saturates near 0.5 when diff_p is small:
+                    #   diff_p=0.03 → sigmoid(0.03) ≈ 0.507, diff_p=0.10 → sigmoid(0.10) ≈ 0.525
+                    #   This pushes predictions toward 0.5 regardless of actual label changes.
+                    #   Fix: use tanh(diff_p) which ranges [-1, 1] with stronger gradients for
+                    #   small changes. Label change is 0 or 1, so tanh(diff_p) correctly penalizes
+                    #   prediction change when label is stable (diff_l ≈ 0) and rewards matching
+                    #   when label changes (diff_l ≈ 1).
+                    pred_change = torch.tanh(diff_p)
                     label_change = diff_l
                     smooth_loss = smooth_loss + (
                         (pred_change - label_change) ** 2
@@ -916,6 +976,26 @@ class MultiTaskLoss(nn.Module):
             ) * 0.001  # Head pose 9-DoF MSE
         else:
             loss_head_pose = zero
+
+        # --- FIX: PSR loss cap to prevent NaN cascade ---
+        psr_cap = float(getattr(C, 'PSR_LOSS_CAP', 20.0))
+        loss_psr = _smooth_cap(loss_psr, psr_cap)
+
+        # --- FIX: Head pose loss cap to prevent NaN cascade ---
+        hp_cap = float(getattr(C, 'HEAD_POSE_LOSS_CAP', 30.0))
+        loss_head_pose = _smooth_cap(loss_head_pose, hp_cap)
+
+        # === Final NaN guard BEFORE Kendall — covers ALL losses.
+        # Each loss can produce NaN via: loss function overflow, temporal smooth
+        # overflow, smooth cap log(0), or numerical instability in any component.
+        # Replace any NaN/inf with 1e-4 (tiny but > 0 — ensures gradient flows
+        # and no division-by-zero in Kendall normalization).
+        _safe = lambda l, z: torch.tensor(1e-4, device=device, dtype=l.dtype) if not torch.isfinite(l).all() else (torch.where(l < 0, z, l) if l.dtype in [torch.float16, torch.bfloat16, torch.float32, torch.float64] else l)
+        loss_det = _safe(loss_det, zero)
+        loss_pose = _safe(loss_pose, zero)
+        loss_act = _safe(loss_act, zero)
+        loss_psr = _safe(loss_psr, zero)
+        loss_head_pose = _safe(loss_head_pose, zero)
 
         # === Kendall weighting ===
         if self.use_kendall:
@@ -960,9 +1040,23 @@ class MultiTaskLoss(nn.Module):
             if self.train_pose:
                 loss_pose = loss_pose.clamp(min=0.0)
             if self.train_act:
-                loss_head_pose = loss_head_pose.clamp(min=0.0)
                 loss_act = loss_act.clamp(min=0.0)
-                total = total + prec_hp * loss_head_pose + lv_hp + prec_act * loss_act + lv_act
+            # Build Kendall total — each task adds its precision-weighted loss + log_var.
+            # NOTE: loss_pose (body keypoint Wing Loss) and loss_head_pose (head pose 9-DoF MSE)
+            # share log_var_pose (intentional per paper §Multi-Task Loss: both are pose tasks).
+            # lv_hp is included ONCE for pose+head_pose when EITHER branch runs, since they share log_var_pose.
+            if self.train_pose or self.train_act:
+                loss_head_pose = loss_head_pose.clamp(min=0.0)
+                pose_contribution = prec_hp * loss_pose + lv_hp if self.train_pose else prec_hp * loss_head_pose + lv_hp
+                if self.train_pose and self.train_act:
+                    pose_contribution = prec_hp * loss_pose + prec_hp * loss_head_pose + lv_hp  # both body+head, one lv_hp
+                elif self.train_pose:
+                    pose_contribution = prec_hp * loss_pose + lv_hp
+                else:  # train_act only
+                    pose_contribution = prec_hp * loss_head_pose + lv_hp
+                total = total + pose_contribution
+            if self.train_act:
+                total = total + prec_act * loss_act + lv_act
             if self.train_psr:
                 loss_psr = loss_psr.clamp(min=0.0)
                 total = total + prec_psr * loss_psr + lv_psr
@@ -979,10 +1073,10 @@ class MultiTaskLoss(nn.Module):
                 if self.train_det:
                     parts.append(loss_det)
                 if self.train_pose:
-                    parts.append(loss_head_pose)  # head pose stored in loss_head_pose, not loss_pose
+                    parts.append(loss_pose)  # body keypoint (prec_hp * loss_pose in Kendall total)
                 if self.train_act:
-                    parts.append(loss_head_pose)
-                    parts.append(loss_act)
+                    parts.append(loss_head_pose)  # head pose (prec_hp * loss_head_pose + lv_hp)
+                    parts.append(loss_act)  # activity (prec_act * loss_act)
                 if self.train_psr:
                     parts.append(loss_psr)
                 finite_parts = [p for p in parts if torch.isfinite(p) and p >= 0]
@@ -1006,6 +1100,9 @@ class MultiTaskLoss(nn.Module):
                     _loss_psr_staged = zero
                     _loss_pose_staged = zero
             total = loss_det + _loss_pose_staged + _loss_act_staged + _loss_psr_staged
+            # Guard total NaN in non-Kendall path (redundant but safe)
+            if not math.isfinite(total.item() if hasattr(total, 'item') else float(total)):
+                total = loss_det.detach().clone() if hasattr(loss_det, 'detach') else loss_det
 
         # Normalized weights for logging — use the ACTUAL precision values
         # (already zeroed for staged training), not the clamped pre-zeroing values
@@ -1020,24 +1117,36 @@ class MultiTaskLoss(nn.Module):
             wa = a_act / ws
             wps = a_psr / ws
 
+        # Safe scalar extractor — handles 0D tensor, 1D tensor, or plain Python float.
+        # Returns 0.0 if the value is NaN/inf or not a scalar.
+        def _s(x):
+            try:
+                if hasattr(x, 'item'):
+                    v = x.item()
+                else:
+                    v = float(x)
+                return 0.0 if not math.isfinite(v) else v
+            except Exception:
+                return 0.0
+
         loss_dict = {
-            'total': total.item(),
-            'det_cls': cls_loss.item(),
-            'det_reg': reg_loss.item(),
-            'det': loss_det.item(),
-            'pose': loss_pose.item(),
-            'activity': loss_act.item(),
-            'psr': loss_psr.item(),
-            'head_pose': loss_head_pose.item(),
-            'w_det': wd / ws,
-            'w_pose': wp / ws,
-            'w_act': wa / ws,
-            'w_psr': wps / ws,
-            'log_var_det': self.log_var_det.item(),
-            'log_var_pose': self.log_var_pose.item(),
-            'log_var_act': self.log_var_act.item(),
-            'log_var_psr': self.log_var_psr.item(),
-            'act_ramp': act_ramp,
+            'total': _s(total),
+            'det_cls': _s(cls_loss) if self.train_det else 0.0,
+            'det_reg': _s(reg_loss) if self.train_det else 0.0,
+            'det': _s(loss_det),
+            'pose': _s(loss_pose),
+            'activity': _s(loss_act),
+            'psr': _s(loss_psr),
+            'head_pose': _s(loss_head_pose),
+            'w_det': _s(wd / ws),
+            'w_pose': _s(wp / ws),
+            'w_act': _s(wa / ws),
+            'w_psr': _s(wps / ws),
+            'log_var_det': _s(self.log_var_det),
+            'log_var_pose': _s(self.log_var_pose),
+            'log_var_act': _s(self.log_var_act),
+            'log_var_psr': _s(self.log_var_psr),
+            'act_ramp': _s(act_ramp),
         }
 
         return total, loss_dict
