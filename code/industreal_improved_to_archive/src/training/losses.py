@@ -963,7 +963,11 @@ class MultiTaskLoss(nn.Module):
                         (pred_change - label_change) ** 2
                     )
                 smooth_loss = smooth_loss / max(bs, 1)
-
+                smooth_loss = torch.where(
+                    torch.isfinite(smooth_loss),
+                    smooth_loss,
+                    torch.tensor(0.0, device=device),
+                )
                 loss_psr = loss_psr + self._psr_temporal_smooth_weight * smooth_loss
         else:
             loss_psr = zero
