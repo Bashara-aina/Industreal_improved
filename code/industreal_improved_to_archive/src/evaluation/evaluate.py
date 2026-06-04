@@ -1320,12 +1320,19 @@ def compute_ap_multi_thresh(
 
     # Compute AP per class per threshold
     aps = {}
+    # [FIX 2026-06-04] Track per-class GT counts so we can compute per-class-present
+    # mAP (det_mAP50_pc) that excludes classes with zero GT. COCO 24-class mean
+    # is preserved as det_mAP50; the _pc variant answers "is the model actually
+    # learning on classes that exist in the data?" — the metric that matters
+    # when val batches have sparse class coverage.
+    present_class_gt = {}
     for cls in range(num_classes):
         aps[cls] = {}
+        present_class_gt[cls] = int(sum(_gl[_gl == cls].shape[0] for _gl in gt_labels))
         for iou_t in iou_thresholds:
             tps = np.array(all_results[cls][float(iou_t)][0], dtype=np.int64)
             scs = np.array(all_results[cls][float(iou_t)][1])
-            total_gt = int(sum(_gl[_gl == cls].shape[0] for _gl in gt_labels))
+            total_gt = present_class_gt[cls]
 
             if total_gt == 0:
                 aps[cls][float(iou_t)] = 0.0
@@ -1348,15 +1355,28 @@ def compute_ap_multi_thresh(
                          for t in np.linspace(0, 1, 11)) / 11
             aps[cls][float(iou_t)] = float(ap)
 
-    # Compute mAP per threshold
+    # Compute mAP per threshold.
+    # mAP_per_thresh[iou] = mean over all 24 classes (COCO-style, comparable to YOLOv8).
+    # mAP_per_thresh_pc[iou] = mean over classes with GT>0 in this eval (per-class-present).
+    # When the model is just starting, almost all classes have AP=0; the _pc mean
+    # only averages over the few classes actually present in the val set, so
+    # non-zero AP on those classes isn't diluted by 20 zero-GT classes.
     map_per_thresh = {}
+    map_per_thresh_pc = {}
     for iou_t in iou_thresholds:
-        vals = [aps[cls][float(iou_t)] for cls in range(num_classes) if cls in aps]
-        map_per_thresh[float(iou_t)] = float(np.mean(vals)) if vals else 0.0
+        all_vals = [aps[cls][float(iou_t)] for cls in range(num_classes) if cls in aps]
+        present_vals = [
+            aps[cls][float(iou_t)] for cls in range(num_classes)
+            if cls in aps and present_class_gt.get(cls, 0) > 0
+        ]
+        map_per_thresh[float(iou_t)] = float(np.mean(all_vals)) if all_vals else 0.0
+        map_per_thresh_pc[float(iou_t)] = float(np.mean(present_vals)) if present_vals else 0.0
 
     return {
         'mAP_per_thresh': map_per_thresh,
+        'mAP_per_thresh_pc': map_per_thresh_pc,
         'per_class_ap': aps,
+        'present_class_gt': present_class_gt,
         'iou_thresholds': [float(t) for t in iou_thresholds],
     }
 
@@ -1391,15 +1411,26 @@ def compute_det_metrics_extended(
     )
 
     mAP_per_thresh = result['mAP_per_thresh']
+    mAP_per_thresh_pc = result.get('mAP_per_thresh_pc', {})
     per_class_ap_50 = result.get('per_class_ap', {})
+    present_class_gt = result.get('present_class_gt', {})
+    n_present = sum(1 for v in present_class_gt.values() if v > 0)
     return {
         'det_mAP50': mAP_per_thresh.get(0.5, 0.0),
         'det_mAP_50_95': float(np.mean(list(mAP_per_thresh.values()))) if mAP_per_thresh else 0.0,
+        # [FIX 2026-06-04] Per-class-present mAP: averages only classes with GT>0
+        # in this eval. When val batches cover only a few classes, this reveals
+        # learning on those classes instead of being diluted to ~0 by 20 empty
+        # classes. Complements (not replaces) the COCO-style 24-class det_mAP50.
+        'det_mAP50_pc': mAP_per_thresh_pc.get(0.5, 0.0),
+        'det_mAP_50_95_pc': float(np.mean([v for k, v in mAP_per_thresh_pc.items()])) if mAP_per_thresh_pc else 0.0,
+        'det_n_present_classes': n_present,
         # [FIX 2026-06-04] Use per-class AP at IoU=0.5 (was: every class got the same global mAP@0.5).
         # The nested per_class_ap dict from compute_ap_multi_thresh has shape
         # {class_id: {iou_thresh: ap}}. The old code flattened this incorrectly, masking
         # which classes have any AP at all.
         'det_per_class_ap': {cls: per_class_ap_50.get(cls, {}).get(0.5, 0.0) for cls in range(num_classes)},
+        'det_per_class_gt': {cls: int(present_class_gt.get(cls, 0)) for cls in range(num_classes)},
         '_det_ap_protocol': 'coco' if interpolation_mode == 'coco' else 'voc',
     }
 
