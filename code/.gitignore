@@ -1,0 +1,13 @@
+# LaTeX build noise — kept in paper/build/, not tracked at root
+*.aux
+*.log
+*.bbl
+*.blg
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+
+# Allow paper/build/ directory to be tracked (for .gitkeep)
+!paper/build/.gitkeep
