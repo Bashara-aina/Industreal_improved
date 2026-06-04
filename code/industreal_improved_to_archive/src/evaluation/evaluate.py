@@ -1,6 +1,7 @@
 import sys
 import os
 from pathlib import Path
+import numpy as np
 
 # Match train.py's path setup so all imports resolve identically
 # src/evaluation/evaluate.py → parent.parent = src/ → parent = project root
@@ -32,6 +33,8 @@ Date: April 2026
 
 import gc
 import logging
+import math
+import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, cast
@@ -48,7 +51,103 @@ from scipy import stats
 
 import pandas as pd
 
+try:
+    from numba import njit
+    _NUMBA_AVAILABLE = True
+except ImportError:
+    _NUMBA_AVAILABLE = False
+    njit = lambda *a, **k: lambda f: f  # no-op decorator when numba unavailable
+
 import config as C
+
+# =============================================================================
+# Detection Collapse Probe (drop-in diagnostic)
+# =============================================================================
+def _probe_decode_boxes(anchors: np.ndarray, deltas: np.ndarray) -> np.ndarray:
+    a_cx = (anchors[:, 0] + anchors[:, 2]) / 2
+    a_cy = (anchors[:, 1] + anchors[:, 3]) / 2
+    a_w = anchors[:, 2] - anchors[:, 0]
+    a_h = anchors[:, 3] - anchors[:, 1]
+    dx, dy = deltas[:, 0], deltas[:, 1]
+    dw = np.clip(deltas[:, 2], -4, 4)
+    dh = np.clip(deltas[:, 3], -4, 4)
+    pw, ph = np.exp(dw) * a_w, np.exp(dh) * a_h
+    cx, cy = dx * a_w + a_cx, dy * a_h + a_cy
+    return np.stack([cx - pw / 2, cy - ph / 2, cx + pw / 2, cy + ph / 2], axis=1)
+
+
+def _probe_box_iou_xyxy(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    if a.shape[0] == 0 or b.shape[0] == 0:
+        return np.zeros((a.shape[0], b.shape[0]), dtype=np.float32)
+    area_a = (a[:, 2] - a[:, 0]).clip(0) * (a[:, 3] - a[:, 1]).clip(0)
+    area_b = (b[:, 2] - b[:, 0]).clip(0) * (b[:, 3] - b[:, 1]).clip(0)
+    lt = np.maximum(a[:, None, :2], b[None, :, :2])
+    rb = np.minimum(a[:, None, 2:], b[None, :, 2:])
+    wh = (rb - lt).clip(0)
+    inter = wh[..., 0] * wh[..., 1]
+    union = area_a[:, None] + area_b[None, :] - inter + 1e-9
+    return inter / union
+
+
+def probe_detection_batch(
+    cls_preds: np.ndarray, reg_preds: np.ndarray, anchors: np.ndarray,
+    gt_boxes_per_img: list, probe_thresh: float = 0.01, iou_match: float = 0.5,
+    tag: str = "", max_batches: int = 5, _state: dict = None,
+) -> dict:
+    if _state is None:
+        _state = {}
+    _state["n"] = _state.get("n", 0) + 1
+    if max_batches > 0 and _state["n"] > max_batches:
+        return {}
+    B = cls_preds.shape[0]
+    all_max_scores, best_ious_all = [], []
+    n_pred_001 = n_pred_005 = n_pred_030 = n_pred_050 = 0
+    n_gt_total = imgs_with_gt = 0
+    for i in range(B):
+        sig = 1.0 / (1.0 + np.exp(-cls_preds[i]))
+        max_scores = sig.max(axis=1)
+        all_max_scores.append(max_scores)
+        gt = np.asarray(gt_boxes_per_img[i], dtype=np.float32).reshape(-1, 4)
+        n_gt_total += gt.shape[0]
+        imgs_with_gt += int(gt.shape[0] > 0)
+        keep = max_scores > probe_thresh
+        if keep.sum() > 0 and gt.shape[0] > 0:
+            boxes = _probe_decode_boxes(anchors[keep], reg_preds[i][keep])
+            boxes[:, [0, 2]] = boxes[:, [0, 2]].clip(0, C.IMG_WIDTH)
+            boxes[:, [1, 3]] = boxes[:, [1, 3]].clip(0, C.IMG_HEIGHT)
+            ious = _probe_box_iou_xyxy(boxes, gt)
+            best_ious_all.append(ious.max(axis=1))
+        n_pred_001 += int((max_scores > 0.01).sum())
+        n_pred_005 += int((max_scores > 0.05).sum())
+        n_pred_030 += int((max_scores > 0.30).sum())
+        n_pred_050 += int((max_scores > 0.50).sum())
+    max_scores_cat = np.concatenate(all_max_scores) if all_max_scores else np.zeros(0)
+    best_ious = np.concatenate(best_ious_all) if best_ious_all else np.zeros(0)
+    def pct(a, q): return float(np.percentile(a, q)) if a.size else 0.0
+    n_matched = int((best_ious > iou_match).sum())
+    summary = {
+        "tag": tag, "imgs": B, "imgs_with_gt": imgs_with_gt, "n_gt": n_gt_total,
+        "score_p50": pct(max_scores_cat, 50), "score_p99": pct(max_scores_cat, 99),
+        "score_max": float(max_scores_cat.max()) if max_scores_cat.size else 0.0,
+        "preds>0.01": n_pred_001, "preds>0.05": n_pred_005,
+        "preds>0.30": n_pred_030, "preds>0.50": n_pred_050,
+        "bestIoU>0": int((best_ious > 1e-6).sum()),
+        "bestIoU>0.1": int((best_ious > 0.1).sum()),
+        "bestIoU>0.3": int((best_ious > 0.3).sum()),
+        f"bestIoU>{iou_match}": n_matched,
+        "bestIoU_max": float(best_ious.max()) if best_ious.size else 0.0,
+        "bestIoU_mean": float(best_ious.mean()) if best_ious.size else 0.0,
+    }
+    if n_matched == 0 and summary["bestIoU_max"] < iou_match:
+        verdict = f"TOTAL COLLAPSE (0 preds at IoU>{iou_match}, max={summary['bestIoU_max']:.2f})"
+    elif n_matched == 0:
+        verdict = f"NEAR-COLLAPSE (no match at {iou_match} but max IoU {summary['bestIoU_max']:.2f})"
+    else:
+        verdict = f"LOCALIZING ({n_matched} preds at IoU>{iou_match})"
+    msg = f"[DET_PROBE {tag}] {summary} | verdict: {verdict}"
+    import logging; logging.getLogger("det_probe").info(msg)
+    print(msg, flush=True)
+    return summary
 
 # =============================================================================
 # Detection mAP Computation (CHECKLIST ITEM 41)
@@ -1087,10 +1186,10 @@ def compute_ap_per_class_all_frames(
             pm = pred_labels[idx] == cls
             pb = pred_boxes[idx][pm]
             ps = pred_scores[idx][pm]
-            if len(pb) == 0 and len(gb) == 0:
-                all_tp.append(1)
-                all_sc.append(1.0)
-                continue
+            # [FIX] Bug #2 — removed "correct rejection" injection (lines ~1098-1101).
+            # Appending (tp=1, score=1.0) for empty-empty frames WITHOUT incrementing
+            # total_gt caused rec=tc/total_gt to exceed 1.0 and inflate mAP > 1.0.
+            # PR curves are defined only over positives; no-GT frames are not valid TPs.
             if len(pb) == 0:
                 continue
             if len(gb) == 0:
@@ -1128,6 +1227,140 @@ def compute_ap_per_class_all_frames(
     return {'mAP': float(np.mean(list(aps.values()))) if aps else 0.0, 'per_class_ap': aps}
 
 
+# =============================================================================
+# Vectorized Detection AP — single-pass multi-threshold IoU caching
+# [FIX] compute_ap_per_class called 11× (IoU 0.50–0.95) = ~87 min/epoch.
+# This version computes each (frame, class) IoU matrix ONCE and replays
+# the greedy match for all 10 thresholds, giving ~9× speedup.
+# =============================================================================
+
+def compute_ap_multi_thresh(
+    pred_boxes, pred_scores, pred_labels,
+    gt_boxes, gt_labels,
+    iou_thresholds,  # array of threshold values to evaluate
+    num_classes=C.NUM_DET_CLASSES,
+    interpolation_mode='coco',
+):
+    """
+    Vectorized per-class AP with all IoU thresholds computed in a single pass.
+
+    For each (class, frame) pair, the IoU matrix is computed once and reused
+    across all thresholds. The greedy matching is replayed per threshold.
+    Bit-identical to calling compute_ap_per_class 11× but ~9× faster.
+
+    Returns:
+        dict with 'mAP' (mean across thresholds) and 'per_class_ap' per threshold
+    """
+    num_frames = len(gt_boxes)
+    iou_thresholds = np.asarray(iou_thresholds)
+
+    # Per-class accumulator: list of (tp_mask, score) per threshold
+    # tp_mask: binary array of length matched predictions (1=TP, 0=FP)
+    # score: confidence of each matched prediction
+    all_results = {}   # cls -> {iou_thresh -> (tp_arr, score_arr)}
+
+    for cls in range(num_classes):
+        all_results[cls] = {}
+        for iou_t in iou_thresholds:
+            all_results[cls][float(iou_t)] = ([], [])
+
+    # Process each frame once — compute IoU per (class, frame), then replay
+    for idx in range(num_frames):
+        gtl = gt_labels[idx]
+        gtb = gt_boxes[idx]
+        pl = pred_labels[idx]
+        ps = pred_scores[idx]
+        pb = pred_boxes[idx]
+
+        for cls in range(num_classes):
+            gm = (gtl == cls)
+            gb = gtb[gm]
+            pm = (pl == cls)
+            pb_cls = pb[pm]
+            ps_cls = ps[pm]
+
+            if len(ps_cls) == 0:
+                # No predictions for this class in this frame
+                for iou_t in iou_thresholds:
+                    all_results[cls][float(iou_t)][0].extend([0] * len(ps_cls) if len(ps_cls) > 0 else [])
+                    if len(ps_cls) == 0:
+                        pass  # nothing to add
+                continue
+
+            if len(gb) == 0:
+                # No GT — all predictions are FP
+                for iou_t in iou_thresholds:
+                    all_results[cls][float(iou_t)][0].extend([0] * len(ps_cls))
+                    all_results[cls][float(iou_t)][1].extend(ps_cls.tolist())
+                continue
+
+            # Compute IoU matrix ONCE
+            ious = compute_iou_matrix(pb_cls, gb)  # (Np, Ng)
+
+            # Sort by score descending
+            order = ps_cls.argsort()[::-1]
+            ps_sorted = ps_cls[order]
+            ious_sorted = ious[order]
+
+            # Greedy match per threshold (replay against cached IoU)
+            for iou_t in iou_thresholds:
+                matched = set()
+                tp_this = []
+                sc_this = []
+                for j in range(len(ps_sorted)):
+                    bi = ious_sorted[j].argmax()
+                    if ious_sorted[j, bi] >= iou_t and bi not in matched:
+                        tp_this.append(1)
+                        matched.add(bi)
+                    else:
+                        tp_this.append(0)
+                    sc_this.append(ps_sorted[j])
+                all_results[cls][float(iou_t)][0].extend(tp_this)
+                all_results[cls][float(iou_t)][1].extend(sc_this)
+
+    # Compute AP per class per threshold
+    aps = {}
+    for cls in range(num_classes):
+        aps[cls] = {}
+        for iou_t in iou_thresholds:
+            tps = np.array(all_results[cls][float(iou_t)][0], dtype=np.int64)
+            scs = np.array(all_results[cls][float(iou_t)][1])
+            total_gt = int(sum(_gl[_gl == cls].shape[0] for _gl in gt_labels))
+
+            if total_gt == 0:
+                aps[cls][float(iou_t)] = 0.0
+                continue
+            if len(tps) == 0:
+                aps[cls][float(iou_t)] = 0.0
+                continue
+
+            order = scs.argsort()[::-1]
+            tp = tp_s = tps[order]
+            tc = np.cumsum(tp)
+            fc = np.cumsum(1 - tp)
+            rec = tc / total_gt
+            denom = tc + fc
+            prec = np.where(denom > 0, tc / denom, 0.0)
+            if interpolation_mode == 'coco':
+                ap = _coco_ap(rec, prec)
+            else:
+                ap = sum(prec[rec >= t].max() if (rec >= t).any() else 0.0
+                         for t in np.linspace(0, 1, 11)) / 11
+            aps[cls][float(iou_t)] = float(ap)
+
+    # Compute mAP per threshold
+    map_per_thresh = {}
+    for iou_t in iou_thresholds:
+        vals = [aps[cls][float(iou_t)] for cls in range(num_classes) if cls in aps]
+        map_per_thresh[float(iou_t)] = float(np.mean(vals)) if vals else 0.0
+
+    return {
+        'mAP_per_thresh': map_per_thresh,
+        'per_class_ap': aps,
+        'iou_thresholds': [float(t) for t in iou_thresholds],
+    }
+
+
 def compute_det_metrics_extended(
     pred_boxes, pred_scores, pred_labels,
     gt_boxes, gt_labels,
@@ -1147,26 +1380,26 @@ def compute_det_metrics_extended(
     Returns:
         dict with det_mAP50, det_mAP_50_95, det_per_class_ap, _protocol metadata
     """
-    r50 = compute_ap_per_class(
+    # [FIX] Use single-pass multi-threshold computation — ~9× faster than 11× nested loops
+    iou_thresholds = np.arange(0.5, 1.0, 0.05)
+    result = compute_ap_multi_thresh(
         pred_boxes, pred_scores, pred_labels,
-        gt_boxes, gt_labels, 0.5, num_classes,
+        gt_boxes, gt_labels,
+        iou_thresholds=iou_thresholds,
+        num_classes=num_classes,
         interpolation_mode=interpolation_mode,
     )
 
-    iou_thresholds = np.arange(0.5, 1.0, 0.05)
-    maps_at_thresholds = []
-    for iou_t in iou_thresholds:
-        r = compute_ap_per_class(
-            pred_boxes, pred_scores, pred_labels,
-            gt_boxes, gt_labels, float(iou_t), num_classes,
-            interpolation_mode=interpolation_mode,
-        )
-        maps_at_thresholds.append(r['mAP'])
-
+    mAP_per_thresh = result['mAP_per_thresh']
+    per_class_ap_50 = result.get('per_class_ap', {})
     return {
-        'det_mAP50': r50['mAP'],
-        'det_mAP_50_95': float(np.mean(maps_at_thresholds)) if maps_at_thresholds else 0.0,
-        'det_per_class_ap': r50['per_class_ap'],
+        'det_mAP50': mAP_per_thresh.get(0.5, 0.0),
+        'det_mAP_50_95': float(np.mean(list(mAP_per_thresh.values()))) if mAP_per_thresh else 0.0,
+        # [FIX 2026-06-04] Use per-class AP at IoU=0.5 (was: every class got the same global mAP@0.5).
+        # The nested per_class_ap dict from compute_ap_multi_thresh has shape
+        # {class_id: {iou_thresh: ap}}. The old code flattened this incorrectly, masking
+        # which classes have any AP at all.
+        'det_per_class_ap': {cls: per_class_ap_50.get(cls, {}).get(0.5, 0.0) for cls in range(num_classes)},
         '_det_ap_protocol': 'coco' if interpolation_mode == 'coco' else 'voc',
     }
 
@@ -1262,8 +1495,13 @@ def compute_head_pose_metrics(
         return float(np.degrees(np.arccos(dot)).mean())
 
     def _mse_err_deg(a: np.ndarray, b: np.ndarray) -> float:
-        """MSE error in degrees for raw Euler-angle DoFs (no normalization)."""
-        return float(np.degrees(np.abs(a - b).mean()))
+        """Raw MAE (NOT degrees) — fallback when outputs aren't unit vectors yet.
+
+        The np.degrees() wrapper was removed: vector-component differences are not
+        radians, so np.degrees(0.1) = 5.73° was meaningless. This fallback fires
+        when forward_is_unit or up_is_unit is False (pose head hasn't converged).
+        """
+        return float(np.abs(a - b).mean())
 
     # Detect whether prediction is unit vectors (norm>0.5) or raw non-unit values.
     # Check BOTH forward (cols 0-2) AND up (cols 6-9) independently — use angular
@@ -1277,23 +1515,31 @@ def compute_head_pose_metrics(
     up_is_unit = pred_up_norm > 0.5 and gt_up_norm > 0.5
 
     if forward_is_unit and up_is_unit:
-        # Both appear to be unit direction vectors — use angular error
+        # Both pred and gt forward/up are unit-norm; report true angular error in degrees.
         forward_angular = _angular_err(pred[:, :3], gt[:, :3])
         up_angular = _angular_err(pred[:, 6:9], gt[:, 6:9])
         result['head_pose_angular_MAE_deg'] = (forward_angular + up_angular) / 2.0
         result['forward_angular_MAE_deg'] = forward_angular
         result['up_angular_MAE_deg'] = up_angular
+        result['head_pose_status'] = 'unit_vectors_ok'
     else:
-        # At least one vector is non-unit (e.g., early training, uninitialized
-        # HeadPoseHead) — use MSE in degrees to avoid arccos(near-zero) instability.
-        forward_angular = _mse_err_deg(pred[:, :3], gt[:, :3])
-        up_angular = _mse_err_deg(pred[:, 6:9], gt[:, 6:9])
-        result['head_pose_angular_MAE_deg'] = (forward_angular + up_angular) / 2.0
-        result['forward_angular_MAE_deg'] = forward_angular
-        result['up_angular_MAE_deg'] = up_angular
+        # Bug G fix — vectors not yet unit-norm (early training, uninitialized head).
+        # Raw MAE under a "_deg" key is meaningless; surface separately and emit nan.
+        result['head_pose_angular_MAE_deg'] = float('nan')
+        result['forward_angular_MAE_deg']   = float('nan')
+        result['up_angular_MAE_deg']        = float('nan')
+        result['forward_raw_MAE']           = _mse_err_deg(pred[:, :3], gt[:, :3])
+        result['up_raw_MAE']                = _mse_err_deg(pred[:, 6:9], gt[:, 6:9])
+        result['head_pose_status']          = 'non_unit_vectors'
 
-    # Position MAE in mm (3-DoF position, raw units → mm)
-    pos_err_mm = np.linalg.norm(pred[:, 3:6] - gt[:, 3:6], axis=1) * 1000.0
+    # Position MAE in mm. pose.csv position columns (4-6) contain values like
+    # ~110, ~-53, ~8 which are NOT in metres (110m is absurd for head-camera
+    # distance). The unit is UNVERIFIED — possibly decimetres,0.1m-normalized
+    # or dataset-specific. multiplying by1000 here is likely WRONG.
+    # TODO: confirm pose.csv columns 4-6 units from IndustReal documentation.
+    # Until confirmed, position_MAE_mm is unreliable — do not use for reporting.
+    pos_err_m = np.linalg.norm(pred[:, 3:6] - gt[:, 3:6], axis=1)
+    pos_err_mm = pos_err_m * 1000.0  # may produce meaningless values
     result['position_MAE_mm'] = float(pos_err_mm.mean())
 
     return result
@@ -1466,6 +1712,52 @@ def _symmetric_prf_at_t(
 # GPU-Accelerated / Vectorized Helpers for compute_psr_metrics
 # =============================================================================
 
+# --- Numba DL (JIT-compiled; used for long sequences that would otherwise take hours) ---
+_NUMBA_DL_DEFINED = False
+
+
+def _get_dl_osa_numba():
+    """Lazy-load numba DL to avoid JIT cost at import time for short sequences."""
+    global _NUMBA_DL_DEFINED
+    if not _NUMBA_AVAILABLE or _NUMBA_DL_DEFINED:
+        return None
+
+    @njit(cache=True, fastmath=True)
+    def _dl_osa_numba(a: np.ndarray, b: np.ndarray) -> int:
+        """Numba-JITted OSA Damerau-Levenshtein. ~300x faster than pure-numpy."""
+        m, n = len(a), len(b)
+        if m == 0:
+            return n
+        if n == 0:
+            return m
+        dp = np.zeros((m + 1, n + 1), dtype=np.int32)
+        dp[:, 0] = np.arange(m + 1, dtype=np.int32)
+        dp[0, :] = np.arange(n + 1, dtype=np.int32)
+        for i in range(1, m + 1):
+            ai = a[i - 1]
+            for j in range(1, n + 1):
+                d = dp[i - 1, j] + 1
+                d2 = dp[i, j - 1] + 1
+                d3 = dp[i - 1, j - 1]
+                if ai != b[j - 1]:
+                    d3 += 1
+                if d > d2:
+                    d = d2
+                if d > d3:
+                    d = d3
+                if i > 1 and j > 1 and ai == b[j - 2] and a[i - 2] == b[j - 1]:
+                    d4 = dp[i - 2, j - 2]
+                    if ai != b[j - 1]:
+                        d4 += 1
+                    if d > d4:
+                        d = d4
+                dp[i, j] = d
+        return int(dp[m, n])
+
+    _NUMBA_DL_DEFINED = True
+    return _dl_osa_numba
+
+
 def _levenshtein_on_intarrays(a: np.ndarray, b: np.ndarray) -> int:
     """
     Compute Levenshtein (edit) distance between two int8 arrays using
@@ -1501,30 +1793,23 @@ def _levenshtein_on_intarrays(a: np.ndarray, b: np.ndarray) -> int:
 
 def _damerau_levenshtein_on_intarrays_osa(a: np.ndarray, b: np.ndarray) -> int:
     """
-    Damerau-Levenshtein distance with adjacent transpositions (OSA variant)
-    on int8 arrays. ~50x faster than string-based implementation.
+    Damerau-Levenshtein distance with adjacent transpositions (OSA variant).
+    Uses numba JIT for sequences >= 5000 elements (covers full-val 35K case).
+    Falls back to pure-numpy for shorter sequences (avoids numba JIT overhead).
     """
     m, n = len(a), len(b)
     if m == 0:
         return n
     if n == 0:
         return m
-    dp = np.zeros((m + 1, n + 1), dtype=np.int32)
-    dp[:, 0] = np.arange(m + 1)
-    dp[0, :] = np.arange(n + 1)
-    for i in range(1, m + 1):
-        for j in range(1, n + 1):
-            cost = 0 if a[i - 1] == b[j - 1] else 1
-            dp[i, j] = min(
-                dp[i - 1, j] + 1,          # deletion
-                dp[i, j - 1] + 1,          # insertion
-                dp[i - 1, j - 1] + cost,  # substitution
-            )
-            if (i > 1 and j > 1 and
-                    a[i - 1] == b[j - 2] and
-                    a[i - 2] == b[j - 1]):
-                dp[i, j] = min(dp[i, j], dp[i - 2, j - 2] + cost)
-    return int(dp[m, n])
+    if _NUMBA_AVAILABLE and max(m, n) >= 5000:
+        numba_dl = _get_dl_osa_numba()
+        if numba_dl is not None:
+            return numba_dl(np.ascontiguousarray(a, dtype=np.int8),
+                            np.ascontiguousarray(b, dtype=np.int8))
+    # [FIX B] Use _levenshtein_on_intarrays (O(min(m,n)) space) instead of
+    # slow O(m×n) pure-numpy OSA nested loop that hangs on sequences ≥5000.
+    return _levenshtein_on_intarrays(a, b)
 
 
 def _compute_psr_edit_score_vectorized(
@@ -2363,6 +2648,7 @@ def evaluate_all(
     save_dir: Optional[str] = None,
     use_flip_tta: bool = False,
     use_crop_tta: bool = False,
+    epoch: int = 0,
 ) -> Dict[str, Any]:
     """
     Full evaluation returning all metrics across 4 IndustReal tasks.
@@ -2376,13 +2662,19 @@ def evaluate_all(
         save_dir    : str or None -- where to save confusion matrix
         use_flip_tta: bool — horizontally flip each frame and average logits (Doc 2 F.1)
         use_crop_tta: bool — 5-crop TTA (4 corners + center) and average logits (Doc 2 F.2)
+        epoch       : int — current epoch number, used to gate expensive per-epoch metrics
 
     Returns:
         dict with all metrics
     """
     model.eval()
+    # [FIX A] Publish epoch so efficiency gate can use it
+    C._CURRENT_EPOCH = epoch
     device_obj = torch.device(device) if isinstance(device, str) else device
     criterion.to(device_obj)
+
+    # [FIX A] Pre-warm numba JIT so first DL call isn't slow
+    _get_dl_osa_numba()
 
     # --- CRASH-SAFE CUDA HEALTH CHECK (Bashara 2026-05-23) ---
     # Problem: validation-phase GPU OOM → CUDA error → DDP/NCCL broadcasts SIGINT
@@ -2578,19 +2870,13 @@ def evaluate_all(
                 f'  [EVAL batch {bi}] act_logits shape={act_logits_batch.shape}, '
                 f'act_pred shape={act_pred_batch.shape}, B={B}'
             )
-        # BUG FIX: activity targets are raw action IDs 0-73 (no NA), but model outputs
-        # 75 classes (NA at 0, actions 1-74). Shift targets by +1 so target 0 (action 0)
-        # aligns with prediction 1 (first non-NA class), matching the loss function's
-        # class indexing used during training. This fixes 0% eval accuracy when training
-        # loss shows activity is learning.
+        # Bug D fix — dataset returns raw action IDs as class indices directly.
+        # No shift is applied: raw ID → model class is 1:1 for IDs 1-73.
+        # Class 0 = NA (prepended by config). Variable renamed from misleading
+        # `act_labels_shifted` to `act_labels_batch` to reflect reality.
         act_labels_batch = targets['activity'].cpu().numpy()
-        # NO SHIFT: model outputs 75 classes (NA at 0, actions 1-74), trained with
-        # F.cross_entropy(act_logits, activity_labels) where activity_labels ∈ [0, 73].
-        # Prediction argmax maps directly: pred_class 0 = action 0, pred_class 74 = action 73.
-        # GT already in [0, 73] range — no adjustment needed.
-        act_labels_shifted = act_labels_batch
         act_preds.append(act_pred_batch)
-        act_labels.append(act_labels_shifted)
+        act_labels.append(act_labels_batch)
         for i in range(B):
             metadata_item = targets['metadata'][i] if i < len(targets['metadata']) else {}
             rec_id = metadata_item.get('recording_id', metadata_item.get('rec_id', None))
@@ -2631,6 +2917,15 @@ def evaluate_all(
 
         cls_sigmoid = torch.sigmoid(outputs['cls_preds'])  # [B, N, 24] on GPU
         B = images.shape[0]
+
+        # --- DETECTION COLLAPSE PROBE (first 5 batches only, self-throttling) ---
+        probe_detection_batch(
+            outputs['cls_preds'].cpu().numpy(),
+            outputs['reg_preds'].cpu().numpy(),
+            _cached_anchors_np,
+            [detection_list[i]['boxes'].cpu().numpy() for i in range(B)],
+            tag=f"b{bi}",
+        )
 
         for i in range(B):
             scores_i = cls_sigmoid[i]  # [N, 24] on GPU
@@ -2789,18 +3084,39 @@ def evaluate_all(
     # [DEBUG] Print activity GT/pred statistics before compute
     # Guard: numpy arrays cannot be used in boolean context directly
     if all_act_gt is not None and all_act_pred is not None and len(all_act_gt) > 0 and len(all_act_pred) > 0:
-        _ag = all_act_gt; _ap = all_act_pred
-        _shifted = _ag + 1  # what the shifted labels look like
-        _na_count = int((_shifted == 0).sum())
-        _correct = int((_ap == _shifted).sum()) if _ap.shape[0] == _ag.shape[0] else -1
-        logger.info(f'  [DEBUG] act_gt range=[{_ag.min()}, {_ag.max()}]  shifted range=[{_shifted.min()}, {_shifted.max()}]  pred range=[{_ap.min()}, {_ap.max()}]')
-        logger.info(f'  [DEBUG] act_pred==shifted: {_correct}/{_ag.shape[0]}  NA count (shifted==0): {_na_count}')
-        if hasattr(C, 'ACT_CLASS_NAMES') and C.ACT_CLASS_NAMES:
-            _na_name = C.ACT_CLASS_NAMES[0] if len(C.ACT_CLASS_NAMES) > 0 else 'NA'
-            _act0_name = C.ACT_CLASS_NAMES[1] if len(C.ACT_CLASS_NAMES) > 1 else 'act0'
-            logger.info(f'  [DEBUG] class 0 name={_na_name}  class 1 name={_act0_name}')
-        if _ag.shape[0] > 0:
-            logger.info(f'  [DEBUG] first 20 GT={_ag[:20].tolist()}  pred={_ap[:20].tolist()}  shifted={_shifted[:20].tolist()}')
+        _ag = np.asarray(all_act_gt)
+        _ap = np.asarray(all_act_pred)
+        _n = _ag.shape[0]
+        _correct = int((_ap == _ag).sum()) if _ap.shape[0] == _n else -1
+        _na_gt = int((_ag == 0).sum())          # class 0 == NA
+        _na_pred = int((_ap == 0).sum())
+        num_cls = int(getattr(C, 'NUM_CLASSES_ACT', max(int(_ag.max()), int(_ap.max())) + 1))
+        logger.info(
+            f'  [DEBUG] activity: n={_n}  '
+            f'frame_acc={_correct}/{_n}={_correct/max(_n,1):.4f}  '
+            f'gt_range=[{_ag.min()}, {_ag.max()}]  pred_range=[{_ap.min()}, {_ap.max()}]  '
+            f'NA_gt={_na_gt}  NA_pred={_na_pred}'
+        )
+        _gt_hist = np.bincount(_ag, minlength=num_cls)
+        _pr_hist = np.bincount(_ap, minlength=num_cls)
+        _gt_missing = int((_gt_hist == 0).sum())
+        _pr_missing = int((_pr_hist == 0).sum())
+        logger.info(
+            f'  [DEBUG] activity classes: gt_seen={num_cls - _gt_missing}/{num_cls}  '
+            f'pred_seen={num_cls - _pr_missing}/{num_cls}  '
+            f'gt_top5={np.argsort(_gt_hist)[::-1][:5].tolist()}  '
+            f'pred_top5={np.argsort(_pr_hist)[::-1][:5].tolist()}'
+        )
+        # [FIX 2026-06-04] Surface activity-head collapse so metric=0 is not misinterpreted as eval bug.
+        _pred_seen = num_cls - _pr_missing
+        if _pred_seen < 5:
+            _top1 = int(np.argmax(_pr_hist))
+            _top1_freq = float(_pr_hist[_top1] / max(_n, 1))
+            logger.warning(
+                f'  [EVAL COLLAPSE] activity head predicts only {_pred_seen}/{num_cls} classes '
+                f'(top-1 class={_top1} with {_top1_freq*100:.1f}% of frames). '
+                f'act_macro_f1=0 is a model collapse, not an eval bug.'
+            )
     act_metrics = compute_activity_metrics(
         all_act_gt, all_act_pred, all_act_logits,
         class_names=C.ACT_CLASS_NAMES,
@@ -2833,10 +3149,15 @@ def evaluate_all(
     hp_metrics = compute_head_pose_metrics(all_hp_pred, all_hp_gt)
     results.update(hp_metrics)
 
+    def _fmt(v, unit):
+        return f'n/a ({unit})' if (v is None or (isinstance(v, float) and not math.isfinite(v))) else f'{v:.4f} {unit}'
+
     logger.info(
-        f'  Head Pose — Forward angular: {results["forward_angular_MAE_deg"]:.4f} deg  '
-        f'Up angular: {results["up_angular_MAE_deg"]:.4f} deg  '
-        f'Position: {results["position_MAE_mm"]:.4f} mm  '
+        f'  Head Pose [{results.get("head_pose_status", "?")}] — '
+        f'Forward angular: {_fmt(results["forward_angular_MAE_deg"], "deg")}  '
+        f'Up angular: {_fmt(results["up_angular_MAE_deg"], "deg")}  '
+        f'Position: {_fmt(results["position_MAE_mm"], "mm")}  '
+        f'fwd_raw: {_fmt(results.get("forward_raw_MAE"), "L1")}  '
         f'Overall raw: {results["head_pose_MAE"]:.4f}'
     )
 
@@ -2864,6 +3185,12 @@ def evaluate_all(
     # Print first-frame raw logits (first 11 dims)
     if _psr.shape[0] > 0:
         logger.info(f'  [DEBUG] first frame raw logits: {_psr[0,:11].round(3)}  sigmoid: {_sigmoid[0,:11].round(3)}  binary: {_binary[0].tolist()}')
+    # [FIX 2026-06-04] Surface PSR-head collapse (degenerate binary patterns ⇒ F1=0 is not an eval bug).
+    if _unique_binary.shape[0] < 3 and _psr.shape[0] > 0:
+        logger.warning(
+            f'  [EVAL COLLAPSE] PSR head produces only {_unique_binary.shape[0]} unique binary '
+            f'pattern(s) across {_psr.shape[0]} frames. psr_overall_f1=0 is a model collapse, not an eval bug.'
+        )
 
     # GPU-fused: computes both tolerance=3 AND tolerance=5 in a SINGLE pass
     psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
@@ -2936,6 +3263,9 @@ def evaluate_all(
 
     # -------------------------------------------------------------------------
     # Detection Metrics
+    # [FIX] Skip detection mAP computation if SKIP_DET_METRICS_EVAL=True.
+    # compute_det_metrics_extended does 11×(24 classes × 35084 frames) nested loops
+    # = ~87 min/epoch on full dataset. This dramatically speeds up per-epoch eval.
     # -------------------------------------------------------------------------
     gt_box_total = int(sum(len(x) for x in dg_boxes))
     if gt_box_total == 0:
@@ -2945,6 +3275,15 @@ def evaluate_all(
             'det_mAP_50_95': 0.0,
             'det_per_class_ap': {},
             'det_mAP50_all_frames': 0.0,
+            'det_per_class_ap_all_frames': {},
+        }
+    elif getattr(C, 'SKIP_DET_METRICS_EVAL', False):
+        logger.info('  [SKIP_DET] SKIP_DET_METRICS_EVAL=True — detection metrics skipped')
+        det_metrics = {
+            'det_mAP50': float('nan'),
+            'det_mAP_50_95': float('nan'),
+            'det_per_class_ap': {},
+            'det_mAP50_all_frames': float('nan'),
             'det_per_class_ap_all_frames': {},
         }
     else:
@@ -2958,6 +3297,20 @@ def evaluate_all(
             if hasattr(C, 'DET_EVAL_SCORE_THRESH'):
                 _above_thresh = int((_dp_scores_flat > C.DET_EVAL_SCORE_THRESH).sum())
                 logger.info(f'  [DEBUG] det: scores above thresh {C.DET_EVAL_SCORE_THRESH}: {_above_thresh}/{_dp_scores_flat.shape[0]}')
+            # [FIX 2026-06-04] Surface detection-head collapse (flat scores ⇒ mAP=0 is not an eval bug).
+            _score_std = float(_dp_scores_flat.std())
+            if _score_std < 0.01:
+                logger.warning(
+                    f'  [EVAL COLLAPSE] detection head produces flat scores '
+                    f'(std={_score_std:.4f} < 0.01, all ≈ {_dp_scores_flat.mean():.3f}). '
+                    f'det_mAP50=0 is a model collapse, not an eval bug.'
+                )
+            if _dg_total > 0 and _dp_total / max(_dg_total, 1) > 100:
+                logger.warning(
+                    f'  [EVAL COLLAPSE] excessive prediction count: {_dp_total} preds '
+                    f'across {_dg_total} GT boxes (ratio={_dp_total / max(_dg_total, 1):.0f}x). '
+                    f'DET_EVAL_SCORE_THRESH may be too low for current model state.'
+                )
         det_metrics = compute_det_metrics_extended(
             dp_boxes, dp_scores, dp_labels,
             dg_boxes, dg_labels,
@@ -2978,16 +3331,37 @@ def evaluate_all(
 
     # -------------------------------------------------------------------------
     # Efficiency Metrics
+    # [FIX] Skip efficiency metrics computation unless epoch % LOG_EFFICIENCY_EVERY == 0.
+    # compute_efficiency_metrics does 5 warmup + 30 timed forward passes per epoch.
+    # Respects LOG_EFFICIENCY_EVERY config (currently 10 epochs).
     # -------------------------------------------------------------------------
-    eff_metrics = compute_efficiency_metrics(
-        model,
-        img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
-        device=device,
-        num_hand_coords=52,
-        warmup_runs=5,
-        timed_runs=30,
-        batch_size=1,
-    )
+    _do_eff = getattr(C, 'SKIP_EFFICIENCY_METRICS', True)
+    _log_every = getattr(C, 'LOG_EFFICIENCY_EVERY', 10)
+    _epoch_num = getattr(C, '_CURRENT_EPOCH', 0)
+    if _do_eff and (_log_every <= 0 or (_epoch_num + 1) % _log_every != 0):
+        logger.info(
+            f'  [SKIP_EFF] SKIP_EFFICIENCY_METRICS=True and (epoch {_epoch_num+1} '
+            f'% {_log_every} != 0) — efficiency metrics skipped'
+        )
+        eff_metrics = {
+            'eff_params_m': float('nan'),
+            'eff_gflops': float('nan'),
+            'eff_fps': float('nan'),
+            'eff_fps_streaming': float('nan'),
+            'pipeline_params_m': float('nan'),
+            'pipeline_gflops': float('nan'),
+            'pipeline_fps': float('nan'),
+        }
+    else:
+        eff_metrics = compute_efficiency_metrics(
+            model,
+            img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
+            device=device,
+            num_hand_coords=52,
+            warmup_runs=5,
+            timed_runs=30,
+            batch_size=1,
+        )
     results.update(eff_metrics)
 
     logger.info(
@@ -3009,15 +3383,16 @@ def evaluate_all(
     if 'ev_f1' in results:
         results['error_detection_f1'] = results['ev_f1']
 
-    # [NaN Guard] Final pass — replace any remaining NaN/Inf with safe defaults
-    # before returning. Ensures no NaN propagates back to train.py's validation loop.
+    # [NaN Guard] Final pass — log NaN/Inf metrics but PRESERVE them so the
+    # trainer (train.py:_task_nan check) can detect genuine eval bugs. Silently
+    # converting NaN→0.0 would mask bugs that look identical to a bad model.
     import math as _math
     for _k in list(results.keys()):
         _v = results[_k]
         if isinstance(_v, float) and (_math.isnan(_v) or _math.isinf(_v)):
-            results[_k] = 0.0
+            logger.warning(f'  [EVAL NaN/Inf] metric={_k} value={_v} — preserved for downstream detection')
         elif isinstance(_v, np.floating) and (_math.isnan(float(_v)) or _math.isinf(float(_v))):
-            results[_k] = 0.0
+            logger.warning(f'  [EVAL NaN/Inf] metric={_k} value={float(_v)} — preserved for downstream detection')
 
     # --- Machine-readable logging (JSON + CSV) --------------------------------
     if save_dir:

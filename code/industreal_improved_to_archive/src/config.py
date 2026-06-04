@@ -24,12 +24,12 @@ _cfg_logger = logging.getLogger(__name__)
 # =========================================================================
 # Debug / profiling flags
 # =========================================================================
-BENCHMARK_MODE = True   # VAL_EVERY=1 every epoch
+BENCHMARK_MODE = True
 DEBUG_MODE         = False
 DEBUG_MAX_VIDEOS   = 2  # smoke test: 2 recordings only
 DEBUG_FRAME_STRIDE = 10
 
-SUBSET_RATIO = 0.10   # 10% subset for quick training
+SUBSET_RATIO = 0.05   # 5% subset for quick training
 
 TRAIN_FRAME_STRIDE = 3  # A.2: stride 3 → T=16 covers 1.6s at 30FPS (median action)
 EVAL_FRAME_STRIDE  = 1
@@ -69,7 +69,7 @@ USE_HEADPOSE_FILM = True
 # Cost: +22M frozen params, ~600 MB VRAM. FPS drops ~25%.
 # NOTE: When switching from False to True, classifier head reinitializes
 # because act_logits dim doubles. Train from scratch or use strict=False.
-USE_VIDEOMAE = False  # Disabled: saves ~800MB VRAM; +5-7% activity boost not needed for baseline
+USE_VIDEOMAE = True
 VIDEOMAE_CKPT = 'MCG-NJU/videomae-small-finetuned-kinetics'
 VIDEOMAE_NUM_FRAMES = 16   # temporal window size for VideoMAE clip
 VIDEOMAE_SAMPLE_STRIDE = 1  # sample every N frames from the clip window
@@ -78,7 +78,7 @@ VIDEOMAE_SAMPLE_STRIDE = 1  # sample every N frames from the clip window
 # to let the temporal stream adapt to IndustReal kinematics. Unfreezing too early
 # (before backbone is warmed up) causes interference; too late wastes the stream's
 # Kinetics pretraining. Epoch 10 is after Stage 1 (5) + Stage 2 start (6-10).
-VIDEOMAE_UNFREEZE_EPOCH = -1
+VIDEOMAE_UNFREEZE_EPOCH = 10  # unfreeze VideoMAE at epoch 10 (after Stage 1/2 warmup)
 VIDEOMAE_UNFREEZE_LR = 1e-5
 
 # Temporal modeling options
@@ -145,22 +145,35 @@ DET_CLASS_NAMES = {
 }
 
 # --- Action Recognition (AR) ---
-# 75 action classes (IDs 0-74, all populated in AR_labels.csv)
-# Class index 0 = 'NA' (prepended), real IDs shifted by +1 (ID 0 -> index 1)
-_NUM_ACT_CLASSES_FALLBACK = 75
+# [ROOT-CAUSE FIX — activity class count] -----------------------------------
+# industreal_dataset.py:_parse_ar_labels writes the *raw* action_id straight
+# into the per-frame label (`labels[start:end+1] = action_id`) with NO
+# remapping. action_id 0 = NA/background; real action IDs run 1..74. So the
+# label index space is exactly 0..74 → the classifier MUST have 75 channels.
+# IDs 37 and 64 are absent in stock IndustReal, leaving two permanently-cold
+# channels — harmless (no GT lands there, so CE/LDAM never push them).
+#
+# The previous code computed NUM_CLASSES_ACT by scanning AR_labels.csv on disk
+# and PRUNING the missing-ID names, which produced 74 when 37/64 were absent
+# and 75 when present. With a 74-wide head, a label of 74 indexes out of range
+# → CUDA device-side assert that kills the full-dataset run. We therefore pin
+# the count to a fixed constant equal to (max raw action_id) + 1 = 75.
+NUM_ACT_RAW_IDS = 74          # action IDs 1..74 (0 is NA); IndustReal spec
+NUM_CLASSES_ACT = NUM_ACT_RAW_IDS + 1   # 75 = NA(0) + IDs 1..74; FIXED, not data-derived
+
 
 def _load_act_class_names() -> list:
     """
-    Load AR action class names from the dataset.
-    AR_labels.csv uses action IDs 0-74 (excluding 37, 64) mapped to action names.
-    We build a full 75-slot list (indices 0-74) so the ID directly indexes the list.
-    Unknown IDs (37, 64) are filled with placeholder names.
+    Build a 75-entry name list indexed BY RAW action_id, so name[i] describes
+    class index i exactly as the dataset emits it. No pruning, no shifting:
+    index 0 = 'NA', indices 1..74 = the action name from AR_labels.csv (or an
+    'unknown_i' placeholder for the cold IDs 37/64). Display/reporting only —
+    NUM_CLASSES_ACT above is the source of truth for tensor shapes.
     """
     import os
 
     recordings_root = RECORDINGS_ROOT
     id_to_name = {}
-
     for split in ['train', 'val', 'test']:
         split_root = recordings_root / split
         if not split_root.exists():
@@ -175,34 +188,27 @@ def _load_act_class_names() -> list:
                         parts = row.strip().split(',')
                         if len(parts) >= 3:
                             aid = int(parts[1])
-                            name = parts[2]
                             if aid not in id_to_name:
-                                id_to_name[aid] = name
+                                id_to_name[aid] = parts[2]
             except OSError:
                 continue
 
-    # Build full 75-entry list (IDs 0-74), then prune unknowns to get 74 entries.
-    full_names = []
-    for i in range(75):
-        if i in id_to_name:
-            full_names.append(id_to_name[i])
+    names = []
+    for i in range(NUM_CLASSES_ACT):           # 0..74, raw-id-aligned
+        if i == 0:
+            names.append('NA')
         else:
-            full_names.append(f'unknown_{i}')
-
-    # Prune unknown entries so len == 74
-    pruned = [n for n in full_names if not n.startswith('unknown_')]
-    return pruned
+            names.append(id_to_name.get(i, f'unknown_{i}'))
+    return names
 
 
 ACT_CLASS_NAMES = _load_act_class_names()
-# The AR_labels.csv does not have an explicit NA/background row.
-# The 73 unique action IDs (0-74 excluding 37, 64) cover all real actions.
-# For classification, prepend 'NA' as class 0 so total = 75 classes (74 AR + NA).
-# AR_labels.csv uses raw IDs 0-73; dataset maps these directly as class indices 0-73.
-# NA placeholder fills index 0 (no raw ID 0 in labels); no ID shift needed.
-if ACT_CLASS_NAMES and ACT_CLASS_NAMES[0] != 'NA':
-    ACT_CLASS_NAMES.insert(0, 'NA')
-NUM_CLASSES_ACT = len(ACT_CLASS_NAMES)  # 75
+assert len(ACT_CLASS_NAMES) == NUM_CLASSES_ACT == 75, (
+    f'Activity class space must be a fixed 75 (NA + raw action IDs 1..74), '
+    f'got NUM_CLASSES_ACT={NUM_CLASSES_ACT}, len(names)={len(ACT_CLASS_NAMES)}. '
+    f'The dataset uses raw action_id as the class index, so the head width is '
+    f'invarianT to which IDs happen to appear on disk.'
+)
 
 # --- Head pose ---
 NUM_KEYPOINTS = 17
@@ -238,6 +244,8 @@ NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_la
 # Paper spec (matches RetinaNet P3-P7): (24, 48, 96, 192, 384)
 # =========================================================================
 ANCHOR_SIZES = (24, 48, 96, 192, 384)
+DET_POS_IOU_THRESH = 0.3       # FCOS anchor matching: positive IoU threshold
+DET_NEG_IOU_THRESH = 0.25      # FCOS anchor matching: negative IoU threshold (below this → background)
 IMG_WIDTH       = 1280
 IMG_HEIGHT      = 720
 IMG_SIZE        = (IMG_WIDTH, IMG_HEIGHT)
@@ -249,14 +257,16 @@ IMAGENET_STD  = [0.229, 0.224, 0.225]
 
 # =========================================================================
 # Training (RTX 3060 12 GB) — Optimized for VideoMAE + ConvNeXt + 5 heads + TMA + TemporalBank
-# NOTE: BATCH_SIZE=1 is REQUIRED. VideoMAE alone uses +600MB VRAM; batch=2 causes OOM.
-# GRAD_ACCUM=32 maintains effective batch=32 (same as old BATCH_SIZE=8, accum=4).
-BATCH_SIZE           = 1     # [GPU-OOM FIX] batch=1 for VRAM headroom with VideoMAE
-GRAD_ACCUM_STEPS     = 16    # [GPU-OOM FIX] effective batch 16 (was 32, halved to avoid OOM on RTX 3060)
-EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 16
+# NOTE: BATCH_SIZE=1 is REQUIRED for benchmark_full preset.
+# For quick training (DEBUG_MODE or SMOKE tests), BATCH_SIZE=6 is acceptable
+# with GRAD_ACCUM_STEPS=6 giving effective batch=32.
+# OOM fallback: train.py automatically halves batch if CUDA OOM is detected.
+BATCH_SIZE = 6        # Safe for quick training. Benchmark runs: use preset 'benchmark_full'.
+GRAD_ACCUM_STEPS = 6  # Keeps EFFECTIVE_BATCH=32
+EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
 
-VAL_BATCH_SIZE = 2   # RTX 3060 stable
-VAL_NUM_WORKERS = 0   # No subprocess workers
+VAL_BATCH_SIZE = 16   # Was 8→32; bumped again (VRAM headroom: 1.30GB/12.5GB used at batch_size=8)
+VAL_NUM_WORKERS = 1   # Reduced from 4 to prevent CPU RAM OOM
 VAL_PREFETCH_FACTOR  = 4
 
 EPOCHS        = 100 
@@ -269,10 +279,10 @@ T_mult = 2
 PATIENCE      = 10
 GRAD_CLIP_NORM = 1.0
 VAL_EVERY = 1    # [BENCHMARK] Evaluate every 1 epoch (BENCHMARK_MODE override)
-EVAL_MAX_BATCHES = 500   # ~4 min eval per epoch
+EVAL_MAX_BATCHES = -1
 
-NUM_WORKERS         = 8     # [OPT] 8 workers for parallel data loading (12 CPU cores available)
-PIN_MEMORY          = True
+NUM_WORKERS = 2        # Reduced from 8 to prevent CPU RAM OOM
+PIN_MEMORY = True
 MIXED_PRECISION = True   # [FIX] Was False — FP16 for RTX 3060 Ampere tensor cores
 SEED            = 42
 
@@ -285,14 +295,33 @@ USE_MIXUP      = True
 MIXUP_ALPHA    = 0.4
 
 # Desktop stability knobs
-CUDA_MEMORY_FRACTION = 0.88
+CUDA_MEMORY_FRACTION = 0.98
 TRAIN_NICE = 10
-TORCH_NUM_THREADS = 4   # [CONVOY FIX] was 8 — 4 threads eliminates lock convoy on this HW
+TORCH_NUM_THREADS = 12
 
 # Validation memory-safety knobs
-VAL_PREFETCH_FACTOR = 4   # [FIX] Match NUM_WORKERS=4 for pipeline prefetch
-TRAIN_PREFETCH_FACTOR = 4
-DET_EVAL_SCORE_THRESH = 0.5
+VAL_PREFETCH_FACTOR = 2   # 2 workers × 2 prefetch (was 4 — overkill for VAL_NUM_WORKERS=0)
+TRAIN_PREFETCH_FACTOR = 4  # 2 workers × 2 prefetch = 4 batches queued (was 4)
+# FIX: Lower DET_EVAL_SCORE_THRESH from 0.5 to 0.0 to avoid zero predictions when
+# model sigmoid scores cluster near 0.5 (e.g., [0.47, 0.53]) — all filtered out at 0.5.
+# With 0.0, at least the top-scoring prediction per location is kept for mAP calculation.
+# [FIX] Changed from 0.0 to 0.05: with threshold 0.0, ALL anchors (1.3M+) pass the filter,
+# top-300 are kept after NMS, and the false-positive flood drives AP to 0.0 by construction.
+# mAP needs a low-but-nonzero floor so the PR curve integrates correctly.
+# [FIX] Changed from 0.05 to 0.03: bias=-3.4 init produces scores ~0.033; 0.05 filters all
+# predictions even when model shows good localization (bestIoU_max=0.923, 554 preds at IoU>0.5).
+# 0.03 is high enough to filter the early-training false-positive flood but low enough to
+# capture predictions when the model is learning and scores are ~0.033-0.05.
+# [FIX 2026-06-04] Bumped to 0.1: with collapsed det head (flat scores ≈ 0.03 across 1.66M
+# predictions), 0.03 passes every anchor through NMS, drowning AP. 0.1 filters noise when
+# the head is untrained and still permits real detections once scores separate from the floor.
+# [FIX 2026-06-04 #2] Lowered to 0.02: at epoch=3, the actual crash_recovery.pth produces
+# score_max=0.076 and score_p99=0.022. With 0.1, EVERY prediction was rejected by the
+# keep_mask filter, leaving dp_boxes empty for all 64 images, so compute_ap_multi_thresh
+# had no positives and returned mAP=0. 0.02 is high enough to filter the random-init noise
+# floor (probe shows only 3107 anchors above 0.05 across 1.66M) but lets through the real
+# localizations that the probe confirms (151 preds at IoU>0.5 in batch 0 alone).
+DET_EVAL_SCORE_THRESH = 0.02
 DET_EVAL_MAX_PER_IMAGE = 300
 DET_EVAL_NMS_IOU_THRESH = 0.5  # NMS IoU threshold for detection evaluation
 SAVE_VAL_CONFUSION_MATRIX = False
@@ -320,7 +349,7 @@ GIOU_WEIGHT   = 2.0  # Doc 01 B.2: GIoU regression weight vs cls weight=1.0
 WING_OMEGA   = 0.05
 WING_EPSILON = 0.005
 
-CB_BETA  = 0.999
+CB_BETA  = 0.99
 CB_GAMMA = 2.0
 CB_LABEL_SMOOTHING = 0.1  # label smoothing for 74-class activity recognition
 
@@ -343,29 +372,53 @@ PRETRAIN_HFLIP_PROB  = 0.5   # probability of random horizontal flip
 # =========================================================================
 # Staged training (Doc 2 B.1)
 # =========================================================================
-STAGED_TRAINING = False   # All 5 heads active from epoch 0
+STAGED_TRAINING = False
 STAGE1_EPOCHS = 5    # Detection-only warmup
 STAGE2_EPOCHS = 10   # Add pose + head pose
 STAGE3_EPOCHS = 85   # Full multi-task with EMA — 5+10+85=100 total — was 35
 ACT_RAMP_EPOCHS = 5  # Activity loss ramp-up
-ACTIVITY_LOSS_CAP = 40.0  # Cap activity loss to prevent NaN cascade at Stage 3 entry (epoch 16) — loss spiked to 40.8 in prior runs
+ACTIVITY_LOSS_CAP = 80.0  # Cap activity loss to prevent NaN cascade at Stage 3 entry (epoch 16). 80 allows LDAM losses (~55) to pass without capping while still protecting against extreme spikes. Gradient = cap/loss at saturation: 80/400=0.2 (vs 40/400=0.1 with old cap).
+# Smooth loss caps: x if x<=cap, cap*(1+log(x/cap)) if x>cap. Gradient=1 below cap, cap/x above cap (never zero).
+DET_LOSS_CAP = 50.0      # Detection: GIoU + Focal cls loss cap
+POSE_LOSS_CAP = 30.0     # Body keypoint Wing Loss cap
+PSR_LOSS_CAP = 20.0      # PSR focal loss + temporal smooth cap
+HEAD_POSE_LOSS_CAP = 30.0  # Head pose 9-DoF MSE cap
+HEAD_POSE_POS_SCALE = 100.0  # Standardizes raw position (~110 in CSV) to O(1); also fixes mm/cm unit ambiguity
 STAGE3_WARMUP_EPOCHS = 3  # LR warmup epochs at Stage 3 entry to stabilize new head activation
+# PSR_WARMUP_EPOCHS disabled: STAGE3_WARMUP_EPOCHS already ramps psr_head via the
+# dedicated param group LR at train.py:2511-2526. Combining both ramps multiplied
+# gradient suppression (1/5 loss-side × 1/3 LR-side = 1/15 at epoch 16) — too
+# aggressive when used together. STAGE3_WARMUP alone is sufficient.
+PSR_WARMUP_EPOCHS = 0  # loss-side ramp disabled; STAGE3_WARMUP_EPOCHS handles psr_head
+CLEAR_FRAME_CACHE_EPOCH_END = True  # free ~5-7GB FRAME_CACHE between epochs
 
 # =========================================================================
 # LDAM-DRW for activity (Doc 01 §B.2 + Doc 2 C.2)
 # =========================================================================
-USE_LDAM_DRW = True   # Use LDAM+DRW instead of CB-Focal for activity
+# NOTE: USE_LDAM_DRW is set to False below for A/B testing (CB-Focal vs LDAM).
+# Set back to True for the full 100-epoch run after confirming activity loss moves.
+USE_LDAM_DRW = False  # [OPUS FIX #2] False=CB-Focal (A/B test for frozen act=0.86)
 LDAM_MAX_M = 0.5
 LDAM_S = 30
-LDAM_DRW_EPOCH = 60   # Switch to CB weights at this epoch (DRW deferred re-weighting) — audit spec: LDAM DRW at epoch 60
-# Doc 01 §B.2: DRW activates after epoch 60 when features are stable.
-# Recipe default of 60 confirmed correct for IndustReal long-tail classes.
+LDAM_DRW_EPOCH = 0    # Switch to CB weights at this epoch (DRW deferred re-weighting)
+# DRW activates immediately (epoch 0) when activity training begins, applying class-balanced
+# weights from the start. This corrects the prior misconfiguration where DRW was delayed
+# to epoch 60, resulting in 60 epochs of unweighted LDAM margin loss before CB re-weighting.
+# Features being "stable" at epoch 60 was not supported by IndustReal experimental evidence.
+
+# [OPUS FIX] LDAM_USE_DRW flag: when True, LDAMLoss.set_class_counts wires cb_weights
+# so that DRW applies class-balanced re-weighting at epoch >= LDAM_DRW_EPOCH.
+# Gate behind this flag for easy A/B testing vs LDAM margins only (no CB re-weighting).
+# NOTE: Set to True for full run after confirming CB-Focal moves the loss.
 
 # =========================================================================
 # PSR focal loss (Doc 01 §D + Doc 2 C.3)
 # =========================================================================
 PSR_FOCAL_ALPHA = 0.25
-PSR_FOCAL_GAMMA = 2.0
+PSR_FOCAL_GAMMA = 1.0  # was 2.0 — gamma=2.0 collapses PSR to trivial solution
+                       # (predicting 0 always gives near-zero gradient on easy negatives).
+                       # gamma=1.0 gives 40% gradient ratio (active vs inactive) vs
+                       # 2.6% with gamma=2.0, enabling the head to escape local minimum.
 
 # PSR sequence-mode training (Doc 01 §D.1) — THE biggest PSR unlock
 # =========================================================================
@@ -382,12 +435,12 @@ PSR_SEQ_EVERY_N_BATCHES = 10  # Draw one sequence batch every N normal batches
 USE_RANDAUGMENT = True   # Photometric augmentation for backbone
 MIXUP_ALPHA = 0.4
 CUTMIX_ALPHA = 1.0       # Alternate Mixup/CutMix each epoch
-RANDOM_TEMPORAL_STRIDE = True  # Random frame stride {2,3,4,5} per clip
+RANDOM_TEMPORAL_STRIDE = True  # Random frame stride {1,2,3} per clip (dataset.py line 875)
 
 # =========================================================================
 # Optimizer (Doc 2 E)
 # =========================================================================
-USE_LION = True         # Use Lion optimizer instead of AdamW (Doc 2 E.1)
+USE_LION = False        # [PAPER-ALIGN] Use AdamW (paper Table 3 specifies AdamW, not Lion)
 ONE_CYCLE_LR = False     # Use OneCycleLR instead of CosineAnnealingWarmRestarts
 USE_SWA = False          # Stochastic Weight Averaging at end of training
 SWA_LR = 1e-5
@@ -410,6 +463,12 @@ SAVE_VIZ_EPOCHS = 5
 NUM_VIZ_SAMPLES = 8
 MONITOR_LOG_INTERVAL = 10
 LOG_EFFICIENCY_EVERY = 10  # log GFLOPs/FPS every N epochs (0=disable)
+# Detection metrics: compute_det_metrics_extended does 11×(24 classes × 35084 frames) nested
+# Python loops = ~87 min/epoch. Set to True to enable, False to skip (epoch快了~87min).
+SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP computation each epoch
+# Efficiency metrics: compute_efficiency_metrics does 35 forward passes each epoch.
+# Set to True to skip except when (epoch % LOG_EFFICIENCY_EVERY == 0).
+SKIP_EFFICIENCY_METRICS = True  # True = only compute every LOG_EFFICIENCY_EVERY epochs
 
 # Kendall gradient sentinel logging (Doc 2 §B.1)
 # Log gradient norms of Kendall log_var params every N steps to detect
