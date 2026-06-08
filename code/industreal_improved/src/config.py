@@ -29,7 +29,7 @@ DEBUG_MODE         = False
 DEBUG_MAX_VIDEOS   = 2  # smoke test: 2 recordings only
 DEBUG_FRAME_STRIDE = 10
 
-SUBSET_RATIO = 0.05   # 5% subset for quick training
+SUBSET_RATIO = 0.10   # 10% subset (per run_10pct_train.sh benchmark; was 0.05 — silent killer)
 
 TRAIN_FRAME_STRIDE = 3  # A.2: stride 3 → T=16 covers 1.6s at 30FPS (median action)
 EVAL_FRAME_STRIDE  = 1
@@ -94,6 +94,9 @@ POPW_ROOT = Path('/media/newadmin/master/POPW/datasets/industreal')
 
 # Output root for runs (relative to this config file's directory)
 OUTPUT_ROOT = Path(__file__).parent / 'runs'
+# Allow override via environment variable for experiment naming
+if 'OUTPUT_ROOT_OVERRIDE' in os.environ:
+    OUTPUT_ROOT = Path(os.environ['OUTPUT_ROOT_OVERRIDE'])
 
 # Recordings root (train/val/test splits)
 RECORDINGS_ROOT = POPW_ROOT / 'recordings'
@@ -257,12 +260,12 @@ IMAGENET_STD  = [0.229, 0.224, 0.225]
 
 # =========================================================================
 # Training (RTX 3060 12 GB) — Optimized for VideoMAE + ConvNeXt + 5 heads + TMA + TemporalBank
-# NOTE: BATCH_SIZE=1 is REQUIRED for benchmark_full preset.
-# For quick training (DEBUG_MODE or SMOKE tests), BATCH_SIZE=6 is acceptable
-# with GRAD_ACCUM_STEPS=6 giving effective batch=32.
+# NOTE: BATCH_SIZE=1 is REQUIRED for RTX 3060 12GB with VideoMAE+ConvNeXt+TMA+TemporalBank+5 heads.
+# Previous BATCH_SIZE=6 OOM'd at ConvNeXt stage2 with batch=2 (only 64 MiB free).
+# BATCH_SIZE=1 with GRAD_ACCUM_STEPS=32 gives effective batch=32.
 # OOM fallback: train.py automatically halves batch if CUDA OOM is detected.
-BATCH_SIZE = 6        # Safe for quick training. Benchmark runs: use preset 'benchmark_full'.
-GRAD_ACCUM_STEPS = 6  # Keeps EFFECTIVE_BATCH=32
+BATCH_SIZE = 1        # [OOM FIX] Was 6 — RTX 3060 12GB cannot fit batch=2 with all 5 heads + VideoMAE
+GRAD_ACCUM_STEPS = 32 # Was 6 — increased to keep EFFECTIVE_BATCH=32
 EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
 
 VAL_BATCH_SIZE = 16   # Was 8→32; bumped again (VRAM headroom: 1.30GB/12.5GB used at batch_size=8)
@@ -342,7 +345,7 @@ MATMUL_PRECISION = 'high'
 # =========================================================================
 # Loss hyperparameters
 # =========================================================================
-FOCAL_ALPHA   = 0.25
+FOCAL_ALPHA   = 0.75  # was 0.25 — α=0.25 starves positives of gradient (99.8% bg). α=0.75 gives positives 3× weight vs background.
 FOCAL_GAMMA   = 2.0
 GIOU_WEIGHT   = 2.0  # Doc 01 B.2: GIoU regression weight vs cls weight=1.0
 
@@ -350,7 +353,11 @@ WING_OMEGA   = 0.05
 WING_EPSILON = 0.005
 
 CB_BETA  = 0.99
-CB_GAMMA = 2.0
+CB_GAMMA = 1.0  # was 2.0 — gamma=2.0 collapses activity to trivial solution
+                # (focuses predictions on 1-4 of 75 classes; dominant class reaches
+                # 100% by epoch 6 in v4 log). Mirrors PSR_FOCAL_GAMMA=1.0 fix at L418.
+                # gamma=1.0 gives ~10x more gradient on hard classes, allowing the
+                # head to escape the focal-γ=2.0 attractor and explore more classes.
 CB_LABEL_SMOOTHING = 0.1  # label smoothing for 74-class activity recognition
 
 # PSR temporal smoothing weight (transition-aware loss)
@@ -372,7 +379,7 @@ PRETRAIN_HFLIP_PROB  = 0.5   # probability of random horizontal flip
 # =========================================================================
 # Staged training (Doc 2 B.1)
 # =========================================================================
-STAGED_TRAINING = False
+STAGED_TRAINING = True
 STAGE1_EPOCHS = 5    # Detection-only warmup
 STAGE2_EPOCHS = 10   # Add pose + head pose
 STAGE3_EPOCHS = 85   # Full multi-task with EMA — 5+10+85=100 total — was 35
@@ -397,7 +404,7 @@ CLEAR_FRAME_CACHE_EPOCH_END = True  # free ~5-7GB FRAME_CACHE between epochs
 # =========================================================================
 # NOTE: USE_LDAM_DRW is set to False below for A/B testing (CB-Focal vs LDAM).
 # Set back to True for the full 100-epoch run after confirming activity loss moves.
-USE_LDAM_DRW = False  # [OPUS FIX #2] False=CB-Focal (A/B test for frozen act=0.86)
+USE_LDAM_DRW = True   # [OPUS FIX #2 + USER-AUTH] LDAM+DRW (long-tail fix, +~2% Top-1)
 LDAM_MAX_M = 0.5
 LDAM_S = 30
 LDAM_DRW_EPOCH = 0    # Switch to CB weights at this epoch (DRW deferred re-weighting)
@@ -410,6 +417,7 @@ LDAM_DRW_EPOCH = 0    # Switch to CB weights at this epoch (DRW deferred re-weig
 # so that DRW applies class-balanced re-weighting at epoch >= LDAM_DRW_EPOCH.
 # Gate behind this flag for easy A/B testing vs LDAM margins only (no CB re-weighting).
 # NOTE: Set to True for full run after confirming CB-Focal moves the loss.
+LDAM_USE_DRW = True
 
 # =========================================================================
 # PSR focal loss (Doc 01 §D + Doc 2 C.3)
@@ -426,8 +434,14 @@ PSR_FOCAL_GAMMA = 1.0  # was 2.0 — gamma=2.0 collapses PSR to trivial solution
 # temporal Transformer dormant. Sequence-mode trains on contiguous T-frame
 # windows where the Transformer is properly engaged.
 USE_PSR_SEQUENCE_MODE = True   # Doc 01 §D.2: PSR sequence-mode — THE biggest PSR unlock
-PSR_SEQUENCE_LENGTH = 4        # T=4 keeps memory bounded on 12GB GPU
+PSR_SEQUENCE_LENGTH = 4        # stayed at 4 — T=8 caused CUDA OOM with SEQ_EVERY_N_BATCHES=2
+                              # (sequence-mode memory doubled and fires 5x more often). T=4 is
+                              # the memory-bounded choice; the bigger unlock is below.
 PSR_SEQ_EVERY_N_BATCHES = 10  # Draw one sequence batch every N normal batches
+
+# Fix 1 (2026-06-06): penalize constant per-frame PSR predictions in T=1 mode.
+# Stage 3 epoch 16 collapsed logit std to 0.12%; this penalty keeps it > 1e-3.
+PSR_SENSITIVITY_WEIGHT = 0.01  # 5% of typical binary-focal magnitude — gentle nudge
 
 # =========================================================================
 # Augmentation (Doc 2 D)
@@ -562,15 +576,19 @@ def update_dynamic_paths():
     """Recompute all dynamic paths after config changes."""
     global OUTPUT_ROOT, CHECKPOINT_DIR, LOG_DIR, EVAL_SAVE_DIR
 
-    parts = ['full_multi_task']
-    if USE_TMA_CELL:
-        parts.append('tma')
-    if USE_TEMPORAL_BANK:
-        parts.append('tbank')
-    if BENCHMARK_MODE:
-        parts.append('benchmark')
+    # Don't override if set by environment variable
+    if 'OUTPUT_ROOT_OVERRIDE' in os.environ:
+        OUTPUT_ROOT = Path(os.environ['OUTPUT_ROOT_OVERRIDE'])
+    else:
+        parts = ['full_multi_task']
+        if USE_TMA_CELL:
+            parts.append('tma')
+        if USE_TEMPORAL_BANK:
+            parts.append('tbank')
+        if BENCHMARK_MODE:
+            parts.append('benchmark')
 
-    OUTPUT_ROOT = Path(__file__).parent / 'runs' / '_'.join(parts)
+        OUTPUT_ROOT = Path(__file__).parent / 'runs' / '_'.join(parts)
     CHECKPOINT_DIR = OUTPUT_ROOT / 'checkpoints'
     LOG_DIR        = OUTPUT_ROOT / 'logs'
     EVAL_SAVE_DIR  = OUTPUT_ROOT / 'eval_outputs'
