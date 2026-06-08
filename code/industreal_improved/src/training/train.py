@@ -1567,6 +1567,65 @@ def _log_kendall_gradient_sentinel(criterion, step_idx: int, log_interval: int) 
         pass
 
 
+def _on_stage_transition(
+    model,
+    criterion,
+    current_stage: int,
+    epoch: int,
+    backbone_type: str,
+    stage3_warmup_state: dict = None,
+) -> None:
+    """Handle stage transition at epoch boundary.
+
+    Responsibilities:
+    1. Call _check_stage_transition for logging/assertions on param counts.
+    2. PRESERVE learned Kendall log_var values (do NOT reset to init).
+    3. Activate Stage 3 warmup LR ramp for activity_head + psr_head.
+
+    The old implementation reset log_var_act and log_var_psr to 0.0 at Stage 3
+    entry (Bug #9 reincarnation prevention). This destroyed learned uncertainty
+    information from Stage 2. Now that log_var values are clamped before every
+    forward (_clamp_kendall_log_vars in Task 1), the reset is unnecessary.
+
+    NOTE: EMA reinit at Stage 3 is intentionally NOT in this helper — it needs
+    the caller's ``device`` variable and ``ema`` reassignment, so it stays
+    inline in the training loop.
+    """
+    # 1. Log trainable param counts and Kendall log_sigma values
+    #    Guard against model=None (test path) — _check_stage_transition
+    #    accesses model.parameters() unconditionally if LOG_STAGE_TRANSITION.
+    if model is not None:
+        _check_stage_transition(model, criterion, current_stage, epoch, backbone_type)
+
+    # 2. Preserve Kendall log_var values — do NOT reset.
+    #    In Stage 2, log_var_act and log_var_psr drift because their tasks are
+    #    not active. But resetting them to 0.0 at Stage 3 destroys whatever
+    #    information Stage 2 accumulated. The per-step clamp in
+    #    _clamp_kendall_log_vars keeps all values in [-4, 2].
+    if current_stage == 3 and criterion is not None:
+        logger.info(
+            '[Epoch %d] Stage 3 entry: preserving learned Kendall log_vars  '
+            '(act=%.3f psr=%.3f  det=%.3f pose=%.3f)'
+            % (epoch,
+               criterion.log_var_act.item(), criterion.log_var_psr.item(),
+               criterion.log_var_det.item(), criterion.log_var_pose.item())
+        )
+
+    # 3. Activate Stage 3 warmup LR ramp from config.py
+    if current_stage == 3 and stage3_warmup_state is not None:
+        if not stage3_warmup_state['active'] and stage3_warmup_state['warmup_epochs'] > 0:
+            stage3_warmup_state['active'] = True
+            stage3_warmup_state['start_epoch'] = epoch
+            stage3_warmup_state['epochs_remaining'] = stage3_warmup_state['warmup_epochs']
+            logger.info(
+                '[Epoch %d] Stage 3 warmup activated: %d-epoch LR ramp on '
+                'activity_head + psr_head (param_group_idx=%d)'
+                % (epoch,
+                   stage3_warmup_state['warmup_epochs'],
+                    stage3_warmup_state['param_group_idx'])
+            )
+
+
 def _log_loss_component_breakdown(
     loss_dict: Dict,
     stage: int,
@@ -2430,31 +2489,12 @@ def main(args):
             current_stage = get_stage(epoch)
             prev_stage = get_stage(epoch - 1) if epoch > 0 else current_stage
             if current_stage != prev_stage:
-                _check_stage_transition(model, criterion, current_stage, epoch, C.BACKBONE)
-
-                # Doc 2 §C.1: Kendall log_var reset at Stage 3 entry.
-                # During Stage 2, log_var_act drifts (prec_act=0 so only lv_act is trained).
-                # Fresh precision values at Stage 3 start prevent suboptimal activity/PSR
-                # precision from carrying over. (Bug #9 reincarnation prevention.)
-                if current_stage == 3:
-                    criterion.log_var_act.data.fill_(0.0)
-                    criterion.log_var_psr.data.fill_(0.0)
-                    logger.info(
-                        '[Epoch %d] Stage 3 entry: reset log_var_act=0, log_var_psr=0 '
-                        '(were drifted from Stage 2)' % epoch
-                    )
-                    # [FIX] STAGE3_WARMUP_EPOCHS ramp from config.py:378
-                    # Begin warmup ramp for newly unfrozen activity_head + psr_head.
-                    if not stage3_warmup_state['active'] and stage3_warmup_state['warmup_epochs'] > 0:
-                        stage3_warmup_state['active'] = True
-                        stage3_warmup_state['start_epoch'] = epoch
-                        stage3_warmup_state['epochs_remaining'] = stage3_warmup_state['warmup_epochs']
-                        logger.info(
-                            '[Epoch %d] Stage 3 warmup activated: %d-epoch LR ramp on '
-                            'activity_head + psr_head (param_group_idx=%d)'
-                            % (epoch, stage3_warmup_state['warmup_epochs'],
-                               stage3_warmup_state['param_group_idx'])
-                        )
+                # Stage transition: log params, PRESERVE log_vars (do NOT reset),
+                # activate Stage 3 warmup LR ramp.
+                _on_stage_transition(
+                    model, criterion, current_stage, epoch, C.BACKBONE,
+                    stage3_warmup_state=stage3_warmup_state,
+                )
 
                 # Doc 2 §C.2: Fresh EMA at Stage 3 entry.
                 # Use epoch-specific decay from the EMA schedule (not the hardcoded
