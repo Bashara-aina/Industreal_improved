@@ -902,6 +902,11 @@ def train_one_epoch(
     for step, (images, targets) in enumerate(pbar):
         total_steps = step + 1
 
+        # [FIX] Clamp Kendall log_var parameters to safe range BEFORE forward
+        # so the gradient we compute this step is from bounded values, not
+        # corrupted ones that escaped the previous step's clamp.
+        _clamp_kendall_log_vars(criterion)
+
         # --- GPU MEMORY SNAPSHOT every 10 batches (skip step 0) ---
         if step > 0 and step % 10 == 0:
             mem_alloc = torch.cuda.memory_allocated(device) / 1024**3
@@ -1039,7 +1044,7 @@ def train_one_epoch(
                 )
                 scaler.step(optimizer)
                 scaler.update()
-                if ema is not None and stage >= 3:
+                if ema is not None and (not staged_training or stage >= 3):
                     ema.update()
                 optimizer.zero_grad(set_to_none=True)
             # [FIX #1] Restore criterion flags AFTER PSR-only sequence batch
@@ -1117,6 +1122,7 @@ def train_one_epoch(
                     nan_skips += 1
                     optimizer.zero_grad(set_to_none=True)
                     del outputs, loss, loss_dict
+                    del images, targets
                     torch.cuda.empty_cache()
                     continue
                 loss = torch.tensor(_det_val / float(accum_steps),
@@ -1135,6 +1141,7 @@ def train_one_epoch(
                     nan_skips += 1
                     optimizer.zero_grad(set_to_none=True)
                     del outputs, loss, loss_dict
+                    del images, targets
                     torch.cuda.empty_cache()
                     continue
                 loss = torch.tensor((_det_val + _hp_val) / float(accum_steps),
@@ -1157,6 +1164,7 @@ def train_one_epoch(
                     nan_skips += 1
                     optimizer.zero_grad(set_to_none=True)
                     del outputs, loss, loss_dict
+                    del images, targets
                     torch.cuda.empty_cache()
                     continue
                 loss = torch.tensor((_det_val + _hp_val + _act_val + _psr_val) / float(accum_steps),
@@ -1179,17 +1187,40 @@ def train_one_epoch(
                 )
             optimizer.zero_grad(set_to_none=True)
             del outputs, loss, loss_dict
+            del images, targets
             torch.cuda.empty_cache()
             continue
-        # Guard: clamp per-component losses to prevent NaN from propagating into Kendall total
+        # Guard: clamp per-component losses to prevent NaN/Inf from propagating into Kendall total.
         # (only needed when Kendall is active; staged non-Kendall losses are already scalar tensors)
-        # Each NaN/inf is replaced with 1e-4 (tiny but > 0 to allow gradient flow).
+        # Each NaN/Inf is replaced with 1e-4 (tiny but > 0 to allow gradient flow).
+        # HARDENING (2026-06-06): removed the `or v < 1e-6` floor — that was a bug. The staged
+        # training override (train.py:1090-1095) sets loss_dict['psr'] = 0.0 (and 'activity'
+        # when frozen), and the old floor treated 0.0 as "vanishing" and silently rewrote it
+        # to 1e-4. That substitution is what made `psr=0.0001` appear in the cap100 log even
+        # though the PSR head was producing a legitimate 0.0. We now only clamp non-finite
+        # values and surface the issue (logger.warning rate-limited to first 10) and abort
+        # if the clamp trips more than 100 times (which would indicate real divergence).
         if criterion.use_kendall:
             for key in ['det', 'det_cls', 'det_reg', 'pose', 'head_pose', 'activity', 'psr']:
                 v = loss_dict.get(key)
-                if v is not None:
-                    if not math.isfinite(v) or v < 1e-6:
-                        loss_dict[key] = 1e-4
+                if v is not None and not math.isfinite(v):
+                    if not hasattr(criterion, '_kendall_clamp_count'):
+                        criterion._kendall_clamp_count = 0
+                        criterion._kendall_clamp_logged = 0
+                    criterion._kendall_clamp_count += 1
+                    if criterion._kendall_clamp_logged < 10:
+                        logger.warning(
+                            f'  [KENDALL_NAN] {key}={v} at epoch {epoch} step {step + 1} '
+                            f'(clamp #{criterion._kendall_clamp_count}) — replacing with 1e-4'
+                        )
+                        criterion._kendall_clamp_logged += 1
+                    if criterion._kendall_clamp_count > 100:
+                        raise RuntimeError(
+                            f'KENDALL_NAN clamp count exceeded 100 '
+                            f'(current #{criterion._kendall_clamp_count} at epoch {epoch} '
+                            f'step {step + 1}) — divergence detected, aborting training'
+                        )
+                    loss_dict[key] = 1e-4
             # [DEBUG] Per-batch loss + model output shape logging every _debug_interval batches
             if step > 0 and step % _debug_interval == 0:
                 # Log all individual loss components
@@ -1214,12 +1245,10 @@ def train_one_epoch(
             _log_kendall_gradient_sentinel(criterion, step, log_kendall_every)
 
         if (step + 1) % accum_steps == 0 or (step + 1) == len(loader):
-            # --- Kendall log_var clamp BEFORE backward: prevent NaN gradients from exploding log_vars.
-            # clamp BEFORE unscale/clip so corrupted values don't corrupt gradients.
-            criterion.log_var_det.data.clamp_(-4.0, 2.0)
-            criterion.log_var_pose.data.clamp_(-4.0, 2.0)
-            criterion.log_var_act.data.clamp_(-4.0, 2.0)
-            criterion.log_var_psr.data.clamp_(-4.0, 2.0)
+            # [REMOVED] Kendall log_var clamp moved to _clamp_kendall_log_vars()
+            # at the start of each step. The old block here was AFTER backward
+            # (despite the comment saying "before"), so the current step's
+            # gradient was always computed from corrupted values.
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(
                 list(model.parameters()) + list(criterion.parameters()),
@@ -1227,7 +1256,7 @@ def train_one_epoch(
             )
             scaler.step(optimizer)
             scaler.update()
-            if ema is not None and stage >= 3:
+            if ema is not None and (not staged_training or stage >= 3):
                 ema.update()
             optimizer.zero_grad(set_to_none=True)
 
@@ -1332,6 +1361,22 @@ def train_one_epoch(
             except Exception:
                 pass
 
+        # [MEMORY LEAK FIX] Release per-step GPU/CPU tensors so they can be garbage
+        # collected. Without this, `images` and `targets` retain the full batch
+        # (~250 MB) until the next loop iteration overwrites them, and pin_memory
+        # + the dataloader's internal buffers can keep a second copy pinned,
+        # doubling peak VRAM. With it, the next .to(device, non_blocking=True) call
+        # overwrites the slot immediately and CUDA caching allocator can reuse it.
+        # NOTE: Do NOT `del loss_dict` here — line 1366 reads it after the loop
+        # to look up the current-batch loss breakdown, and `del` would mark
+        # `loss_dict` as a local in this scope so the post-loop read fails with
+        # UnboundLocalError. The dict itself is small (4 keys, ~200 bytes).
+        del images, targets
+        if 'outputs' in locals():
+            del outputs
+        if 'loss' in locals():
+            del loss
+
     total_all_steps = total_steps + seq_steps
     if nan_skips > 0:
         logger.warning(f'  Epoch {epoch}: skipped {nan_skips} NaN/Inf batches total')
@@ -1349,7 +1394,8 @@ def train_one_epoch(
             src = loss_dict.get(k, 0.0)
         else:
             src = v
-        if isinstance(src, float) and math.isfinite(src) and src >= 0.0:
+        is_log_var = k.startswith('log_var_')
+        if isinstance(src, float) and math.isfinite(src) and (is_log_var or src >= 0.0):
             avg[k] = v / max(num_batches, 1)
         else:
             avg[k] = 0.0
@@ -1361,6 +1407,7 @@ def train_one_epoch(
     avg['epoch_time'] = time.time() - t_start
     avg['nan_skips'] = nan_skips
     avg['stage'] = stage
+    avg['num_batches'] = num_batches  # [FIX] needed by PRE_VAL_GUARD in main() — must reflect actual batches processed
 
     # Warn ONLY when ALL four task losses are simultaneously 0.0 (global loss not being computed)
     # [FIX] Give non-NaN fallback values so training continues rather than poisoning metrics
@@ -1374,6 +1421,24 @@ def train_one_epoch(
         # Replace 0.0 with small positive fallback so metrics remain valid
         for k in task_keys:
             avg[k] = 1e-4  # non-NaN, non-zero so downstream _safe_log returns this
+
+    # [FIX] GUARD: train_one_epoch must process at least 1 batch. If num_batches==0,
+    # train_one_epoch returned without doing any work — raise RuntimeError so the
+    # retry loop in the epoch handler catches it. Without this guard, a silent
+    # return-with-no-output causes eval to run next (parent process restart) with
+    # no training having happened for this epoch.
+    if num_batches == 0:
+        raise RuntimeError(
+            f'train_one_epoch(epoch={epoch}) returned with num_batches=0 — '
+            f'no training batches processed. Dataloader may be empty or crashed. '
+            f'Dataset size: {len(loader.dataset) if hasattr(loader, "dataset") else "unknown"}'
+        )
+
+    logger.info(
+        f'  [Epoch {epoch}] train completed: {num_batches} batches, '
+        f'steps={total_all_steps}, time={avg["epoch_time"]:.0f}s, nan_skips={nan_skips}'
+    )
+
     return avg
 
 
@@ -1448,7 +1513,8 @@ def _compute_combined_metric(
     macro_f1_psr: float,
 ) -> float:
     """Combined validation metric for 4-task IndustReal."""
-    head_pose_acc = 1.0 / (1.0 + mae_head_pose)
+    mae_safe = max(mae_head_pose, 1e-6)
+    head_pose_acc = 1.0 / (1.0 + mae_safe)
     combined = (
         _W_DET * map50
         + _W_ACT * macro_f1_act
@@ -1461,6 +1527,24 @@ def _compute_combined_metric(
 # ===========================================================================
 # Monitoring Hooks (Doc 2 §B)
 # ===========================================================================
+
+def _clamp_kendall_log_vars(criterion):
+    """Clamp Kendall log_var parameters to a numerically safe range.
+
+    Called at the start of every training step (BEFORE forward) so the
+    log_var values that participate in the next forward are always within
+    bounds. The previous implementation clamped AFTER backward
+    (train.py:1245-1248), which is too late: the current step's gradient
+    was already computed from the corrupted values, and only future steps
+    benefit.
+    """
+    if not hasattr(criterion, 'log_var_det'):
+        return
+    criterion.log_var_det.data.clamp_(-4.0, 2.0)
+    criterion.log_var_pose.data.clamp_(-4.0, 2.0)
+    criterion.log_var_act.data.clamp_(-4.0, 2.0)
+    criterion.log_var_psr.data.clamp_(-4.0, 2.0)
+
 
 def _log_kendall_gradient_sentinel(criterion, step_idx: int, log_interval: int) -> None:
     """
@@ -1693,8 +1777,8 @@ def _compare_raw_vs_ema(
             val_ds,
             'val',
             CFG_VAL_BATCH_SIZE,
-            2,
-            prefetch=2,
+            0,          # HARDENED: always 0 — no worker management (matches val hardening)
+            prefetch=1,
         )
         raw_metrics = evaluate_all(
             model,
@@ -1928,7 +2012,7 @@ def main(args):
             f'samples ({seq_len} frames/window, stride=1)'
         )
 
-    class_counts = train_ds.class_counts[:C.NUM_CLASSES_ACT - 1]  # ActivityHead outputs 74, not 75
+    class_counts = train_ds.class_counts  # full 75-element bincount (indices 0-74 for action_ids 0-74); set_class_counts handles the shift via counts[1:]
 
     logger.info(f'Training samples  : {len(train_ds):,}')
     logger.info(f'Validation samples: {len(val_ds):,}')
@@ -1999,18 +2083,48 @@ def main(args):
             f'{psr_prev.numpy().round(3).tolist()}'
         )
 
-    backbone_params, head_params, bias_params = [], [], []
+    backbone_params, head_params, activity_psr_params, bias_params = [], [], [], []
+    videomae_params = []
     loss_params = list(criterion.parameters())
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        if any(ln in name for ln in ['layer0', 'layer1', 'layer2', 'layer3', 'layer4']):
+        # [HOT-FIX 2026-06-07] Use `name.startswith('backbone.')` instead of
+        # ResNet-only `['layer0', ..., 'layer4']` substring filter. The backbone
+        # is ConvNeXt-Tiny, whose timm names look like
+        # `backbone.model.features.<stage>.<block>.<op>.weight` — none of these
+        # contain the literal 'layerN' substring, so all 137 ConvNeXt backbone
+        # params fell through to `head_params` (lr=1e-4, 10× the intended lr=1e-5
+        # backbone rate). The crash_recovery.pth inspection confirmed
+        # `optimizer.param_groups[0]` (backbone_params) is empty (params=0) and
+        # group[1] (head_params) contains 137 params. `name.startswith('backbone.')`
+        # is a backbone-name-agnostic match that routes ConvNeXt params correctly
+        # without breaking the ResNet path (ResNet has `backbone.model.layerN.*`
+        # which also starts with 'backbone.').
+        if name.startswith('backbone.'):
             backbone_params.append(param)
         elif 'bias' in name:
             # Doc 03: bias params get 0.3× head LR to prevent collapse from locked EMA
             bias_params.append(param)
+        elif 'activity_head' in name or 'psr_head' in name:
+            # [FIX] STAGE3_WARMUP_EPOCHS ramp from config.py:378
+            # Split activity_head + psr_head into a separate param group so the
+            # Stage 3 warmup ramp can scale their LR independently from
+            # already-warm det / head_pose heads.
+            activity_psr_params.append(param)
         else:
             head_params.append(param)
+    # [OPUS FIX #3] Pre-register VideoMAE stream params as a separate param group
+    # with lr=0. The stream is frozen at startup (requires_grad=False on encoder),
+    # so its params are excluded by the requires_grad filter above. Adding them
+    # here with lr=0 lets OneCycleLR see a constant param_groups length across
+    # the run, so the zip(strict=True) at scheduler.step() (was line 2526) does
+    # not crash when unfreeze() flips requires_grad=True at VIDEOMAE_UNFREEZE_EPOCH.
+    # At unfreeze we toggle optimizer.param_groups[VIDEOMAE_PARAM_GROUP_IDX]['lr']
+    # in-place instead of calling add_param_group.
+    if hasattr(model, 'videomae_stream') and bool(getattr(C, 'USE_VIDEOMAE', False)):
+        for p in model.videomae_stream.parameters():
+            videomae_params.append(p)
 
     use_lion = bool(getattr(C, 'USE_LION', False))
 
@@ -2031,39 +2145,57 @@ def main(args):
         use_lion = False
     if use_lion:
         param_groups = [
-            {'params': backbone_params, 'lr': backbone_lr * 0.3},
-            {'params': head_params,      'lr': head_lr},
-            {'params': bias_params,       'lr': bias_lr},
+            {'params': backbone_params,      'lr': backbone_lr * 0.3},
+            {'params': head_params,           'lr': head_lr},
+            {'params': activity_psr_params,   'lr': head_lr},
+            {'params': bias_params,           'lr': bias_lr},
+            {'params': videomae_params,       'lr': 0.0},  # [OPUS FIX #3] pre-registered frozen; lr toggled at unfreeze
         ]
         if loss_params:
             param_groups.append({'params': loss_params, 'lr': head_lr})
         optimizer = Lion(param_groups, weight_decay=C.WEIGHT_DECAY * 3)
-        logger.info('Optimizer: Lion (backbone=0.1×, heads=1×, bias=0.3×)')
+        logger.info('Optimizer: Lion (backbone=0.1×, heads=1×, act/psr=1×, bias=0.3×)')
     else:
         param_groups = [
-            {'params': backbone_params, 'lr': backbone_lr},
-            {'params': head_params,      'lr': head_lr},
-            {'params': bias_params,       'lr': bias_lr},
+            {'params': backbone_params,      'lr': backbone_lr},
+            {'params': head_params,           'lr': head_lr},
+            {'params': activity_psr_params,   'lr': head_lr},
+            {'params': bias_params,           'lr': bias_lr},
+            {'params': videomae_params,       'lr': 0.0},  # [OPUS FIX #3] pre-registered frozen; lr toggled at unfreeze
         ]
         if loss_params:
             param_groups.append({'params': loss_params, 'lr': head_lr})
         optimizer = torch.optim.AdamW(param_groups, weight_decay=C.WEIGHT_DECAY)
-        logger.info('Optimizer: AdamW with differential LR (backbone=0.1×, heads=1×, bias=0.3×)')
+        logger.info('Optimizer: AdamW with differential LR (backbone=0.1×, heads=1×, act/psr=1×, bias=0.3×)')
+
+    # Param-group index map (used by Stage 3 warmup ramp + videomae unfreeze toggle):
+    #   0 = backbone, 1 = head, 2 = activity_psr, 3 = bias, 4 = videomae, [5 = loss if loss_params]
+    ACTIVITY_PSR_PARAM_GROUP_IDX = 2
+    VIDEOMAE_PARAM_GROUP_IDX = 4
 
     warmup = LinearLR(optimizer, start_factor=0.1, total_iters=C.WARMUP_EPOCHS)
     if bool(getattr(C, 'ONE_CYCLE_LR', False)):
         # Doc 2 E.2: OneCycleLR with super-convergence
         # High peak LR (5e-4) + aggressive cosine decay
-        # Doc 01 B.3 fix: make max_lr dynamic based on actual num param groups
-        n_groups = len(param_groups)
         backbone_lr_local = C.BASE_LR * 0.1
         head_lr_local = C.BASE_LR
         bias_lr_local = head_lr_local * BIAS_LR_FACTOR
-        max_lr = (
-            [backbone_lr_local * 0.5]  # backbone: lower LR for transformer backbone
-            + [head_lr_local * 0.5] * (n_groups - 2)  # head params groups
-            + [bias_lr_local * 0.5]   # bias params group
-        )
+        # [OPUS FIX #3] EXPLICIT per-group max_lr. The previous generic formula
+        # ([backbone] + [head]*(N-2) + [bias]) implicitly assumed the last non-loss
+        # group is bias. With videomae pre-registered between bias and loss, that
+        # tail becomes videomae (lr=0), not bias — so *bias_lr_local*0.5 would
+        # land on the videomae slot. We name each group explicitly.
+        # If you add/remove a param group, update this list AND
+        # VIDEOMAE_PARAM_GROUP_IDX above.
+        max_lr = [
+            backbone_lr_local * 0.5,  # idx 0: backbone
+            head_lr_local * 0.5,      # idx 1: head
+            head_lr_local * 0.5,      # idx 2: activity_psr
+            bias_lr_local * 0.5,      # idx 3: bias
+            0.0,                      # idx 4: videomae (frozen at start, toggled at unfreeze)
+        ]
+        if loss_params:
+            max_lr.append(head_lr_local * 0.5)  # idx 5 (if present): loss
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=max_lr,
@@ -2099,6 +2231,20 @@ def main(args):
         'active': False,
         'param_group_idx': -1,
         'unfreeze_lr': 0.0,
+        'epochs_remaining': 0,
+    }
+
+    # [FIX] STAGE3_WARMUP_EPOCHS ramp from config.py:378
+    # Activated when entering Stage 3 (epoch 16+). For the first
+    # STAGE3_WARMUP_EPOCHS epochs after entry, activity_head + psr_head LR is
+    # scaled by (epoch - stage3_start + 1) / STAGE3_WARMUP_EPOCHS so the
+    # newly-unfrozen heads don't blow up gradient magnitude right after Stage 2.
+    stage3_warmup_state = {
+        'active': False,
+        'param_group_idx': ACTIVITY_PSR_PARAM_GROUP_IDX,
+        'base_lr': head_lr,
+        'start_epoch': -1,
+        'warmup_epochs': int(getattr(C, 'STAGE3_WARMUP_EPOCHS', 3)),
         'epochs_remaining': 0,
     }
 
@@ -2252,9 +2398,33 @@ def main(args):
 
     try:
         _train_start_epoch = _override_start_epoch if _override_start_epoch is not None else start_epoch
+        # [FIX 2026-06-06] Warn loudly if epoch range is empty (e.g., --max-epochs 1 + --resume from
+        # epoch-0 checkpoint → range(1, 1) silently does no training and the user gets
+        # "Best combined metric: 0.0000" with no explanation). Log + fall through to finalization
+        # so the (unchanged) checkpoint is preserved. The for loop body will be a no-op.
+        if _train_start_epoch >= C.EPOCHS:
+            logger.warning(
+                f'  [EPOCH_LOOP_EMPTY] _train_start_epoch={_train_start_epoch} >= C.EPOCHS={C.EPOCHS}. '
+                f'Nothing to train — skipping epoch loop and proceeding to finalization. '
+                f'If this is unexpected, use --max-epochs (e.g. --max-epochs {_train_start_epoch + 5}) '
+                f'OR drop --resume for a fresh run.'
+            )
         for epoch in range(_train_start_epoch, C.EPOCHS):
             logger.info(f'\n--- Epoch {epoch}/{C.EPOCHS - 1} ---')
             criterion.set_epoch(epoch)
+
+            # [MEMORY LEAK FIX] At epoch start (skip epoch 0 — cache is fresh),
+            # release the previous epoch's FRAME_CACHE so the OS can reclaim
+            # ~5-7GB RAM. The next epoch's loader will re-preload on first access.
+            if epoch > _train_start_epoch and getattr(C, 'CLEAR_FRAME_CACHE_EPOCH_END', True):
+                try:
+                    from data.industreal_dataset import clear_frame_cache
+                    clear_frame_cache()
+                    import gc as _gc
+                    _gc.collect()
+                    torch.cuda.empty_cache()
+                except Exception as _exc:
+                    logger.warning(f'  [MEMORY] clear_frame_cache failed: {_exc}')
 
             # Doc 2 §B.2: Stage transition validation — log trainable param counts
             current_stage = get_stage(epoch)
@@ -2273,36 +2443,106 @@ def main(args):
                         '[Epoch %d] Stage 3 entry: reset log_var_act=0, log_var_psr=0 '
                         '(were drifted from Stage 2)' % epoch
                     )
+                    # [FIX] STAGE3_WARMUP_EPOCHS ramp from config.py:378
+                    # Begin warmup ramp for newly unfrozen activity_head + psr_head.
+                    if not stage3_warmup_state['active'] and stage3_warmup_state['warmup_epochs'] > 0:
+                        stage3_warmup_state['active'] = True
+                        stage3_warmup_state['start_epoch'] = epoch
+                        stage3_warmup_state['epochs_remaining'] = stage3_warmup_state['warmup_epochs']
+                        logger.info(
+                            '[Epoch %d] Stage 3 warmup activated: %d-epoch LR ramp on '
+                            'activity_head + psr_head (param_group_idx=%d)'
+                            % (epoch, stage3_warmup_state['warmup_epochs'],
+                               stage3_warmup_state['param_group_idx'])
+                        )
 
                 # Doc 2 §C.2: Fresh EMA at Stage 3 entry.
-                # EMA decay=0.999 tracks frozen params for ~700 steps before catching up.
-                # Starting fresh EMA at Stage 3 ensures activity/PSR heads (random init)
-                # are tracked from epoch 1 of their training, not from epoch 0.
+                # Use epoch-specific decay from the EMA schedule (not the hardcoded
+                # 0.999 from EMA_DECAY): at Stage 3 epoch 1 the decay is 0.999, but
+                # by epoch 18+ it should be 0.9999. Hardcoding 0.999 here meant
+                # shadow weights lagged the model for ~700 steps past the schedule.
                 if current_stage == 3 and ema is not None:
                     from model import EMA as EMAClass
-                    ema = EMAClass(model, decay=EMA_DECAY, device=device)
+                    stage3_decay = _get_ema_decay(epoch)
+                    ema = EMAClass(model, decay=stage3_decay, device=device)
                     logger.info(
-                        '[Epoch %d] Stage 3: reinitialized EMA from current model state' % epoch
+                        '[Epoch %d] Stage 3: reinitialized EMA from current model state (decay=%.4f)'
+                        % (epoch, stage3_decay)
                     )
 
             # Doc 01 §B.1: Unfreeze VideoMAE stream at configured epoch to let the
             # temporal stream adapt to IndustReal kinematics after backbone is warmed up.
-            # This is a one-time event — subsequent epochs skip the check.
+            # [HOT-FIX 2026-06-07] Cumulative `>=` + idempotency gate (was `==` one-shot):
+            # the old strict-equality check missed unfreeze on resume runs because the
+            # epoch counter had already advanced past VIDEOMAE_UNFREEZE_EPOCH. The gate
+            # `optimizer.param_groups[VIDEOMAE_PARAM_GROUP_IDX]['lr'] == 0.0` is
+            # state-tied (not epoch-tied), so it survives resume cleanly: a fresh
+            # pre-unfreeze resume fires once when the first qualifying epoch hits,
+            # subsequent epochs see lr != 0.0 and skip.
             unfreeze_epoch = int(getattr(C, 'VIDEOMAE_UNFREEZE_EPOCH', -1))
-            if unfreeze_epoch >= 0 and epoch == unfreeze_epoch and C.USE_VIDEOMAE:
+            if (
+                unfreeze_epoch >= 0
+                and epoch >= unfreeze_epoch
+                and C.USE_VIDEOMAE
+                and len(optimizer.param_groups) > VIDEOMAE_PARAM_GROUP_IDX
+                and optimizer.param_groups[VIDEOMAE_PARAM_GROUP_IDX]['lr'] == 0.0
+            ):
                 if hasattr(model, 'videomae_stream'):
                     videomae_lr = float(getattr(C, 'VIDEOMAE_UNFREEZE_LR', 1e-5))
-                    opt_params = model.videomae_stream.unfreeze(lr=videomae_lr)
-                    optimizer.add_param_group(opt_params[0])
+                    # [OPUS FIX #3] unfreeze() flips requires_grad=True on the
+                    # encoder (side effect we still need); we discard its return
+                    # value because the videomae param group was already
+                    # pre-registered at optimizer build time with lr=0. Toggling
+                    # lr in-place keeps param_groups length constant so
+                    # OneCycleLR's zip(strict=True) at scheduler.step() never
+                    # sees a length mismatch.
+                    _ = model.videomae_stream.unfreeze(lr=videomae_lr)
+                    optimizer.param_groups[VIDEOMAE_PARAM_GROUP_IDX]['lr'] = videomae_lr
+                    logger.info(
+                        '[Epoch %d] VideoMAE stream unfreeze fired (lr=%.2e, '
+                        'param_group_idx=%d)' % (
+                            epoch, videomae_lr, VIDEOMAE_PARAM_GROUP_IDX,
+                        )
+                    )
+                    # Doc 2 A.1: activity_head.videomae_proj (384-D VideoMAE ->
+                    # embed_dim projection) lives on ActivityHead, which is NOT
+                    # frozen by staged training — only videomae_stream is. The
+                    # projection has been in activity_psr_params at head_lr
+                    # since epoch 0 (param-group build at line 2058). Adding it
+                    # again here would raise
+                    # "ValueError: some parameters appear in more than one
+                    # parameter group" (observed crash at epoch 10 start).
+                    # So this step is a no-op log; videomae_proj is already
+                    # trainable at the right LR.
+                    activity_head = getattr(model, 'activity_head', None)
+                    if activity_head is not None and getattr(activity_head, 'videomae_proj', None) is not None:
+                        n_proj = sum(p.numel() for p in activity_head.videomae_proj.parameters())
+                        logger.info(
+                            '[Epoch %d] VideoMAE projection already trainable via '
+                            'activity_psr param group (n=%d, lr=head_lr=%.0e); '
+                            'no add_param_group needed (would duplicate)'
+                            % (epoch, n_proj, head_lr)
+                        )
                     videomae_warmup_epochs = int(getattr(C, 'VIDEOMAE_WARMUP_EPOCHS', 3))
                     videomae_warmup_state['active'] = True
-                    videomae_warmup_state['param_group_idx'] = len(optimizer.param_groups) - 1
+                    videomae_warmup_state['param_group_idx'] = VIDEOMAE_PARAM_GROUP_IDX
                     videomae_warmup_state['unfreeze_lr'] = videomae_lr
                     videomae_warmup_state['epochs_remaining'] = videomae_warmup_epochs
                     logger.info(
                         '[Epoch %d] VideoMAE stream unfrozen at lr=%.0e, warmup=%d epochs'
                         % (epoch, videomae_lr, videomae_warmup_epochs)
                     )
+                    # EMA shadow must be re-registered with newly unfrozen parameters;
+                    # without this, update() asserts that every requires_grad param has a
+                    # shadow entry — failing for VideoMAE params that were frozen during
+                    # EMA init but become trainable at epoch 10.  Mirrors Stage 3 pattern.
+                    if ema is not None:
+                        from model import EMA as EMAClass
+                        ema = EMAClass(model, decay=EMA_DECAY, device=device)
+                        logger.info(
+                            '[Epoch %d] VideoMAE unfreeze: reinitialized EMA from current model state'
+                            % epoch
+                        )
                 else:
                     logger.warning(
                         '[Epoch %d] USE_VIDEOMAE=True but model has no videomae_stream attribute'
@@ -2412,18 +2652,43 @@ def main(args):
                     '[Epoch %d] VideoMAE warmup lr=%.0e (%d/%d)'
                     % (epoch, target_vid_lr, warmup_total - videomae_warmup_state['epochs_remaining'] - 1, warmup_total)
                 )
+            # [FIX] STAGE3_WARMUP_EPOCHS ramp from config.py:378
+            # Scale activity/psr head LR linearly from 1/N to 1.0×base over the
+            # first STAGE3_WARMUP_EPOCHS epochs of Stage 3.
+            # epoch=stage3_start → 1/N; +1 → 2/N; ... +N-1 → N/N=1.0×base.
+            if (stage3_warmup_state['active']
+                    and stage3_warmup_state['epochs_remaining'] > 0):
+                warmup_total = stage3_warmup_state['warmup_epochs']
+                completed = warmup_total - stage3_warmup_state['epochs_remaining']
+                warmup_factor = (completed + 1) / float(warmup_total)
+                idx = stage3_warmup_state['param_group_idx']
+                base = stage3_warmup_state['base_lr']
+                # Restore to base first (in case scheduler or another block set it),
+                # then apply this epoch's warmup factor.
+                optimizer.param_groups[idx]['lr'] = base * warmup_factor
+                stage3_warmup_state['epochs_remaining'] -= 1
+                logger.info(
+                    '[Epoch %d] Stage3 head warmup lr=%.2e (factor=%.2f, %d/%d)'
+                    % (epoch, base * warmup_factor, warmup_factor,
+                       warmup_total - stage3_warmup_state['epochs_remaining'],
+                       warmup_total)
+                )
             _check_ram(f'epoch_{epoch}_train')
 
-            # [2% AUDIT] TRAIN_MAX_STEPS: break epoch loop if step limit reached
-            if getattr(C, 'TRAIN_MAX_STEPS', 0) > 0:
+            # [2% AUDIT] TRAIN_MAX_STEPS: check step limit AFTER val block completes.
+            # FIX: Previously this break was placed BEFORE the val block, causing
+            # TRAIN_MAX_STEPS to skip validation entirely and fall through to
+            # train() returning → parent restarts → eval without training (epoch N+1).
+            # Moving to AFTER val ensures validation always runs regardless of step limit.
+            _train_max_steps = getattr(C, 'TRAIN_MAX_STEPS', 0)
+            if _train_max_steps > 0:
                 _batch_count = train_metrics.get('num_batches', 0)
                 if not hasattr(C, '_global_step'):
                     C._global_step = 0
                 C._global_step += _batch_count
-                logger.info(f'  [2pct] global_step={C._global_step}/{C.TRAIN_MAX_STEPS}')
-                if C._global_step >= C.TRAIN_MAX_STEPS:
-                    logger.info(f'  [2pct] TRAIN_MAX_STEPS limit reached ({C._global_step}). Stopping training.')
-                    break
+                logger.info(f'  [2pct] global_step={C._global_step}/{_train_max_steps}')
+                if C._global_step >= _train_max_steps:
+                    logger.info(f'  [2pct] TRAIN_MAX_STEPS limit reached ({C._global_step}). Will exit after val completes.')
 
             current_lr = optimizer.param_groups[1]['lr']
             ema_decay_str = ''
@@ -2436,15 +2701,23 @@ def main(args):
                 return alt
 
             def _safe_log(v, key, default=0.0):
-                """Guard a single metric against NaN/Inf."""
+                """Guard a single metric against NaN/Inf. log_var keys are signed; only reject non-finite."""
                 val = train_metrics.get(key, default)
-                if isinstance(val, float) and math.isfinite(val) and val >= 0.0:
-                    return val
-                logger.warning(
-                    f'  [TRAIN_METRIC_NAN] {key}={val} at epoch {epoch} — '
-                    f'replacing with {default} to prevent log corruption'
-                )
-                return default
+                if not isinstance(val, float):
+                    try:
+                        val = float(val)
+                    except Exception:
+                        logger.warning(f'  [TRAIN_METRIC_NAN] {key}={val!r} at epoch {epoch} — non-numeric, using {default}')
+                        return default
+                if not math.isfinite(val):
+                    logger.warning(f'  [TRAIN_METRIC_NAN] {key}={val} at epoch {epoch} — non-finite, using {default}')
+                    return default
+                # log_var keys are signed; loss keys must be >= 0
+                _SIGNED_KEYS = {'log_var_det', 'log_var_pose', 'log_var_act', 'log_var_psr'}
+                if key not in _SIGNED_KEYS and val < 0.0:
+                    logger.warning(f'  [TRAIN_METRIC_NEG] {key}={val} at epoch {epoch} — unexpected negative loss, using {default}')
+                    return default
+                return val
 
             logger.info(
                 f'Train: loss={_safe_log(train_metrics["total"], "total"):.4f}  '
@@ -2453,10 +2726,10 @@ def main(args):
                 f'act={_safe_log(train_metrics["activity"], "activity"):.4f}  '
                 f'psr={_safe_log(train_metrics["psr"], "psr"):.4f}  '
                 f'lr={current_lr:.2e}  '
-                f'kd_d={_safe_log(train_metrics["log_var_det"], "log_var_det", default=-3.0):.3f}  '
-                f'kd_p={_safe_log(train_metrics["log_var_pose"], "log_var_pose", default=-3.0):.3f}  '
-                f'kd_a={_safe_log(train_metrics["log_var_act"], "log_var_act", default=-3.0):.3f}  '
-                f'kd_r={_safe_log(train_metrics["log_var_psr"], "log_var_psr", default=-3.0):.3f}'
+                f'kd_d={_safe_log(train_metrics["log_var_det"], "log_var_det", default=0.0):+.3f}  '
+                f'kd_p={_safe_log(train_metrics["log_var_pose"], "log_var_pose", default=0.0):+.3f}  '
+                f'kd_a={_safe_log(train_metrics["log_var_act"], "log_var_act", default=0.0):+.3f}  '
+                f'kd_r={_safe_log(train_metrics["log_var_psr"], "log_var_psr", default=0.0):+.3f}'
                 f'{ema_decay_str}  '
                 f'time={train_metrics["epoch_time"]:.0f}s'
                 + (
@@ -2488,6 +2761,36 @@ def main(args):
                     f'res={eff["eff_resolution"]}'
                 )
 
+            # --- PRE-VALIDATION GUARD (Bashara 2026-05-26) ---
+            # Verify train_one_epoch produced valid output for this epoch before running
+            # evaluation. This prevents the "eval without training" bug where a silent
+            # train_one_epoch crash or zero-batch return causes eval to run next with
+            # no training having happened. If train_metrics is empty or suspicious,
+            # raise immediately — the epoch retry loop will handle it.
+            _train_ok = (
+                isinstance(train_metrics, dict)
+                and train_metrics.get('num_batches', 0) > 0
+                and train_metrics.get('total', 0) > 0
+            )
+            if not _train_ok:
+                logger.error(
+                    f'  [PRE_VAL_GUARD] train_metrics suspicious for epoch {epoch}: '
+                    f'batches={train_metrics.get("num_batches", 0)}, '
+                    f'total_loss={train_metrics.get("total", 0)}. '
+                    f'Skipping val and retrying training.'
+                )
+                # Raise to trigger train retry — don't run val with broken train state
+                raise RuntimeError(
+                    f'PRE_VAL_GUARD: train_one_epoch(epoch={epoch}) produced '
+                    f'invalid metrics (batches={train_metrics.get("num_batches",0)}, '
+                    f'loss={train_metrics.get("total",0)}). Not running val until '
+                    f'training is healthy.'
+                )
+            logger.info(
+                f'  [PRE_VAL_GUARD] epoch {epoch} training healthy: '
+                f'batches={train_metrics["num_batches"]}, loss={train_metrics["total"]:.4f}'
+            )
+
             val_metrics = {}
             if (epoch + 1) % C.VAL_EVERY == 0:
                 logger.info('Running validation ...')
@@ -2505,10 +2808,16 @@ def main(args):
                     torch.cuda.set_device(0)  # Reset CUDA context state
                     torch.cuda.empty_cache()
 
-                # Use EMA weights for validation (if EMA is enabled)
-                if ema is not None:
+                # Bug A fix — only swap to EMA shadow if EMA has been updated.
+                # With STAGED_TRAINING=False, EMA tracks from epoch 0.
+                # With STAGED_TRAINING=True, only swap once stage>=3 (EMA has been updating).
+                _ema_staged = bool(getattr(C, 'STAGED_TRAINING', True))
+                ema_warmed = (ema is not None) and (not _ema_staged or current_stage >= 3)
+                if ema_warmed:
                     ema.get_ema()
                     logger.info('  [EMA] Using exponential-moving-average weights for val')
+                elif ema is not None:
+                    logger.info('  [EMA] Skipping EMA swap — shadow not yet updated (stage<3, staged=%s)' % _ema_staged)
 
                 val_batch_size_rt = CFG_VAL_BATCH_SIZE
                 val_workers_rt = 0          # HARDENED: always 0 — no worker management
@@ -2543,6 +2852,7 @@ def main(args):
                                 val_loader,
                                 device,
                                 max_batches=val_max_batches_rt,
+                                epoch=epoch,
                             )
                             _check_per_class_activity_sanity(val_metrics, epoch)
                         except Exception as exc:
@@ -2618,27 +2928,74 @@ def main(args):
                         torch.cuda.empty_cache()
                         logger.info('  [POST_EVAL] val_loader cleaned up, resuming train...')
 
-                if ema is not None:
-                    ema.restore()
-                    logger.info('  [EMA] Restored original weights after val')
+                    # [DIAGNOSTIC] Log whether val succeeded and produced metrics
+                    # before proceeding. This catches silent eval crashes that would
+                    # otherwise cause the epoch loop to continue with empty val_metrics
+                    # and trigger a second eval on the next iteration.
+                    if val_metrics:
+                        logger.info(
+                            f'  [VAL_OK] epoch {epoch} val completed, '
+                            f'loss={val_metrics.get("loss", -1):.4f}'
+                        )
+                    else:
+                        logger.warning(
+                            f'  [VAL_EMPTY] epoch {epoch} val_metrics is EMPTY — '
+                            f'this will cause double-eval. Raising to retry.'
+                        )
+                        raise RuntimeError(
+                            f'VAL_EMPTY: evaluate_all(epoch={epoch}) returned empty metrics. '
+                            f'Expected non-empty dict, got {val_metrics}. '
+                            f'Raising to trigger epoch retry loop.'
+                        )
 
-                def _s(v, alt=0.0):
-                    """Safe numeric: replace NaN/Inf with alt."""
-                    if isinstance(v, float) and math.isfinite(v):
-                        return v
-                    return alt
+                    if ema_warmed:
+                        ema.restore()
+                        logger.info('  [EMA] Restored original weights after val')
 
-                logger.info(
-                    f'Val: loss={_s(val_metrics.get("loss")):.4f}  '
-                    f'mAP50={_s(val_metrics.get("det_mAP50")):.4f}  '
-                    f'mAP50_all={_s(val_metrics.get("det_mAP50_all_frames")):.4f}  '
-                    f'act_clip={_s(val_metrics.get("act_accuracy")):.4f}  '
-                    f'act_frame={_s(val_metrics.get("act_frame_accuracy")):.4f}  '
-                    f'act_macro_f1={_s(val_metrics.get("act_macro_f1")):.4f}  '
-                    f'head_pose_mae={_s(val_metrics.get("head_pose_MAE")):.4f}  '
-                    f'psr_f1={_s(val_metrics.get("psr_overall_f1")):.4f}  '
-                    f'psr_f1_tol5={_s(val_metrics.get("psr_overall_f1_at5")):.4f}'
-                )
+                    def _s(v, alt=float('nan')):
+                        """Safe numeric: NaN/Inf → alt (default NaN so broken metrics surface visibly)."""
+                        if isinstance(v, float) and math.isfinite(v):
+                            return v
+                        return alt
+
+                    # Compute combined metric before printing Val: line (same logic as below, with safe fallback)
+                    _map50_v  = _s(val_metrics.get('det_mAP50', 0.0))
+                    _f1_act_v = _s(val_metrics.get('act_macro_f1', 0.0))
+                    _mae_raw  = val_metrics.get('head_pose_MAE', float('nan'))
+                    _mae_pose_v = _s(_mae_raw, alt=float('nan'))
+                    # [FIX 2026-05-31] psr_macro_f1 = psr_overall_f1 = 0.0 (all-ones predictions).
+                    # Use psr_f1_at_t (±3-frame F1, the actual benchmark metric) for combined metric.
+                    _f1_psr_v = _s(val_metrics.get('psr_f1_at_t', 0.0))
+                    if all(map(math.isfinite, [_map50_v, _f1_act_v, _mae_pose_v, _f1_psr_v])):
+                        combined = _compute_combined_metric(_map50_v, _f1_act_v, _mae_pose_v, _f1_psr_v)
+                    else:
+                        combined = 0.0
+                        logger.warning(
+                            f'  [COMBINED_NAN] components: map50={_map50_v} f1_act={_f1_act_v} '
+                            f'mae_pose={_mae_pose_v} f1_psr={_f1_psr_v} — using combined=0.0'
+                        )
+
+                    logger.info(
+                        f'Val: loss={_s(val_metrics.get("loss")):.4f}  '
+                        f'det_mAP50={_s(val_metrics.get("det_mAP50")):.4f}  '
+                        f'act_clip={_s(val_metrics.get("act_clip_accuracy")):.4f}  '
+                        f'act_frame={_s(val_metrics.get("act_frame_accuracy")):.4f}  '
+                        f'act_macro_f1={_s(val_metrics.get("act_macro_f1")):.4f}  '
+                        f'act_top5={_s(val_metrics.get("act_top5_accuracy")):.4f}  '
+                        f'forward_angular_MAE_deg={_s(val_metrics.get("forward_angular_MAE_deg"), alt=float("nan")):.2f}  '
+                        f'psr_f1={_s(val_metrics.get("psr_f1_at_t")):.4f}  '
+                        f'psr_edit={_s(val_metrics.get("psr_edit_score")):.4f}  '
+                        f'psr_pos={_s(val_metrics.get("psr_pos")):.4f}  '
+                        f'as_f1={_s(val_metrics.get("as_f1")):.4f}  '
+                        f'as_map_r={_s(val_metrics.get("as_map_at_r")):.4f}  '
+                        f'ev_ap={_s(val_metrics.get("ev_ap")):.4f}  '
+                        f'ev_f1={_s(val_metrics.get("ev_f1")):.4f}  '
+                        f'combined={_s(combined):.4f}'
+                    )
+
+                    break  # [FIX 2026-05-27] Success path — exit retry loop.
+                           # Without this, while True: iterates again and calls
+                           # evaluate_all() a second time immediately after POST_EVAL.
 
                 if ema is not None and current_stage == 3:
                     _compare_raw_vs_ema(
@@ -2663,28 +3020,34 @@ def main(args):
                     _f1_act = _s(val_metrics.get('act_macro_f1', 0.0))
                     _mae_pose_raw = val_metrics.get('head_pose_MAE', float('nan'))
                     _mae_pose = _s(_mae_pose_raw, alt=float('nan'))
-                    _f1_psr = _s(val_metrics.get('psr_macro_f1', 0.0))
+                    # [FIX 2026-05-31] Use psr_f1_at_t (real ±3-frame F1) instead of psr_macro_f1 (= psr_overall_f1 = 0.0)
+                    _f1_psr = _s(val_metrics.get('psr_f1_at_t', 0.0))
 
                     # [NaN Guard] Validate inputs before computing combined metric
-                    for _name, _val in [('det_mAP50', _map50), ('act_macro_f1', _f1_act),
-                                        ('head_pose_MAE', _mae_pose), ('psr_macro_f1', _f1_psr)]:
-                        if not isinstance(_val, float) or not math.isfinite(_val):
-                            logger.warning(
-                                f'  [COMBINED_NAN] {_name}={_val} at epoch {epoch} — '
-                                f'replacing with safe value'
-                            )
-
-                    # Safe combined computation with NaN fallback
-                    if not (math.isfinite(_map50) and math.isfinite(_f1_act) and
-                            math.isfinite(_mae_pose) and math.isfinite(_f1_psr)):
+                    # [FIX 2026-05-31] OR instead of AND — fire when ANY component is non-finite
+                    # [FIX 2026-06-06] Clamp non-finite components to NEUTRAL values (0.0 for f1/map50,
+                    #                     _MAE_POSE_NEUTRAL=360° for head_pose_MAE) instead of forcing
+                    #                     combined=0.0. This lets GOOD components still contribute to
+                    #                     combined metric and allows best-checkpoint saving to function
+                    #                     in mixed-NaN scenarios (e.g. eff_*=NaN, but PSR/DET valid).
+                    _MAE_POSE_NEUTRAL = 360.0  # degrees — neutral fallback for head_pose_MAE
+                    _orig_components = (_map50, _f1_act, _mae_pose, _f1_psr)
+                    _neutrals = (0.0, 0.0, _MAE_POSE_NEUTRAL, 0.0)
+                    _clamped = tuple(
+                        _c if math.isfinite(_c) else _n
+                        for _c, _n in zip(_orig_components, _neutrals)
+                    )
+                    if _clamped != _orig_components:
                         logger.warning(
-                            f'  [COMBINED_NAN] Invalid component — combined metric set to 0.0 '
-                            f'(map50={_map50}, f1_act={_f1_act}, mae_pose={_mae_pose}, f1_psr={_f1_psr})'
+                            f'  [COMBINED_NAN] Non-finite component(s) clamped to neutral — '
+                            f'map50={_orig_components[0]}->{_clamped[0]}, '
+                            f'f1_act={_orig_components[1]}->{_clamped[1]}, '
+                            f'mae_pose={_orig_components[2]}->{_clamped[2]}, '
+                            f'f1_psr={_orig_components[3]}->{_clamped[3]}'
                         )
-                        combined = 0.0
-                    else:
-                        combined = _compute_combined_metric(_map50, _f1_act, _mae_pose, _f1_psr)
-                        val_metrics['combined'] = combined
+                    _map50, _f1_act, _mae_pose, _f1_psr = _clamped
+                    combined = _compute_combined_metric(_map50, _f1_act, _mae_pose, _f1_psr)
+                    val_metrics['combined'] = combined
                     logger.info(
                         f'  combined={combined:.4f}  '
                         f'(best={best_metric:.4f}  '
@@ -2756,6 +3119,15 @@ def main(args):
 
             # --- BASHARA 2026-05-25: Per-epoch crash recovery save (epoch end only) ---
             _save_crash_recovery(f'epoch_{epoch}_end')
+
+            # [2pct FIX] Exit epoch loop AFTER validation completes when step limit reached.
+            # Previously this was BEFORE val, causing TRAIN_MAX_STEPS to skip validation.
+            if _train_max_steps > 0 and C._global_step >= _train_max_steps:
+                logger.info(
+                    f'  [2pct] TRAIN_MAX_STEPS={_train_max_steps} reached '
+                    f'(global_step={C._global_step}). Exiting epoch loop after val.'
+                )
+                break  # Exit for epoch loop — val completed, training done
 
             record = {
                 'epoch': epoch,
@@ -2951,6 +3323,12 @@ if __name__ == '__main__':
     if _env_max_steps > 0:
         C.TRAIN_MAX_STEPS = _env_max_steps
         logger.info(f'[train] TRAIN_MAX_STEPS={_env_max_steps} — will early-stop at this step count')
+
+    # EVAL_MAX_BATCHES: cap val batches per epoch (env var) — for quick smoke runs
+    _env_eval_max_batches = int(os.environ.get('EVAL_MAX_BATCHES', '0'))
+    if _env_eval_max_batches > 0:
+        C.EVAL_MAX_BATCHES = _env_eval_max_batches
+        logger.info(f'[train] EVAL_MAX_BATCHES={_env_eval_max_batches} — will cap val at this many batches per epoch')
 
     _override_start_epoch = None  # set by --start-epoch
     if args.no_staged_training:
