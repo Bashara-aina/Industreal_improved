@@ -137,6 +137,9 @@ CFG_EVAL_MAX_BATCHES = int(getattr(C, 'EVAL_MAX_BATCHES', 0))
 # Wrapped around evaluate_all() calls via try/finally in the epoch loop.
 IN_EVALUATION_PHASE = False
 
+# RC-25 guard: set True when --reinit-heads is active; gates step-0 assertions.
+_REINIT_HEADS_ACTIVE = False
+
 
 def _refresh_runtime_cfg() -> None:
     global CFG_TRAIN_DET, CFG_TRAIN_HEAD_POSE, CFG_TRAIN_ACT
@@ -1090,6 +1093,28 @@ def train_one_epoch(
         criterion.set_epoch(epoch)
         loss, loss_dict = criterion(outputs, targets)
 
+        # ── Step-0 Assertion (RC-25 permanent guard) ──
+        if step == 0:
+            cls_loss_val = loss_dict.get('det_cls', loss_dict.get('cls', 0.0))
+            if cls_loss_val >= 1e4:
+                raise RuntimeError(
+                    f'STEP-0 ASSERTION FAILED: cls_loss={cls_loss_val:.1f} >= 1e4. '
+                    'Detection head is saturated. Reinit FPN+heads with --reinit-heads '
+                    'before retraining. (RC-25 guard)'
+                )
+            if _REINIT_HEADS_ACTIVE:
+                cls_logits = outputs.get('cls_preds')
+                if cls_logits is not None:
+                    cls_logits_median = cls_logits.detach().abs().median().item()
+                    if cls_logits_median >= 8.0:
+                        raise RuntimeError(
+                            f'STEP-0 ASSERTION FAILED: cls_logits.abs().median()={cls_logits_median:.3f} >= 8.0. '
+                            'FPN reinit insufficient — backbone weight norms may also need reinit. '
+                            '(RC-25 guard)'
+                        )
+                else:
+                    logger.warning('[STEP-0 ASSERT] cls_preds not found in outputs — skipping logit check.')
+
         # Override losses based on stage — keep `loss` as 0D tensor for NaN/isfinite guard
         if staged_training:
             if stage == 1:
@@ -1624,6 +1649,150 @@ def _on_stage_transition(
                    stage3_warmup_state['warmup_epochs'],
                     stage3_warmup_state['param_group_idx'])
             )
+
+
+def _reinit_dead_heads(model):
+    """Re-initialize the 3 collapsed heads (det/act/psr) + FPN from documented priors.
+
+    Keeps backbone, pose heads, and pretrained ConvNeXt weights intact.
+    Used to recover from head collapse without losing learned backbone features.
+
+    RC-14 fix: cls_tower/reg_tower don't exist — use cls_subnet/reg_subnet.
+    RC-25 fix: also re-init FPN modules (lateral_c3/c4/c5, smooth_p3/p4/p5,
+    p6_conv, p7_conv) to fix feature-magnitude explosion at step 0.
+    """
+    import math
+    nn = torch.nn
+    init_count = {'det': 0, 'act': 0, 'psr': 0, 'fpn': 0, 'other': 0}
+
+    # 0) FPN: 8 Conv2d modules (RC-25 fix — feature-magnitude explosion)
+    fpn_attrs = [
+        'lateral_c3', 'lateral_c4', 'lateral_c5',
+        'smooth_p3', 'smooth_p4', 'smooth_p5',
+        'p6_conv', 'p7_conv',
+    ]
+    fpn_reinit = 0
+    for attr in fpn_attrs:
+        m = getattr(model.fpn, attr, None)
+        if m is not None and isinstance(m, nn.Conv2d):
+            nn.init.kaiming_uniform_(m.weight, a=1)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+            fpn_reinit += 1
+    assert fpn_reinit == 8, f'FPN reinit: expected 8 modules, got {fpn_reinit}'
+    init_count['fpn'] = fpn_reinit
+    logger.info(f'  [REINIT] fpn: {fpn_reinit}/8 Conv2d modules (Kaiming-uniform a=1 + zero bias)')
+
+    # 1) DETECTION HEAD: cls_score (pi=0.05 prior) + reg_pred + cls_subnet + reg_subnet
+    for _det_attr in ('det_head', 'detection_head'):
+        if hasattr(model, _det_attr):
+            dh = getattr(model, _det_attr)
+            if hasattr(dh, 'cls_score'):
+                pi = 0.05
+                nn.init.normal_(dh.cls_score.weight, std=0.01)
+                nn.init.constant_(dh.cls_score.bias, -math.log((1 - pi) / pi))
+                init_count['det'] += 1
+                logger.info(f'  [REINIT] {_det_attr}.cls_score: pi={pi}, bias={-math.log((1 - pi) / pi):.4f}')
+            if hasattr(dh, 'reg_pred'):
+                nn.init.normal_(dh.reg_pred.weight, std=0.01)
+                nn.init.zeros_(dh.reg_pred.bias)
+                init_count['det'] += 1
+                logger.info(f'  [REINIT] {_det_attr}.reg_pred: std=0.01, bias=0')
+            # RC-14 fix: cls_subnet/reg_subnet (not cls_tower/reg_tower)
+            for subnet_attr in ('cls_subnet', 'reg_subnet'):
+                sw = getattr(dh, subnet_attr, None)
+                if sw is not None:
+                    for m in sw.modules():
+                        if isinstance(m, nn.Conv2d):
+                            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                            if m.bias is not None:
+                                nn.init.zeros_(m.bias)
+                    init_count['det'] += 1
+                    logger.info(f'  [REINIT] {_det_attr}.{subnet_attr}: Kaiming-normal + zero bias')
+            break
+
+    # 2) ACTIVITY HEAD: full re-init
+    if hasattr(model, 'activity_head'):
+        ah = model.activity_head
+        if hasattr(ah, 'proj_features'):
+            nn.init.normal_(ah.proj_features.weight, std=0.02)
+            if ah.proj_features.bias is not None:
+                nn.init.zeros_(ah.proj_features.bias)
+            init_count['act'] += 1
+            logger.info('  [REINIT] act.proj_features: std=0.02, bias=0')
+        if hasattr(ah, 'cls_token'):
+            nn.init.trunc_normal_(ah.cls_token, std=0.02)
+            init_count['act'] += 1
+            logger.info('  [REINIT] act.cls_token: trunc_normal std=0.02')
+        if hasattr(ah, 'vit'):
+            for blk in ah.vit:
+                for m in blk.modules():
+                    if isinstance(m, nn.Linear):
+                        nn.init.xavier_uniform_(m.weight)
+                        if m.bias is not None:
+                            nn.init.zeros_(m.bias)
+                    elif isinstance(m, nn.LayerNorm):
+                        nn.init.ones_(m.weight)
+                        nn.init.zeros_(m.bias)
+            init_count['act'] += 1
+            logger.info(f'  [REINIT] act.vit ({len(ah.vit)} blocks): Xavier-uniform + LayerNorm reset')
+        if hasattr(ah, 'activity_classifier'):
+            for m in ah.activity_classifier.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.normal_(m.weight, std=0.01)
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, -0.5)
+                elif isinstance(m, nn.LayerNorm):
+                    nn.init.ones_(m.weight)
+                    nn.init.zeros_(m.bias)
+            init_count['act'] += 1
+            logger.info('  [REINIT] act.activity_classifier: std=0.01 + bias=-0.5')
+        if hasattr(ah, 'tcn'):
+            for m in ah.tcn.modules():
+                if isinstance(m, nn.Conv1d):
+                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+                elif isinstance(m, nn.LayerNorm):
+                    nn.init.ones_(m.weight)
+                    nn.init.zeros_(m.bias)
+            init_count['act'] += 1
+            logger.info('  [REINIT] act.tcn: Kaiming-normal + LayerNorm reset')
+
+    # 3) PSR HEAD
+    if hasattr(model, 'psr_head'):
+        ph = model.psr_head
+        if hasattr(ph, 'per_frame_mlp'):
+            for m in ph.per_frame_mlp.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.normal_(m.weight, std=0.02)
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+            init_count['psr'] += 1
+            logger.info('  [REINIT] psr.per_frame_mlp: std=0.02, bias=0')
+        if hasattr(ph, 'output_heads'):
+            for h in ph.output_heads:
+                for m in h.modules():
+                    if isinstance(m, nn.Linear):
+                        nn.init.normal_(m.weight, std=0.01)
+                        if m.bias is not None:
+                            nn.init.constant_(m.bias, -0.2)
+            init_count['psr'] += 1
+            logger.info(f'  [REINIT] psr.output_heads ({len(ph.output_heads)} heads): std=0.01, bias=-0.2')
+        for gap_attr in ('gap_p3', 'gap_p4', 'gap_p5'):
+            g = getattr(ph, gap_attr, None)
+            if g is not None and isinstance(g, nn.Conv2d):
+                nn.init.kaiming_normal_(g.weight, mode='fan_out', nonlinearity='relu')
+                if g.bias is not None:
+                    nn.init.zeros_(g.bias)
+                init_count['psr'] += 1
+                logger.info(f'  [REINIT] psr.{gap_attr}: Kaiming-normal + zero bias')
+
+    total = sum(init_count.values())
+    logger.info(f'  [REINIT] Total submodules re-initialized: {total} '
+                f'(det={init_count["det"]}, act={init_count["act"]}, '
+                f'psr={init_count["psr"]}, fpn={init_count["fpn"]}, other={init_count["other"]})')
+    return init_count
 
 
 def _log_loss_component_breakdown(
@@ -2425,6 +2594,69 @@ def main(args):
                 f'act={criterion.log_var_act.item():.3f}  '
                 f'psr={criterion.log_var_psr.item():.3f}'
             )
+
+    # ── RC-25 Recovery: Re-initialize dead heads + FPN ──
+    if getattr(args, 'reinit_heads', False):
+        global _REINIT_HEADS_ACTIVE
+        _REINIT_HEADS_ACTIVE = True
+        logger.warning(
+            '  [REINIT-HEADS] Flag --reinit-heads set: re-initializing 3 '
+            'dead heads (det/act/psr) + FPN from priors. Backbone + pose + '
+            'pretrained ConvNeXt weights are PRESERVED.'
+        )
+        reinit_counts = _reinit_dead_heads(model)
+        logger.warning(
+            f'  [REINIT-HEADS] Re-initialized submodules: {reinit_counts}'
+        )
+        # Re-anchor EMA shadow to fresh reinit weights
+        if ema is not None and ema.shadow:
+            import re as _re
+            _head_prefixes = ('det_head.', 'detection_head.', 'activity_head.',
+                              'psr_head.', 'fpn.')
+            _ema_reset = 0
+            for _n, _p in model.named_parameters():
+                if any(_n.startswith(pf) for pf in _head_prefixes):
+                    ema.shadow[_n] = _p.data.clone().detach().to(ema.device if ema.device else _p.device)
+                    _ema_reset += 1
+            logger.warning(
+                f'  [REINIT-HEADS] EMA shadow re-anchored for {_ema_reset} head/fpn tensors.'
+            )
+        # Reset Kendall log_vars to neutral for recovery
+        with torch.no_grad():
+            criterion.log_var_det.fill_(0.0)
+            criterion.log_var_act.fill_(0.0)
+            criterion.log_var_psr.fill_(0.0)
+        logger.info('  [REINIT-HEADS] Kendall log_vars reset to neutral (det=act=psr=0.0).')
+
+    # ── Step-0 Assertion (RC-25 gate) ──
+    if getattr(args, 'reinit_heads', False):
+        logger.info('[STEP-0 ASSERT] Running step-0 diagnostic forward pass...')
+        model.eval()
+        with torch.no_grad():
+            try:
+                sample_batch = next(iter(train_loader))
+                images = sample_batch['image'].to(device)[:1]
+                clip_rgb = sample_batch.get('clip_rgb')
+                if clip_rgb is not None:
+                    clip_rgb = clip_rgb.to(device)[:1]
+                video_ids = sample_batch.get('video_id')
+                if video_ids is not None:
+                    video_ids = video_ids[:1]
+                out = model(images, clip_rgb=clip_rgb, video_ids=video_ids)
+                cls_preds = out['cls_preds']
+                cls_logits_abs_median = cls_preds.abs().median().item()
+                logger.info(f'  [STEP-0 ASSERT] cls_logits.abs().median() = {cls_logits_abs_median:.3f}')
+                if cls_logits_abs_median >= 8.0:
+                    raise RuntimeError(
+                        f'STEP-0 ASSERTION FAILED: cls_logits.abs().median()={cls_logits_abs_median:.3f} >= 8.0. '
+                        'FPN/backbone feature magnitude still saturating detection head. '
+                        'Run D7-D9 diagnostics then reinit FPN before retraining.'
+                    )
+                else:
+                    logger.info('  [STEP-0 ASSERT] PASSED: logit scale in healthy range (< 8).')
+            except Exception as exc:
+                logger.warning(f'  [STEP-0 ASSERT] Could not run diagnostic forward pass: {exc}')
+        model.train()
 
     log_file = open(log_dir / 'metrics.jsonl', 'a')
 
@@ -3333,6 +3565,14 @@ if __name__ == '__main__':
         help='Override starting epoch (e.g., 16 to jump to stage-3 equivalent). '
              'Does NOT load checkpoint — model starts fresh. '
              'Use with --no-staged-training to bypass stage gates.',
+    )
+    parser.add_argument(
+        '--reinit-heads',
+        action='store_true',
+        help='[Recovery] Re-initialize det/act/psr heads + FPN from priors before training. '
+             'Keeps backbone + pose_head + pretrained ConvNeXt. Resets FPN with Kaiming-uniform, '
+             'det.cls_score pi=0.05, act full reinit, psr bias=-0.2. '
+             'Use after head collapse (all 3 heads producing constant output).',
     )
 
     args = parser.parse_args()

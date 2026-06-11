@@ -500,6 +500,7 @@ class DetectionHead(nn.Module):
             for _ in range(4):
                 layers.extend([
                     nn.Conv2d(in_channels, in_channels, 3, padding=1),
+                    nn.GroupNorm(8, in_channels),
                     nn.ReLU(True),
                 ])
             return nn.Sequential(*layers)
@@ -1804,6 +1805,8 @@ class POPWMultiTaskModel(nn.Module):
 
         with torch.no_grad():
             det_conf = cls_preds.max(dim=1)[0]
+        if C.ZERO_DET_CONF_FOR_RECOVERY:
+            det_conf = torch.zeros_like(det_conf)
 
         # PSR Head: pass full temporal sequence for proper Causal Transformer engagement
         # Pyramid dicts have per-level features [BT, C, H, W]. Reshape each to [B, T, C, H, W].

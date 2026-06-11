@@ -249,6 +249,7 @@ NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_la
 ANCHOR_SIZES = (24, 48, 96, 192, 384)
 DET_POS_IOU_THRESH = 0.3       # FCOS anchor matching: positive IoU threshold
 DET_NEG_IOU_THRESH = 0.25      # FCOS anchor matching: negative IoU threshold (below this → background)
+ZERO_DET_CONF_FOR_RECOVERY = False  # RC-25 recovery: zero det_conf input to activity head during recovery
 IMG_WIDTH       = 1280
 IMG_HEIGHT      = 720
 IMG_SIZE        = (IMG_WIDTH, IMG_HEIGHT)
@@ -531,6 +532,24 @@ PRESETS = {
         'batch_size':        1,   # VideoMAE + ConvNeXt + TMA + TemporalBank exceeds 12GB at batch=2
         'grad_accum_steps':  32,  # Keep effective batch 32 (same as old 8×4)
     },
+    'recovery': {
+        'description': (
+            'RC-25 recovery preset. Zeros det_conf for activity head, disables '
+            'mixed precision (AMP→FP32), small batch, no staged training. '
+            'Use with --reinit-heads --subset-ratio 0.25 for recovery retrain.'
+        ),
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         1,
+        'grad_accum_steps':   32,
+        'zero_det_conf':      True,   # RC-25: zero det_conf into activity head during recovery
+        'staged_training':    False,  # All heads active from epoch 0
+        'mixed_precision':    False,  # FP32 for recovery stability
+    },
     'benchmark_quick': {
         'description': (
             'Quick baseline — no temporal, no Hand-FiLM. Faster iteration. '
@@ -552,6 +571,7 @@ def apply_preset(preset_name: str) -> None:
     global BENCHMARK_MODE, VAL_EVERY, BATCH_SIZE
     global USE_TMA_CELL, USE_TEMPORAL_BANK, USE_HAND_FILM
     global GRAD_ACCUM_STEPS
+    global ZERO_DET_CONF_FOR_RECOVERY, STAGED_TRAINING, MIXED_PRECISION
 
     if preset_name not in PRESETS:
         raise ValueError(f'Unknown preset: {preset_name}. Available: {list(PRESETS.keys())}')
@@ -563,6 +583,9 @@ def apply_preset(preset_name: str) -> None:
     USE_HAND_FILM = preset.get('use_hand_film', USE_HAND_FILM)
     BATCH_SIZE = preset.get('batch_size', BATCH_SIZE)
     GRAD_ACCUM_STEPS = preset.get('grad_accum_steps', GRAD_ACCUM_STEPS)
+    ZERO_DET_CONF_FOR_RECOVERY = preset.get('zero_det_conf', ZERO_DET_CONF_FOR_RECOVERY)
+    STAGED_TRAINING = preset.get('staged_training', STAGED_TRAINING)
+    MIXED_PRECISION = preset.get('mixed_precision', MIXED_PRECISION)
 
     update_dynamic_paths()
 
