@@ -29,7 +29,10 @@ from torch.utils.data import DataLoader
 
 import config as C
 from models.model import POPWMultiTaskModel
-from data import create_dataloaders  # may differ; fallback to manual
+# [AUDIT FIX 2026-06-11] top-level `from data import create_dataloaders`
+# crashed the whole script when that symbol doesn't exist (the data package
+# exposes IndustRealMultiTaskDataset + collate_fn, not create_dataloaders).
+# Dataset access now happens lazily inside get_sample_input() with a fallback.
 
 CKPT = os.environ.get('CHECKPOINT', str(PROJ / 'src/runs/full_multi_task_tma_tbank_benchmark/checkpoints/latest.pth'))
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -93,36 +96,64 @@ def compare_magnitudes(fresh_frames, ckpt_frames):
 
 
 def load_model(ckpt_path=None):
-    """Build a fresh POPW model, optionally load checkpoint."""
+    """Build a POPW model, optionally load checkpoint.
+
+    [AUDIT FIX 2026-06-11] Two correctness bugs fixed:
+    1. The constructor was called with kwargs that don't exist
+       (num_det_classes/num_act_classes/num_psr_classes/BACKBONE_TYPE) —
+       TypeError on every run; this script had never executed.
+    2. The control model used pretrained=False (RANDOM torchvision init).
+       The RC-25 baseline is the ImageNet-pretrained trunk — random-init
+       feature magnitudes are a wrong denominator for the collapse factor.
+       Control is now pretrained=True; FPN/heads are randomly initialized
+       identically either way.
+    use_videomae=False keeps the probe light (FPN magnitudes are independent
+    of the VideoMAE stream).
+    """
     C.ZERO_DET_CONF_FOR_RECOVERY = False  # no-op for magnitude probe
     model = POPWMultiTaskModel(
-        num_det_classes=C.NUM_DET_CLASSES if hasattr(C, 'NUM_DET_CLASSES') else 24,
-        num_act_classes=C.NUM_ACT_CLASSES,
-        num_psr_classes=C.NUM_PSR_CLASSES if hasattr(C, 'NUM_PSR_CLASSES') else 11,
-        backbone_type=C.BACKBONE_TYPE if hasattr(C, 'BACKBONE_TYPE') else 'convnext_tiny',
-        pretrained=False,  # fresh init
+        pretrained=(ckpt_path is None),  # ImageNet control vs ckpt-overwritten
+        backbone_type=str(getattr(C, 'BACKBONE', 'convnext_tiny')),
+        use_hand_film=bool(getattr(C, 'USE_HAND_FILM', True)),
+        use_headpose_film=bool(getattr(C, 'USE_HEADPOSE_FILM', True)),
+        use_videomae=False,
+        train_pose=bool(getattr(C, 'TRAIN_HEAD_POSE', True)),
     )
     if ckpt_path and Path(ckpt_path).exists():
         ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
         state = ckpt.get('model_state_dict', ckpt.get('model_state', ckpt.get('model')))
-        model.load_state_dict(state, strict=False)
-        print(f'Loaded checkpoint: {ckpt_path}')
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        print(f'Loaded checkpoint: {ckpt_path} (missing={len(missing)} unexpected={len(unexpected)})')
     return model.to(DEVICE)
 
 
+def _normalize_uint8(images: torch.Tensor) -> torch.Tensor:
+    """uint8 [B,3,H,W] -> float ImageNet-normalized (mirrors train._prepare_images)."""
+    if images.dtype == torch.uint8:
+        images = images.float().div(255.0)
+        mean = torch.tensor(C.IMAGENET_MEAN, dtype=images.dtype).view(1, 3, 1, 1)
+        std = torch.tensor(C.IMAGENET_STD, dtype=images.dtype).view(1, 3, 1, 1)
+        images = (images - mean) / std
+    return images
+
+
 def get_sample_input():
-    """Get a real image batch from the dataset."""
+    """Get a real, ImageNet-normalized image batch from the dataset."""
     try:
-        from data import create_dataloaders
-        loaders = create_dataloaders(
-            subset_ratio=0.05, batch_size=BS, num_workers=0,
-            benchmark_mode=False,
+        from data import IndustRealMultiTaskDataset, collate_fn
+        ds = IndustRealMultiTaskDataset(
+            split='val', img_size=C.IMG_SIZE, augment=False, seed=C.SEED,
         )
-        batch = next(iter(loaders['train']))
-        return batch['image'].to(DEVICE)
-    except Exception:
-        # Fallback: random input
-        print('Using random input (dataset unavailable)')
+        loader = DataLoader(ds, batch_size=BS, shuffle=False, num_workers=0,
+                            collate_fn=collate_fn)
+        # collate_fn returns (images, targets) — a tuple, not a dict.
+        images, _targets = next(iter(loader))
+        return _normalize_uint8(images).to(DEVICE)
+    except Exception as exc:
+        # Fallback: random input. NOTE: random N(0,1) input is acceptable for
+        # the RELATIVE fresh-vs-ckpt comparison but absolute magnitudes will
+        # differ from real frames — prefer real data when available.
+        print(f'Using random input (dataset unavailable: {exc!r})')
         return torch.randn(BS, 3, C.IMG_HEIGHT, C.IMG_WIDTH).to(DEVICE)
 
 

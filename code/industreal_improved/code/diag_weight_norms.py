@@ -42,10 +42,16 @@ def weight_norm(param):
 
 
 def collect_conv_weights(model):
-    """Return {name: weight_tensor} for all Conv2d layers in model."""
+    """Return {name: weight_tensor} for all Conv2d AND Linear layers.
+
+    [AUDIT FIX 2026-06-11] Conv2d-only scanning missed most of the backbone:
+    torchvision ConvNeXt blocks implement the per-block MLP as nn.Linear
+    (only the 7x7 depthwise is Conv2d). A backbone blowup living in the block
+    MLPs would have been invisible to this probe.
+    """
     weights = {}
     for name, module in model.named_modules():
-        if isinstance(module, nn.Conv2d) and hasattr(module, 'weight'):
+        if isinstance(module, (nn.Conv2d, nn.Linear)) and getattr(module, 'weight', None) is not None:
             weights[name] = module.weight.data.clone().cpu()
     return weights
 
@@ -55,29 +61,34 @@ def main():
     print(f'  Checkpoint: {CKPT}')
     print(f'  Threshold: {THRESHOLD}x')
 
-    # 1) Fresh model weights
-    print('\n[1/3] Collecting fresh-init weights...')
+    # [AUDIT FIX 2026-06-11] The constructor was called with kwargs that don't
+    # exist (num_det_classes/...) — TypeError on every run; this script had
+    # never executed. Also: the control must be pretrained=True. Backbone
+    # weight norms of the ImageNet checkpoint differ systematically from
+    # random init; comparing the trained checkpoint against RANDOM init
+    # inflates every backbone ratio and produces false EXPLODED flags.
+    # FPN/head layers are randomly initialized identically either way.
+    def _build_model(pretrained: bool):
+        return POPWMultiTaskModel(
+            pretrained=pretrained,
+            backbone_type=str(getattr(C, 'BACKBONE', 'convnext_tiny')),
+            use_hand_film=bool(getattr(C, 'USE_HAND_FILM', True)),
+            use_headpose_film=bool(getattr(C, 'USE_HEADPOSE_FILM', True)),
+            use_videomae=False,
+            train_pose=bool(getattr(C, 'TRAIN_HEAD_POSE', True)),
+        )
+
+    # 1) Reference model weights (ImageNet backbone + fresh FPN/heads)
+    print('\n[1/3] Collecting reference weights (ImageNet backbone + fresh FPN/heads)...')
     C.ZERO_DET_CONF_FOR_RECOVERY = False
-    model_fresh = POPWMultiTaskModel(
-        num_det_classes=C.NUM_DET_CLASSES if hasattr(C, 'NUM_DET_CLASSES') else 24,
-        num_act_classes=C.NUM_ACT_CLASSES,
-        num_psr_classes=C.NUM_PSR_CLASSES if hasattr(C, 'NUM_PSR_CLASSES') else 11,
-        backbone_type=C.BACKBONE_TYPE if hasattr(C, 'BACKBONE_TYPE') else 'convnext_tiny',
-        pretrained=False,
-    )
+    model_fresh = _build_model(pretrained=True)
     fresh_weights = collect_conv_weights(model_fresh)
-    print(f'  Fresh model: {len(fresh_weights)} Conv2d layers')
+    print(f'  Reference model: {len(fresh_weights)} Conv2d/Linear layers')
     del model_fresh
 
     # 2) Checkpoint weights
     print('\n[2/3] Loading checkpoint model...')
-    model_ckpt = POPWMultiTaskModel(
-        num_det_classes=C.NUM_DET_CLASSES if hasattr(C, 'NUM_DET_CLASSES') else 24,
-        num_act_classes=C.NUM_ACT_CLASSES,
-        num_psr_classes=C.NUM_PSR_CLASSES if hasattr(C, 'NUM_PSR_CLASSES') else 11,
-        backbone_type=C.BACKBONE_TYPE if hasattr(C, 'BACKBONE_TYPE') else 'convnext_tiny',
-        pretrained=False,
-    )
+    model_ckpt = _build_model(pretrained=False)
     ckpt = torch.load(CKPT, map_location='cpu', weights_only=False)
     state = ckpt.get('model_state_dict', ckpt.get('model_state', ckpt.get('model')))
     model_ckpt.load_state_dict(state, strict=False)
