@@ -122,8 +122,13 @@ def load_model(ckpt_path=None):
     if ckpt_path and Path(ckpt_path).exists():
         ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
         state = ckpt.get('model_state_dict', ckpt.get('model_state', ckpt.get('model')))
-        missing, unexpected = model.load_state_dict(state, strict=False)
-        print(f'Loaded checkpoint: {ckpt_path} (missing={len(missing)} unexpected={len(unexpected)})')
+        # Filter incompatible keys (pre-GroupNorm checkpoint vs post-GroupNorm model)
+        model_shape = {k: v.shape for k, v in model.state_dict().items()}
+        compat = {k: v for k, v in state.items()
+                  if k in model_shape and v.shape == model_shape[k]}
+        skipped = len(state) - len(compat)
+        model.load_state_dict(compat, strict=False)
+        print(f'Loaded checkpoint: {ckpt_path} (loaded={len(compat)} skipped={skipped})')
     return model.to(DEVICE)
 
 

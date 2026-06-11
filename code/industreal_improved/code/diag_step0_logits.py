@@ -56,8 +56,12 @@ def load_and_reinit():
 
     ckpt = torch.load(CKPT, map_location=DEVICE, weights_only=False)
     state = ckpt.get('model_state_dict', ckpt.get('model_state', ckpt.get('model')))
-    missing, unexpected = model.load_state_dict(state, strict=False)
-    print(f'Loaded checkpoint (missing={len(missing)} unexpected={len(unexpected)})')
+    model_shape = {k: v.shape for k, v in model.state_dict().items()}
+    compat = {k: v for k, v in state.items()
+              if k in model_shape and v.shape == model_shape[k]}
+    skipped = len(state) - len(compat)
+    model.load_state_dict(compat, strict=False)
+    print(f'Loaded checkpoint (loaded={len(compat)} skipped={skipped})')
 
     if DO_REINIT:
         print('Reinitializing FPN + heads via _reinit_dead_heads...')
