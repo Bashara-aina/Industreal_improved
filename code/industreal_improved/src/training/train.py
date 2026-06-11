@@ -2633,6 +2633,7 @@ def main(args):
         logger.info('[STEP-0 ASSERT] Running step-0 diagnostic forward pass...')
         model.eval()
         with torch.no_grad():
+            cls_logits_abs_median = None
             try:
                 sample_batch = next(iter(train_loader))
                 images = sample_batch['image'].to(device)[:1]
@@ -2646,16 +2647,16 @@ def main(args):
                 cls_preds = out['cls_preds']
                 cls_logits_abs_median = cls_preds.abs().median().item()
                 logger.info(f'  [STEP-0 ASSERT] cls_logits.abs().median() = {cls_logits_abs_median:.3f}')
-                if cls_logits_abs_median >= 8.0:
-                    raise RuntimeError(
-                        f'STEP-0 ASSERTION FAILED: cls_logits.abs().median()={cls_logits_abs_median:.3f} >= 8.0. '
-                        'FPN/backbone feature magnitude still saturating detection head. '
-                        'Run D7-D9 diagnostics then reinit FPN before retraining.'
-                    )
-                else:
-                    logger.info('  [STEP-0 ASSERT] PASSED: logit scale in healthy range (< 8).')
             except Exception as exc:
                 logger.warning(f'  [STEP-0 ASSERT] Could not run diagnostic forward pass: {exc}')
+            if cls_logits_abs_median is not None and cls_logits_abs_median >= 8.0:
+                raise RuntimeError(
+                    f'STEP-0 ASSERTION FAILED: cls_logits.abs().median()={cls_logits_abs_median:.3f} >= 8.0. '
+                    'FPN/backbone feature magnitude still saturating detection head. '
+                    'Run D7-D9 diagnostics then reinit FPN before retraining.'
+                )
+            elif cls_logits_abs_median is not None:
+                logger.info('  [STEP-0 ASSERT] PASSED: logit scale in healthy range (< 8).')
         model.train()
 
     log_file = open(log_dir / 'metrics.jsonl', 'a')
