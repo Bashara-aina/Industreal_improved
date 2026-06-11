@@ -91,7 +91,19 @@ def main():
     model_ckpt = _build_model(pretrained=False)
     ckpt = torch.load(CKPT, map_location='cpu', weights_only=False)
     state = ckpt.get('model_state_dict', ckpt.get('model_state', ckpt.get('model')))
-    model_ckpt.load_state_dict(state, strict=False)
+    # Filter to keys that match the current model's shapes (GroupNorm added
+    # post-checkpoint changes subnet/classifier shapes — skip those).
+    model_shapes = {k: v.shape for k, v in model_ckpt.state_dict().items()}
+    compatible_state = {}
+    skipped = 0
+    for k, v in state.items():
+        if k in model_shapes and v.shape == model_shapes[k]:
+            compatible_state[k] = v
+        else:
+            skipped += 1
+    model_ckpt.load_state_dict(compatible_state, strict=False)
+    if skipped:
+        print(f'  Skipped {skipped} incompatible keys (pre-GroupNorm checkpoint vs post-GroupNorm model)')
     ckpt_weights = collect_conv_weights(model_ckpt)
     del model_ckpt
 
