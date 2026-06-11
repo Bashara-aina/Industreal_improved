@@ -1186,6 +1186,31 @@ class IndustRealMultiTaskDataset(Dataset):
         sample_weights = np.array(
             [class_weights[aid] for aid in self.activity_ids], dtype=np.float64
         )
+
+        # Tier 3.12 — Task-aware sample weighting. When enabled, upweight frames
+        # where the rarer secondary tasks (PSR, detection) have valid labels.
+        # The boost is small (≤2x) and applied multiplicatively, so it never
+        # overpowers the activity class balance.
+        if bool(getattr(C, 'USE_TASK_AWARE_SAMPLING', False)):
+            psr_boost = float(getattr(C, 'TASK_AWARE_PSR_BOOST', 1.5))
+            det_boost = float(getattr(C, 'TASK_AWARE_DET_BOOST', 1.2))
+            for i in range(len(sample_weights)):
+                sample_meta = self.frame_metadata[i] if i < len(self.frame_metadata) else None
+                if sample_meta is None:
+                    continue
+                # PSR: boost frames where any component has a positive label
+                psr_labels = sample_meta.get('psr_labels') if isinstance(sample_meta, dict) else None
+                if psr_labels is not None and hasattr(psr_labels, '__len__'):
+                    if any(psr_labels):
+                        sample_weights[i] *= psr_boost
+                # Detection: boost frames with at least one detection target
+                if isinstance(sample_meta, dict) and sample_meta.get('num_dets', 0) > 0:
+                    sample_weights[i] *= det_boost
+            # Re-normalize so weights still sum to 1
+            total_w = sample_weights.sum()
+            if total_w > 0:
+                sample_weights = sample_weights / total_w
+
         return WeightedRandomSampler(
             weights=torch.as_tensor(sample_weights, dtype=torch.double),
             num_samples=len(sample_weights),

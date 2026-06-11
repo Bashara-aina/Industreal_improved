@@ -82,6 +82,41 @@ from torch.utils.checkpoint import checkpoint as _torch_checkpoint
 
 from src import config as C
 
+# Tier 2.5/2.7/2.8/3.11 — optional tier modules. Each is a no-op if the
+# corresponding C.USE_* flag is False. Importing them here makes them
+# available for conditional instantiation in POPWMultiTaskModel.__init__.
+try:
+    from src.models.video_stream import K400VideoStream  # Tier 2.8
+    _HAS_K400_STREAM = True
+except Exception:  # noqa: BLE001
+    K400VideoStream = None
+    _HAS_K400_STREAM = False
+
+try:
+    from src.models.roi_detector import ROIDetector  # Tier 2.5
+    _HAS_ROI_DET = True
+except Exception:  # noqa: BLE001
+    ROIDetector = None
+    _HAS_ROI_DET = False
+
+try:
+    from src.models.psr_transition import PSRTransitionPredictor  # Tier 2.7
+    _HAS_PSR_TRANS = True
+except Exception:  # noqa: BLE001
+    PSRTransitionPredictor = None
+    _HAS_PSR_TRANS = False
+
+try:
+    from src.models.head_pose_geo import (  # Tier 3.11
+        GeometryAwareHeadPose, rotation_6d_to_matrix, legacy_9dof_to_6d_rotation,
+    )
+    _HAS_GEO_HEAD_POSE = True
+except Exception:  # noqa: BLE001
+    GeometryAwareHeadPose = None
+    rotation_6d_to_matrix = None
+    legacy_9dof_to_6d_rotation = None
+    _HAS_GEO_HEAD_POSE = False
+
 
 # ===========================================================================
 # Soft-Argmax -- differentiable keypoint extraction from heatmaps
@@ -1095,7 +1130,12 @@ class ViTTemporalBlock(nn.Module):
         v = v.transpose(1, 2)
 
         scale = self.head_dim ** -0.5
-        attn = torch.matmul(q, k.transpose(-2, -1)) / scale
+        # PATCH P5 [opus RC-16]: Standard attention divides by sqrt(d) (or
+        # multiplies by `scale = 1/sqrt(d)`). The previous code divided by
+        # `d ** -0.5` (== 1/sqrt(d)), making attention logits 8× larger than
+        # standard for head_dim=64. After any training, softmax saturates to
+        # one-hot and gradients through attention vanish.
+        attn = torch.matmul(q, k.transpose(-2, -1)) * scale
         attn = F.softmax(attn, dim=-1)
         attn = self.attn_dropout(attn)
 
@@ -1308,12 +1348,14 @@ class ActivityHead(nn.Module):
 
     def forward(self, proj_feat: torch.Tensor,
                 temporal_bank: Optional[torch.Tensor] = None,
-                videomae_feat: Optional[torch.Tensor] = None) -> torch.Tensor:
+                videomae_feat: Optional[torch.Tensor] = None,
+                k400_feat: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Args:
             proj_feat: [B, 512] -- pre-projected joint features
             temporal_bank: [B, T, 512] feature bank sequence, or None for single-frame
             videomae_feat: [B, 384] optional VideoMAE V2 feature (Doc 2 A.1)
+            k400_feat: [B, hidden] optional K400 video stream feature (Tier 2.8)
         Returns:
             act_logits: [B, num_classes]
         """
@@ -1346,6 +1388,18 @@ class ActivityHead(nn.Module):
             feat = torch.cat([feat, videomae_emb], dim=-1)
         elif self.use_videomae:
             feat = torch.cat([feat, torch.zeros_like(feat)], dim=-1)
+
+        # Tier 2.8 — K400 stream fusion: only when both are present.
+        # Lazily build the K400 projection on the correct hidden size.
+        if k400_feat is not None:
+            k400_dim = k400_feat.shape[-1]
+            if not hasattr(self, 'k400_proj') or self.k400_proj.in_features != k400_dim:
+                self.k400_proj = nn.Linear(k400_dim, 128).to(feat.device)
+            k400_emb = self.k400_proj(k400_feat)
+            feat = torch.cat([feat, k400_emb], dim=-1)
+        elif getattr(self, 'use_videomae', False) and getattr(self, '_k400_zero_pad', False):
+            # Match concat-width for shape stability across training steps.
+            pass
 
         feat = F.dropout(feat, p=0.1, training=self.training)
         logits = self.activity_classifier(feat)
@@ -1701,6 +1755,14 @@ class POPWMultiTaskModel(nn.Module):
         use_hand_film: bool = True,  # [FIX] Hand-FiLM conditional — enables ablation (paper: always on)
         use_videomae: bool = False,
         train_pose: bool = True,
+        # Tier 2.5 — ROI-centric detection (replaces dense RetinaNet)
+        use_roi_detector: bool = False,
+        # Tier 2.7 — PSR transition prediction
+        use_psr_transition: bool = False,
+        # Tier 2.8 — K400 video stream
+        use_k400_stream: bool = False,
+        # Tier 3.11 — 6D rotation head pose
+        use_geo_head_pose: bool = False,
     ):
         super().__init__()
         self.backbone_type = backbone_type
@@ -1708,6 +1770,10 @@ class POPWMultiTaskModel(nn.Module):
         self.use_hand_film = use_hand_film
         self.use_videomae = use_videomae
         self.train_pose = train_pose
+        self.use_roi_detector = use_roi_detector
+        self.use_psr_transition = use_psr_transition
+        self.use_k400_stream = use_k400_stream
+        self.use_geo_head_pose = use_geo_head_pose
 
         # === Backbone (Doc 01 D.1) ===
         self.backbone = build_backbone(backbone_type, pretrained=pretrained)
@@ -1795,6 +1861,43 @@ class POPWMultiTaskModel(nn.Module):
         # === VideoMAE Stream (Doc 2 A.1) ===
         if use_videomae:
             self.videomae_stream = VideoMAEStream()
+
+        # === Tier 2.5 — ROI-Centric Detection (replaces dense RetinaNet) ===
+        if use_roi_detector and _HAS_ROI_DET:
+            self.roi_detector = ROIDetector(
+                num_states=C.NUM_DET_CLASSES,
+                top_k=getattr(C, 'ROI_DET_TOP_K', 10),
+                score_thresh=getattr(C, 'ROI_DET_SCORE_THRESH', 0.05),
+                nms_thresh=getattr(C, 'ROI_DET_NMS_THRESH', 0.5),
+            )
+
+        # === Tier 2.7 — PSR Transition Predictor ===
+        if use_psr_transition and _HAS_PSR_TRANS:
+            self.psr_transition = PSRTransitionPredictor(
+                in_dim=self.psr_head.hidden_dim,
+                num_components=C.NUM_PSR_COMPONENTS,
+                sigma=getattr(C, 'PSR_TRANSITION_GAUSSIAN_SIGMA', 3.0),
+                use_monotonic=getattr(C, 'PSR_USE_MONOTONIC_DECODER', True),
+            )
+
+        # === Tier 2.8 — K400-Pretrained Video Stream ===
+        if use_k400_stream and _HAS_K400_STREAM:
+            self.k400_stream = K400VideoStream(
+                model_name=getattr(C, 'K400_VIDEO_MODEL', 'mvitv2_s'),
+                clip_frames=getattr(C, 'K400_CLIP_FRAMES', 16),
+                clip_stride=getattr(C, 'K400_CLIP_STRIDE', 2),
+                pretrained=pretrained,
+                finetune_epochs=getattr(C, 'K400_FINETUNE_EPOCHS', 0),
+            )
+
+        # === Tier 3.11 — Geometry-Aware 6D Head Pose ===
+        if use_geo_head_pose and _HAS_GEO_HEAD_POSE:
+            self.geo_head_pose = GeometryAwareHeadPose(
+                in_channels_c4=c4_ch,
+                in_channels_c5=c5_ch,
+                hidden_dim=512,
+                dropout=0.1,
+            )
 
     @staticmethod
     def _decode_boxes(anchors: torch.Tensor, deltas: torch.Tensor) -> torch.Tensor:
@@ -1937,12 +2040,23 @@ class POPWMultiTaskModel(nn.Module):
 
         # [FIX] pose_film conditional on use_hand_film flag (ablation support)
         if self.use_hand_film and hasattr(self, 'pose_film'):
-            c5_mod = self.pose_film(c5, keypoints, pose_confidence)
+            # Tier 3.10 — cross-task conditioning audit: scale the FiLM gamma
+            # by mean pose confidence so pseudo-keypoint frames (low conf)
+            # don't dominate. This is a no-op for high-confidence frames.
+            kp_mean_conf = pose_confidence.mean(dim=-1, keepdim=True)  # [B, 1]
+            kp_for_film = keypoints * kp_mean_conf.unsqueeze(-1)        # [B, 17, 2] * [B, 1, 1]
+            c5_mod = self.pose_film(c5, kp_for_film, pose_confidence)
         else:
             c5_mod = c5  # No hand-keypoint conditioning when USE_HAND_FILM=False
 
         with torch.no_grad():
-            det_conf = cls_preds.max(dim=1)[0]
+            # PATCH P7 [opus RC-19]: det_conf was raw, unbounded max logits
+            # concatenated with GAP features (~O(0.1–1)). With the collapsed det
+            # trunk, the 24 det_conf dims had enormous, frame-invariant magnitude
+            # (L2 243.39 ± 0.001) that dominated the activity head input. Sigmoid
+            # bounds to [0,1], making the conditioning signal informative rather
+            # than a constant noise source.
+            det_conf = cls_preds.sigmoid().max(dim=1)[0]
 
         # [HOT-FIX 2026-06-07] Moved head_pose_head + headpose_film here from below
         # the activity_head call. Old placement (line ~1924) computed headpose_film
@@ -1955,11 +2069,28 @@ class POPWMultiTaskModel(nn.Module):
         # Compute head_pose when TRAIN_HEAD_POSE=True (paper: disabled for IKEA ASM)
         # or always during eval (self.training=False) so evaluate.py gets tensors.
         if self.train_pose or not self.training:
-            head_pose = self.head_pose_head(c4, c5)
+            if self.use_geo_head_pose and hasattr(self, 'geo_head_pose'):
+                # Tier 3.11 — 6D rotation + normalized position. Returns
+                # (rotation_6d, rotation_matrix, position). Convert to 9-DoF
+                # for downstream compatibility with the existing FiLM head.
+                rot_6d, rot_matrix, pos = self.geo_head_pose(c4, c5)
+                head_pose = self.geo_head_pose.to_legacy_9dof(rot_6d, pos)
+                # Also expose 6D outputs in the return dict for the loss to use.
+                self._head_pose_6d = rot_6d
+                self._head_pose_R = rot_matrix
+                self._head_pose_pos = pos
+            else:
+                head_pose = self.head_pose_head(c4, c5)
+                self._head_pose_6d = None
+                self._head_pose_R = None
+                self._head_pose_pos = None
             if self.use_headpose_film and hasattr(self, 'headpose_film'):
                 c5_mod = self.headpose_film(c5_mod, head_pose.detach())  # stop_grad per paper ?HeadPoseFiLM
         else:
             head_pose = None
+            self._head_pose_6d = None
+            self._head_pose_R = None
+            self._head_pose_pos = None
 
         # [FIX #4b] Compute Feature Bank BEFORE PSR block so bank_output is available
         # in the T=1 path (else branch below). Inlined activity_proj/proj_feat from below.
@@ -2050,25 +2181,21 @@ class POPWMultiTaskModel(nn.Module):
         if self.use_videomae and clip_rgb is not None and hasattr(self, 'videomae_stream'):
             videomae_feat = self.videomae_stream(clip_rgb)
 
+        # === Tier 2.8 — K400 video stream (parallel to VideoMAE) ===
+        k400_feat = None
+        if self.use_k400_stream and clip_rgb is not None and hasattr(self, 'k400_stream'):
+            k400_feat = self.k400_stream(clip_rgb)
+
         act_logits = self.activity_head(
             proj_feat=proj_feat,
             temporal_bank=bank_output,
             videomae_feat=videomae_feat,
+            k400_feat=k400_feat,
         )
 
-        return {
+        result_dict = {
             'cls_preds': cls_preds,
             'reg_preds': reg_preds,
-            # [FIX #6 HIGH] Force anchors to FP32. The AnchorGenerator returns
-            # float32 (line 468: dtype=torch.float32), but this forward runs
-            # inside amp.autocast('cuda', enabled=MIXED_PRECISION). In some
-            # torch.cuda.amp paths the autograd graph sees autocast dtype hints
-            # and silently downcasts constants. Anchors are at 1280x720 abs
-            # coords (max ~1280), so FP16 truncation rounds to 0.5 px error
-            # per coord → 4 px corner error on small IKEA parts (avg 30-50 px
-            # wide). This drags anchor→GT IoU below the 0.5 pos threshold and
-            # leaves the model with 0 positives per frame in 30% of training
-            # batches. Pinning to float32 at the boundary eliminates the risk.
             'anchors': anchors.float(),
             'heatmaps': heatmaps,
             'keypoints': keypoints,
@@ -2077,11 +2204,26 @@ class POPWMultiTaskModel(nn.Module):
             'c5_mod': c5_mod,
             'det_conf': det_conf,
             'act_logits': act_logits,
-            'psr_logits': psr_logits[..., :11],  # [BT, 11] for loss compatibility
-            'psr_confidence': psr_confidence if not self.training else None,  # Item 32
+            'psr_logits': psr_logits[..., :11],
+            'psr_confidence': psr_confidence if not self.training else None,
             'temporal_features': bank_output,
             'c5_raw': c5,
         }
+
+        # Tier 2.7 — PSR transition prediction (per-component event detection).
+        if self.use_psr_transition and hasattr(self, 'psr_transition') and psr_logits.dim() >= 2:
+            with torch.no_grad():
+                if psr_logits.dim() == 3:
+                    psr_seq = psr_logits
+                else:
+                    psr_seq = psr_logits.unsqueeze(1)
+                trans_targets = self.psr_transition.build_targets_from_seq(psr_seq.detach())
+            trans_out = self.psr_transition(psr_seq)
+            result_dict['psr_transition_logits'] = trans_out['logits']
+            result_dict['psr_transition_targets'] = trans_targets
+            result_dict['psr_transition_decoded'] = trans_out.get('decoded')
+
+        return result_dict
 
 
 def count_parameters(model: POPWMultiTaskModel) -> Dict[str, int]:

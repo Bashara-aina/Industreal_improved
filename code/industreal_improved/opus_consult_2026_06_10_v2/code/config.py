@@ -290,12 +290,134 @@ MIXED_PRECISION = False  # [FIX 2026-06-09] FP32 retrain — bf16/fp16 both fail
 SEED            = 42
 
 # EMA (Exponential Moving Average) — [FIX #4 HIGH] Enabled per paper §Training: EMA=0.999 in Stage 3
-USE_EMA        = True
+# PATCH P2 [opus RC-13]: Disabled for the recovery run. The EMA shadow blends
+# the freshly-reinit'd head with the (collapsed) pre-reinit trajectory; the
+# resulting best.pth is a corrupted blend, not the trained model. Disable EMA
+# so best.pth = raw end-of-epoch weights, and checkpoint selection measures
+# the real model. Re-enable for long runs once heads are alive.
+USE_EMA        = False
 EMA_DECAY      = 0.999  # standard decay for image models
 
-# Mixup augmentation for activity head
-USE_MIXUP      = True
+# PATCH P4 [opus RC-15]: Mixup/CutMix corrupt activity labels. The current
+# implementation blends OUTPUT LOGITS (train.py:407, 470) — the model never
+# sees mixed inputs. With LDAM argmax'ing the soft label (losses.py:491-495),
+# this becomes a coin-flip label swap. Disable until the implementation
+# actually mixes images before the forward pass.
+USE_MIXUP      = False
 MIXUP_ALPHA    = 0.4
+
+# =========================================================================
+# Tier 1.2 — Simplified Loss Config (assert-and-crash vs guard-and-continue)
+# =========================================================================
+# When True: replaces LDAM with plain CE+label_smoothing, drops Kendall
+# uncertainty weighting for fixed per-task weights, removes NaN guard layers,
+# and CRASHES on NaN instead of silently replacing with fallback values.
+# This is the "boring, proven recipe" that wins over defensive machinery.
+USE_SIMPLIFIED_LOSS = True   # Set True for recovery/tuning runs (Tier 1.2)
+
+# Assert-and-crash: if True, the loss forward() raises on NaN instead of
+# guard-and-continue. Only works with USE_SIMPLIFIED_LOSS=True. With
+# USE_SIMPLIFIED_LOSS=False, NaN guards are active but diagnostic warnings
+# are upgraded to errors.
+ASSERT_AND_CRASH = True   # Set True for debugging runs (Tier 1.2)
+
+# Simplified loss fixed per-task weights (only used when USE_SIMPLIFIED_LOSS=True)
+SIMPLIFIED_LOSS_WEIGHTS = {
+    'det': 2.0,        # detection dominates with 173K location loss
+    'pose': 0.1,       # body pose heatmap MSE is small-scale; prevent dominance
+    'act': 2.0,        # activity CE on 75 classes converges slowly
+    'psr': 2.0,        # PSR focal on 11 components
+    'head_pose': 0.1,  # head pose is 9-DoF MSE; keep low weight
+}
+
+# Simplified loss: use label smoothing for activity classification
+SIMPLIFIED_CE_LABEL_SMOOTHING = 0.15  # standard for 75-class problems
+
+# Simplified loss: drop LDAM entirely (True) or keep LDAM with s=30 (False)
+SIMPLIFIED_DROP_LDAM = True
+
+# ---------------------------------------------------------------------------
+# Tier 2.4 — Embedding Cache Pipeline
+# ---------------------------------------------------------------------------
+EMBEDDING_CACHE_DIR = 'runs/embedding_cache'  # HDF5 cache directory
+EMBEDDING_CACHE_FEATURE_DIM = 512  # proj_feat dimension to cache
+EMBEDDING_CACHE_SEQ_LEN = 64       # sequence length for temporal head training
+EMBEDDING_CACHE_BATCH_SIZE = 128   # huge batch when training from cache
+
+# ---------------------------------------------------------------------------
+# Tier 2.5 — ROI-Centric Detection
+# ---------------------------------------------------------------------------
+USE_ROI_DETECTOR = False  # Replace RetinaNet DetectionHead with ROIDetector
+ROI_DET_TOP_K = 10        # Max boxes to keep per image
+ROI_DET_SCORE_THRESH = 0.05
+ROI_DET_NMS_THRESH = 0.5
+
+# ---------------------------------------------------------------------------
+# Tier 2.6 — Synthetic Data Pretraining (already wired, expose explicitly)
+# ---------------------------------------------------------------------------
+SYNTHETIC_DATA_DIR = None  # Path to synthetic ASD images; set to activate
+SYNTHETIC_PRETRAIN_ENABLED = False  # Set True to run synthetic detection pretrain
+
+# ---------------------------------------------------------------------------
+# Tier 2.7 — PSR Transition Prediction
+# ---------------------------------------------------------------------------
+USE_PSR_TRANSITION = False  # Use PSRTransitionPredictor instead of per-frame BCE
+PSR_TRANSITION_GAUSSIAN_SIGMA = 3.0  # sigma for smoothing transition targets
+PSR_TRANSITION_THRESHOLD = 0.3       # min prob to trigger state transition
+PSR_USE_MONOTONIC_DECODER = True     # enforce monotonic fill-forward constraint
+
+# ---------------------------------------------------------------------------
+# Tier 2.8 — K400-Pretrained Video Stream for Activity
+# ---------------------------------------------------------------------------
+USE_K400_VIDEO_STREAM = False  # Use fine-tuned Kinetics-400 pretrained video encoder
+K400_VIDEO_MODEL = 'mvitv2_s'  # 'mvitv2_s', 'videomae_v2_s', 'slowfast_r50'
+K400_FINETUNE_EPOCHS = 20      # Epochs to fine-tune (0 = frozen)
+K400_CLIP_FRAMES = 16          # Frames per activity clip
+K400_CLIP_STRIDE = 2           # Stride between sampled frames
+
+# ---------------------------------------------------------------------------
+# Tier 3.9 — Knowledge Distillation
+# ---------------------------------------------------------------------------
+USE_DISTILLATION = False       # Enable logit + box distillation from teacher models
+DISTILL_TEMPERATURE = 3.0      # Softmax temperature for KL divergence
+DISTILL_DET_WEIGHT = 0.5       # Weight of detection distillation loss
+DISTILL_ACT_WEIGHT = 0.3       # Weight of activity distillation loss
+DISTILL_TEACHER_DET_CKPT = None  # Path to YOLOv8m teacher checkpoint
+DISTILL_TEACHER_ACT_CKPT = None  # Path to MViTv2 teacher checkpoint
+
+# ---------------------------------------------------------------------------
+# Tier 3.10 — Cross-Task FiLM Fixes
+# ---------------------------------------------------------------------------
+USE_DET_SIGMOID_CONDITIONING = True   # Sigmoid-bounded det_conf (P7 confirmed)
+USE_HAND_CONFIDENCE_GATING = False    # Gate PoseFiLM by actual hand confidence
+USE_FILM_ABLATION_MODE = False        # Test mode: disable FiLM stages for ablation
+
+# ---------------------------------------------------------------------------
+# Tier 3.12 — Task-Aware Sampling
+# ---------------------------------------------------------------------------
+USE_TASK_AWARE_SAMPLING = False        # Upweight frames with rare-task labels
+TASK_AWARE_PSR_BOOST = 1.5             # Multiplier for frames with positive PSR
+TASK_AWARE_DET_BOOST = 1.2             # Multiplier for frames with detection targets
+
+# ---------------------------------------------------------------------------
+# Tier 3.11 — Geometry-Aware Head Pose
+# ---------------------------------------------------------------------------
+USE_GEO_HEAD_POSE = False      # Use 6D rotation + normalized pos instead of 9-DoF MSE
+HEAD_POSE_GEO_HIDDEN = 512     # Hidden dim for geo head pose MLP
+HEAD_POSE_ROTATION_WEIGHT = 1.0  # Weight for geodesic rotation loss
+HEAD_POSE_POSITION_WEIGHT = 0.1  # Weight for position MSE loss
+
+# ---------------------------------------------------------------------------
+# Tier 3.12 — Task-Aware Multi-Loader
+# ---------------------------------------------------------------------------
+USE_TASK_AWARE_SAMPLING = False  # Use per-task dataloaders instead of unified loader
+TASK_SAMPLING_ROUND_ROBIN = True # Round-robin between task loaders
+TASK_SAMPLING_RATIOS = {         # Per-task batch ratios relative to total
+    'det': 0.3,       # train detection on annotated frames
+    'activity': 0.3,  # train activity on segment-sampled clips
+    'psr': 0.2,       # train PSR on transition-dense windows
+    'pose': 0.2,      # train pose on every k-th frame
+}
 
 # Desktop stability knobs
 CUDA_MEMORY_FRACTION = 0.98
@@ -495,7 +617,10 @@ PSR_SENSITIVITY_WEIGHT = 0.01  # 5% of typical binary-focal magnitude — gentle
 # =========================================================================
 USE_RANDAUGMENT = True   # Photometric augmentation for backbone
 MIXUP_ALPHA = 0.4
-CUTMIX_ALPHA = 1.0       # Alternate Mixup/CutMix each epoch
+# PATCH P4 [opus RC-15]: CutMix currently blends output logits (never the
+# inputs) and has no lam-gating — coin-flip label noise on the activity head.
+# Disabled together with USE_MIXUP above for the recovery run.
+CUTMIX_ALPHA = 0.0       # Alternate Mixup/CutMix each epoch
 RANDOM_TEMPORAL_STRIDE = True  # Random frame stride {1,2,3} per clip (dataset.py line 875)
 
 # =========================================================================

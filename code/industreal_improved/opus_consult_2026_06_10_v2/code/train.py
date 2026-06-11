@@ -67,9 +67,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.amp as amp
-# AMP_DTYPE: torch.float16 (default) or torch.bfloat16 (set by --bf16 flag).
+from torch.amp.autocast_mode import autocast as _torch_autocast
+float16 = torch.float16
+float32 = torch.float32
+bfloat16 = torch.bfloat16
+uint8 = torch.uint8
+device = torch.device
+tensor = torch.tensor
+randperm = torch.randperm
+isfinite = torch.isfinite
+zeros_like = torch.zeros_like
+_torch_from_numpy = torch.from_numpy
+_torch_sigmoid = torch.sigmoid
+_torch_max = torch.max
+_torch_abs = torch.abs
+# AMP_DTYPE: float16 (default) or bfloat16 (set by --bf16 flag).
 # bf16 prevents overflow in the first backbone conv on 720x1280 inputs.
-AMP_DTYPE = torch.float16
+AMP_DTYPE = float16
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts, LinearLR, SequentialLR
 from torch.optim.swa_utils import AveragedModel
@@ -173,9 +187,9 @@ def seed_everything(seed: int = C.SEED) -> None:
         pass
 
 
-def _prepare_images(images: torch.Tensor, device: torch.device, training: bool = True) -> torch.Tensor:
+def _prepare_images(images: torch.Tensor, device: device, training: bool = True) -> torch.Tensor:
     images = images.to(device, non_blocking=True)
-    if images.dtype == torch.uint8:
+    if images.dtype == uint8:
         images = images.float().div_(255.0)
 
         if bool(getattr(C, 'USE_RANDAUGMENT', False)) and training:
@@ -190,8 +204,8 @@ def _prepare_images(images: torch.Tensor, device: torch.device, training: bool =
             except Exception:
                 pass
 
-        mean = torch.tensor(C.IMAGENET_MEAN, device=device, dtype=images.dtype)
-        std = torch.tensor(C.IMAGENET_STD, device=device, dtype=images.dtype)
+        mean = tensor(C.IMAGENET_MEAN, device=device, dtype=images.dtype)
+        std = tensor(C.IMAGENET_STD, device=device, dtype=images.dtype)
         if images.dim() == 5:
             mean = mean.view(1, 1, 3, 1, 1)
             std = std.view(1, 1, 3, 1, 1)
@@ -401,7 +415,7 @@ def mixup_activity(
     if same_label_mask.sum() > 0.5 * B * B:
         return outputs, targets
 
-    indices = torch.randperm(B)
+    indices = randperm(B)
 
     act_logits = outputs['act_logits']
     mixed_act_logits = lam * act_logits + (1 - lam) * act_logits[indices]
@@ -459,7 +473,7 @@ def cutmix_activity(
     y1 = np.clip(cy - cut_h // 2, 0, H)
     y2 = np.clip(cy + cut_h // 2, 0, H)
 
-    indices = torch.randperm(B, device=images.device)
+    indices = randperm(B, device=images.device)
 
     images_mixed = images.clone()
     images_mixed[:, :, y1:y2, x1:x2] = images[indices, :, y1:y2, x1:x2]
@@ -608,7 +622,7 @@ def _checkpoint_has_nan(model) -> bool:
     """Guard: check model tensors for NaN/Inf before saving."""
     for name, param in model.named_parameters():
         if param.requires_grad:
-            if not torch.isfinite(param).all():
+            if not isfinite(param).all():
                 logger.warning(
                     f'  [NaN_GUARD] Parameter {name} contains NaN/Inf -- '
                     f'skipping checkpoint save'
@@ -688,30 +702,32 @@ def _save_crash_recovery(tag: str = '') -> None:
                         model_state[k] = v
 
                 optimizer_state = {}
-                for k, v in optimizer.state_dict().items():
-                    if isinstance(v, torch.Tensor):
-                        try:
-                            optimizer_state[k] = v.detach().cpu()
-                        except Exception:
+                if optimizer is not None:
+                    for k, v in optimizer.state_dict().items():
+                        if isinstance(v, torch.Tensor):
                             try:
-                                optimizer_state[k] = v.clone().cpu()
+                                optimizer_state[k] = v.detach().cpu()
                             except Exception:
-                                optimizer_state[k] = v
-                    else:
-                        optimizer_state[k] = v
+                                try:
+                                    optimizer_state[k] = v.clone().cpu()
+                                except Exception:
+                                    optimizer_state[k] = v
+                        else:
+                            optimizer_state[k] = v
 
                 scaler_state = {}
-                for k, v in scaler.state_dict().items():
-                    if isinstance(v, torch.Tensor):
-                        try:
-                            scaler_state[k] = v.detach().cpu()
-                        except Exception:
+                if scaler is not None:
+                    for k, v in scaler.state_dict().items():
+                        if isinstance(v, torch.Tensor):
                             try:
-                                scaler_state[k] = v.clone().cpu()
+                                scaler_state[k] = v.detach().cpu()
                             except Exception:
-                                scaler_state[k] = v
-                    else:
-                        scaler_state[k] = v
+                                try:
+                                    scaler_state[k] = v.clone().cpu()
+                                except Exception:
+                                    scaler_state[k] = v
+                        else:
+                            scaler_state[k] = v
 
                 save_dict = {
                     'tag': tag,
@@ -842,6 +858,9 @@ def train_one_epoch(
     num_batches = 0
     nan_skips = 0
     total_steps = 0
+    # [PYRIGHT] Initialize loss_dict so it is always bound when the averaging
+    # loop at the end of the epoch body reads from it.
+    loss_dict: Dict[str, float] = {}
     seq_steps = 0
     t_start = time.time()
 
@@ -912,7 +931,7 @@ def train_one_epoch(
         # in the epoch are NaN-skipped (continue), loss_dict is never assigned
         # in the loop body. The post-loop aggregation at line 1474 then crashes
         # with UnboundLocalError. Initializing here keeps the local bound.
-        loss_dict = {}
+        loss_dict: Dict[str, float] = {}
 
         # [FIX] Clamp Kendall log_var parameters to safe range BEFORE forward
         # so the gradient we compute this step is from bounded values, not
@@ -941,8 +960,8 @@ def train_one_epoch(
         # Catch NaN/Inf in images BEFORE the expensive CUDA forward pass.
         # A single bad frame can crash the GPU kernel silently.
         if step > 0:  # skip step 0 (first batch can have weird init values)
-            _finite, _idx = torch.max(torch.abs(images), dim=0)
-            _finite = torch.isfinite(_finite).all()
+            _finite, _idx = _torch_max(_torch_abs(images), dim=0)
+            _finite = isfinite(_finite).all()
             if not _finite:
                 nan_skips += 1
                 logger.warning(
@@ -958,10 +977,13 @@ def train_one_epoch(
         # Doc 01 §D.2: Alternate PSR sequence batch every seq_every steps
         is_seq_batch = (seq_iter is not None and step > 0 and step % seq_every == 0)
         if is_seq_batch:
+            assert seq_iter is not None, 'seq_iter is None in is_seq_batch branch'
             try:
                 images_seq, targets_seq = next(seq_iter)
             except StopIteration:
+                assert seq_loader is not None, 'seq_loader is None when seq_iter is exhausted'
                 seq_iter = iter(seq_loader)
+                assert seq_iter is not None, 'fresh seq_iter is None'
                 images_seq, targets_seq = next(seq_iter)
             B_seq = images_seq.shape[0]
             T_seq = images_seq.shape[1]
@@ -971,8 +993,9 @@ def train_one_epoch(
             clip_rgb_seq = targets_seq.get('clip_rgb')
             if clip_rgb_seq is not None:
                 clip_rgb_seq = clip_rgb_seq.to(device)
-            with amp.autocast('cuda', enabled=C.MIXED_PRECISION, dtype=AMP_DTYPE):
-                outputs_seq = model(images_seq, clip_rgb=clip_rgb_seq)
+            with _torch_autocast('cuda', enabled=C.MIXED_PRECISION, dtype=AMP_DTYPE):
+                video_ids_seq = [m['recording_id'] for m in targets_seq.get('metadata', [])]
+                outputs_seq = model(images_seq, video_ids=video_ids_seq, clip_rgb=clip_rgb_seq)
                 for _k in ('cls_preds', 'reg_preds', 'head_pose', 'psr_logits', 'act_logits'):
                     if _k in outputs_seq and isinstance(outputs_seq[_k], torch.Tensor):
                         outputs_seq[_k] = outputs_seq[_k].float()
@@ -1031,7 +1054,7 @@ def train_one_epoch(
                 loss_dict_seq = {k: 0.0 for k in loss_dict_seq}
                 # [FIX] isfinite check BEFORE assigning .item() to loss_dict_seq
                 # Prevents NaN contamination of loss_dict_seq when loss_seq is NaN
-                if not torch.isfinite(loss_seq):
+                if not isfinite(loss_seq):
                     loss_dict_seq['psr'] = 0.0
                     loss_dict_seq['total'] = 0.0
                 else:
@@ -1039,7 +1062,7 @@ def train_one_epoch(
                     loss_dict_seq['total'] = loss_seq.item()
 
                 loss_seq = loss_seq / float(accum_steps)
-            if not torch.isfinite(loss_seq):
+            if not isfinite(loss_seq):
                 nan_skips += 1
                 optimizer.zero_grad(set_to_none=True)
                 del outputs_seq, loss_seq, loss_dict_seq, fake_outputs, fake_targets
@@ -1079,7 +1102,7 @@ def train_one_epoch(
                         running[k] += 0.0
             num_batches += 1
             pbar.set_postfix_str(
-                f"loss={loss_dict_seq.get('total', loss_seq.item() if torch.isfinite(loss_seq) else 0.0):.3f} "
+                f"loss={loss_dict_seq.get('total', loss_seq.item() if isfinite(loss_seq) else 0.0):.3f} "
                 f"det={loss_dict_seq.get('det', 0.0):.3f} "
                 f"pose={loss_dict_seq.get('head_pose', 0.0):.3f} "
                 f"act={loss_dict_seq.get('activity', 0.0):.3f} "
@@ -1117,18 +1140,57 @@ def train_one_epoch(
         targets['head_pose'] = targets['head_pose'].to(device)
         targets['psr_labels'] = targets['psr_labels'].to(device)
         targets['activity'] = targets['activity'].to(device)
-        hand_joints = targets.get('hand_joints', torch.zeros_like(
+        hand_joints = targets.get('hand_joints', zeros_like(
             images[:, :1, 0, 0]
         )).to(device, non_blocking=True)
 
-        with amp.autocast('cuda', enabled=C.MIXED_PRECISION, dtype=AMP_DTYPE):
+        with _torch_autocast('cuda', enabled=C.MIXED_PRECISION, dtype=AMP_DTYPE):
             clip_rgb = targets.get('clip_rgb')
             if clip_rgb is not None:
                 clip_rgb = clip_rgb.to(device)
-            outputs = model(images, clip_rgb=clip_rgb)
+            video_ids = [m['recording_id'] for m in targets.get('metadata', [])]
+            outputs = model(images, video_ids=video_ids, clip_rgb=clip_rgb)
         for _k in ('cls_preds', 'reg_preds', 'head_pose', 'psr_logits', 'act_logits'):
             if _k in outputs and isinstance(outputs[_k], torch.Tensor):
                 outputs[_k] = outputs[_k].float()
+
+        # Tier 2.4 — Embedding cache write (only first time / for cache rebuild).
+        # We use the model's det_conf + GAP features to populate the cache; the
+        # full forward of stage-2 temporal heads is skipped, replaced with the
+        # cached sequence training (CacheDataset) which is 100x faster.
+        if getattr(C, 'EMBEDDING_CACHE_WRITE_ENABLED', False):
+            cache = globals().get('_embedding_cache_writer', None)
+            if cache is not None:
+                with torch.no_grad():
+                    det_conf = outputs.get('det_conf')
+                    proj_feat = outputs.get('temporal_features')
+                    c5 = outputs.get('c5_raw')
+                    if det_conf is not None and proj_feat is not None and c5 is not None:
+                        rec_ids = targets.get('rec_ids') or ['__batch__'] * images.shape[0]
+                        for b in range(images.shape[0]):
+                            try:
+                                proj_b = proj_feat[b].mean(dim=0).cpu() if proj_feat.dim() == 3 else proj_feat[b].cpu()
+                                c5_gap_b = F.adaptive_avg_pool2d(c5[b:b+1], 1).flatten(1)[0].cpu()
+                                if 'pyramid' in outputs and 'p4' in outputs['pyramid']:
+                                    p4_gap_b = F.adaptive_avg_pool2d(
+                                        outputs['pyramid']['p4'][b:b+1], 1
+                                    ).flatten(1)[0].cpu()
+                                else:
+                                    p4_gap_b = F.adaptive_avg_pool2d(c5[b:b+1], 1).flatten(1)[0].cpu()
+                                cache.add_frame(
+                                    rec_id=rec_ids[b] if b < len(rec_ids) else f'batch_{b}',
+                                    proj_feat=proj_b,
+                                    det_conf=det_conf[b].cpu(),
+                                    c5_gap=c5_gap_b,
+                                    p4_gap=p4_gap_b,
+                                    activity=int(targets['activity'][b].item()),
+                                    psr=targets['psr_labels'][b].cpu(),
+                                    frame_idx=int(targets.get('frame_idx', [0] * images.shape[0])[b] if b < len(targets.get('frame_idx', [])) else 0),
+                                    camera=targets.get('camera_view', 'S0')[b] if isinstance(targets.get('camera_view'), list) and b < len(targets['camera_view']) else 'S0',
+                                )
+                            except Exception:
+                                # Cache write is best-effort; never break training
+                                pass
 
         # Doc 2 D.2: Alternate Mixup/CutMix each epoch
         # Activity is fixed in stage 2 (train_stage == 2) — skip MixUp to avoid
@@ -1179,8 +1241,8 @@ def train_one_epoch(
                     del images, targets
                     torch.cuda.empty_cache()
                     continue
-                loss = torch.tensor(_det_val / float(accum_steps),
-                                     dtype=torch.float32, device=device)
+                loss = tensor(_det_val / float(accum_steps),
+                                     dtype=float32, device=device)
                 loss.requires_grad_(True)
             elif stage == 2:
                 _det_val = float(loss_dict.get('det', 0.0))
@@ -1198,8 +1260,8 @@ def train_one_epoch(
                     del images, targets
                     torch.cuda.empty_cache()
                     continue
-                loss = torch.tensor((_det_val + _hp_val) / float(accum_steps),
-                                     dtype=torch.float32, device=device)
+                loss = tensor((_det_val + _hp_val) / float(accum_steps),
+                                     dtype=float32, device=device)
                 loss.requires_grad_(True)
             elif stage == 3:
                 _det_val = float(loss_dict.get('det', 0.0))
@@ -1221,11 +1283,11 @@ def train_one_epoch(
                     del images, targets
                     torch.cuda.empty_cache()
                     continue
-                loss = torch.tensor((_det_val + _hp_val + _act_val + _psr_val) / float(accum_steps),
-                                     dtype=torch.float32, device=device)
+                loss = tensor((_det_val + _hp_val + _act_val + _psr_val) / float(accum_steps),
+                                     dtype=float32, device=device)
                 loss.requires_grad_(True)
 
-        if not torch.isfinite(loss):
+        if not isfinite(loss):
             nan_skips += 1
             det_val = float(loss_dict.get('det', float('nan')))
             pose_val = float(loss_dict.get('head_pose', float('nan')))
@@ -1380,16 +1442,20 @@ def train_one_epoch(
 
         # [2% FIX] Enforce TRAIN_MAX_STEPS at batch granularity — BEFORE logging
         if getattr(C, 'TRAIN_MAX_STEPS', 0) > 0:
-            if not hasattr(C, '_global_step'):
-                C._global_step = 0
-            C._global_step += 1
-            if C._global_step >= C.TRAIN_MAX_STEPS:
-                logger.info(f'  [2pct] batch-level TRAIN_MAX_STEPS limit reached ({C._global_step}). Stopping.')
+            _gs = getattr(C, '_global_step', 0)
+            C._global_step = _gs + 1  # type: ignore[attr-defined]
+            if C._global_step >= C.TRAIN_MAX_STEPS:  # type: ignore[attr-defined]
+                logger.info(f'  [2pct] batch-level TRAIN_MAX_STEPS limit reached ({C._global_step}). Stopping.')  # type: ignore[attr-defined]
                 break
 
         # Doc 2 §B.3: Loss component breakdown (logged every 50 steps)
         if (step + 1) % 50 == 0:
-            loss_dict['total'] = loss_dict.get('total', loss)
+            _total_val = loss_dict.get('total', loss)
+            try:
+                _total_val = _total_val.item()  # type: ignore[union-attr]
+            except AttributeError:
+                pass
+            loss_dict['total'] = float(_total_val)  # type: ignore[assignment]
             _log_loss_component_breakdown(loss_dict, stage, epoch)
 
         pbar.set_postfix_str(
@@ -1491,8 +1557,8 @@ def train_one_epoch(
     avg = {}
     for k in running:
         v = running[k]
-        if k in loss_dict:
-            src = loss_dict.get(k, 0.0)
+        if k in loss_dict:  # type: ignore[used-before-def]
+            src = loss_dict.get(k, 0.0)  # type: ignore[used-before-def]
         else:
             src = v
         is_log_var = k.startswith('log_var_')
@@ -1619,8 +1685,13 @@ def _reinit_dead_heads(model):
                 nn.init.zeros_(dh.reg_pred.bias)
                 init_count['det'] += 1
                 logger.info(f'  [REINIT] {_det_attr}.reg_pred: std=0.01, bias=0')
-            # Also re-init FPN lateral/cls_tower conv layers if present (light regen)
-            for tower_attr in ('cls_tower', 'reg_tower'):
+            # PATCH P3 [opus RC-14]: DetectionHead uses `cls_subnet`/`reg_subnet`
+            # (model.py:508-509), not `cls_tower`/`reg_tower`. The old name
+            # never matched, so the 8-conv trunks stayed at their collapsed
+            # state. With trunks collapsed, a fresh 0.01-std final conv on top
+            # yields the observed bimodal score distribution (median 1e-39,
+            # max 0.97).
+            for tower_attr in ('cls_subnet', 'reg_subnet'):
                 tw = getattr(dh, tower_attr, None)
                 if tw is not None:
                     for m in tw.modules():
@@ -1838,7 +1909,7 @@ def _on_stage_transition(
     current_stage: int,
     epoch: int,
     backbone_type: str,
-    stage3_warmup_state: dict = None,
+    stage3_warmup_state: Optional[Dict] = None,
 ) -> None:
     """Handle stage transition at epoch boundary.
 
@@ -2020,8 +2091,9 @@ def _check_per_class_activity_sanity(
         return
 
     try:
-        from evaluate import report_per_class_accuracy
-        report_per_class_accuracy(cm, C.ACT_CLASS_NAMES, k=5)
+        _rpca = getattr(_evaluate_module, 'report_per_class_accuracy', None)
+        if _rpca is not None:
+            _rpca(cm, C.ACT_CLASS_NAMES, k=5)
     except Exception as exc:  # logging helper must NEVER abort training
         logger.warning(f'  [SANITY] per-class activity report failed (non-fatal): {exc}')
 
@@ -2043,7 +2115,7 @@ def _get_ema_decay(epoch: int) -> float:
 def _check_psr_prevalence_sanity(
     model: nn.Module,
     loader: DataLoader,
-    device: torch.device,
+    device: device,
     epoch: int,
 ) -> None:
     """
@@ -2062,8 +2134,9 @@ def _check_psr_prevalence_sanity(
         with torch.no_grad():
             for images, targets in tqdm(loader, desc='PSR prevalence check', leave=False):
                 images = _prepare_images(images, device, training=False)
-                outputs = model(images)
-                preds = torch.sigmoid(outputs['psr_logits'])
+                video_ids = [m['recording_id'] for m in targets.get('metadata', [])]
+                outputs = model(images, video_ids=video_ids)
+                preds = _torch_sigmoid(outputs['psr_logits'])
                 all_preds.append(preds.cpu().numpy())
                 all_labels.append(targets['psr_labels'].numpy())
 
@@ -2094,7 +2167,7 @@ def _compare_raw_vs_ema(
     model: nn.Module,
     criterion: nn.Module,
     val_ds,
-    device: torch.device,
+    device: device,
     val_metrics: Dict,
     epoch: int,
     ckpt_dir: Path,
@@ -2140,7 +2213,7 @@ def _compare_raw_vs_ema(
         logger.warning(f'  [Stage 3] Raw-vs-EMA comparison failed: {exc}')
 
 
-def _apply_runtime_safety(device: torch.device) -> None:
+def _apply_runtime_safety(device: device) -> None:
     nice_value = int(getattr(C, 'TRAIN_NICE', 0))
     if nice_value > 0:
         try:
@@ -2152,11 +2225,11 @@ def _apply_runtime_safety(device: torch.device) -> None:
     thread_cap = int(getattr(C, 'TORCH_NUM_THREADS', 0))
     if thread_cap > 0:
         try:
-            torch.set_num_threads(thread_cap)
-            torch.set_num_interop_threads(max(1, min(4, thread_cap)))
+            torch.set_num_threads(thread_cap)  # type: ignore[attr-defined]
+            torch.set_num_interop_threads(max(1, min(4, thread_cap)))  # type: ignore[attr-defined]
             logger.info(
-                f'Torch CPU threads capped: intraop={torch.get_num_threads()} '
-                f'interop={torch.get_num_interop_threads()}'
+                f'Torch CPU threads capped: intraop={torch.get_num_threads()} '  # type: ignore[attr-defined]
+                f'interop={torch.get_num_interop_threads()}'  # type: ignore[attr-defined]
             )
         except RuntimeError as exc:
             logger.warning(f'Could not update torch thread limits: {exc}')
@@ -2222,10 +2295,10 @@ def main(args):
     # This custom handler flushes after EVERY write() call.
     class _FlushingFileHandler(logging.FileHandler):
         def emit(self, record):
-            super().emit(record)
+            super(_FlushingFileHandler, self).emit(record)
             self.flush()   # force write to disk immediately
         def write(self, msg):
-            super().write(msg)
+            super(_FlushingFileHandler, self).write(msg)  # type: ignore[safe-super]
             self.flush()   # force write on every chunk
 
     _train_log_path = log_dir / 'train.log'
@@ -2238,7 +2311,7 @@ def main(args):
     _root_logger.addHandler(logging.StreamHandler())   # stdout still goes to train_log_YYYYMMDD.log
     # --------------------------------------------------------
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = device('cuda' if torch.cuda.is_available() else 'cpu')  # type: ignore[has-type]
     logger.info(f'Device: {device}')
     if torch.cuda.is_available():
         logger.info(f'GPU : {torch.cuda.get_device_name()}')
@@ -2247,6 +2320,22 @@ def main(args):
 
     _apply_runtime_safety(device)
 
+    # Tier 2.4 — Embedding cache initialization
+    global _embedding_cache_writer
+    _embedding_cache_writer = None
+    if getattr(C, 'EMBEDDING_CACHE_WRITE_ENABLED', False):
+        try:
+            from src.training.embedding_cache import EmbeddingCache
+            _embedding_cache_writer = EmbeddingCache(
+                cache_dir=getattr(C, 'EMBEDDING_CACHE_DIR', 'runs/embedding_cache'),
+                mode='write',
+            ).open()
+            logger.info('[Tier 2.4] Embedding cache writer opened at %s',
+                        getattr(C, 'EMBEDDING_CACHE_DIR', 'runs/embedding_cache'))
+        except Exception as _exc:
+            logger.warning('[Tier 2.4] Could not open embedding cache writer: %s', _exc)
+            _embedding_cache_writer = None
+
     logger.info(
         f'Ablation: TRAIN_DET={CFG_TRAIN_DET}  '
         f'TRAIN_HEAD_POSE={CFG_TRAIN_HEAD_POSE}  '
@@ -2254,6 +2343,20 @@ def main(args):
         f'TRAIN_PSR={CFG_TRAIN_PSR}  '
         f'USE_KENDALL={CFG_USE_KENDALL}'
     )
+
+    # Tier 2.6 — Synthetic data detection pretraining (run before main training)
+    if bool(getattr(C, 'SYNTHETIC_PRETRAIN_ENABLED', False)) and getattr(C, 'SYNTHETIC_DATA_DIR', None):
+        try:
+            from src.training.pretrain_synthetic import main as _pretrain_main
+            logger.info('[Tier 2.6] Running synthetic detection pretrain first')
+            import argparse as _argparse
+            _pretrain_args = _argparse.Namespace(
+                max_recordings=getattr(args, 'max_recordings', None),
+                resume=None,
+            )
+            _pretrain_main(_pretrain_args)
+        except Exception as _exc:
+            logger.warning('[Tier 2.6] Synthetic pretrain failed: %s', _exc)
 
     # Debug mode overrides
     max_recordings_train = None
@@ -2410,7 +2513,7 @@ def main(args):
     criterion.set_class_counts(class_counts)
 
     if hasattr(train_ds, 'psr_prevalence'):
-        psr_prev = torch.from_numpy(train_ds.psr_prevalence)
+        psr_prev = _torch_from_numpy(train_ds.psr_prevalence)
         criterion.set_psr_class_counts(psr_prev)
         logger.info(
             f'PSR per-component prevalence: '
@@ -2487,7 +2590,7 @@ def main(args):
         ]
         if loss_params:
             param_groups.append({'params': loss_params, 'lr': head_lr})
-        optimizer = Lion(param_groups, weight_decay=C.WEIGHT_DECAY * 3)
+        optimizer = Lion(param_groups, weight_decay=C.WEIGHT_DECAY * 3)  # type: ignore[possibly-unbound]
         logger.info('Optimizer: Lion (backbone=0.1×, heads=1×, act/psr=1×, bias=0.3×)')
     else:
         param_groups = [
@@ -2555,10 +2658,22 @@ def main(args):
         scheduler = SequentialLR(optimizer, [warmup, cosine],
                                milestones=[C.WARMUP_EPOCHS])
 
-    scaler = amp.GradScaler('cuda', enabled=C.MIXED_PRECISION)
+    scaler = amp.GradScaler('cuda', enabled=C.MIXED_PRECISION)  # type: ignore[attr-defined]
 
     start_epoch = 0
     best_metric = 0.0
+
+    # TIER 1.3 — Per-task best metric tracking and checkpoint selection.
+    # The combined metric is mathematically pose-only when det/act/psr=0
+    # (RC-20). Per-task bests save checkpoints the paper tables need.
+    _per_task_best = {
+        'det_mAP50': 0.0,
+        'act_f1': 0.0,
+        'psr_f1': 0.0,
+        'pose_mae': float('inf'),  # lower is better
+    }
+    _per_task_ckpt_dir = ckpt_dir / 'per_task'
+    _per_task_ckpt_dir.mkdir(parents=True, exist_ok=True)
     patience_counter = 0
 
     videomae_warmup_state = {
@@ -2606,6 +2721,7 @@ def main(args):
         # pose head, and pretrained ConvNeXt weights intact. Used to recover from
         # head collapse (all 3 heads producing constant output) without losing
         # the learned backbone features.
+        _reinit_param_names: set = set()  # type: ignore[assignment]
         if getattr(args, 'reinit_heads', False):
             logger.warning(
                 '  [REINIT-HEADS] Flag --reinit-heads set: re-initializing 3 '
@@ -2619,7 +2735,6 @@ def main(args):
             # Re-zero EMA shadow for re-initialized params so EMA tracks fresh weights.
             if ema is not None and ema.shadow:
                 import re as _re
-                _reinit_param_names = set()
                 for _tag, _pfx in [
                     ('det', 'det_head.'),
                     ('act', 'activity_head.'),
@@ -2630,10 +2745,18 @@ def main(args):
                             if _n.startswith(_pfx):
                                 _reinit_param_names.add(_n)
                 _ema_reset = 0
+                _live_params = dict(model.named_parameters())
                 for _n in list(ema.shadow.keys()):
                     if any(_n.startswith(p) or _n == p for p in _reinit_param_names) or \
                        any(_n.startswith(_pfx) for _pfx in ('det_head.', 'detection_head.', 'activity_head.', 'psr_head.')):
-                        ema.shadow[_n] = ema.shadow[_n].clone().detach()
+                        if _n in _live_params:
+                            # PATCH P1 [opus RC-13]: re-anchor EMA shadow to the
+                            # freshly reinit'd parameter values, not to the old
+                            # (collapsed) shadow.
+                            ema.shadow[_n] = _live_params[_n].data.clone().detach()
+                        else:
+                            # Buffer (e.g. BN running stats) — leave alone.
+                            ema.shadow[_n] = ema.shadow[_n].clone().detach()
                         _ema_reset += 1
                 logger.warning(
                     f'  [REINIT-HEADS] EMA shadow reset for {_ema_reset} head tensors '
@@ -2655,6 +2778,22 @@ def main(args):
             })
             logger.info('  EMA shadow weights restored from checkpoint.')
 
+        # PATCH P1 [opus RC-13]: After the checkpoint restore, re-anchor the EMA
+        # shadow to the freshly-reinit'd parameter values for any reinit'd
+        # prefix. Without this, the restored shadow reverts the reinit.
+        if ema is not None and ema.shadow and _reinit_param_names:
+            _live_params = dict(model.named_parameters())
+            _re_anchored = 0
+            for _n in list(ema.shadow.keys()):
+                if _n in _reinit_param_names and _n in _live_params:
+                    ema.shadow[_n] = _live_params[_n].data.clone().detach()
+                    _re_anchored += 1
+            if _re_anchored:
+                logger.info(
+                    f'  [REINIT-HEADS] Re-anchored EMA shadow to fresh reinit values '
+                    f'for {_re_anchored} reinit\'d tensors (post-restore).'
+                )
+
         try:
             # FIX: Accept 'optimizer' (named checkpoints), 'optimizer_state' (crash_recovery), 'optimizer_state_dict' (crash_recovery v2)
             opt_state = ckpt.get('optimizer_state_dict', ckpt.get('optimizer_state', ckpt.get('optimizer')))
@@ -2668,6 +2807,34 @@ def main(args):
                 f'  Could not restore optimizer state ({e}). '
                 f'Re-initialized -- LR schedule continues.'
             )
+
+        # PATCH R1 [opus 2026-06-10]: When --reinit-heads + --reset-optimizer-for-reinit
+        # are both set, zero Adam m/v (exp_avg / exp_avg_sq) for the reinit'd head
+        # params. Without this, the optimizer's stale momentum from the collapsed
+        # weights causes the first Adam step on fresh reinit weights to explode
+        # (verified: det_cls_loss=197844 at step 0 in 5pct/bs=2 retrain, heads
+        # collapsed FURTHER by end of epoch: act→1 class, PSR→1 pattern, det→flat).
+        if getattr(args, 'reinit_heads', False) and getattr(args, 'reset_optimizer_for_reinit', False):
+            _opt_state = optimizer.state
+            _reset_state_count = 0
+            for _n, _p in model.named_parameters():
+                if not any(_n.startswith(p) for p in ('detection_head.', 'det_head.',
+                                                       'activity_head.', 'psr_head.')):
+                    continue
+                if _n in _opt_state:
+                    _st = _opt_state[_n]
+                    if isinstance(_st, dict):
+                        if 'exp_avg' in _st:
+                            _st['exp_avg'].zero_()
+                        if 'exp_avg_sq' in _st:
+                            _st['exp_avg_sq'].zero_()
+                        # AdamW may also have 'step' — leave alone
+                        _reset_state_count += 1
+            if _reset_state_count:
+                logger.warning(
+                    f'  [REINIT-HEADS] Zeroed Adam m/v for {_reset_state_count} head '
+                    'tensors (stale-momentum collapse guard).'
+                )
         try:
             # FIX: Accept 'scheduler' (named checkpoint), 'lr_scheduler_state' (crash_recovery), 'scheduler_state_dict'
             sched_state = ckpt.get('scheduler_state_dict', ckpt.get('scheduler', ckpt.get('lr_scheduler_state', {})))
@@ -2734,6 +2901,21 @@ def main(args):
                 '  Reset Kendall log_var params (early epoch resume): '
                 'det=0.0  head_pose=-1.0  act=0.0  psr=0.0'
             )
+        elif getattr(args, 'reset_kendall_log_vars', False):
+            # PATCH R2 [opus 2026-06-10]: When --reset-kendall-log-vars is set,
+            # force-reset log_vars to neutral even on late-epoch resume. The
+            # epoch-43 log_vars were learned against a collapsed state and will
+            # unbalance the loss for fresh reinit heads.
+            with torch.no_grad():
+                criterion.log_var_det.fill_(0.0)
+                criterion.log_var_pose.fill_(-1.0)
+                criterion.log_var_act.fill_(0.0)
+                criterion.log_var_psr.fill_(0.0)
+            logger.warning(
+                '  [REINIT-HEADS] Reset Kendall log_vars to neutral '
+                '(forced via --reset-kendall-log-vars): '
+                'det=0.0  head_pose=-1.0  act=0.0  psr=0.0'
+            )
         else:
             logger.info(
                 f'  Keeping learned Kendall log_var params '
@@ -2771,7 +2953,8 @@ def main(args):
     # FIX: If resuming mid-epoch, pass resume_batch to train_one_epoch so it can
     # fast-forward the DataLoader iterator without re-computing forward passes.
     # _resume_batch_info is set in the resume block above.
-    _resume_batch = _resume_batch_info[0] if '_resume_batch_info' in dir() and _resume_batch_info[0] > 0 else 0
+    _resume_batch_info: list = [0]  # type: ignore[assignment]
+    _resume_batch = _resume_batch_info[0] if '_resume_batch_info' in dir() and _resume_batch_info[0] > 0 else 0  # type: ignore[possibly-unbound]
 
     try:
         _train_start_epoch = _override_start_epoch if _override_start_epoch is not None else start_epoch
@@ -2788,7 +2971,8 @@ def main(args):
             )
         for epoch in range(_train_start_epoch, C.EPOCHS):
             logger.info(f'\n--- Epoch {epoch}/{C.EPOCHS - 1} ---')
-            criterion.set_epoch(epoch)
+            if criterion is not None:
+                criterion.set_epoch(epoch)
 
             # [MEMORY LEAK FIX] At epoch start (skip epoch 0 — cache is fresh),
             # release the previous epoch's FRAME_CACHE so the OS can reclaim
@@ -3047,11 +3231,11 @@ def main(args):
             if _train_max_steps > 0:
                 _batch_count = train_metrics.get('num_batches', 0)
                 if not hasattr(C, '_global_step'):
-                    C._global_step = 0
-                C._global_step += _batch_count
-                logger.info(f'  [2pct] global_step={C._global_step}/{_train_max_steps}')
-                if C._global_step >= _train_max_steps:
-                    logger.info(f'  [2pct] TRAIN_MAX_STEPS limit reached ({C._global_step}). Will exit after val completes.')
+                    C._global_step = 0  # type: ignore[attr-defined]
+                C._global_step += _batch_count  # type: ignore[attr-defined]
+                logger.info(f'  [2pct] global_step={C._global_step}/{_train_max_steps}')  # type: ignore[attr-defined]
+                if C._global_step >= _train_max_steps:  # type: ignore[attr-defined]
+                    logger.info(f'  [2pct] TRAIN_MAX_STEPS limit reached ({C._global_step}). Will exit after val completes.')  # type: ignore[attr-defined]
 
             current_lr = optimizer.param_groups[1]['lr']
             ema_decay_str = ''
@@ -3105,17 +3289,18 @@ def main(args):
                 epoch == 0 or (epoch + 1) % C.LOG_EFFICIENCY_EVERY == 0
             ):
                 if _eff_cache['epoch'] != epoch:
-                    from evaluate import compute_efficiency_metrics
-                    _eff_cache['epoch'] = epoch
-                    _eff_cache['metrics'] = compute_efficiency_metrics(
-                        model,
-                        img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
-                        device=device,
-                        num_hand_coords=52,
-                        warmup_runs=3,
-                        timed_runs=20,
-                        batch_size=1,
-                    )
+                    _cem = getattr(_evaluate_module, 'compute_efficiency_metrics', None)
+                    if _cem is not None:
+                        _eff_cache['epoch'] = epoch
+                        _eff_cache['metrics'] = _cem(
+                            model,
+                            img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
+                            device=device,
+                            num_hand_coords=52,
+                            warmup_runs=3,
+                            timed_runs=20,
+                            batch_size=1,
+                        )
                 eff = _eff_cache['metrics']
                 logger.info(
                     f'Efficiency: params={eff["eff_params_m"]:.2f}M  '
@@ -3176,7 +3361,7 @@ def main(args):
                 # With STAGED_TRAINING=True, only swap once stage>=3 (EMA has been updating).
                 _ema_staged = bool(getattr(C, 'STAGED_TRAINING', True))
                 ema_warmed = (ema is not None) and (not _ema_staged or current_stage >= 3)
-                if ema_warmed:
+                if ema_warmed and ema is not None:
                     ema.get_ema()
                     logger.info('  [EMA] Using exponential-moving-average weights for val')
                 elif ema is not None:
@@ -3188,6 +3373,7 @@ def main(args):
                 val_max_batches_rt = CFG_EVAL_MAX_BATCHES
 
                 val_attempt = 0
+                val_loader = None  # type: ignore[assignment]
                 while True:
                     val_attempt += 1
                     if val_attempt > 2:
@@ -3285,8 +3471,9 @@ def main(args):
                         IN_EVALUATION_PHASE = False
                         # HARDENED: val_workers_rt=0, but call shutdown anyway to be safe.
                         # With 0 workers the function returns immediately (no-op).
-                        _shutdown_loader_workers(val_loader, logger)
-                        del val_loader
+                        if val_loader is not None:  # type: ignore[possibly-unbound,used-before-def]
+                            _shutdown_loader_workers(val_loader, logger)  # type: ignore[arg-type,possibly-unbound]
+                            del val_loader  # type: ignore[possibly-unbound]
                         gc.collect()
                         torch.cuda.empty_cache()
                         logger.info('  [POST_EVAL] val_loader cleaned up, resuming train...')
@@ -3311,8 +3498,8 @@ def main(args):
                             f'Raising to trigger epoch retry loop.'
                         )
 
-                    if ema_warmed:
-                        ema.restore()
+                    if ema_warmed and ema is not None:
+                        ema.restore()  # type: ignore[union-attr]
                         logger.info('  [EMA] Restored original weights after val')
 
                     def _s(v, alt=float('nan')):
@@ -3360,7 +3547,7 @@ def main(args):
                            # Without this, while True: iterates again and calls
                            # evaluate_all() a second time immediately after POST_EVAL.
 
-                if ema is not None and current_stage == 3:
+                if ema is not None and current_stage == 3 and criterion is not None:
                     _compare_raw_vs_ema(
                         model, criterion, val_ds, device, val_metrics, epoch, ckpt_dir
                     )
@@ -3439,17 +3626,73 @@ def main(args):
                         else:
                             save_dict['model'] = model.state_dict()
                         # FIX: Save criterion (Kendall log_vars) in best checkpoint
-                        save_dict['criterion'] = {
-                            'log_var_det': criterion.log_var_det.data.clone(),
-                            'log_var_pose': criterion.log_var_pose.data.clone(),
-                            'log_var_act': criterion.log_var_act.data.clone(),
-                            'log_var_psr': criterion.log_var_psr.data.clone(),
-                        }
+                        if criterion is not None:
+                            save_dict['criterion'] = {
+                                'log_var_det': criterion.log_var_det.data.clone(),  # type: ignore[union-attr]
+                                'log_var_pose': criterion.log_var_pose.data.clone(),  # type: ignore[union-attr]
+                                'log_var_act': criterion.log_var_act.data.clone(),  # type: ignore[union-attr]
+                                'log_var_psr': criterion.log_var_psr.data.clone(),  # type: ignore[union-attr]
+                            }
                         torch.save(save_dict, ckpt_dir / 'best.pth')
                         logger.info(
                             f'  ** New best model (combined={combined:.4f}) **'
                         )
+
+                    # [PATCH RC-20] TIER 1.3 — Per-task best checkpoints.
+                    # Saves independent best_*.pth for each head. These are the
+                    # checkpoints your paper tables need — combined is pose-only
+                    # when det/act/psr are collapsed (RC-20). Runs every epoch
+                    # (independent of the combined-metric gate) so that even when
+                    # combined is flat, an isolated head that recovers still gets
+                    # its own best snapshot. Note: `save_dict` is built above in
+                    # the if-branch, so we build a per-task save_dict here that
+                    # captures the current (raw, non-EMA-swapped) model state.
+                    _cur_save = {
+                        'epoch':            epoch,
+                        'optimizer':        optimizer.state_dict(),
+                        'scheduler':        scheduler.state_dict(),
+                        'scaler':           scaler.state_dict(),
+                        'val_metrics':      val_metrics,
+                        'criterion': {
+                            'log_var_det':  criterion.log_var_det.data.clone(),
+                            'log_var_pose': criterion.log_var_pose.data.clone(),
+                            'log_var_act':  criterion.log_var_act.data.clone(),
+                            'log_var_psr':  criterion.log_var_psr.data.clone(),
+                        } if criterion is not None else {},
+                    }
+                    if ema is not None:
+                        ema.get_ema()
+                        _cur_save['model'] = model.state_dict()
+                        ema.restore()
                     else:
+                        _cur_save['model'] = model.state_dict()
+
+                    _task_checks = [
+                        ('det_mAP50', _map50, 'best_det.pth', 'max'),
+                        ('act_f1',    _f1_act, 'best_act.pth', 'max'),
+                        ('psr_f1',    _f1_psr, 'best_psr.pth', 'max'),
+                        ('pose_mae',  _mae_pose, 'best_pose.pth', 'min'),
+                    ]
+                    for _task_key, _task_val, _task_fname, _task_dir in _task_checks:
+                        _improved = False
+                        if _task_dir == 'max':
+                            _improved = _task_val > _per_task_best[_task_key]
+                        else:
+                            _improved = _task_val < _per_task_best[_task_key]
+                        if _improved:
+                            _per_task_best[_task_key] = _task_val
+                            _task_save = dict(_cur_save)
+                            _task_save['best_metric'] = _task_val
+                            torch.save(_task_save, _per_task_ckpt_dir / _task_fname)
+                            logger.info(
+                                f'  ** New best {_task_key} ({_task_val:.4f}) → '
+                                f'saved {_task_fname}'
+                            )
+
+                    # Patience increment — fires only when combined did NOT improve.
+                    # The if/else above already resets patience_counter=0 on improvement;
+                    # the for-loop above saves per-task bests independently.
+                    if combined <= best_metric:
                         patience_counter += 1
                         logger.info(
                             f'  No improvement ({patience_counter}/{C.PATIENCE})'
@@ -3485,10 +3728,10 @@ def main(args):
 
             # [2pct FIX] Exit epoch loop AFTER validation completes when step limit reached.
             # Previously this was BEFORE val, causing TRAIN_MAX_STEPS to skip validation.
-            if _train_max_steps > 0 and C._global_step >= _train_max_steps:
+            if _train_max_steps > 0 and C._global_step >= _train_max_steps:  # type: ignore[attr-defined]
                 logger.info(
                     f'  [2pct] TRAIN_MAX_STEPS={_train_max_steps} reached '
-                    f'(global_step={C._global_step}). Exiting epoch loop after val.'
+                    f'(global_step={C._global_step}). Exiting epoch loop after val.'  # type: ignore[attr-defined]
                 )
                 break  # Exit for epoch loop — val completed, training done
 
@@ -3534,7 +3777,7 @@ def main(args):
 
             swa_model = AveragedModel(model)
             swa_scheduler = SWALR(optimizer, swa_lr)
-            swa_start_epoch = epoch + 1
+            swa_start_epoch = epoch + 1  # type: ignore[possibly-unbound]
 
             for swa_epoch in range(swa_start_epoch, swa_start_epoch + swa_epochs):
                 logger.info(f'\n--- SWA Epoch {swa_epoch} ---')
@@ -3678,24 +3921,41 @@ if __name__ == '__main__':
     parser.add_argument(
         '--no-amp',
         action='store_true',
-        help='[FIX 2026-06-09] Disable AMP entirely (FP32). Slower than bf16 (~30%) but completely '
+        help='[FIX 2026-06-09] Disable AMP entirely, FP32. Slower than bf16 — about 30 percent — but completely '
              'avoids the bf16+seq-mode NaN cascade that poisoned all 4 head losses after step 60 '
              'in the 5% retrain. Diagnostic diag_amp_nan.py shows FP32 produces 0 NaN/Inf grads '
              'across all 386 parameters.',
+    )
+    parser.add_argument(
+        '--reset-optimizer-for-reinit',
+        action='store_true',
+        help='[Recovery 2026-06-10] When used with --reinit-heads, zero the Adam m/v buffers for '
+             'det/act/psr head params. Without this, the resumed optimizer state carries stale '
+             'momentum from the pre-collapse weights; the first Adam step on fresh reinit weights '
+             'produces wild updates — e.g. det_cls_loss=197844 at step 0 in the 5pct retrain — '
+             'collapsing the heads further. ALWAYS pair this with --reinit-heads when recovering '
+             'from collapse.',
+    )
+    parser.add_argument(
+        '--reset-kendall-log-vars',
+        action='store_true',
+        help='[Recovery 2026-06-10] Reset Kendall log_vars to neutral: det=0, head_pose=-1, act=0, '
+             'psr=0 when resuming. The epoch-43 ckpt has log_vars learned against a collapsed '
+             'state. Fresh heads need a fresh balancing — defaults to the documented neutral values.',
     )
 
     args = parser.parse_args()
 
     if args.no_amp:
         import config as _cfg_mod_amp
-        _cfg_mod_amp.MIXED_PRECISION = False
+        _cfg_mod_amp.MIXED_PRECISION = False  # type: ignore[attr-defined]
         logger.info('[train] --no-amp set: MIXED_PRECISION=False (FP32).')
 
     if args.preset:
         try:
             import config as _cfg_mod
             if hasattr(_cfg_mod, 'apply_preset'):
-                _cfg_mod.apply_preset(args.preset)
+                _cfg_mod.apply_preset(args.preset)  # type: ignore[attr-defined]
                 _refresh_runtime_cfg()
                 logger.info(f'[train] Applied preset: {args.preset}')
             else:
@@ -3715,7 +3975,7 @@ if __name__ == '__main__':
     # TRAIN_MAX_STEPS: limit total optimizer steps for quick runs (env var)
     _env_max_steps = int(os.environ.get('TRAIN_MAX_STEPS', '0'))
     if _env_max_steps > 0:
-        C.TRAIN_MAX_STEPS = _env_max_steps
+        C.TRAIN_MAX_STEPS = _env_max_steps  # type: ignore[attr-defined]
         logger.info(f'[train] TRAIN_MAX_STEPS={_env_max_steps} — will early-stop at this step count')
 
     # EVAL_MAX_BATCHES: cap val batches per epoch (env var) — for quick smoke runs
@@ -3735,7 +3995,7 @@ if __name__ == '__main__':
     if args.bf16:
         # Override autocast dtype globally. fp16 overflows the first backbone conv on
         # 720x1280 inputs (Inf gradients); bf16 has the same speed on Ampere but no overflow.
-        AMP_DTYPE = torch.bfloat16
+        AMP_DTYPE = bfloat16
         logger.warning('[train] AMP_DTYPE=bfloat16 (--bf16) — prevents first-conv fp16 overflow')
 
     if args.debug:

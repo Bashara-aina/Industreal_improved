@@ -2871,20 +2871,21 @@ def evaluate_all(
         B, C_img, H_img, W_img = images.shape
 
         def run_model(inp: torch.Tensor,
-                      clip: Optional[torch.Tensor] = None
+                      clip: Optional[torch.Tensor] = None,
+                      vids: Optional[List[str]] = None,
                       ) -> Dict[str, torch.Tensor]:
-            out = model(inp, clip_rgb=clip)
+            out = model(inp, video_ids=vids, clip_rgb=clip)
             for _k in out:
                 if isinstance(out[_k], torch.Tensor):
                     out[_k] = out[_k].float()
             return out
 
-        outputs_raw = run_model(images, clip_rgb)
+        outputs_raw = run_model(images, clip_rgb, batch_recording_ids)
 
         # Doc 2 F.1: Horizontal Flip TTA
         if use_flip_tta:
             flip_images = torch.flip(images, dims=[3])
-            out_flip = run_model(flip_images, clip_rgb)
+            out_flip = run_model(flip_images, clip_rgb, batch_recording_ids)
             for key in ['act_logits', 'psr_logits']:
                 if key in out_flip:
                     outputs_raw[key] = 0.5 * (outputs_raw[key] + torch.flip(out_flip[key], dims=[2]))
@@ -2904,7 +2905,7 @@ def evaluate_all(
                                for k in ['act_logits', 'psr_logits', 'head_pose']
                                if k in outputs_raw}
             for crop in crop_list:
-                out_crop = run_model(crop, None)
+                out_crop = run_model(crop, None, batch_recording_ids)
                 for k in crop_logits_acc:
                     crop_logits_acc[k] = crop_logits_acc[k] + out_crop[k]
             n_crops = len(crop_list)
