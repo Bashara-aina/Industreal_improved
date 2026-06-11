@@ -1,0 +1,1506 @@
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import logging
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Detection Anchor Matching Probe (drop-in diagnostic)
+# =============================================================================
+def probe_anchor_matching(
+    matched_labels, max_iou=None, num_gt: int = 0, img_idx: int = 0, every: int = 200, _state: dict = None,
+) -> None:
+    if _state is None:
+        _state = {}
+    _state["n"] = _state.get("n", 0) + 1
+    if every > 0 and _state["n"] % every != 0:
+        return
+    pos = int((matched_labels >= 0).sum())
+    neg = int((matched_labels == -2).sum())
+    ign = int((matched_labels == -1).sum())
+    extra = ""
+    if max_iou is not None:
+        extra = f" max_iou[p50/p99/max]={float(max_iou.float().median()):.3f}/" \
+                f"{float(max_iou.float().quantile(0.99)):.3f}/{float(max_iou.float().max()):.3f}"
+    msg = (f"[MATCH_PROBE call={_state['n']} img={img_idx}] "
+           f"num_gt={num_gt} pos={pos} neg={neg} ignore={ign}{extra}")
+    logger.info(msg)
+    print(msg, flush=True)
+
+"""
+POPW Loss Functions — Matches the exact diagram architecture
+============================================================
+L_det  = Focal Loss (α=0.25, γ=2) + GIoU for bounding boxes (Doc 2 C.1)
+L_pose = Wing Loss (ω=0.05, ε=0.005) for keypoint regression
+L_act  = LDAM-DRW (Doc 2 C.2) or CB-Focal Loss (β=0.999, γ=2.0, 74 classes)
+L_psr  = Binary Focal Loss (α=0.25, γ=2.0) (Doc 2 C.3) — replaces BCE
+L_total = Kendall(s_det, s_pose, s_act) with act_ramp = min(1, epoch/5)
+init: s_det=0, s_pose=-1, s_act=0
+
+Author: Bashara
+Date: April 2026
+"""
+
+import math
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torchvision.ops import box_iou, generalized_box_iou_loss
+
+from src import config as C
+
+
+def _get_kendall_stage(epoch: int) -> int:
+    """Mirror of train.get_stage() — must stay in sync.
+    
+    Stage 1 (epochs 1-5):   detection only
+    Stage 2 (epochs 6-15):  detection + head_pose  
+    Stage 3 (epochs 16+):   all tasks
+    """
+    stage1_end = int(getattr(C, 'STAGE1_EPOCHS', 5))
+    stage2_end = stage1_end + int(getattr(C, 'STAGE2_EPOCHS', 10))
+    if epoch <= stage1_end:
+        return 1
+    if epoch <= stage2_end:
+        return 2
+    return 3
+
+
+# ===========================================================================
+# Detection Losses
+# ===========================================================================
+
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for ASD detection (Lin et al., 2017).
+    FL(p_t) = -α_t * (1 - p_t)^γ * log(p_t)
+    With α=0.25, γ=2 for class imbalance handling.
+
+    Doc 2 C.1: GIoU loss replaces SmoothL1 for box regression.
+    GIoU directly optimizes the IoU metric evaluated at mAP@0.5.
+    """
+    def __init__(self, alpha: float = 0.25, gamma: float = 2.0,
+                 pos_iou_thresh: float = 0.3, neg_iou_thresh: float = 0.2):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        # [FIX #11 HIGH] Lowered IoU thresholds from (0.5, 0.4) → (0.3, 0.2).
+        # With IKEA frames having 0-3 small parts (avg 30-50 px wide on 1280x720)
+        # and 25K anchors spread across P3-P7, default RetinaNet thresholds (0.5/0.4)
+        # give only ~5-15 positive anchor assignments per frame. The paper's
+        # PASCAL/COCO values assume 5-20 GT/frame; IKEA is 0-3 GT/frame.
+        # At IoU 0.3, anchor-to-GT distance allowed is ~0.5 * sqrt(2) * (1-0.3) ≈ 0.5
+        # of normalized space — i.e., anchors within ~25% of GT size in normalized
+        # coords. This matches the original IndustReal paper's small-object regime.
+        # At 0.2 neg threshold, all anchors with IoU<0.2 (vast majority) get clean
+        # negative labels instead of being ignored — the "ignore" zone (0.2-0.3)
+        # is still small enough that ignore-rate per frame stays manageable.
+        # Effect: ~3-5x more positive anchors per frame → ~3-5x more cls/reg gradient.
+        self.pos_iou_thresh = pos_iou_thresh
+        self.neg_iou_thresh = neg_iou_thresh
+
+    def _match_anchors(self, anchors: torch.Tensor, gt_boxes: torch.Tensor,
+                      gt_labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Assign anchors to GT boxes. Returns labels and matched boxes.
+
+        BUG FIX #1: Normalize both anchors and GT boxes to [0,1] image coords
+        before IoU matching. GT boxes from COCO are in pixel coordinates
+        (absolute pixels), but anchors are generated at full resolution (1280x720).
+        Without normalization, max IoU = 0.0001 << 0.5 threshold → zero positive
+        matches → detection loss = 0.000 → no learning.
+        """
+        N = anchors.shape[0]
+        device = anchors.device
+
+        if gt_boxes.shape[0] == 0:
+            return (torch.full((N,), -2, dtype=torch.long, device=device),
+                    torch.zeros((N, 4), device=device))
+
+        # --- Normalize anchors and GT boxes to [0,1] before IoU matching ---
+        # Anchors: shifts in pixels → divide by image dimensions
+        anchors_norm = anchors.clone()
+        anchors_norm[:, [0, 2]] = anchors[:, [0, 2]] / C.IMG_WIDTH   # x coords
+        anchors_norm[:, [1, 3]] = anchors[:, [1, 3]] / C.IMG_HEIGHT  # y coords
+
+        # GT boxes: already in pixel xyxy → normalize to [0,1]
+        gt_boxes_norm = gt_boxes.clone()
+        gt_boxes_norm[:, [0, 2]] = gt_boxes[:, [0, 2]] / C.IMG_WIDTH
+        gt_boxes_norm[:, [1, 3]] = gt_boxes[:, [1, 3]] / C.IMG_HEIGHT
+
+        ious = box_iou(anchors_norm, gt_boxes_norm)
+        max_iou, max_idx = ious.max(dim=1)
+
+        labels = torch.full((N,), -1, dtype=torch.long, device=device)
+        matched_boxes = gt_boxes[max_idx]
+
+        labels[max_iou < self.neg_iou_thresh] = -2
+        pos_mask = max_iou >= self.pos_iou_thresh
+        labels[pos_mask] = gt_labels[max_idx[pos_mask]]
+
+        for gi in range(gt_boxes.shape[0]):
+            labels[ious[:, gi].argmax()] = gt_labels[gi]
+
+        return labels, matched_boxes
+
+    def _encode_boxes(self, anchors: torch.Tensor, gt_boxes: torch.Tensor) -> torch.Tensor:
+        """Encode GT boxes as deltas relative to anchors."""
+        a_cx = (anchors[:, 0] + anchors[:, 2]) / 2
+        a_cy = (anchors[:, 1] + anchors[:, 3]) / 2
+        a_w = (anchors[:, 2] - anchors[:, 0]).abs().clamp(min=1e-6)
+        a_h = (anchors[:, 3] - anchors[:, 1]).abs().clamp(min=1e-6)
+
+        g_cx = (gt_boxes[:, 0] + gt_boxes[:, 2]) / 2
+        g_cy = (gt_boxes[:, 1] + gt_boxes[:, 3]) / 2
+        g_w = (gt_boxes[:, 2] - gt_boxes[:, 0]).abs().clamp(min=1e-6)
+        g_h = (gt_boxes[:, 3] - gt_boxes[:, 1]).abs().clamp(min=1e-6)
+
+        return torch.stack([
+            (g_cx - a_cx) / a_w,
+            (g_cy - a_cy) / a_h,
+            torch.log(g_w / a_w),
+            torch.log(g_h / a_h),
+        ], dim=1)
+
+    def _decode_boxes(self, anchors: torch.Tensor, deltas: torch.Tensor) -> torch.Tensor:
+        """Decode anchor deltas to bounding boxes (xyxy format)."""
+        a_cx = (anchors[:, 0] + anchors[:, 2]) / 2
+        a_cy = (anchors[:, 1] + anchors[:, 3]) / 2
+        a_w = anchors[:, 2] - anchors[:, 0]
+        a_h = anchors[:, 3] - anchors[:, 1]
+
+        dx = deltas[:, 0]
+        dy = deltas[:, 1]
+        dw = deltas[:, 2].clamp(-4, 4)
+        dh = deltas[:, 3].clamp(-4, 4)
+
+        pred_w = torch.exp(dw) * a_w
+        pred_h = torch.exp(dh) * a_h
+        pred_cx = dx * a_w + a_cx
+        pred_cy = dy * a_h + a_cy
+
+        return torch.stack([
+            pred_cx - pred_w / 2,
+            pred_cy - pred_h / 2,
+            pred_cx + pred_w / 2,
+            pred_cy + pred_h / 2,
+        ], dim=1)
+
+    def forward(self, cls_preds: torch.Tensor, reg_preds: torch.Tensor = None,
+                anchors: torch.Tensor = None, targets: List[Dict] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Returns cls_loss, reg_loss (both scalars).
+
+        Two call modes:
+        - Detection (4 args): forward(cls_preds, reg_preds, anchors, targets)
+          Returns (cls_loss, reg_loss) for full detection pipeline.
+        - Standalone (2 args): forward(logits, targets) for simple classification.
+          Returns (loss, zero_reg) where loss is a simple multiclass focal loss.
+        """
+        # --- C-3 standalone focal loss (2-arg mode) ---
+        # 2-arg mode: forward(logits, targets) where targets is a 1D/2D tensor (not List[Dict])
+        # 4-arg detection mode: targets is List[Dict]
+        if anchors is None and (not isinstance(targets, list)):
+            # Simple 2-arg call: forward(logits, targets)
+            logits = cls_preds
+            tgt = reg_preds if isinstance(reg_preds, torch.Tensor) else targets
+            if tgt.dtype != torch.long:
+                tgt = tgt.long()
+            # Multiclass focal: FL = -alpha_t * (1-p_t)^gamma * log(p_t)
+            probs = F.softmax(logits, dim=1)
+            p_t = probs.gather(1, tgt.unsqueeze(1)).squeeze(1)
+            ce = F.cross_entropy(logits, tgt, reduction='none')
+            alpha_t = self.alpha * torch.ones_like(p_t)
+            loss = alpha_t * (1 - p_t).pow(self.gamma) * ce
+            return loss.mean(), torch.tensor(0.0, device=logits.device)
+
+        # --- Full detection mode (4 args) ---
+        B = cls_preds.shape[0]
+        device = cls_preds.device
+        total_cls = torch.tensor(0.0, device=device)
+        total_reg = torch.tensor(0.0, device=device)
+
+        for i in range(B):
+            gt_boxes = targets[i]['boxes'].to(device)
+            gt_labels = targets[i]['labels'].to(device)
+            matched_labels, matched_boxes = self._match_anchors(anchors, gt_boxes, gt_labels)
+            probe_anchor_matching(matched_labels, num_gt=gt_boxes.shape[0], img_idx=i)
+
+            pos_mask = matched_labels >= 0
+            neg_mask = matched_labels == -2
+            valid_mask = pos_mask | neg_mask
+            num_pos = max(pos_mask.sum().item(), 1)
+
+            cls_pred = cls_preds[i][valid_mask]
+            cls_target = torch.zeros_like(cls_pred)
+
+            if pos_mask.sum() > 0:
+                pos_in_valid = pos_mask[valid_mask]
+                cls_target[pos_in_valid, matched_labels[valid_mask][pos_in_valid]] = 1.0
+
+            # --- FIX #1: Clamp sigmoid inputs to prevent NaN in focal loss ---
+            # p_t near 0 causes (1-p_t)^gamma → inf and log(0) → NaN
+            p = torch.sigmoid(cls_pred).clamp(1e-7, 1.0 - 1e-7)
+            ce = F.binary_cross_entropy_with_logits(cls_pred, cls_target, reduction='none')
+            p_t = p * cls_target + (1 - p) * (1 - cls_target)
+            alpha_t = self.alpha * cls_target + (1 - self.alpha) * (1 - cls_target)
+            total_cls = total_cls + (alpha_t * (1 - p_t) ** self.gamma * ce).sum() / num_pos
+
+            # C.1: GIoU loss replaces SmoothL1 — directly optimizes IoU metric
+            # --- FIX #2: Guard GIoU against degenerate zero-area boxes ---
+            if pos_mask.sum() > 0:
+                pos_anchors = anchors[pos_mask]
+                pos_deltas = reg_preds[i][pos_mask]
+                pred_boxes = self._decode_boxes(pos_anchors, pos_deltas)
+                gt_boxes_pos = matched_boxes[pos_mask]
+
+                # Clip boxes to be valid before GIoU (zero-area boxes cause NaN)
+                # [FIX] Build fully-modified boxes out-of-place via torch.stack, then clone
+                pred_x1 = torch.clamp(pred_boxes[:, 0], 0, C.IMG_WIDTH)
+                pred_y1 = torch.clamp(pred_boxes[:, 1], 0, C.IMG_HEIGHT)
+                pred_x2 = torch.clamp(pred_boxes[:, 2], 0, C.IMG_WIDTH)
+                pred_y2 = torch.clamp(pred_boxes[:, 3], 0, C.IMG_HEIGHT)
+                # Ensure min width/height > 0
+                pred_x2 = torch.maximum(pred_x2, pred_x1 + 1.0)
+                pred_y2 = torch.maximum(pred_y2, pred_y1 + 1.0)
+                pred_boxes = torch.stack([pred_x1, pred_y1, pred_x2, pred_y2], dim=1).clone()
+
+                gt_x1 = gt_boxes_pos[:, 0]
+                gt_y1 = gt_boxes_pos[:, 1]
+                gt_x2 = torch.maximum(gt_boxes_pos[:, 2], gt_boxes_pos[:, 0] + 1.0)
+                gt_y2 = torch.maximum(gt_boxes_pos[:, 3], gt_boxes_pos[:, 1] + 1.0)
+                gt_boxes_pos = torch.stack([gt_x1, gt_y1, gt_x2, gt_y2], dim=1).clone()
+
+                giou_loss = generalized_box_iou_loss(
+                    pred_boxes, gt_boxes_pos, reduction='sum'
+                )
+                # Guard NaN GIoU (happens when boxes don't overlap at all)
+                giou_loss = torch.where(
+                    torch.isfinite(giou_loss),
+                    giou_loss,
+                    torch.tensor(0.0, device=device),
+                )
+                total_reg = total_reg + giou_loss / num_pos
+
+        return total_cls / B, total_reg / B
+
+
+# ===========================================================================
+# GIoU Loss (standalone wrapper for C-5)
+# ===========================================================================
+
+class GIoULoss(nn.Module):
+    """Standalone GIoU loss wrapper around torchvision's generalized_box_iou_loss.
+    Directly optimizes IoU metric evaluated at mAP@0.5 (Doc 2 C.1)."""
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, pred_boxes: torch.Tensor, target_boxes: torch.Tensor) -> torch.Tensor:
+        return generalized_box_iou_loss(pred_boxes, target_boxes, reduction='mean')
+
+
+# ===========================================================================
+# Pose Loss — Wing Loss
+# ===========================================================================
+
+class WingLoss(nn.Module):
+    """
+    Wing Loss for robust keypoint regression.
+    L = ω * ln(1 + |x|/ε)  for |x| < ω
+       |x| - C              for |x| >= ω
+    where C = ω - ω*ln(1+ω/ε)
+    Parameters from diagram: ω=0.05, ε=0.005
+    """
+    def __init__(self, omega: float = 0.05, epsilon: float = 0.005):
+        super().__init__()
+        self.omega = omega
+        self.epsilon = epsilon
+        self.C = omega - omega * math.log(1 + omega / epsilon)
+
+    def forward(self, pred: torch.Tensor, target: torch.Tensor,
+                weight: Optional[torch.Tensor] = None) -> torch.Tensor:
+        diff = (pred - target).abs()
+        loss = torch.where(
+            diff < self.omega,
+            self.omega * torch.log(1 + diff / self.epsilon),
+            diff - self.C,
+        )
+        if weight is not None:
+            loss = loss * weight.unsqueeze(-1)
+        return loss.mean()
+
+
+class PoseLoss(nn.Module):
+    """
+    Combined pose loss: Wing Loss for keypoints + L2 confidence regularization.
+    """
+    def __init__(self, wing_omega: float = 0.05, wing_epsilon: float = 0.005):
+        super().__init__()
+        self.wing_loss = WingLoss(omega=wing_omega, epsilon=wing_epsilon)
+
+    def forward(self, pred_keypoints: torch.Tensor, pred_confidence: torch.Tensor,
+                target_keypoints: torch.Tensor, target_confidence: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            pred_keypoints: [B, 17, 2]
+            pred_confidence: [B, 17]
+            target_keypoints: [B, 17, 2]
+            target_confidence: [B, 17]
+        Returns:
+            loss: scalar
+        """
+        # Wing loss on keypoints — weighted by per-joint confidence (Doc 2 C.4)
+        # Invalid joints (confidence=0) contribute zero loss
+        loss_kp = self.wing_loss(pred_keypoints, target_keypoints, weight=target_confidence)
+
+        # Confidence regularization: encourage high confidence when target is valid
+        conf_loss = F.mse_loss(pred_confidence, target_confidence.clamp(0.0, 1.0))
+
+        return loss_kp + 0.1 * conf_loss
+
+
+# ===========================================================================
+# Activity Loss — LDAM-DRW + CB-Focal (Doc 2 C.2)
+# ===========================================================================
+
+class LDAMLoss(nn.Module):
+    """
+    Label-Distribution-Aware Margin (LDAM) Loss + Deferred Re-Weighting (DRW).
+
+    Paper: "LDAM: Label-Distribution-Aware Margin Loss" (NeurIPS 2020)
+    Used for long-tail classification on small datasets like IndustReal.
+
+    DRW: Apply CB weights only AFTER epoch LDAM_DRW_EPOCH (when features are stable).
+    Before that: standard cross-entropy with margin.
+
+    The margin for class c: m_c = 1 / sqrt(sqrt(n_c))
+    where n_c is the number of samples for class c.
+    """
+    def __init__(self, num_classes: int = 74, max_m: float = 0.5, s: float = 30,
+                 cb_weights: Optional[torch.Tensor] = None):
+        super().__init__()
+        self.num_classes = num_classes
+        self.max_m = max_m
+        self.s = s
+        self.cb_weights = cb_weights
+        self.register_buffer('class_weights', torch.ones(num_classes))
+        self._raw_counts: Optional[np.ndarray] = None
+        self._margins: Optional[torch.Tensor] = None
+
+    def _compute_margins(self, cls_num_list: np.ndarray) -> torch.Tensor:
+        m_list = 1.0 / np.sqrt(np.sqrt(np.maximum(cls_num_list, 1e-8)))
+        m_list = m_list * (self.max_m / m_list.max())
+        return torch.tensor(m_list, dtype=torch.float32)
+
+    def _ensure_margins(self, device: torch.device) -> torch.Tensor:
+        """Lazily compute and cache margins."""
+        if self._margins is None:
+            counts = self._raw_counts if self._raw_counts is not None else np.ones(self.num_classes)
+            self._margins = self._compute_margins(counts)
+        return self._margins.to(device)
+
+    @property
+    def margin_cumsum(self) -> torch.Tensor:
+        """Expose margins for inspection (CHECKLIST ITEM 31)."""
+        if self._margins is None:
+            return self._compute_margins(np.ones(self.num_classes))
+        return self._margins
+
+    def set_class_counts(self, counts):
+        """Set per-class sample counts for LDAM margin / CB-Focal reweighting.
+
+        Accepts counts of length self.num_classes-1, self.num_classes, or
+        self.num_classes+1 (with explicit reconciliation in each case). The
+        old code silently passed an over-long array through to copy_(),
+        producing a Torch size-mismatch error on the full dataset whenever
+        the data contained the highest action id.
+        """
+        if counts is None:
+            self.class_weights.data.fill_(1.0 / self.num_classes)
+            self._raw_counts = None
+            self._margins = None
+            return
+
+        counts = np.asarray(counts, dtype=np.float64).reshape(-1)
+        n_in, n_want = counts.shape[0], self.num_classes
+
+        if n_in == n_want - 1:
+            # caller forgot the NA slot; prepend a sentinel of 1 (not 0; the
+            # margin formula 1/√√n needs n > 0 to avoid huge spurious margins)
+            counts = np.concatenate([[1.0], counts])
+        elif n_in != n_want:
+            # Length disagrees with self.num_classes (the NUM_CLASSES_ACT
+            # 74-vs-75 hazard). This is NOT fatal: forward() resizes every
+            # per-class vector to the actual logits width via _fit_to_width,
+            # so we keep the counts at their natural length and only warn.
+            logger.warning(
+                f'LDAMLoss.set_class_counts: got {n_in} entries but '
+                f'num_classes={n_want}. Keeping natural length; margins/weights '
+                f'are re-aligned to the logits width at forward time.'
+            )
+
+        effective = np.where(
+            counts > 0,
+            (1.0 - np.power(0.999, counts)) / (1.0 - 0.999),
+            1.0,
+        )
+        weights = 1.0 / np.maximum(effective, 1e-8)
+        weights = weights / weights.sum() * counts.shape[0]
+        # The class_weights buffer is fixed-size; only copy when shapes match
+        # (it is informational — forward() reads _raw_counts / cb_weights).
+        if weights.shape[0] == self.class_weights.shape[0]:
+            self.class_weights.data.copy_(torch.tensor(weights, dtype=torch.float32))
+
+        self._raw_counts = counts.copy()
+        self._raw_counts[0] = max(self._raw_counts[0], 1.0)  # avoid 1/√√0 at NA
+        self._margins = None  # force recompute on next forward
+
+        # [OPUS FIX #2] Wire cb_weights for DRW when LDAM_USE_DRW is True.
+        # DRW needs class-balanced re-weighting: w_c = 1/E(n_c).
+        # When LDAM_USE_DRW=False, LDAM uses margins only (no CB re-weighting) — for A/B testing.
+        if bool(C.LDAM_USE_DRW):
+            # Store as torch tensor — forward() calls .to(device) on it directly.
+            self.cb_weights = torch.tensor(weights, dtype=torch.float32)
+        else:
+            self.cb_weights = None
+
+    @staticmethod
+    def _fit_to_width(arr: np.ndarray, width: int, pad_value: float = 1.0) -> np.ndarray:
+        """Return ``arr`` resized to exactly ``width`` entries.
+
+        Pads with ``pad_value`` if too short, truncates if too long. This keeps
+        per-class vectors (margins, weights) aligned with the *actual* logits
+        width at forward time, even when ``self.num_classes`` was computed from a
+        different source than the data (the NUM_CLASSES_ACT 74-vs-75 hazard).
+        """
+        n = arr.shape[0]
+        if n == width:
+            return arr
+        if n < width:
+            return np.concatenate([arr, np.full(width - n, pad_value, dtype=arr.dtype)])
+        return arr[:width]
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor,
+                epoch: int = 0, drw_epoch: int = 60) -> torch.Tensor:
+        device = logits.device
+        B, C = logits.shape
+
+        is_soft_labels = (targets.dim() == 2 and targets.shape[1] == C)
+        if is_soft_labels:
+            hard_targets = targets.argmax(dim=1)
+        else:
+            hard_targets = targets.long()
+
+        # [ROBUSTNESS FIX — activity label range] ----------------------------
+        # On the full IndustReal dataset, NUM_CLASSES_ACT is computed by scanning
+        # AR_labels.csv on disk; the raw bincount that feeds set_class_counts and
+        # the model's output width can disagree by one (the 37/64 dead-channel /
+        # NA-prepend ambiguity). If any target lands one-past the logits width,
+        # the original `m_list[hard_targets]` and `scatter_` calls raise a cryptic
+        # CUDA device-side assert that kills the 100-epoch run. We instead size
+        # every per-class vector to the *observed* logits width C and clamp any
+        # out-of-range target into valid range, warning exactly once so the data
+        # mapping bug stays visible without aborting training.
+        if hard_targets.numel() > 0:
+            t_max = int(hard_targets.max().item())
+            t_min = int(hard_targets.min().item())
+            if t_max >= C or t_min < 0:
+                if not getattr(self, '_warned_oob_target', False):
+                    logger.warning(
+                        'LDAMLoss: activity target out of range '
+                        f'(min={t_min}, max={t_max}, logits width C={C}, '
+                        f'num_classes={self.num_classes}). Clamping to [0, {C - 1}]. '
+                        'This indicates a NUM_CLASSES_ACT / label-mapping mismatch — '
+                        'see AUDIT_REPORT.md "Activity class count".'
+                    )
+                    self._warned_oob_target = True
+                hard_targets = hard_targets.clamp_(0, C - 1)
+
+        # Margins are built to width C (not self.num_classes) so they always
+        # align with the logits, regardless of how counts were registered.
+        raw = self._raw_counts if self._raw_counts is not None else np.ones(C)
+        m_list = self._compute_margins(self._fit_to_width(raw, C)).to(device)
+
+        index = torch.zeros_like(logits, dtype=torch.bool)
+        index.scatter_(1, hard_targets.view(-1, 1), True)
+        batch_m = m_list[hard_targets].view(-1, 1)
+        x_m = logits - batch_m * index.float()
+        # Clamp x_m to prevent overflow when s=30 and logits are large
+        x_m = x_m.clamp(-10.0, 10.0)
+
+        if epoch >= drw_epoch and self.cb_weights is not None:
+            cb = self.cb_weights.to(device)
+            if cb.shape[0] != C:  # keep DRW weights aligned with logits width
+                cb = torch.from_numpy(
+                    self._fit_to_width(cb.cpu().numpy(), C)
+                ).to(device)
+            w = cb[hard_targets]
+        else:
+            w = torch.ones(B, device=device)
+
+        # [FIX #C] Paper §2.2.4: label_smooth=0.1 for LDAM-DRW
+        # [FIX #D] Clamp s*x_m to prevent softmax overflow (inf → NaN cascade)
+        # softmax(±50) is numerically stable; beyond ±100 causes inf → NaN
+        logits_safe = (self.s * x_m).clamp(-50.0, 50.0)
+        return (w * F.cross_entropy(
+            logits_safe, hard_targets, reduction='none',
+            label_smoothing=0.1
+        )).mean()
+
+
+class ClassBalancedFocalLoss(nn.Module):
+    """
+    CB Focal Loss (Cui et al., 2019) for 74-class activity recognition.
+    Effective number of samples: E(n) = (1 - β^n) / (1 - β)
+    Weights: w_c = 1 / E(n_c)
+    FL = (1 - p_t)^γ * CE_with_weights
+    With optional label smoothing for better generalization.
+
+    Doc 2 C.2: LDAM-DRW is preferred for long-tail IndustReal classes.
+    """
+    # Alias used by checklist scripts
+    CBFocalLoss = None  # resolved after class definition below
+
+    def __init__(self, num_classes: int = 74, beta: float = 0.999, gamma: float = 2.0,
+                 label_smoothing: float = 0.1):
+        super().__init__()
+        self.num_classes = num_classes
+        self.beta = beta
+        self.gamma = gamma
+        self.label_smoothing = label_smoothing
+        self.register_buffer('class_weights', torch.ones(num_classes))
+
+    def compute_beta_weights(self, frequencies: torch.Tensor) -> None:
+        """
+        Compute class-balanced weights from per-class sample frequencies.
+        E(n) = (1 - β^n) / (1 - β)
+        w_c = 1 / E(n_c)
+        """
+        freq = frequencies.float()
+        effective = torch.where(
+            freq > 0,
+            (1.0 - torch.pow(self.beta, freq)) / (1.0 - self.beta),
+            torch.ones_like(freq),
+        )
+        weights = 1.0 / effective.clamp(min=1e-8)
+        weights = weights / weights.sum() * self.num_classes
+        self.class_weights.data.copy_(weights)
+
+    def set_class_counts(self, counts):
+        counts = np.array(counts, dtype=np.float64)
+        effective = np.where(
+            counts > 0,
+            (1.0 - np.power(self.beta, counts)) / (1.0 - self.beta),
+            1.0,
+        )
+        weights = 1.0 / np.maximum(effective, 1e-8)
+        weights = weights / weights.sum() * self.num_classes
+        self.class_weights.data.copy_(torch.tensor(weights, dtype=torch.float32))
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        device = logits.device
+        B, C = logits.shape
+
+        probs = F.softmax(logits, dim=1)
+
+        is_soft_labels = (targets.dim() == 2 and targets.shape[1] == C)
+
+        if is_soft_labels:
+            soft_targets = targets
+            p_t = (soft_targets * probs).sum(dim=1)
+            log_probs = F.log_softmax(logits, dim=1)
+            ce = -(soft_targets * log_probs).sum(dim=1)
+        elif self.label_smoothing > 0:
+            with torch.no_grad():
+                smooth_targets = torch.zeros_like(logits)
+                smooth_targets.fill_(self.label_smoothing / self.num_classes)
+                smooth_targets.scatter_(1, targets.unsqueeze(1), 1.0 - self.label_smoothing)
+
+            p_t = (smooth_targets * probs).sum(dim=1)
+            log_probs = F.log_softmax(logits, dim=1)
+            ce = -(smooth_targets * log_probs).sum(dim=1)
+        else:
+            p_t = probs.gather(1, targets.unsqueeze(1)).squeeze(1)
+            ce = F.cross_entropy(logits, targets, reduction='none')
+
+        focal_weight = (1 - p_t) ** self.gamma
+
+        if is_soft_labels:
+            w = (self.class_weights.to(device).unsqueeze(0) * soft_targets).sum(dim=1)
+        else:
+            w = self.class_weights.to(device)[targets]
+
+        # Clamp max weight ratio to prevent catastrophic reweighting (beta=0.999 caused 10,000x amplification)
+        w_min = self.class_weights.min()
+        ratios = self.class_weights / w_min.clamp(min=1e-8)
+        clamp_mask = ratios > 50.0
+        if clamp_mask.any():
+            w = torch.where(clamp_mask[targets], w_min * 50.0, w)
+
+        loss = w * focal_weight * ce
+        return loss.mean()
+
+
+# Alias used by checklist scripts referencing CBFocalLoss
+CBFocalLoss = ClassBalancedFocalLoss
+
+
+class PSRFocalLoss(nn.Module):
+    """
+    Focal Loss for PSR — supports both multi-class (activity step classification)
+    and multi-label (PSR component detection) modes.
+
+    Multi-class mode (CHECKLIST ITEM 32): logits [B, 36], targets [B] integer class indices
+    Multi-label mode (Doc 2 C.3): logits [B, 11], targets [B, 11] binary
+
+    FL(p_t) = -α_t * (1 - p_t)^γ * log(p_t)
+    """
+    def __init__(self, alpha: float = 0.25, gamma: float = 2.0):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        # Detect mode: if targets are 1D integer indices → multi-class
+        # if targets are 2D binary → multi-label (PSR components)
+        if targets.dim() == 1 and targets.dtype == torch.long:
+            # Multi-class mode: convert to one-hot, apply binary focal per class
+            return self._multiclass_focal(logits, targets)
+        else:
+            # Multi-label mode: use binary focal loss (targets must be float)
+            targets_float = targets.float()
+            return binary_focal_loss(logits, targets_float, alpha=self.alpha, gamma=self.gamma)
+
+    def _multiclass_focal(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        """Focal loss for multi-class classification."""
+        ce = F.cross_entropy(logits, targets, reduction='none')
+        p_t = torch.gather(F.softmax(logits, dim=1), dim=1, index=targets.unsqueeze(1)).squeeze(1)
+        focal_weight = (1 - p_t) ** self.gamma
+        alpha_t = self.alpha * torch.ones_like(p_t)
+        loss = alpha_t * focal_weight * ce
+        return loss.mean()
+
+
+def binary_focal_loss(logits: torch.Tensor, targets: torch.Tensor,
+                       alpha: float = 0.25, gamma: float = 2.0,
+                       per_component_alpha: torch.Tensor = None) -> torch.Tensor:
+    """
+    Binary Focal Loss for PSR (Doc 2 C.3).
+
+    PSR has heavy class imbalance per component (component appears in <30% of frames).
+    BCE WithLogitsLoss struggles with this; focal loss down-weights easy negatives.
+
+    FL(p_t) = -α_t * (1 - p_t)^γ * log(p_t)
+    where p_t = p if y=1 else 1-p
+
+    Args:
+        logits: [B, C] or [B] tensor of sigmoid logits
+        targets: [B, C] or [B] binary targets
+        alpha: scalar fallback alpha (used when per_component_alpha is None)
+        gamma: focal gamma
+        per_component_alpha: [C] tensor of per-component alphas; if provided,
+            overrides the scalar alpha. Computed as alpha_c = 2 * (1 - prevalence_c)
+            so rare components get higher alpha (Doc 01 §D.4).
+    """
+    # --- FIX: Clamp logits to gradient-safe range BEFORE sigmoid.
+    # Logits beyond ±8 produce saturated sigmoid (≈0 or ≈1) that destabilizes
+    # focal loss: p_t≈0 → log(p_t)=-inf → NaN. ±8 is safe: exp(-8)≈0.00034,
+    # exp(8)≈2981 (well below fp16 overflow ~65504). Gradient flows through clamp.
+    _logit_safe = logits.clamp(min=-8.0, max=8.0)
+    p = torch.sigmoid(_logit_safe)
+    ce = F.binary_cross_entropy_with_logits(_logit_safe, targets, reduction='none')
+    p_t = p * targets + (1 - p) * (1 - targets)
+
+    # --- FIX: Mask -1 (error/aborted state) targets as ignore ---
+    # PSR labels contain -1 for error/aborted states (_parse_psr_raw fills -1 for
+    # error transitions). With target=-1: p_t = 2-3p (can be negative), making
+    # (1-p_t)^gamma numerically unstable. Also, alpha_t = 2*target - 1 would produce
+    # alpha_t=1 (not 0) for target=-1. Mask these as ignore BEFORE computing alpha_t.
+    if (targets < 0).any():
+        ignore_mask = (targets < 0).float()
+        # Temporarily set -1 → 0 so alpha_t formula works correctly on masked entries
+        targets_safe = targets.clone().masked_fill_(ignore_mask.bool(), 0)
+    else:
+        ignore_mask = None
+        targets_safe = targets
+
+    if per_component_alpha is not None:
+        alpha_c = per_component_alpha.to(logits.device).unsqueeze(0).clamp(max=1.0)
+        alpha_t = alpha_c * targets_safe + (1 - alpha_c) * (1 - targets_safe)
+    else:
+        alpha_t = alpha * targets_safe + (1 - alpha) * (1 - targets_safe)
+
+    # Apply ignore mask: zero out alpha_t and CE contribution for -1 entries
+    if ignore_mask is not None:
+        alpha_t = alpha_t * (1 - ignore_mask)  # 0 for -1 targets
+        # p_t=1 → (1-1)^gamma=0, ce=0 → loss=0 for -1 targets
+        p_t = p_t.masked_fill(ignore_mask.bool(), 1.0)
+        ce = ce.masked_fill(ignore_mask.bool(), 0.0)
+
+    # --- FIX: Clamp p_t to prevent NaN in focal loss ---
+    # p_t near 0 → (1-0)^gamma = 1, but -log(0) = inf → NaN
+    # p_t near 1 → (1-1)^gamma = 0, log(1) = 0, but clamp is safe
+    p_t = p_t.clamp(min=1e-6, max=1.0 - 1e-6)
+    per_elem = alpha_t * (1 - p_t) ** gamma * ce
+    if ignore_mask is not None:
+        valid_mask = (1 - ignore_mask).bool()
+        if valid_mask.sum() == 0:
+            return torch.tensor(0.0, device=logits.device, dtype=logits.dtype, requires_grad=logits.requires_grad)
+        loss = per_elem.masked_select(valid_mask).mean()
+    else:
+        loss = per_elem.mean()
+
+    # --- DIAGNOSTIC: expose real PSR loss before any sentinel ---
+    # 18,615/18,635 steps show psr=0.0001000 but zero PSR_NAN warnings.
+    # Diagnostic: print whenever loss is non-finite OR suspiciously small.
+    # Remove this block after confirming the -1 fraction on real data.
+    _n_neg1 = int((targets < 0).sum())
+    _total = targets.numel()
+    _valid = _total - _n_neg1
+    _suspicious = (not torch.isfinite(loss).all()) or (float(loss) < 1e-4)
+    if _suspicious:
+        _msg = (
+            f"[PSR_DIAG] loss={float(loss):.3e} finite={bool(torch.isfinite(loss).all())} | "
+            f"shape={tuple(targets.shape)} total={_total} valid={_valid} neg1={_n_neg1} "
+            f"(neg1_frac={_n_neg1 / max(_total, 1):.3f}) | "
+            f"logits[min/max/mean]={float(logits.min()):.3f}/"
+            f"{float(logits.max()):.3f}/{float(logits.mean()):.3f} | "
+            f"target counts: zeros={int((targets == 0).sum())} "
+            f"ones={int((targets == 1).sum())} neg1={_n_neg1} | "
+            f"per_elem[min/max/sum]={float(per_elem.min()):.3e}/"
+            f"{float(per_elem.max()):.3e}/{float(per_elem.sum()):.3e}"
+        )
+        logger.warning(_msg)
+        print(_msg, flush=True)
+
+    return loss
+
+
+# =============================================================================
+# Head Pose Split Loss (two-term: position MSE + normalized direction MSE)
+# =============================================================================
+def head_pose_loss_split(
+    pred: torch.Tensor, target: torch.Tensor,
+    pos_weight: float = 1.0, dir_weight: float = 1.0,
+    norm_reg_weight: float = 0.0, eps: float = 1e-6,
+) -> torch.Tensor:
+    """
+    Two-term head-pose loss. Position target must be standardized to O(1)
+    via HEAD_POSE_POS_SCALE in the dataset (industreal_dataset.py _parse_pose).
+    Direction term uses L2-normalized vectors so it is scale-invariant.
+    """
+    fwd_p, pos_p, up_p = pred[:, 0:3], pred[:, 3:6], pred[:, 6:9]
+    fwd_t, pos_t, up_t = target[:, 0:3], target[:, 3:6], target[:, 6:9]
+    pos_loss = F.mse_loss(pos_p, pos_t)
+    fwd_pn = F.normalize(fwd_p, dim=1, eps=eps)
+    up_pn = F.normalize(up_p, dim=1, eps=eps)
+    fwd_tn = F.normalize(fwd_t, dim=1, eps=eps)
+    up_tn = F.normalize(up_t, dim=1, eps=eps)
+    dir_loss = F.mse_loss(fwd_pn, fwd_tn) + F.mse_loss(up_pn, up_tn)
+    total = pos_weight * pos_loss + dir_weight * dir_loss
+    if norm_reg_weight > 0.0:
+        fwd_norm = fwd_p.norm(dim=1)
+        up_norm = up_p.norm(dim=1)
+        norm_reg = ((fwd_norm - 1.0) ** 2 + (up_norm - 1.0) ** 2).mean()
+        total = total + norm_reg_weight * norm_reg
+    return total
+
+
+# ===========================================================================
+# Multi-Task Loss — Kendall Uncertainty Weighting
+# ===========================================================================
+
+class MultiTaskLoss(nn.Module):
+    """
+    Kendall homoscedastic uncertainty weighting for 4 tasks:
+      detection + pose + activity + PSR
+
+    L = sum_t [ exp(-s_t) * L_t + s_t ]
+
+    Initialization per diagram:
+      s_det = 0   (precision=1.0, neutral)
+      s_pose = -1 (precision~2.7x higher at init)
+      s_act = 0   (precision=1.0, neutral)
+      s_psr = 0   (precision=1.0, neutral)
+
+    Activity warmup: ramp from 0→1 over first 5 epochs.
+    act_ramp = min(1, epoch/5)
+
+    Kendall clamp range [-4, 2]:
+      exp(-(-4)) = exp(4) ~ 54.6  max precision
+      exp(-(2))  = exp(-2) ~ 0.135  min precision
+
+    Doc 2 improvements:
+      C.1: GIoU replaces SmoothL1 in FocalLoss
+      C.2: LDAM-DRW replaces CB-Focal (when USE_LDAM_DRW=True)
+      C.3: Binary focal loss replaces BCE for PSR
+    """
+    def __init__(
+        self,
+        num_classes_act: int = 74,
+        num_psr_components: int = 11,
+        train_det: bool = True,
+        train_pose: bool = True,
+        train_act: bool = True,
+        train_psr: bool = True,
+        use_kendall: bool = True,
+    ):
+        super().__init__()
+        self.train_det = train_det
+        self.train_pose = train_pose
+        self.train_act = train_act
+        self.train_psr = train_psr
+        self.use_kendall = use_kendall
+
+        # Kendall log variances (log σ²) — initialized on CPU; forward() moves
+        # them to the correct device before use. This avoids GPU OOM at init
+        # while keeping training fast (one-time per-forward transfer is negligible).
+        #
+        # DESIGN CHOICE (Warning C9): log_var_pose is shared for BOTH body pose AND
+        # head pose. This is NOT a bug — it matches the paper §Multi-Task Loss spec:
+        #   t ∈ {det, pose+head_pose, act, psr}
+        # Body pose (17-keypoint Wing Loss) and head pose (9-DoF MSE) share a single
+        # s_pose=-1 because both are pose tasks of similar magnitude (both ×0.001).
+        # The paper never intended independent weighting for these two. If head pose
+        # converges faster than body pose (or vice versa), the shared log_var means
+        # they must be reweighted together — this is an intentional architectural choice
+        # per the Kendall grouping, not a deficiency.
+        # [FIX 2026-06-08] init to data-driven priors instead of zeros(1):
+        # - log_var = log(typical_init_loss) — equalizes initial weighted contribution per head
+        # - typical init losses: det focal with pi=0.01 prior ~ 2.0; act 75-class CE
+        #   (rand init) ~ log(75)=4.3; pose heatmap MSE ~ 0.1; psr BCE on 0.5 prior ~ 0.7;
+        #   head_pose heatmap MSE ~ 0.05
+        # - This means the first ~5 epochs no longer spend 50% of capacity re-balancing
+        #   weights from uniform 1.0 (the previous init) to a sensible distribution.
+        # - Clamp range: Kendall log_var ∈ [-4, 2] (precision ∈ [0.018, 54.6]) — these
+        #   priors (-3, 1.4) are well inside the clamp range so they can shrink/grow
+        #   freely during training without hitting the boundary.
+        self.log_var_det = nn.Parameter(torch.tensor([0.69]))       # log(2.0)
+        # Fix (Opus #1): s_pose=0 instead of -1 to prevent Kendall clamp(min=0) from
+        # zeroing the pose Kendall term at init. With s=-1: exp(-(-1))=exp(1)=2.7 prec
+        # and lv=-1 → term = 2.7*loss + (-1) which can be negative when loss is tiny
+        # (e.g. loss_pose ~0.0001 → 2.7*0.0001-1 = -0.9997). clamp(min=0) zeroes it.
+        # s=0 gives prec=1.0 and lv=0 → term = loss + 0 (always ≥ 0).
+        # [FIX 2026-06-08] Raise s_pose to 0.69 (same as det) so the pose+head_pose
+        # shared log_var starts with precision=0.5 instead of 1.0. Heatmap MSE for
+        # 17-keypoint body pose is ~0.1, so 1/0.1 = 10 → log_var=2.3. We use a
+        # more conservative 0.69 (precision=0.5) because (a) head_pose is 9-DoF
+        # with different scale, and (b) the body pose is X-0.001 scaled internally
+        # so its effective loss to Kendall is ~0.1 → 1/0.1 = 10 (overweight).
+        # 0.69 splits the difference; training can adapt to 2.3 if needed.
+        self.log_var_pose = nn.Parameter(torch.tensor([0.69]))
+        self.log_var_act = nn.Parameter(torch.tensor([1.44]))       # log(4.2) ≈ 75-class CE rand init
+        self.log_var_psr = nn.Parameter(torch.tensor([-0.36]))      # log(0.7) — BCE on 0.5 prior
+
+        # Sub-losses
+        self.det_loss_fn = FocalLoss(alpha=C.FOCAL_ALPHA, gamma=C.FOCAL_GAMMA, pos_iou_thresh=C.DET_POS_IOU_THRESH)
+        self.pose_loss_fn = PoseLoss(wing_omega=C.WING_OMEGA, wing_epsilon=C.WING_EPSILON)
+
+        # C.2: LDAM-DRW or CB-Focal for activity
+        use_ldam = bool(getattr(C, 'USE_LDAM_DRW', False))
+        if use_ldam:
+            self.act_loss_fn = LDAMLoss(
+                num_classes=num_classes_act,
+                max_m=float(getattr(C, 'LDAM_MAX_M', 0.5)),
+                s=float(getattr(C, 'LDAM_S', 30)),
+            )
+        else:
+            self.act_loss_fn = ClassBalancedFocalLoss(
+                num_classes=num_classes_act,
+                beta=C.CB_BETA,
+                gamma=C.CB_GAMMA,
+                label_smoothing=getattr(C, 'CB_LABEL_SMOOTHING', 0.1),
+            )
+        self.use_ldam = use_ldam
+
+        # C.3: Binary focal loss for PSR (instead of BCE)
+        self.psr_loss_fn = nn.BCEWithLogitsLoss(reduction='mean')
+        self.use_psr_focal = bool(getattr(C, 'PSR_FOCAL_GAMMA', 0) > 0)
+        self.psr_focal_alpha = float(getattr(C, 'PSR_FOCAL_ALPHA', 0.25))
+        self.psr_focal_gamma = float(getattr(C, 'PSR_FOCAL_GAMMA', 2.0))
+        self._psr_per_component_alpha: torch.Tensor = None
+        self._psr_num_components = num_psr_components
+
+        self.head_pose_loss_fn = nn.MSELoss(reduction='mean')
+
+        self._psr_temporal_smooth_weight = float(getattr(C, 'PSR_TEMPORAL_SMOOTH_WEIGHT', 0.05))
+        self._psr_temporal_history: Dict[str, List[torch.Tensor]] = {}
+
+        self._act_warmup_epochs = int(getattr(C, 'ACT_RAMP_EPOCHS', 5))
+        self._current_epoch = 0
+
+    def set_class_counts(self, counts):
+        # counts has length 74 (excludes NA class 0); act_loss_fn expects 75
+        # The FocalLoss and LDAMLoss use num_classes=75 internally but only
+        # active classes 1-74 get weights; class 0 (NA/NA) gets weight 0.
+        # We pass the 74 active-class counts directly; the loss handles the mismatch.
+        self.act_loss_fn.set_class_counts(counts)
+
+    def set_psr_class_counts(self, prevalence_per_component: torch.Tensor):
+        """
+        Doc 01 §D.4: Per-component PSR focal loss weighting.
+
+        Each of the 11 PSR components has different prevalence (component 0 appears
+        in ~95% of frames; component 10 in <30%). Rare components need higher
+        focal alpha to avoid the model collapsing to predicting 0 everywhere.
+
+        alpha_c = 2 * (1 - prevalence_c)
+        - prevalence_c near 1.0 → alpha_c near 0 (common component, well-balanced)
+        - prevalence_c near 0.0 → alpha_c near 2.0 (rare component, needs heavy upweighting)
+
+        Call this once at training start after computing prevalence from dataset.
+
+        Args:
+            prevalence_per_component: [11] tensor of per-component "appears as 1" prevalence
+                                      values in [0, 1]. Computed as:
+                                      cache.psr_per_frame.mean(axis=0)
+        """
+        prev = prevalence_per_component.float().clamp(0.01, 0.99)
+        alpha_c = 2.0 * (1.0 - prev)
+        # [FIX Bug #11] Clamp alpha_c to min=0.1 to prevent starvation.
+        # Component0 has prevalence=1.0 → clamped prev=0.99 → alpha_c=0.02.
+        # With alpha_c=0.02, focal loss gives near-zero gradient for that component,
+        # causing PSR head to collapse to trivial all-zero predictions.
+        # Min-clamp ensures every component gets at least 0.1 focal weight.
+        alpha_c = alpha_c.clamp(min=0.1)
+        self._psr_per_component_alpha = alpha_c
+        logger.debug(
+            f'PSR per-component alpha: {alpha_c.numpy().round(3).tolist()} '
+            f'(from prevalence {prev.numpy().round(3).tolist()})'
+        )
+
+    def set_epoch(self, epoch: int):
+        self._current_epoch = epoch
+
+    def forward(self, outputs: Dict, targets: Dict) -> Tuple[torch.Tensor, Dict]:
+        # Find the first available tensor to determine device and dtype (PSR-only branch
+        # omits cls_preds, so fall back to psr_logits or any other tensor).
+        device = None
+        output_dtype = None
+        for key in ('cls_preds', 'psr_logits', 'act_logits', 'head_pose', 'heatmaps'):
+            if key in outputs and isinstance(outputs[key], torch.Tensor):
+                device = outputs[key].device
+                output_dtype = outputs[key].dtype
+                break
+        if device is None:
+            raise RuntimeError(
+                f'MultiTaskLoss.forward received an empty outputs dict: {list(outputs.keys())}'
+            )
+
+        # Ensure Kendall log_vars are on the same device as the model output
+        # (they are CPU-initialized; autograd does NOT auto-move registered params)
+        if self.log_var_det.device != device:
+            self.log_var_det.data = self.log_var_det.data.to(device)
+            self.log_var_pose.data = self.log_var_pose.data.to(device)
+            self.log_var_act.data = self.log_var_act.data.to(device)
+            self.log_var_psr.data = self.log_var_psr.data.to(device)
+
+        zero = torch.tensor(0.0, device=device, dtype=output_dtype)
+
+        # Initialize NaN-tracking flag. Set to True if any loss is replaced with
+        # grad-safe fallback. The training loop checks loss_dict['__nan_detected__']
+        # to skip the step entirely (avoids scaler.scale + backward edge cases).
+        _nan_detected_this_step = False
+
+        # === Detection ===
+        if self.train_det:
+            cls_loss, reg_loss = self.det_loss_fn(
+                outputs['cls_preds'], outputs['reg_preds'],
+                outputs['anchors'], targets['detection'],
+            )
+            giou_weight = float(getattr(C, 'GIOU_WEIGHT', 2.0))
+            loss_det = cls_loss + giou_weight * reg_loss
+            # --- FIX: Floor loss_det at zero to prevent GIoU negative values
+            # causing Kendall divergence. reg_loss can be negative (GIoU ∈ [-1,1]),
+            # and with Kendall prec = exp(-lv_det) up to ~54.6, a loss_det of -1.5
+            # multiplied by prec=54.6 gives ~-82 per detection step → divergence.
+            # Full zero-floor: GIoU<0 gets 0 gradient (no negative signal to log_var).
+            NEG_SLOPE = 0.0
+            loss_det = torch.where(
+                loss_det < 0,
+                NEG_SLOPE * loss_det,
+                loss_det,
+            )
+        else:
+            cls_loss = reg_loss = loss_det = zero
+
+        # NaN/inf guard on ALL individual losses before smooth cap.
+        # A single batch with corrupted loss (e.g., from extreme GIoU or LDAM overflow)
+        # propagates NaN into Kendall and crashes training.
+        #
+        # FIX: Use locals() check instead of dir() — loss_pose and loss_head_pose are
+        # assigned AFTER this guard block (lines 831 and 950), so dir() always returns
+        # False and they get incorrectly zeroed. locals() gives us the current vars
+        # actually in scope at this point.
+        _local = locals()
+        loss_pose = _local.get('loss_pose', zero)
+        loss_head_pose = _local.get('loss_head_pose', zero)
+        # Initialize loss_act and loss_psr before the NaN guard loop
+        # (they may not be assigned yet if train_act/train_psr are False,
+        # but we still include them in the loop to avoid UnboundLocalError)
+        loss_act = zero
+        loss_psr = zero
+        # Track whether ANY NaN was detected — training loop can check loss_dict['__nan_detected__']
+        # to skip the step entirely (scaler.scale → backward is unsafe with replaced NaN losses).
+        _nan_detected_this_step = False
+        for _loss, _name, _zero in [
+            (loss_det, 'det', zero),
+            (loss_pose, 'pose', zero),
+            (loss_act, 'act', zero),
+            (loss_psr, 'psr', zero),
+            (loss_head_pose, 'head_pose', zero),
+        ]:
+            if not torch.isfinite(_loss).all():
+                _nan_detected_this_step = True
+                # CRITICAL: Use torch.where to keep autograd graph intact.
+                # torch.tensor(1e-4, device=...) creates a LEAF without requires_grad=True,
+                # which breaks the backward() graph when combined with Kendall precision.
+                # torch.where(isfinite(_loss), _loss, fallback) keeps the path through _loss
+                # for finite elements — gradients still flow normally.
+                if _name in ('det', 'pose', 'psr', 'head_pose'):
+                    _fallback = _loss.new_full(_loss.shape, 1e-4) if _loss.numel() > 1 else _loss.new_full((1,), 1e-4).squeeze()
+                    _replaced = torch.where(torch.isfinite(_loss), _loss, _fallback)
+                else:
+                    _replaced = _zero
+                if _name == 'det':
+                    loss_det = _replaced
+                elif _name == 'pose':
+                    loss_pose = _replaced
+                elif _name == 'act':
+                    loss_act = _replaced
+                elif _name == 'psr':
+                    loss_psr = _replaced
+                elif _name == 'head_pose':
+                    loss_head_pose = _replaced
+
+        # --- FIX: Per-component smooth loss caps to prevent NaN cascade into Kendall.
+        # A single batch with extreme loss (e.g., det=100+, pose=200+) can cause
+        # Kendall divergence: exp(-lv) * loss can produce inf, which then propagates
+        # through all log_vars. Soft cap formula: x if x<=cap, cap*(1+log(x/cap)) if x>cap.
+        # Gradient: 1.0 below cap, cap/x above cap (never zero → no gradient death).
+        def _smooth_cap(x, cap):
+            x_safe = x.clamp(min=1e-6, max=1e6)
+            return torch.where(x > cap, cap * (1 + torch.log(x_safe / cap)), x.clamp(min=1e-6))
+
+        det_cap = float(getattr(C, 'DET_LOSS_CAP', 50.0))
+        loss_det = _smooth_cap(loss_det, det_cap)
+
+        # === Pose (Wing Loss on keypoints) ===
+        # Note: When TRAIN_HEAD_POSE=True, train_pose=True controls head pose head
+        # (9-DoF MSE), NOT body keypoints (COCO-style). The model generates pseudo-
+        # keypoints from detection outputs for PoseFiLM, but there are no real
+        # keypoint annotations in IndustReal. Wing Loss block is only for the rare
+        # body-keypoint case where train_pose=True AND keypoints are actually present.
+        if self.train_pose and 'keypoints' in targets:
+            loss_pose = self.pose_loss_fn(
+                outputs['keypoints'],
+                outputs['pose_confidence'],
+                targets['keypoints'],
+                targets['pose_confidence'],
+            ) * 0.001  # Kendall exp(-lv_pose)=exp(1)≈2.7 amplifies
+        else:
+            loss_pose = zero
+
+        # --- FIX: Pose loss cap to prevent NaN cascade ---
+        pose_cap = float(getattr(C, 'POSE_LOSS_CAP', 30.0))
+        loss_pose = _smooth_cap(loss_pose, pose_cap)
+
+        # === Activity ===
+        if self.train_act:
+            # C.2: LDAM-DRW needs epoch for DRW decision
+            if self.use_ldam:
+                drw_epoch = int(getattr(C, 'LDAM_DRW_EPOCH', 60))
+                loss_act = self.act_loss_fn(
+                    outputs['act_logits'],
+                    targets['activity'],
+                    epoch=self._current_epoch,
+                    drw_epoch=drw_epoch,
+                )
+            else:
+                loss_act = self.act_loss_fn(outputs['act_logits'], targets['activity'])
+        else:
+            loss_act = zero
+
+        # [FIX #1] Preventive NaN guard — catch inf before smooth cap propagates it.
+        # LDAM can produce inf if logits are extreme (e.g., all zeros → softamax → NaN from log).
+        # LDAM forward: F.cross_entropy with label_smoothing=0.1 and s=30 — any
+        # inf in logits will create NaN in cross_entropy output.
+        # This guard is BEFORE the smooth cap so NaN cannot corrupt the cap formula.
+        if not torch.isfinite(loss_act).all():
+            loss_act = torch.where(
+                torch.isfinite(loss_act),
+                loss_act,
+                zero.expand_as(loss_act) if loss_act.numel() > 1 else zero,
+            )
+            # Fallback: if entire tensor is non-finite, use zero (activity contributes nothing this batch).
+            if not torch.isfinite(loss_act).all():
+                loss_act = zero
+
+        # Activity warmup ramp — only applies during staged training
+        # NOTE: +1 so epoch 0 gets ramp=1/5=0.2 instead of 0/5=0 (which zeroed loss_act entirely)
+        act_ramp = 1.0
+        if getattr(C, 'STAGED_TRAINING', False):
+            act_ramp = min(1.0, (self._current_epoch + 1) / max(self._act_warmup_epochs, 1))
+        loss_act = loss_act * act_ramp
+
+        # --- FIX: Activity loss cap to prevent NaN cascade at Stage 3 entry ---
+        # Prior runs showed activity loss spiking to 40.8 when head_pose + PSR activate
+        # simultaneously at epoch 16, causing log_var explosion and NaN cascade.
+        # Cap activity loss to a safe threshold; Kendall will still learn from lower values.
+        #
+        # PROBLEM: hard clamp(max=40.0) zeroes the gradient when loss > 40.
+        # PyTorch clamp backward: at the boundary, subgradient = 0 (hard max).
+        # LDAM loss at epoch 16 ~= 55 > 40 → gradient zeroed → activity head can't learn.
+        #
+        # SOLUTION: fully-differentiable smooth cap that preserves gradient above cap.
+        # loss_capped(x, cap) = x for x <= cap, cap * (1 + log(x/cap)) for x > cap
+        # - Below cap: gradient = 1.0 (passthrough)
+        # - Above cap: gradient = cap/x > 0 (never zeroed)
+        # torch.where preserves the autograd graph through both branches.
+        # [FIX #2] Clamp smooth cap log input to prevent extreme value instability.
+        # log(x) is only defined for x > 0. clamp(min=1e-6) guards against x ≤ 0 from prior
+        # numerical errors. clamp(max=1e6) prevents overflow in exp(log(x)) downstream.
+        # The outer torch.where still passes gradient through when loss_act <= act_cap.
+        act_cap = float(getattr(C, 'ACTIVITY_LOSS_CAP', 40.0))
+        loss_act_safe = loss_act.clamp(min=1e-6, max=1e6)
+        loss_act = torch.where(
+            loss_act > act_cap,
+            act_cap * (1 + torch.log(loss_act_safe / act_cap)),
+            loss_act
+        )
+
+        # === PSR ===
+        preds = None
+        if self.train_psr:
+            # C.3: Binary focal loss for PSR (Doc 01 §D.4: per-component alpha)
+            if self.use_psr_focal:
+                loss_psr = binary_focal_loss(
+                    outputs['psr_logits'],
+                    targets['psr_labels'],
+                    alpha=self.psr_focal_alpha,
+                    gamma=self.psr_focal_gamma,
+                    per_component_alpha=self._psr_per_component_alpha,
+                )
+            else:
+                loss_psr = self.psr_loss_fn(
+                    outputs['psr_logits'],
+                    targets['psr_labels'],
+                )
+
+            # --- FIX 1 (2026-06-06): PSR input-sensitivity penalty ---
+            # Stage 3 epoch 16 collapsed: per-frame logit std/mean=0.12% on cap100
+            # (vs 7% at 200b baseline). Root cause: focal loss alone doesn't penalize
+            # constant output when the per-component positives ratio is in [0, 1]
+            # and the model finds a single threshold that fits all frames.
+            # Penalty: -log(mean(per-component-std)) keeps std > 1e-3 in log-space.
+            # Only fires at T=1 (dim==2); sequence mode (dim==3) handled by temporal smooth.
+            if outputs['psr_logits'].dim() == 2:
+                _per_comp_std = outputs['psr_logits'].std(dim=0).mean()
+                _sens = -torch.log(_per_comp_std + 1e-3)
+                _sens = torch.where(
+                    torch.isfinite(_sens), _sens, torch.tensor(0.0, device=device)
+                )
+                # [FIX #5 HIGH] Cap _sens at 5.0. When std collapses to the 1e-3 floor
+                # (e.g., crash_recovery pth: PSR collapse stage 3), -log(1e-3) = 6.9.
+                # Combined with weight 0.01 that's 0.069 added to loss_psr — harmless.
+                # But during mid-collapse with std=0.001-0.01 across many components,
+                # _sens hits 4-6 routinely. Without cap, it can spike to 7-9 when
+                # a single component has std<1e-5 (rare but observed in smoke tests),
+                # which then drags down Kendall's learned weights for ALL heads.
+                # Cap=5.0 → std floor effectively 1e-2 for penalty purposes; well below
+                # the 0.05-0.15 std regime of healthy PSR heads, so cap rarely fires
+                # in healthy runs but always fires during collapse.
+                _sens = _sens.clamp(max=5.0)
+                _sens_w = float(getattr(C, 'PSR_SENSITIVITY_WEIGHT', 0.01))
+                loss_psr = loss_psr + _sens_w * _sens
+
+            if self._psr_temporal_smooth_weight > 0 and outputs['psr_logits'].dim() == 3:
+                preds = torch.sigmoid(outputs['psr_logits'])
+                labels = targets['psr_labels']
+                smooth_loss = torch.tensor(0.0, device=device)
+                bs = preds.shape[0]
+                for i in range(bs):
+                    p_i = preds[i]
+                    l_i = labels[i]
+                    # --- FIX: tanh(.abs()) destroys sign. Use signed diff
+                    # so tanh sees real direction. Labels also get a -1 mask
+                    # so oscillating labels (signed mean = 0) don't inflate
+                    # smooth_loss for a consistent-but-different pred.
+                    diff_p = (p_i[1:] - p_i[:-1]).mean()
+                    diff_l = -1 * (l_i[1:] - l_i[:-1]).mean()
+                    pred_change = torch.tanh(diff_p)
+                    label_change = diff_l
+                    smooth_loss = smooth_loss + (
+                        (pred_change - label_change) ** 2
+                    )
+                smooth_loss = smooth_loss / max(bs, 1)
+                smooth_loss = torch.where(
+                    torch.isfinite(smooth_loss),
+                    smooth_loss,
+                    torch.tensor(0.0, device=device),
+                )
+                loss_psr = loss_psr + self._psr_temporal_smooth_weight * smooth_loss
+            # --- FIX: PSR NaN guard BEFORE smooth_cap (lines 1187-1189).
+            # loss_psr can be NaN even after binary_focal_loss returns if the model
+            # spits extreme logits. Adding smooth_loss weight to NaN gives NaN.
+            # Catch it here so _smooth_cap never sees x<=0 (its log would give NaN).
+            # CRITICAL: Use torch.where to preserve autograd graph.
+            # torch.tensor(1e-4, device=...).expand_as() creates a leaf without requires_grad,
+            # which breaks the Kendall backward() graph → "element 0 of tensors does not require grad".
+            if not torch.isfinite(loss_psr).all():
+                logger.warning(
+                    f'  [PSR_NAN] loss_psr={loss_psr.item() if loss_psr.numel()==1 else loss_psr} '
+                    f'— replacing NaN elements with 1e-4 before smooth_cap '
+                    f'(epoch {self._current_epoch}, grad-safe)'
+                )
+                _nan_safe = loss_psr.new_full(loss_psr.shape, 1e-4)
+                loss_psr = torch.where(torch.isfinite(loss_psr), loss_psr, _nan_safe)
+                _nan_detected_this_step = True
+        else:
+            loss_psr = zero
+
+        # === Head Pose (split loss: position MSE + normalized direction MSE) ===
+        if 'head_pose' in outputs and outputs['head_pose'] is not None:
+            loss_head_pose = head_pose_loss_split(
+                outputs['head_pose'],
+                targets['head_pose'],
+                pos_weight=1.0,
+                dir_weight=1.0,
+            )  # No *0.001: Kendall handles weighting; O(1) inputs give balanced gradient
+        else:
+            loss_head_pose = zero
+
+        # --- FIX: PSR loss cap to prevent NaN cascade ---
+        psr_cap = float(getattr(C, 'PSR_LOSS_CAP', 20.0))
+        loss_psr = _smooth_cap(loss_psr, psr_cap)
+
+        # --- FIX: Head pose loss cap to prevent NaN cascade ---
+        hp_cap = float(getattr(C, 'HEAD_POSE_LOSS_CAP', 30.0))
+        loss_head_pose = _smooth_cap(loss_head_pose, hp_cap)
+
+        # === Final NaN guard BEFORE Kendall — covers ALL losses.
+        # Each loss can produce NaN via: loss function overflow, temporal smooth
+        # overflow, smooth cap log(0), or numerical instability in any component.
+        # Replace any NaN/inf with 1e-4 (tiny but > 0 — ensures gradient flows
+        # and no division-by-zero in Kendall normalization).
+        # CRITICAL: Use torch.where(isfinite(l), l, l.new_full(shape, 1e-4)) — KEEPS the
+        # autograd path through `l` for finite elements. A bare torch.tensor(1e-4) creates
+        # a leaf without requires_grad → "element 0 of tensors does not require grad" in backward().
+        def _safe(l, z):
+            if not torch.isfinite(l).all():
+                _nan_detected_this_step = True  # signal train.py to skip this step
+                _fallback = l.new_full(l.shape, 1e-4) if l.numel() > 1 else l.new_full((1,), 1e-4).squeeze()
+                l = torch.where(torch.isfinite(l), l, _fallback)
+            if l.dtype in (torch.float16, torch.bfloat16, torch.float32, torch.float64):
+                l = torch.where(l < 0, z, l)
+            return l
+
+        loss_det = _safe(loss_det, zero)
+        loss_pose = _safe(loss_pose, zero)
+        loss_act = _safe(loss_act, zero)
+        # [FIX Bug #9] PSR NaN diagnostic — log when PSR is silently replaced
+        if not torch.isfinite(loss_psr).all():
+            logger.warning(
+                f'  [PSR_NAN] loss_psr={loss_psr.item() if loss_psr.numel()==1 else loss_psr} '
+                f'— replacing NaN elements with 1e-4 (epoch {self._current_epoch}, grad-safe)'
+            )
+        loss_psr = _safe(loss_psr, zero)
+        loss_head_pose = _safe(loss_head_pose, zero)
+
+        # === HEAD_LOSS_WEIGHTS static scaling (before Kendall weighting) ===
+        # Static per-head multipliers compensate for cross-head magnitude
+        # imbalance that bounded Kendall precision cannot fix alone.
+        # Applied BEFORE precision multiplication so Kendall log_vars adapt
+        # to the new scaled loss landscape.
+        loss_det *= C.HEAD_LOSS_WEIGHTS['det']
+        loss_pose *= C.HEAD_LOSS_WEIGHTS['pose']
+        loss_act *= C.HEAD_LOSS_WEIGHTS['act']
+        loss_psr *= C.HEAD_LOSS_WEIGHTS['psr']
+        loss_head_pose *= C.HEAD_LOSS_WEIGHTS['head_pose']
+
+        # === Kendall weighting ===
+        if self.use_kendall:
+            lv_det = self.log_var_det.clamp(-4.0, 2.0)
+            lv_hp = self.log_var_pose.clamp(-4.0, 2.0)
+            lv_act = self.log_var_act.clamp(-4.0, 2.0)
+            lv_psr = self.log_var_psr.clamp(-4.0, 2.0)
+
+            prec_det = torch.exp(-lv_det)
+            prec_hp = torch.exp(-lv_hp)
+            prec_act = torch.exp(-lv_act)
+            prec_psr = torch.exp(-lv_psr)
+
+            # Stage-aware Kendall: zero precision AND log_var of frozen tasks to prevent
+            # gradient corruption in their log_vars during staged training.
+            # Epoch 0: no staging (backward-compat for resumed runs).
+            # Epoch 1-5 (stage 1): detection + activity (ramped) only.
+            #   head_pose + psr frozen (zeroed).
+            # Epoch 6-15 (stage 2): detection + head_pose + activity (ramp completed).
+            #   psr frozen (zeroed).
+            # Epoch 16+ (stage 3): all tasks (psr ramped per PSR_WARMUP_EPOCHS).
+            #
+            # [USER-AUTH FIX 2026-06-05] Activity is now trained from epoch 0 via
+            # ACT_RAMP_EPOCHS ramp (mirrors prec_psr_ramp below). The log_var_act
+            # is preserved (not zeroed) so the learnable parameter can adapt to the
+            # ramping gradient magnitude. Zeroing lv_act would have starved log_var_act
+            # of all gradient signal.
+            if bool(getattr(C, 'STAGED_TRAINING', True)) and self._current_epoch >= 1:
+                stage = _get_kendall_stage(self._current_epoch)
+                # Activity ramp — applies in BOTH stage 1 and stage 2 (ramp completes
+                # by epoch ACT_RAMP_EPOCHS-1, so stage 2 sees ramp=1.0 unless config
+                # is changed). In stage 3 the ramp is naturally 1.0 and prec_act is
+                # left unchanged below.
+                act_ramp_epochs = int(getattr(C, 'ACT_RAMP_EPOCHS', 5))
+                if act_ramp_epochs > 0 and self._current_epoch < act_ramp_epochs:
+                    act_ramp = (self._current_epoch + 1) / act_ramp_epochs
+                else:
+                    act_ramp = 1.0
+                if stage == 1:
+                    # Detection-only stage: head_pose and psr frozen.
+                    prec_hp = prec_hp * 0
+                    lv_hp = lv_hp * 0
+                    prec_psr = prec_psr * 0
+                    lv_psr = lv_psr * 0
+                    # Activity ramps in (user-authorized; log_var preserved)
+                    prec_act = prec_act * act_ramp
+                elif stage == 2:
+                    # Det + head_pose + activity (ramp at 1.0 by epoch >= ACT_RAMP_EPOCHS)
+                    prec_psr = prec_psr * 0
+                    lv_psr = lv_psr * 0
+                    prec_act = prec_act * act_ramp
+                elif stage == 3:
+                    stage1_end = int(getattr(C, 'STAGE1_EPOCHS', 5))
+                    stage2_end = stage1_end + int(getattr(C, 'STAGE2_EPOCHS', 10))
+                    stage3_start = stage2_end + 1
+                    warmup_epochs = int(getattr(C, 'PSR_WARMUP_EPOCHS', 5))
+                    if warmup_epochs > 0:
+                        prec_psr_ramp = min(1.0, (self._current_epoch - stage3_start + 1) / warmup_epochs)
+                        prec_psr = prec_psr * prec_psr_ramp
+
+            total = torch.tensor(0.0, device=device)
+            if self.train_det:
+                total = total + prec_det * loss_det + lv_det
+            # Sanity floor: ensure no component loss is negative enough to cause
+            # Kendall divergence. Soft floor already applied to loss_det above, but
+            # add this as last-resort guard for all components.
+            if self.train_pose:
+                loss_pose = loss_pose.clamp(min=0.0)
+            if self.train_act:
+                loss_act = loss_act.clamp(min=0.0)
+            # Build Kendall total — each task adds its precision-weighted loss + log_var.
+            # NOTE: loss_pose (body keypoint Wing Loss) and loss_head_pose (head pose 9-DoF MSE)
+            # share log_var_pose (intentional per paper §Multi-Task Loss: both are pose tasks).
+            # lv_hp is included ONCE for pose+head_pose when EITHER branch runs, since they share log_var_pose.
+            if self.train_pose or self.train_act:
+                loss_head_pose = loss_head_pose.clamp(min=0.0)
+                pose_contribution = prec_hp * loss_pose + lv_hp if self.train_pose else prec_hp * loss_head_pose + lv_hp
+                if self.train_pose and self.train_act:
+                    pose_contribution = prec_hp * loss_pose + prec_hp * loss_head_pose + lv_hp  # both body+head, one lv_hp
+                elif self.train_pose:
+                    pose_contribution = prec_hp * loss_pose + lv_hp
+                else:  # train_act only
+                    pose_contribution = prec_hp * loss_head_pose + lv_hp
+                total = total + pose_contribution
+            if self.train_act:
+                total = total + prec_act * loss_act + lv_act
+            if self.train_psr:
+                loss_psr = loss_psr.clamp(min=0.0)
+                total = total + prec_psr * loss_psr + lv_psr
+            total = total.squeeze()
+
+            # NaN guard in Kendall total — fires on inf/NaN only, not on negative
+            # Handle both scalar and 1-element tensor cases
+            total_val = total.item() if total.numel() == 1 else total
+            if not math.isfinite(total_val):
+                parts = []
+                if self.train_det:
+                    parts.append(loss_det)
+                if self.train_pose:
+                    parts.append(loss_pose)  # body keypoint (prec_hp * loss_pose in Kendall total)
+                if self.train_act:
+                    parts.append(loss_head_pose)  # head pose (prec_hp * loss_head_pose + lv_hp)
+                    parts.append(loss_act)  # activity (prec_act * loss_act)
+                if self.train_psr:
+                    parts.append(loss_psr)
+                finite_parts = [p for p in parts if torch.isfinite(p) and p >= 0]
+                if finite_parts:
+                    total = torch.stack(finite_parts).sum()
+                else:
+                    total = loss_det
+        else:
+            prec_det = prec_hp = prec_act = prec_psr = torch.tensor(1.0, device=device)
+            _loss_act_staged = loss_act
+            _loss_psr_staged = loss_psr
+            _loss_pose_staged = loss_pose if self.train_pose else loss_head_pose
+            if bool(getattr(C, 'STAGED_TRAINING', True)) and self._current_epoch >= 1:
+                stage = _get_kendall_stage(self._current_epoch)
+                if stage == 1:
+                    _loss_act_staged = zero
+                    _loss_psr_staged = zero
+                    _loss_pose_staged = zero
+                elif stage == 2:
+                    _loss_act_staged = zero
+                    _loss_psr_staged = zero
+                    _loss_pose_staged = zero
+            total = loss_det + _loss_pose_staged + _loss_act_staged + _loss_psr_staged
+            # Guard total NaN in non-Kendall path (redundant but safe)
+            if not math.isfinite(total.item() if hasattr(total, 'item') else float(total)):
+                total = loss_det.detach().clone() if hasattr(loss_det, 'detach') else loss_det
+
+        # Normalized weights for logging — use the ACTUAL precision values
+        # (already zeroed for staged training), not the clamped pre-zeroing values
+        with torch.no_grad():
+            a_det = prec_det.item() if isinstance(prec_det, torch.Tensor) else prec_det
+            a_hp = prec_hp.item() if isinstance(prec_hp, torch.Tensor) else prec_hp
+            a_act = prec_act.item() if isinstance(prec_act, torch.Tensor) else prec_act
+            a_psr = prec_psr.item() if isinstance(prec_psr, torch.Tensor) else prec_psr
+            ws = a_det + a_hp + a_act + a_psr + 1e-8
+            wd = a_det / ws
+            wp = a_hp / ws
+            wa = a_act / ws
+            wps = a_psr / ws
+
+        # Safe scalar extractor — handles 0D tensor, 1D tensor, or plain Python float.
+        # Returns 0.0 if the value is NaN/inf or not a scalar.
+        def _s(x):
+            try:
+                if hasattr(x, 'item'):
+                    v = x.item()
+                else:
+                    v = float(x)
+                return 0.0 if not math.isfinite(v) else v
+            except Exception:
+                return 0.0
+
+        loss_dict = {
+            'total': _s(total),
+            'det_cls': _s(cls_loss) if self.train_det else 0.0,
+            'det_reg': _s(reg_loss) if self.train_det else 0.0,
+            'det': _s(loss_det),
+            'pose': _s(loss_pose),
+            'activity': _s(loss_act),
+            'psr': _s(loss_psr),
+            'head_pose': _s(loss_head_pose),
+            'w_det': _s(wd),
+            'w_pose': _s(wp),
+            'w_act': _s(wa),
+            'w_psr': _s(wps),
+            'log_var_det': _s(self.log_var_det),
+            'log_var_pose': _s(self.log_var_pose),
+            'log_var_act': _s(self.log_var_act),
+            'log_var_psr': _s(self.log_var_psr),
+            'act_ramp': _s(act_ramp),
+        }
+        # Sentinel: True if any NaN was caught and replaced with grad-safe fallback.
+        # Training loop checks loss_dict['__nan_detected__'] and skips the step
+        # entirely (zero_grad + continue) to avoid scaler.scale → backward edge cases
+        # where the grad path through some heads is weakened.
+        loss_dict['__nan_detected__'] = bool(_nan_detected_this_step)
+        # Also store the first replacement name for logging
+        if _nan_detected_this_step:
+            loss_dict['__nan_replaced__'] = 'see KENDALL_NAN/PSR_NAN logs above'
+
+        return total, loss_dict
