@@ -32,10 +32,10 @@ FL(p_t) = −α_t · (1 − p_t)^γ · log(p_t)
 The anchor grid has ~173K locations × 24 classes ≈ 4.15M predictions per image. At batch size 2:
 
 ```
-4.15M × 2 × 4.0 / num_pos(≈1) ≈ 3.3×10^7  ✓ matches 1.93×10^7 observed at step 2
+4.15M × 4.0 / num_pos(≈1) ≈ 1.66×10^7  ✓ matches 1.93×10^7 observed at step 2 (losses.py:288 returns /B)
 ```
 
-**For logits to saturate at +16 at step 0, the input features must be O(10²–10³).** A freshly initialized conv with weight std=0.01 receiving input of magnitude 100 produces output magnitude 1.0 — but after 4 conv layers, the accumulated scale is 100⁴ before Kaiming normalization, and the normalization only corrects variance, not the magnitude feeding in from the trunk.
+**For logits to saturate at +16 at step 0, the input features must be O(10²–10³).** Kaiming init approximately preserves input scale per layer, so O(100) input stays O(100) through the 4-conv stack. Saturation follows directly: `cls_score` has fan_in = 3·3·256 = 2304 with weight std 0.01, so logit std ≈ 0.01·√2304·σ_in ≈ 0.48·σ_in — with σ_in ~ O(30–100), logits span ±15–50.
 
 The epoch-43 trunk has been through:
 1. 43 epochs of training including multiple NaN events and gradient explosions
@@ -80,7 +80,7 @@ The epoch-43 trunk has been through:
 
 ### Q1: Detection Collapse Mechanism — Why Confident-on-Background After Reinit?
 
-**Answer: (c) with a new root cause.** It's not insufficient training time (a) — 1 epoch should show SOME learning. It's not primarily LR mismatch (b) — Adam with diff LR can handle reinit'd heads. The issue is that the detection subnet (4×Conv3×3+ReLU) receives FPN features with magnitude 10²–10³, and Kaiming init preserves variance through the subnet but cannot undo the input magnitude. The output logits therefore span [+10, +100] at step 0, saturating sigmoid at ≈ 1.0 for every class×anchor location. Focal loss at saturation is ≈ 4.0 per element × 4.15M elements ≈ 1.7×10^7. The gradients at saturation are near-zero (the (1−p_t)^γ term), so the head learns extremely slowly while reporting enormous loss.
+**Answer: (c) with a new root cause.** It's not insufficient training time (a) — 1 epoch should show SOME learning. It's not primarily LR mismatch (b) — Adam with diff LR can handle reinit'd heads. The issue is that the detection subnet (4×Conv3×3+ReLU) receives FPN features with magnitude 10²–10³, and Kaiming init preserves variance through the subnet but cannot undo the input magnitude. The output logits therefore span [+10, +100] at step 0, saturating sigmoid at ≈ 1.0 for every class×anchor location. Focal loss at saturation is ≈ 4.0 per element × 4.15M elements ≈ 1.7×10^7. For saturated negatives (p→1, target 0): p_t = 1−p ≈ 0, focal factor (1−p_t)^γ ≈ 1, and dL/dlogit ≈ p ≈ 1 — **maximal**, not near-zero. The head learns fast in the only direction available: push everything to −∞ (the observed 10^7 → 302.98 descent). The collapse mechanism is gradient domination by the uniform push-negative signal — discriminative per-location signal is negligible relative to the saturation term.
 
 The "confident on background" pattern is a direct consequence: with ALL logits saturated positive, every anchor fires at confidence ≈ 0.99+. NMS can't fix it because there's no differentiation — every location on every level fires.
 
@@ -125,7 +125,7 @@ Evidence against the "transient" interpretation:
 3. The "EMA vs Raw" comparison at train.log:649 shows the raw model had psr_f1=0.0909 which EMA destroyed — but 0.0909 is still collapsed (1 pattern, wrong pattern)
 4. Activity head REGRESSED from 3→1 classes over the epoch — the head is not learning, it's being crushed
 
-**The frozen backbone at epoch 43 has weights optimized to produce features for collapsed heads.** Those features are pathologically scaled. A fresh head cannot learn from them because (a) the magnitude saturates the loss surface flat and (b) the features encode no useful signal about the collapsed tasks.
+**The trunk inherited from epoch 43 has weights optimized to produce features for collapsed heads.** Those features are pathologically scaled. A fresh head cannot learn from them because (a) the magnitude saturates the loss with uniform push-negative gradients and (b) the features encode no useful signal about the collapsed tasks.
 
 ### Q6: Priority for Second Recovery Attempt — Zero-GPU Fixes First?
 
@@ -173,17 +173,18 @@ All three scripts load `latest.pth` vs ImageNet-init control, no GPU needed.
 
 ### Phase 1: Branch A — FPN-Only Blowup (IF D9 shows backbone healthy)
 
-1. Add `fpn.lateral_convs.*.conv`, `fpn.fpn_convs.*.conv`, `fpn.smooth_convs.*.conv` to the reinit list in `_reinit_dead_heads`
-2. Add GroupNorm after each detection subnet conv block (model.py:499-506):
+1. Add `fpn.lateral_c3`, `fpn.lateral_c4`, `fpn.lateral_c5`, `fpn.smooth_p3`, `fpn.smooth_p4`, `fpn.smooth_p5`, `fpn.p6_conv`, `fpn.p7_conv` to the reinit list in `_reinit_dead_heads` (model.py:390-400 — NOT mmdetection naming). Assert `reinit_count == 8` so a rename can never silently no-op again.
+2. Add GroupNorm after each conv inside `make_subnet()` (model.py:499-506) — both cls_subnet and reg_subnet are built from the same factory and assigned at 508-509, so one edit covers both:
    ```python
-   # After each Conv3x3+ReLU in cls_subnet and reg_subnet:
+   # Inside make_subnet(), after each Conv3x3+ReLU:
    nn.GroupNorm(num_groups=8, num_channels=256)
    ```
 3. Zero det_conf for activity head input during recovery
-4. Add step-0 assertion:
+4. Add step-0 assertion (gated on `--reinit-heads` for the logit bound; cls_loss bound is unconditional):
    ```python
    assert cls_loss.item() < 1e4, f"RC-25: cls_loss={cls_loss.item():.1e} — trunk features exploded"
-   assert cls_logits.abs().median() < 8, f"RC-25: median |logit|={cls_logits.abs().median():.1f}"
+   if args.reinit_heads:
+       assert cls_logits.abs().median() < 8, f"RC-25: median |logit|={cls_logits.abs().median():.1f}"
    ```
 5. 1 epoch, 5% subset, frozen backbone, reinit'd FPN+heads
 6. **Gate:** det_mAP50 ≥ 0.05 after 1 epoch → proceed. Otherwise → Branch B.
@@ -195,8 +196,8 @@ All three scripts load `latest.pth` vs ImageNet-init control, no GPU needed.
 3. Add GroupNorm to detection subnets (same as Branch A).
 4. Add step-0 assertion (same as Branch A).
 5. Zero det_conf for activity head during early training.
-6. **First run: detection-only on annotated + synthetic frames, 3-5 epochs.**
-   - `PRETRAIN_DET_ON_SYNTH=True`, stage 1 only, backbone frozen first 2 epochs
+6. **First run: detection-only on annotated frames + subsampled synthetic (~20-30k), 3-5 epochs.**
+   - `PRETRAIN_DET_ON_SYNTH=True` with subsampled synthetic set (full ~260k is too slow on RTX 3060), stage 1 only, backbone frozen first 2 epochs
    - **Gate: mAP50 ≥ 0.3 on b-boxed val** — proves the detection pipeline works
 7. Once detection gate passes: add pose + headpose (stage 2, 5 epochs)
 8. Once spatial heads are stable: add activity + PSR with embedding cache (stage 3)
@@ -215,10 +216,11 @@ These go into the codebase regardless of which branch succeeds:
            f"FATAL: det cls_loss={cls_loss.item():.1e} at step 0. " \
            f"Trunk features are likely exploded (RC-25). " \
            f"Run D7-D9 diagnostics before retraining."
-       median_logit = cls_logits.detach().abs().median().item()
-       assert median_logit < 8, \
-           f"FATAL: median |logit|={median_logit:.1f} at step 0. " \
-           f"Detection head receiving saturated features."
+       if args.reinit_heads:
+           median_logit = cls_logits.detach().abs().median().item()
+           assert median_logit < 8, \
+               f"FATAL: median |logit|={median_logit:.1f} at step 0. " \
+               f"Detection head receiving saturated features."
    ```
 
 3. **Remove or reduce defensive machinery:**
@@ -265,9 +267,9 @@ These go into the codebase regardless of which branch succeeds:
 **If D9 shows backbone blowup → Branch B:**
 | # | Action | GPU Time | Gate |
 |---|--------|----------|------|
-| 7 | Fresh ImageNet init, det-only synthetic pretrain, 3 ep | ~1 hr | mAP50 ≥ 0.3 |
-| 8 | Real fine-tune, det + pose, 5 ep | ~1.5 hr | mAP50 ≥ 0.4 |
-| 9 | Add activity + PSR from embedding cache, 20 ep | ~2 hr | act ≥ 20 classes, psr ≥ 5 patterns |
+| 7 | Fresh ImageNet init, det-only on annotated frames + subsampled synthetic (~20-30k), 3-5 ep | ~2-3 hr | mAP50 ≥ 0.3 |
+| 8 | Real fine-tune, det + pose, 5 ep | ~2 hr | mAP50 ≥ 0.4 |
+| 9 | Add activity + PSR from embedding cache, 20 ep | ~3-4 hr | act ≥ 20 classes, psr ≥ 5 patterns |
 
 ### THIS WEEK
 
@@ -296,7 +298,7 @@ These go into the codebase regardless of which branch succeeds:
 
 ### RC-27: GroupNorm Absent from Detection Subnets (DESIGN GAP)
 
-**Location:** model.py:499-506 (cls_subnet), model.py:526-532 (reg_subnet)  
+**Location:** model.py:499-506 (cls_subnet and reg_subnet both built via `make_subnet()`)  
 **Mechanism:** 4× Conv3×3+ReLU with no normalization. Kaiming init preserves variance through the stack, but any upstream magnitude excursion passes through unattenuated. BatchNorm would be wrong (batch=1), but GroupNorm provides per-sample normalization — exactly what's needed for a multi-task model where one head's gradient spike could perturb shared features.  
 **Fix:** Add GroupNorm(8, 256) after each conv in cls_subnet and reg_subnet.
 
