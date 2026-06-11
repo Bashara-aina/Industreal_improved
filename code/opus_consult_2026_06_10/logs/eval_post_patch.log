@@ -1,0 +1,201 @@
+[reinit-eval] ckpt=/home/newadmin/swarm-bot/project/popw/working/code/industreal_improved/src/runs/full_multi_task_tma_tbank_benchmark/checkpoints/best.pth
+[reinit-eval] split=val max_batches=50 bs=4
+[reinit-eval] ckpt epoch=43 step=None
+[reinit-eval] ds size: 35084
+/media/newadmin/master/POPW/working/code/industreal_improved/src/models/model.py:1462: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+[reinit-eval] load: missing=0 unexpected=0
+[reinit-eval] params with NaN/Inf after load: 0
+[reinit-eval] EVAL_SKIP_REINIT=1: NOT re-initializing heads (using trained post-retrain weights)
+LDAMLoss.set_class_counts: got 75 entries but num_classes=74. Keeping natural length; margins/weights are re-aligned to the logits width at forward time.
+[reinit-eval] starting eval...
+/home/newadmin/miniconda3/lib/python3.13/site-packages/torch/nn/modules/linear.py:134: UserWarning: Could not parse CUBLAS_WORKSPACE_CONFIG, using default workspace size of 8519680 bytes. (Triggered internally at /pytorch/aten/src/ATen/cuda/CublasHandlePool.cpp:160.)
+  return F.linear(input, self.weight, self.bias)
+/home/newadmin/miniconda3/lib/python3.13/site-packages/torch/nn/modules/transformer.py:921: UserWarning: Could not parse CUBLAS_WORKSPACE_CONFIG, using default workspace size of 8519680 bytes. (Triggered internally at /pytorch/aten/src/ATen/cuda/CublasHandlePool.cpp:160.)
+  return torch._transformer_encoder_layer_fwd(
+/media/newadmin/master/POPW/working/code/industreal_improved/src/models/model.py:1098: UserWarning: Could not parse CUBLAS_WORKSPACE_CONFIG, using default workspace size of 8519680 bytes. (Triggered internally at /pytorch/aten/src/ATen/cuda/CublasHandlePool.cpp:160.)
+  attn = torch.matmul(q, k.transpose(-2, -1)) / scale
+/media/newadmin/master/POPW/working/code/industreal_improved/src/models/model.py:1102: UserWarning: Could not parse CUBLAS_WORKSPACE_CONFIG, using default workspace size of 8519680 bytes. (Triggered internally at /pytorch/aten/src/ATen/cuda/CublasHandlePool.cpp:160.)
+  out = torch.matmul(attn, v)
+/media/newadmin/master/POPW/working/code/industreal_improved/src/evaluation/evaluate.py:107: RuntimeWarning: overflow encountered in exp
+  sig = 1.0 / (1.0 + np.exp(-cls_preds[i]))
+[DET_PROBE b0] {'tag': 'b0', 'imgs': 4, 'imgs_with_gt': 4, 'n_gt': 4, 'score_p50': 0.0, 'score_p99': 0.184491828083992, 'score_max': 0.9563789367675781, 'preds>0.01': 31919, 'preds>0.05': 22687, 'preds>0.30': 5447, 'preds>0.50': 4036, 'bestIoU>0': 25393, 'bestIoU>0.1': 1866, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.24266116321086884, 'bestIoU_mean': 0.06562140583992004} | verdict: TOTAL COLLAPSE (0 preds at IoU>0.5, max=0.24)
+[DET_PROBE b1] {'tag': 'b1', 'imgs': 4, 'imgs_with_gt': 4, 'n_gt': 4, 'score_p50': 0.0, 'score_p99': 0.2361462116241455, 'score_max': 0.9594418406486511, 'preds>0.01': 33705, 'preds>0.05': 24063, 'preds>0.30': 5908, 'preds>0.50': 4406, 'bestIoU>0': 26935, 'bestIoU>0.1': 1094, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.22552773356437683, 'bestIoU_mean': 0.05299873650074005} | verdict: TOTAL COLLAPSE (0 preds at IoU>0.5, max=0.23)
+[DET_PROBE b2] {'tag': 'b2', 'imgs': 4, 'imgs_with_gt': 4, 'n_gt': 4, 'score_p50': 0.0, 'score_p99': 0.25911080837249756, 'score_max': 0.9547058343887329, 'preds>0.01': 35254, 'preds>0.05': 25325, 'preds>0.30': 6157, 'preds>0.50': 4789, 'bestIoU>0': 28398, 'bestIoU>0.1': 979, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.2272098958492279, 'bestIoU_mean': 0.05099840834736824} | verdict: TOTAL COLLAPSE (0 preds at IoU>0.5, max=0.23)
+[DET_PROBE b3] {'tag': 'b3', 'imgs': 4, 'imgs_with_gt': 4, 'n_gt': 4, 'score_p50': 0.0, 'score_p99': 0.2588481605052948, 'score_max': 0.953091561794281, 'preds>0.01': 35220, 'preds>0.05': 25364, 'preds>0.30': 6144, 'preds>0.50': 4846, 'bestIoU>0': 28451, 'bestIoU>0.1': 1316, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.22765639424324036, 'bestIoU_mean': 0.056093886494636536} | verdict: TOTAL COLLAPSE (0 preds at IoU>0.5, max=0.23)
+[DET_PROBE b4] {'tag': 'b4', 'imgs': 4, 'imgs_with_gt': 4, 'n_gt': 4, 'score_p50': 0.0, 'score_p99': 0.2271990180015564, 'score_max': 0.9528964161872864, 'preds>0.01': 33496, 'preds>0.05': 23903, 'preds>0.30': 5740, 'preds>0.50': 4345, 'bestIoU>0': 26835, 'bestIoU>0.1': 1611, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.22964420914649963, 'bestIoU_mean': 0.0608256533741951} | verdict: TOTAL COLLAPSE (0 preds at IoU>0.5, max=0.23)
+[DET_PROBE b5] {'tag': 'b5', 'imgs': 4, 'imgs_with_gt': 4, 'n_gt': 4, 'score_p50': 3.4854706897920824e-39, 'score_p99': 0.19049707055091858, 'score_max': 0.9581469297409058, 'preds>0.01': 32214, 'preds>0.05': 22852, 'preds>0.30': 5560, 'preds>0.50': 4105, 'bestIoU>0': 25611, 'bestIoU>0.1': 2022, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.23224720358848572, 'bestIoU_mean': 0.06585440039634705} | verdict: TOTAL COLLAPSE (0 preds at IoU>0.5, max=0.23)
+[DET_PROBE b6] {'tag': 'b6', 'imgs': 4, 'imgs_with_gt': 4, 'n_gt': 4, 'score_p50': 3.9809123735403004e-39, 'score_p99': 0.17842857539653778, 'score_max': 0.9511587023735046, 'preds>0.01': 31832, 'preds>0.05': 22454, 'preds>0.30': 5416, 'preds>0.50': 4053, 'bestIoU>0': 25345, 'bestIoU>0.1': 2379, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.25217926502227783, 'bestIoU_mean': 0.07109875231981277} | verdict: TOTAL COLLAPSE (0 preds at IoU>0.5, max=0.25)
+[DET_PROBE b7] {'tag': 'b7', 'imgs': 4, 'imgs_with_gt': 4, 'n_gt': 4, 'score_p50': 6.230327115219212e-39, 'score_p99': 0.1749718189239502, 'score_max': 0.9504978060722351, 'preds>0.01': 31581, 'preds>0.05': 22253, 'preds>0.30': 5293, 'preds>0.50': 3988, 'bestIoU>0': 25190, 'bestIoU>0.1': 2756, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.269119530916214, 'bestIoU_mean': 0.07648970931768417} | verdict: TOTAL COLLAPSE (0 preds at IoU>0.5, max=0.27)
+[DET_PROBE b8] {'tag': 'b8', 'imgs': 4, 'imgs_with_gt': 4, 'n_gt': 4, 'score_p50': 0.0, 'score_p99': 0.1766718477010727, 'score_max': 0.9532281756401062, 'preds>0.01': 31788, 'preds>0.05': 22505, 'preds>0.30': 5281, 'preds>0.50': 4007, 'bestIoU>0': 25357, 'bestIoU>0.1': 2928, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.2719463109970093, 'bestIoU_mean': 0.07824801653623581} | verdict: TOTAL COLLAPSE (0 preds at IoU>0.5, max=0.27)
+[DET_PROBE b9] {'tag': 'b9', 'imgs': 4, 'imgs_with_gt': 2, 'n_gt': 2, 'score_p50': 0.0, 'score_p99': 0.1956975907087326, 'score_max': 0.9586448073387146, 'preds>0.01': 32511, 'preds>0.05': 23048, 'preds>0.30': 5512, 'preds>0.50': 4169, 'bestIoU>0': 12861, 'bestIoU>0.1': 1461, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.2709587812423706, 'bestIoU_mean': 0.07811016589403152} | verdict: TOTAL COLLAPSE (0 preds at IoU>0.5, max=0.27)
+[DET_PROBE b10] {'tag': 'b10', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 8.056923867362004e-39, 'score_p99': 0.2178310602903366, 'score_max': 0.9652752876281738, 'preds>0.01': 32832, 'preds>0.05': 23002, 'preds>0.30': 6078, 'preds>0.50': 4328, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.965)
+[DET_PROBE b11] {'tag': 'b11', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.25360918045043945, 'score_max': 0.9565443396568298, 'preds>0.01': 33701, 'preds>0.05': 23638, 'preds>0.30': 6385, 'preds>0.50': 4474, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.957)
+[DET_PROBE b12] {'tag': 'b12', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.2693244516849518, 'score_max': 0.9619259238243103, 'preds>0.01': 34126, 'preds>0.05': 24126, 'preds>0.30': 6545, 'preds>0.50': 4614, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.962)
+[DET_PROBE b13] {'tag': 'b13', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.255746454000473, 'score_max': 0.9562872052192688, 'preds>0.01': 35034, 'preds>0.05': 24719, 'preds>0.30': 6066, 'preds>0.50': 4614, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.956)
+[DET_PROBE b14] {'tag': 'b14', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.26532885432243347, 'score_max': 0.9526367783546448, 'preds>0.01': 35271, 'preds>0.05': 25006, 'preds>0.30': 6189, 'preds>0.50': 4750, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.953)
+[DET_PROBE b15] {'tag': 'b15', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.23889417946338654, 'score_max': 0.9593958258628845, 'preds>0.01': 34208, 'preds>0.05': 24404, 'preds>0.30': 5759, 'preds>0.50': 4438, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.959)
+[DET_PROBE b16] {'tag': 'b16', 'imgs': 4, 'imgs_with_gt': 3, 'n_gt': 3, 'score_p50': 0.0, 'score_p99': 0.19413214921951294, 'score_max': 0.9522011280059814, 'preds>0.01': 32792, 'preds>0.05': 22887, 'preds>0.30': 5245, 'preds>0.50': 4062, 'bestIoU>0': 18693, 'bestIoU>0.1': 364, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.16360247135162354, 'bestIoU_mean': 0.03729895502328873} | verdict: TOTAL COLLAPSE (0 preds at IoU>0.5, max=0.16)
+[DET_PROBE b17] {'tag': 'b17', 'imgs': 4, 'imgs_with_gt': 1, 'n_gt': 1, 'score_p50': 3.006843186317298e-39, 'score_p99': 0.1621345728635788, 'score_max': 0.9640493392944336, 'preds>0.01': 31350, 'preds>0.05': 21530, 'preds>0.30': 5092, 'preds>0.50': 3765, 'bestIoU>0': 5759, 'bestIoU>0.1': 127, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.20061765611171722, 'bestIoU_mean': 0.03749233856797218} | verdict: TOTAL COLLAPSE (0 preds at IoU>0.5, max=0.20)
+[DET_PROBE b18] {'tag': 'b18', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 5.3831861415962875e-39, 'score_p99': 0.14703010022640228, 'score_max': 0.959380030632019, 'preds>0.01': 31249, 'preds>0.05': 20919, 'preds>0.30': 4956, 'preds>0.50': 3583, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.959)
+[DET_PROBE b19] {'tag': 'b19', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.2480599582195282, 'score_max': 0.9617271423339844, 'preds>0.01': 34540, 'preds>0.05': 24494, 'preds>0.30': 5989, 'preds>0.50': 4533, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.962)
+[DET_PROBE b20] {'tag': 'b20', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 1.208330697477118e-37, 'score_p99': 0.2048492431640625, 'score_max': 0.9704635143280029, 'preds>0.01': 32520, 'preds>0.05': 22606, 'preds>0.30': 5821, 'preds>0.50': 4232, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.970)
+[DET_PROBE b21] {'tag': 'b21', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.2595136761665344, 'score_max': 0.9662094116210938, 'preds>0.01': 34050, 'preds>0.05': 24121, 'preds>0.30': 6378, 'preds>0.50': 4577, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.966)
+[DET_PROBE b22] {'tag': 'b22', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 3.5219857251754585e-39, 'score_p99': 0.19496144354343414, 'score_max': 0.9582550525665283, 'preds>0.01': 32936, 'preds>0.05': 23307, 'preds>0.30': 5314, 'preds>0.50': 4023, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.958)
+[DET_PROBE b23] {'tag': 'b23', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.22107432782649994, 'score_max': 0.9623953104019165, 'preds>0.01': 33416, 'preds>0.05': 23656, 'preds>0.30': 5854, 'preds>0.50': 4314, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.962)
+[DET_PROBE b24] {'tag': 'b24', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 3.710575275101221e-39, 'score_p99': 0.1721651405096054, 'score_max': 0.9449017643928528, 'preds>0.01': 31770, 'preds>0.05': 22162, 'preds>0.30': 5404, 'preds>0.50': 3889, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.945)
+[DET_PROBE b25] {'tag': 'b25', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.18980763852596283, 'score_max': 0.9602788686752319, 'preds>0.01': 32524, 'preds>0.05': 22656, 'preds>0.30': 5670, 'preds>0.50': 4112, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.960)
+[DET_PROBE b26] {'tag': 'b26', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 6.37034205517762e-39, 'score_p99': 0.19487731158733368, 'score_max': 0.9617754220962524, 'preds>0.01': 32852, 'preds>0.05': 23119, 'preds>0.30': 5595, 'preds>0.50': 4124, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.962)
+[DET_PROBE b27] {'tag': 'b27', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 3.362934145579199e-39, 'score_p99': 0.18939073383808136, 'score_max': 0.9568580389022827, 'preds>0.01': 32407, 'preds>0.05': 22674, 'preds>0.30': 5633, 'preds>0.50': 4082, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.957)
+[DET_PROBE b28] {'tag': 'b28', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 4.435660349884526e-39, 'score_p99': 0.19306837022304535, 'score_max': 0.9580109119415283, 'preds>0.01': 32591, 'preds>0.05': 22863, 'preds>0.30': 5678, 'preds>0.50': 4117, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.958)
+[DET_PROBE b29] {'tag': 'b29', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.22638465464115143, 'score_max': 0.9465980529785156, 'preds>0.01': 33570, 'preds>0.05': 24029, 'preds>0.30': 5620, 'preds>0.50': 4348, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.947)
+[DET_PROBE b30] {'tag': 'b30', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.21660472452640533, 'score_max': 0.9429821372032166, 'preds>0.01': 33151, 'preds>0.05': 23829, 'preds>0.30': 5445, 'preds>0.50': 4290, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.943)
+[DET_PROBE b31] {'tag': 'b31', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.20029304921627045, 'score_max': 0.9432636499404907, 'preds>0.01': 33008, 'preds>0.05': 23495, 'preds>0.30': 5322, 'preds>0.50': 4069, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.943)
+[DET_PROBE b32] {'tag': 'b32', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.20918020606040955, 'score_max': 0.9648247361183167, 'preds>0.01': 33238, 'preds>0.05': 23622, 'preds>0.30': 5605, 'preds>0.50': 4204, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.965)
+[DET_PROBE b33] {'tag': 'b33', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.17938439548015594, 'score_max': 0.9637778997421265, 'preds>0.01': 32418, 'preds>0.05': 22498, 'preds>0.30': 5518, 'preds>0.50': 3959, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.964)
+[DET_PROBE b34] {'tag': 'b34', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.19345298409461975, 'score_max': 0.9647347331047058, 'preds>0.01': 33003, 'preds>0.05': 23137, 'preds>0.30': 5618, 'preds>0.50': 4110, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.965)
+[DET_PROBE b35] {'tag': 'b35', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.18074145913124084, 'score_max': 0.9445134997367859, 'preds>0.01': 32779, 'preds>0.05': 23011, 'preds>0.30': 5143, 'preds>0.50': 3849, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.945)
+[DET_PROBE b36] {'tag': 'b36', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.18788020312786102, 'score_max': 0.945585310459137, 'preds>0.01': 32859, 'preds>0.05': 23089, 'preds>0.30': 5215, 'preds>0.50': 3979, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.946)
+[DET_PROBE b37] {'tag': 'b37', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.20344409346580505, 'score_max': 0.9620952010154724, 'preds>0.01': 33072, 'preds>0.05': 23491, 'preds>0.30': 5714, 'preds>0.50': 4215, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.962)
+[DET_PROBE b38] {'tag': 'b38', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.17978721857070923, 'score_max': 0.9515035152435303, 'preds>0.01': 31822, 'preds>0.05': 22391, 'preds>0.30': 5690, 'preds>0.50': 4022, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.952)
+[DET_PROBE b39] {'tag': 'b39', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.2215672731399536, 'score_max': 0.9650830626487732, 'preds>0.01': 33007, 'preds>0.05': 23406, 'preds>0.30': 6059, 'preds>0.50': 4353, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.965)
+[DET_PROBE b40] {'tag': 'b40', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.2584587037563324, 'score_max': 0.9638683795928955, 'preds>0.01': 34762, 'preds>0.05': 25095, 'preds>0.30': 6219, 'preds>0.50': 4717, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.964)
+[DET_PROBE b41] {'tag': 'b41', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.22479985654354095, 'score_max': 0.955446720123291, 'preds>0.01': 33588, 'preds>0.05': 24003, 'preds>0.30': 5463, 'preds>0.50': 4239, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.955)
+[DET_PROBE b42] {'tag': 'b42', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.2550608217716217, 'score_max': 0.9543266892433167, 'preds>0.01': 34696, 'preds>0.05': 25019, 'preds>0.30': 5961, 'preds>0.50': 4620, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.954)
+[DET_PROBE b43] {'tag': 'b43', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.2576124966144562, 'score_max': 0.9586249589920044, 'preds>0.01': 34924, 'preds>0.05': 25082, 'preds>0.30': 6037, 'preds>0.50': 4673, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.959)
+[DET_PROBE b44] {'tag': 'b44', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.25517547130584717, 'score_max': 0.9499326348304749, 'preds>0.01': 34872, 'preds>0.05': 25042, 'preds>0.30': 5956, 'preds>0.50': 4607, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.950)
+[DET_PROBE b45] {'tag': 'b45', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.2444133758544922, 'score_max': 0.9670134782791138, 'preds>0.01': 33410, 'preds>0.05': 24008, 'preds>0.30': 6143, 'preds>0.50': 4444, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.967)
+[DET_PROBE b46] {'tag': 'b46', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.18679286539554596, 'score_max': 0.9645665884017944, 'preds>0.01': 32301, 'preds>0.05': 22535, 'preds>0.30': 5704, 'preds>0.50': 4082, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.965)
+[DET_PROBE b47] {'tag': 'b47', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.24896977841854095, 'score_max': 0.9686301350593567, 'preds>0.01': 33726, 'preds>0.05': 24285, 'preds>0.30': 6042, 'preds>0.50': 4557, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.969)
+[DET_PROBE b48] {'tag': 'b48', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.25336596369743347, 'score_max': 0.9690616130828857, 'preds>0.01': 34719, 'preds>0.05': 25043, 'preds>0.30': 6076, 'preds>0.50': 4584, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.969)
+[DET_PROBE b49] {'tag': 'b49', 'imgs': 4, 'imgs_with_gt': 0, 'n_gt': 0, 'score_p50': 0.0, 'score_p99': 0.2074897587299347, 'score_max': 0.9374352097511292, 'preds>0.01': 33241, 'preds>0.05': 23589, 'preds>0.30': 5491, 'preds>0.50': 4098, 'bestIoU>0': 0, 'bestIoU>0.1': 0, 'bestIoU>0.3': 0, 'bestIoU>0.5': 0, 'bestIoU_max': 0.0, 'bestIoU_mean': 0.0} | verdict: NO-GT (n_gt=0, max=0.00, score_max=0.937)
+  [EVAL COLLAPSE] activity head predicts only 1/75 classes (top-1 class=8 with 100.0% of frames). act_macro_f1=0 is a model collapse, not an eval bug.
+  [EVAL COLLAPSE] PSR head produces only 1 unique binary pattern(s) across 200 frames. psr_overall_f1=0 is a model collapse, not an eval bug.
+  [EVAL NaN/Inf] metric=eff_params_m value=nan — preserved for downstream detection
+  [EVAL NaN/Inf] metric=eff_gflops value=nan — preserved for downstream detection
+  [EVAL NaN/Inf] metric=eff_fps value=nan — preserved for downstream detection
+  [EVAL NaN/Inf] metric=eff_fps_streaming value=nan — preserved for downstream detection
+  [EVAL NaN/Inf] metric=pipeline_params_m value=nan — preserved for downstream detection
+  [EVAL NaN/Inf] metric=pipeline_gflops value=nan — preserved for downstream detection
+  [EVAL NaN/Inf] metric=pipeline_fps value=nan — preserved for downstream detection
+
+[reinit-eval] metrics saved to /home/newadmin/swarm-bot/project/popw/working/code/industreal_improved/src/runs/eval_post_retrain_fp32_20260610_194311/metrics.json
+
+============================================================
+IndustReal Evaluation Results (val)
+============================================================
+
+ASSEMBLY STATE DETECTION (ASD)
+----------------------------------------
+  mAP@0.5                : 0.0000
+  mAP@[0.5:0.95]         : 0.0000
+
+  Per-class AP@0.5 (with GT count — 0.0 with GT=0 means absent-class, not model failure):
+    background          : 0.0000  (GT=42)
+    10000000000         : 0.0000  (GT=0)
+    10010010000         : 0.0000  (GT=0)
+    10010100000         : 0.0000  (GT=0)
+    10010110000         : 0.0000  (GT=0)
+    11100000000         : 0.0000  (GT=0)
+    11110010000         : 0.0000  (GT=0)
+    11110100000         : 0.0000  (GT=0)
+    11110110000         : 0.0000  (GT=0)
+    11110111100         : 0.0000  (GT=0)
+    11110111110         : 0.0000  (GT=0)
+    11110110001         : 0.0000  (GT=0)
+    11110111101         : 0.0000  (GT=0)
+    11110111111         : 0.0000  (GT=0)
+    11110101111         : 0.0000  (GT=0)
+    11110011111         : 0.0000  (GT=0)
+    11110011110         : 0.0000  (GT=0)
+    11110101110         : 0.0000  (GT=0)
+    11100001110         : 0.0000  (GT=0)
+    11101101110         : 0.0000  (GT=0)
+    11101011110         : 0.0000  (GT=0)
+    11101111110         : 0.0000  (GT=0)
+    11101111111         : 0.0000  (GT=0)
+    error_state         : 0.0000  (GT=0)
+
+  3 Worst ASD classes (GT>0 only):
+    background          : 0.0000  (GT=42)
+  3 Best ASD classes (GT>0 only):
+    background          : 0.0000  (GT=42)
+
+ACTIVITY RECOGNITION
+----------------------------------------
+  Top-1 (frame)          : 0.0000
+  Top-5 (frame)          : 0.0600
+  mcAP (mean per-class) : 0.0000
+  Macro-F1               : 0.0000
+  Frame Accuracy (all)  : 0.0000
+  Frame Accuracy (no NA): 0.0000
+  Clip Accuracy (majority): 0.0000
+  Weighted-F1            : 0.0000
+  Macro-Recall          : 0.0000
+
+PROCEDURE STEP RECOGNITION (PSR)
+----------------------------------------
+  Overall F1 (thresh)    : 0.0909
+  F1@T (±3 frames)       : 0.0000
+  Precision@±3           : 0.0000
+  Recall@±3             : 0.0000
+  F1@T (±5 frames)      : 0.0000
+  Precision@±5           : 0.0000
+  Recall@±5             : 0.0000
+  Edit Score            : 0.7273
+  PSR POS               : 0.0000
+  Valid components      : 11/11
+  N samples             : 200
+  Per-component F1:
+    comp0       : 1.0000
+    comp1       : 0.0000
+    comp10      : 0.0000
+    comp2       : 0.0000
+    comp3       : 0.0000
+    comp4       : 0.0000
+    comp5       : 0.0000
+    comp6       : 0.0000
+    comp7       : 0.0000
+    comp8       : 0.0000
+    comp9       : 0.0000
+
+ASSEMBLY STATE RECOGNITION (IEEE RAL 2024)
+--------------------------------------------------
+  F1@1 (frame-level)     : 0.0000
+  Top-1 Accuracy         : 0.0000
+  MAP@R(+) (±5 frames)   : 0.0000
+  Num States (K)         : 1
+  Num Transitions        : 0
+
+ERROR VERIFICATION (ECCV VISION 2024)
+--------------------------------------------------
+  Average Precision (AP) : 0.0000
+  F1 (threshold=0.5)     : 0.0000
+  Precision (threshold=0.5): 0.0000
+  Recall (threshold=0.5)   : 0.0000
+
+HEAD POSE (9-DoF)
+----------------------------------------
+  Forward angular MAE (deg): 68.6469
+  Up angular MAE (deg)     : 74.3445
+  Position MAE (mm)        : 823.4841
+  --- Detail ---
+  Overall MAE (raw)         : 0.4205
+  MAE Std                  : 0.4034
+  forward_x MAE (raw)     : 0.1821
+  forward_y MAE (raw)     : 0.1280
+  forward_z MAE (raw)     : 1.0134
+  pos_x MAE (raw)          : 0.2828
+  pos_y MAE (raw)         : 0.7699
+  pos_z MAE (raw)         : 0.0739
+  up_x MAE (raw)           : 0.1922
+  up_y MAE (raw)           : 0.0293
+  up_z MAE (raw)           : 1.1133
+  N samples               : 200
+
+EFFICIENCY METRICS
+--------------------------------------------------
+  Parameters (M)         : nanM
+[reinit-eval] _print_single_run_results missing key 'eff_trainable_params_m' (likely no efficiency profile)
+
+[reinit-eval] DONE
