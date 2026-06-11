@@ -1096,10 +1096,19 @@ def train_one_epoch(
         # ── Step-0 Assertion (RC-25 permanent guard) ──
         if step == 0:
             cls_loss_val = loss_dict.get('det_cls', loss_dict.get('cls', 0.0))
-            if cls_loss_val >= 1e4:
+            # [AUDIT FIX 2026-06-11] losses._s() maps NaN/inf to 0.0, so a
+            # det_cls of inf would EVADE the >= 1e4 check. Also fail on a
+            # non-finite total loss at step 0 — same disease, worse stage.
+            _step0_loss_finite = (
+                bool(torch.isfinite(loss).all()) if isinstance(loss, torch.Tensor)
+                else math.isfinite(float(loss))
+            )
+            if cls_loss_val >= 1e4 or not _step0_loss_finite:
                 raise RuntimeError(
-                    f'STEP-0 ASSERTION FAILED: cls_loss={cls_loss_val:.1f} >= 1e4. '
-                    'Detection head is saturated. Reinit FPN+heads with --reinit-heads '
+                    f'STEP-0 ASSERTION FAILED: cls_loss={cls_loss_val:.1f} '
+                    f'(>= 1e4 or sanitized-from-NaN), total_loss_finite={_step0_loss_finite}. '
+                    'Detection head is saturated or loss is non-finite at step 0. '
+                    'Reinit FPN+heads with --reinit-heads (or restart from ImageNet init) '
                     'before retraining. (RC-25 guard)'
                 )
             if _REINIT_HEADS_ACTIVE:
@@ -2629,35 +2638,57 @@ def main(args):
         logger.info('  [REINIT-HEADS] Kendall log_vars reset to neutral (det=act=psr=0.0).')
 
     # ── Step-0 Assertion (RC-25 gate) ──
+    # [AUDIT FIX 2026-06-11] The previous version had two fatal flaws:
+    # (1) `sample_batch['image']` — collate_fn returns a TUPLE (images, targets),
+    #     so the probe raised TypeError on every run; and
+    # (2) the blanket `except Exception` wrapped the probe's own RuntimeError,
+    #     downgrading the assertion to a warning. The guard could never fail a
+    #     run. Probe-infrastructure failures now crash loudly too: a guard that
+    #     silently no-ops is how RC-25 survived three investigation rounds.
     if getattr(args, 'reinit_heads', False):
         logger.info('[STEP-0 ASSERT] Running step-0 diagnostic forward pass...')
         model.eval()
-        with torch.no_grad():
-            cls_logits_abs_median = None
+        _probe_median = None
+        try:
             try:
-                sample_batch = next(iter(train_loader))
-                images = sample_batch['image'].to(device)[:1]
-                clip_rgb = sample_batch.get('clip_rgb')
-                if clip_rgb is not None:
-                    clip_rgb = clip_rgb.to(device)[:1]
-                video_ids = sample_batch.get('video_id')
-                if video_ids is not None:
-                    video_ids = video_ids[:1]
-                out = model(images, clip_rgb=clip_rgb, video_ids=video_ids)
-                cls_preds = out['cls_preds']
-                cls_logits_abs_median = cls_preds.abs().median().item()
-                logger.info(f'  [STEP-0 ASSERT] cls_logits.abs().median() = {cls_logits_abs_median:.3f}')
-            except Exception as exc:
-                logger.warning(f'  [STEP-0 ASSERT] Could not run diagnostic forward pass: {exc}')
-            if cls_logits_abs_median is not None and cls_logits_abs_median >= 8.0:
+                _probe_images, _probe_targets = next(iter(train_loader))
+            except StopIteration:
                 raise RuntimeError(
-                    f'STEP-0 ASSERTION FAILED: cls_logits.abs().median()={cls_logits_abs_median:.3f} >= 8.0. '
-                    'FPN/backbone feature magnitude still saturating detection head. '
-                    'Run D7-D9 diagnostics then reinit FPN before retraining.'
+                    '[STEP-0 ASSERT] train_loader is EMPTY — cannot probe. '
+                    'Check subset_ratio / dataset paths before training.'
                 )
-            elif cls_logits_abs_median is not None:
-                logger.info('  [STEP-0 ASSERT] PASSED: logit scale in healthy range (< 8).')
-        model.train()
+            # Same preprocessing as the training loop (uint8 -> float,
+            # ImageNet normalize). Raw uint8 input would distort the
+            # feature-magnitude measurement this guard exists to make.
+            _probe_images = _prepare_images(_probe_images[:1], device, training=False)
+            _probe_clip = None
+            if isinstance(_probe_targets, dict):
+                _probe_clip = _probe_targets.get('clip_rgb')
+                if _probe_clip is not None and _probe_clip.numel() > 0:
+                    _probe_clip = _probe_clip[:1].to(device)
+                else:
+                    _probe_clip = None
+            with torch.no_grad():
+                _probe_out = model(_probe_images, clip_rgb=_probe_clip)
+            _probe_median = _probe_out['cls_preds'].detach().abs().median().item()
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                f'[STEP-0 ASSERT] diagnostic forward pass failed: {exc!r}. '
+                'Fix the probe — do not train without this RC-25 gate.'
+            ) from exc
+        finally:
+            model.train()
+        logger.info(f'  [STEP-0 ASSERT] cls_logits.abs().median() = {_probe_median:.3f}')
+        if _probe_median >= 8.0:
+            raise RuntimeError(
+                f'STEP-0 ASSERTION FAILED: cls_logits.abs().median()={_probe_median:.3f} >= 8.0. '
+                'FPN/backbone feature magnitude still saturating detection head. '
+                'Run D7-D9 diagnostics then reinit FPN (or restart from ImageNet init) '
+                'before retraining.'
+            )
+        logger.info('  [STEP-0 ASSERT] PASSED: logit scale in healthy range (< 8).')
 
     log_file = open(log_dir / 'metrics.jsonl', 'a')
 
@@ -3508,7 +3539,8 @@ if __name__ == '__main__':
         '--preset',
         type=str,
         default=None,
-        help='Preset (kept for backwards compat -- no-op on IndustReal)',
+        help='Config preset name from config.PRESETS '
+             "(e.g. 'recovery', 'benchmark_full', 'benchmark_quick').",
     )
     parser.add_argument(
         '--max-epochs',
@@ -3579,16 +3611,22 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.preset:
-        try:
-            import config as _cfg_mod
-            if hasattr(_cfg_mod, 'apply_preset'):
-                _cfg_mod.apply_preset(args.preset)
-                _refresh_runtime_cfg()
-                logger.info(f'[train] Applied preset: {args.preset}')
-            else:
-                logger.warning('[train] Config has no apply_preset — ignoring --preset')
-        except Exception as exc:
-            logger.warning(f'[train] Failed to apply preset {args.preset}: {exc}')
+        # [AUDIT FIX 2026-06-11 — config split-brain] `import config as _cfg_mod`
+        # resolved to the root config.py copy, a DIFFERENT module object from
+        # `from src import config as C` used by this file, model.py and
+        # losses.py. apply_preset() therefore mutated globals nobody read —
+        # `--preset recovery` (zero_det_conf, FP32, staged off) was a silent
+        # no-op for training. Apply the preset on C directly, and let an
+        # unknown preset name crash loudly instead of degrading to a warning.
+        C.apply_preset(args.preset)
+        _refresh_runtime_cfg()
+        logger.info(
+            f'[train] Applied preset: {args.preset} '
+            f'(MIXED_PRECISION={C.MIXED_PRECISION}, STAGED_TRAINING={C.STAGED_TRAINING}, '
+            f'ZERO_DET_CONF_FOR_RECOVERY={C.ZERO_DET_CONF_FOR_RECOVERY}, '
+            f'USE_EMA={C.USE_EMA}, USE_MIXUP={C.USE_MIXUP}, '
+            f'BATCH_SIZE={C.BATCH_SIZE}x{C.GRAD_ACCUM_STEPS})'
+        )
 
     if args.max_epochs is not None:
         C.EPOCHS = args.max_epochs

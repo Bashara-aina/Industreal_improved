@@ -37,19 +37,27 @@ DO_REINIT = bool(int(os.environ.get('REINIT_FPN', '1')))
 
 
 def load_and_reinit():
-    """Load checkpoint, optionally reinit FPN+heads, return model."""
+    """Load checkpoint, optionally reinit FPN+heads, return model.
+
+    [AUDIT FIX 2026-06-11] The constructor was called with kwargs that don't
+    exist (num_det_classes/...) — TypeError on every run; this script had
+    never executed. Real signature: (pretrained, backbone_type,
+    use_headpose_film, use_hand_film, use_videomae, train_pose).
+    """
     C.ZERO_DET_CONF_FOR_RECOVERY = False
     model = POPWMultiTaskModel(
-        num_det_classes=C.NUM_DET_CLASSES if hasattr(C, 'NUM_DET_CLASSES') else 24,
-        num_act_classes=C.NUM_ACT_CLASSES,
-        num_psr_classes=C.NUM_PSR_CLASSES if hasattr(C, 'NUM_PSR_CLASSES') else 11,
-        backbone_type=C.BACKBONE_TYPE if hasattr(C, 'BACKBONE_TYPE') else 'convnext_tiny',
-        pretrained=False,
+        pretrained=False,  # weights come from the checkpoint below
+        backbone_type=str(getattr(C, 'BACKBONE', 'convnext_tiny')),
+        use_hand_film=bool(getattr(C, 'USE_HAND_FILM', True)),
+        use_headpose_film=bool(getattr(C, 'USE_HEADPOSE_FILM', True)),
+        use_videomae=False,  # det logits are independent of the VideoMAE stream
+        train_pose=bool(getattr(C, 'TRAIN_HEAD_POSE', True)),
     ).to(DEVICE)
 
     ckpt = torch.load(CKPT, map_location=DEVICE, weights_only=False)
     state = ckpt.get('model_state_dict', ckpt.get('model_state', ckpt.get('model')))
-    model.load_state_dict(state, strict=False)
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    print(f'Loaded checkpoint (missing={len(missing)} unexpected={len(unexpected)})')
 
     if DO_REINIT:
         print('Reinitializing FPN + heads via _reinit_dead_heads...')
@@ -66,18 +74,29 @@ def main():
     model = load_and_reinit()
     model.eval()
 
-    # Build a representative input
+    # Build a representative input.
+    # [AUDIT FIX 2026-06-11] collate_fn returns (images, targets), not a dict,
+    # and create_dataloaders doesn't exist. Images are uint8 and MUST be
+    # ImageNet-normalized — feeding raw 0-255 floats would itself saturate the
+    # head and produce a false RC-25 FAILED verdict.
     try:
-        from data import create_dataloaders
-        loaders = create_dataloaders(
-            subset_ratio=0.05, batch_size=BS, num_workers=0,
-            benchmark_mode=False,
+        from torch.utils.data import DataLoader
+        from data import IndustRealMultiTaskDataset, collate_fn
+        ds = IndustRealMultiTaskDataset(
+            split='val', img_size=C.IMG_SIZE, augment=False, seed=C.SEED,
         )
-        batch = next(iter(loaders['train']))
-        images = batch['image'].to(DEVICE)
+        loader = DataLoader(ds, batch_size=BS, shuffle=False, num_workers=0,
+                            collate_fn=collate_fn)
+        images, _targets = next(iter(loader))
+        if images.dtype == torch.uint8:
+            images = images.float().div(255.0)
+            _mean = torch.tensor(C.IMAGENET_MEAN, dtype=images.dtype).view(1, 3, 1, 1)
+            _std = torch.tensor(C.IMAGENET_STD, dtype=images.dtype).view(1, 3, 1, 1)
+            images = (images - _mean) / _std
+        images = images.to(DEVICE)
         print(f'Using real data: {images.shape}')
-    except Exception:
-        print('Using random input (dataset unavailable)')
+    except Exception as exc:
+        print(f'Using random input (dataset unavailable: {exc!r})')
         images = torch.randn(BS, 3, C.IMG_HEIGHT, C.IMG_WIDTH).to(DEVICE)
 
     with torch.no_grad():

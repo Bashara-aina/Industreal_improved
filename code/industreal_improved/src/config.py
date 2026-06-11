@@ -249,7 +249,13 @@ NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_la
 ANCHOR_SIZES = (24, 48, 96, 192, 384)
 DET_POS_IOU_THRESH = 0.3       # FCOS anchor matching: positive IoU threshold
 DET_NEG_IOU_THRESH = 0.25      # FCOS anchor matching: negative IoU threshold (below this → background)
-ZERO_DET_CONF_FOR_RECOVERY = False  # RC-25 recovery: zero det_conf input to activity head during recovery
+# RC-25 recovery: zero det_conf input to activity head during recovery.
+# [AUDIT FIX 2026-06-11] env override added: a checkpoint TRAINED with
+# det_conf zeroed must also be EVALUATED with det_conf zeroed (otherwise the
+# activity head sees an input distribution it never trained on — the same
+# train/eval mismatch class as RC-17). Eval scripts don't apply presets, so:
+#     ZERO_DET_CONF=1 python eval_... .py
+ZERO_DET_CONF_FOR_RECOVERY = bool(int(os.environ.get('ZERO_DET_CONF', '0')))
 IMG_WIDTH       = 1280
 IMG_HEIGHT      = 720
 IMG_SIZE        = (IMG_WIDTH, IMG_HEIGHT)
@@ -287,7 +293,11 @@ EVAL_MAX_BATCHES = -1
 
 NUM_WORKERS = 2        # Reduced from 8 to prevent CPU RAM OOM
 PIN_MEMORY = True
-MIXED_PRECISION = True   # [FIX] Was False — FP16 for RTX 3060 Ampere tensor cores
+MIXED_PRECISION = False  # [AUDIT FIX 2026-06-11] fp16 AMP is a CONFIRMED failure mode on this
+                         # model (R2: first NaN at backbone.0.conv1.weight; diag_amp_nan.py /
+                         # diag_amp_2step.py — AMP fails at the first optimizer step, FP32
+                         # succeeds). The earlier flip back to True regressed that finding.
+                         # Keep False until AMP is re-validated with a dedicated smoke run.
 SEED            = 42
 
 # EMA (Exponential Moving Average) — [FIX #4 HIGH] Enabled per paper §Training: EMA=0.999 in Stage 3
@@ -295,7 +305,15 @@ USE_EMA        = True
 EMA_DECAY      = 0.999  # standard decay for image models
 
 # Mixup augmentation for activity head
-USE_MIXUP      = True
+# [AUDIT FIX 2026-06-11 / RC-15] DISABLED. The implementations in train.py
+# (mixup_activity / cutmix_activity) mix the OUTPUT LOGITS after the forward
+# pass instead of the input images (cutmix even builds images_mixed and never
+# feeds it to the model), and LDAMLoss argmaxes the soft label — so for
+# lam < 0.5 the loss supervises frame i's logits with frame j's label. That is
+# pure label corruption (~50% wrong labels at CutMix alpha=1.0) and a direct
+# driver of the 1-class activity collapse. Do NOT re-enable until the
+# implementation mixes IMAGES BEFORE the forward pass.
+USE_MIXUP      = False
 MIXUP_ALPHA    = 0.4
 
 # Desktop stability knobs
@@ -449,7 +467,11 @@ PSR_SENSITIVITY_WEIGHT = 0.01  # 5% of typical binary-focal magnitude — gentle
 # =========================================================================
 USE_RANDAUGMENT = True   # Photometric augmentation for backbone
 MIXUP_ALPHA = 0.4
-CUTMIX_ALPHA = 1.0       # Alternate Mixup/CutMix each epoch
+CUTMIX_ALPHA = 0.0       # [AUDIT FIX 2026-06-11 / RC-15] was 1.0 — cutmix_activity mixes
+                         # LOGITS, not images (label corruption); the train.py gate
+                         # `CUTMIX_ALPHA > 0 and epoch % 2 == 1` made it fire on every odd
+                         # epoch at stage 3 with NO lam range gating. Keep 0.0 until the
+                         # implementation mixes images before the forward pass.
 RANDOM_TEMPORAL_STRIDE = True  # Random frame stride {1,2,3} per clip (dataset.py line 875)
 
 # =========================================================================
@@ -549,6 +571,9 @@ PRESETS = {
         'zero_det_conf':      True,   # RC-25: zero det_conf into activity head during recovery
         'staged_training':    False,  # All heads active from epoch 0
         'mixed_precision':    False,  # FP32 for recovery stability
+        'use_mixup':          False,  # RC-15: logit-mixing corrupts activity labels
+        'use_ema':            False,  # short recovery runs: best.pth must hold the RAW
+                                      # trained weights, not an EMA blend lagging at init
     },
     'benchmark_quick': {
         'description': (
@@ -570,8 +595,9 @@ def apply_preset(preset_name: str) -> None:
     """Apply a preset configuration by name. Updates global flags."""
     global BENCHMARK_MODE, VAL_EVERY, BATCH_SIZE
     global USE_TMA_CELL, USE_TEMPORAL_BANK, USE_HAND_FILM
-    global GRAD_ACCUM_STEPS
+    global GRAD_ACCUM_STEPS, EFFECTIVE_BATCH
     global ZERO_DET_CONF_FOR_RECOVERY, STAGED_TRAINING, MIXED_PRECISION
+    global USE_MIXUP, USE_EMA
 
     if preset_name not in PRESETS:
         raise ValueError(f'Unknown preset: {preset_name}. Available: {list(PRESETS.keys())}')
@@ -586,6 +612,11 @@ def apply_preset(preset_name: str) -> None:
     ZERO_DET_CONF_FOR_RECOVERY = preset.get('zero_det_conf', ZERO_DET_CONF_FOR_RECOVERY)
     STAGED_TRAINING = preset.get('staged_training', STAGED_TRAINING)
     MIXED_PRECISION = preset.get('mixed_precision', MIXED_PRECISION)
+    USE_MIXUP = preset.get('use_mixup', USE_MIXUP)
+    USE_EMA = preset.get('use_ema', USE_EMA)
+    # [AUDIT FIX 2026-06-11] EFFECTIVE_BATCH was computed once at import and
+    # went stale when a preset changed BATCH_SIZE / GRAD_ACCUM_STEPS.
+    EFFECTIVE_BATCH = BATCH_SIZE * GRAD_ACCUM_STEPS
 
     update_dynamic_paths()
 
