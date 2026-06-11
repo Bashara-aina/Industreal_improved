@@ -1093,7 +1093,12 @@ class ViTTemporalBlock(nn.Module):
         v = v.transpose(1, 2)
 
         scale = self.head_dim ** -0.5
-        attn = torch.matmul(q, k.transpose(-2, -1)) / scale
+        # [AUDIT FIX 2026-06-11 / RC-16] was `/ scale`: dividing by d^-0.5
+        # MULTIPLIES the attention logits by sqrt(d)=8 instead of dividing —
+        # logits 64x larger than standard scaled dot-product attention →
+        # softmax saturates to near-one-hot and gradients through attention
+        # vanish (activity-ViT collapse mechanism). Standard form: qk^T * d^-0.5.
+        attn = torch.matmul(q, k.transpose(-2, -1)) * scale
         attn = F.softmax(attn, dim=-1)
         attn = self.attn_dropout(attn)
 
@@ -1804,7 +1809,13 @@ class POPWMultiTaskModel(nn.Module):
             c5_mod = c5  # No hand-keypoint conditioning when USE_HAND_FILM=False
 
         with torch.no_grad():
-            det_conf = cls_preds.max(dim=1)[0]
+            # [AUDIT FIX 2026-06-11 / RC-19, P7] sigmoid-bound the detection
+            # confidence. Raw max-logits are unbounded: a saturated det head
+            # injected O(10-100), near-constant values into the activity-head
+            # input (measured L2 243.39 +/- 0.001 across frames), drowning the
+            # GAP features. max(sigmoid(x)) == sigmoid(max(x)) (monotonic), so
+            # ranking semantics are unchanged; the scale is now [0, 1].
+            det_conf = torch.sigmoid(cls_preds.max(dim=1)[0])
         if C.ZERO_DET_CONF_FOR_RECOVERY:
             det_conf = torch.zeros_like(det_conf)
 
@@ -1835,16 +1846,20 @@ class POPWMultiTaskModel(nn.Module):
             causal_mask = torch.triu(torch.ones(T, T, device=seq.device), diagonal=1).bool()
             # batch_first=True, so [B, T, hidden]
             encoded = self.psr_head.transformer(seq, mask=causal_mask)  # [B, T, hidden]
-            # Use last position (causal -- only sees past)
-            last_out = encoded[:, -1, :]  # [B, hidden]
-            # Each head takes [B, hidden] → [B, 1]; cat gives [B, 12] (logits + confidence, Item 32)
+            # [AUDIT FIX 2026-06-11 — FIX-4 reapplied] The old code took only
+            # encoded[:, -1, :] and .expand()ed ONE prediction across all T
+            # frames: the per-frame focal loss then compared one prediction to
+            # T different labels (optimum = window-average label = constant
+            # output collapse), and the temporal-smooth loss had identically
+            # zero gradient (differences of the same expanded tensor). Causal
+            # masking already guarantees position t only sees frames <= t, so
+            # every position is a valid (and supervised) per-frame prediction.
+            enc_flat = encoded.reshape(B_main * T_main, -1)  # [BT, hidden]
             psr_full = torch.cat([
-                head(last_out) for head in self.psr_head.output_heads
-            ], dim=-1)  # [B, 11]
-            confidence = torch.sigmoid(psr_full).max(dim=-1, keepdim=True)[0]  # [B, 1]
-            psr_logits = torch.cat([psr_full, confidence], dim=-1)  # [B, 12]
-            psr_logits = psr_logits.unsqueeze(1).expand(B_main, T_main, -1)  # [B, T, 12]
-            psr_logits = psr_logits.reshape(B_main * T_main, -1)  # [BT, 12]
+                head(enc_flat) for head in self.psr_head.output_heads
+            ], dim=-1)  # [BT, 11]
+            confidence = torch.sigmoid(psr_full).max(dim=-1, keepdim=True)[0]  # [BT, 1]
+            psr_logits = torch.cat([psr_full, confidence], dim=-1)  # [BT, 12]
             psr_confidence = psr_logits[..., 11:]  # [BT, 1]
         else:
             psr_full = self.psr_head(pyramid, video_ids=video_ids)  # [B, 12]
