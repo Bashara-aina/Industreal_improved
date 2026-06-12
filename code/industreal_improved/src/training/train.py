@@ -846,6 +846,17 @@ def train_one_epoch(
     nan_skips = 0
     total_steps = 0
     seq_steps = 0
+    # [RC-29 TELEMETRY 2026-06-12] GradScaler SILENTLY skips optimizer.step()
+    # when unscaled grads contain inf/NaN (fp16 AMP). Two 4-epoch recovery runs
+    # produced validation metrics identical to 4 decimal places — the signature
+    # of weights that never update — while per-batch train losses looked alive
+    # (forward pass is unaffected). Count committed vs skipped optimizer
+    # windows so a frozen run is visible within minutes, not GPU-days.
+    # Detection idiom: scaler.update() REDUCES the scale iff the step was
+    # skipped (growth events only ever increase it). Inert when AMP disabled
+    # (scale constant at 1.0).
+    opt_windows = 0
+    opt_skipped = 0
     t_start = time.time()
 
     _heartbeat_interval = 10   # log heartbeat every N batches
@@ -1056,10 +1067,13 @@ def train_one_epoch(
                             break
                     if _seq_grads_nan:
                         break
+                opt_windows += 1  # [RC-29 TELEMETRY] count every window, committed or not
                 if _seq_grads_nan:
+                    opt_skipped += 1
                     logger.warning(
                         f'  [GRAD_NAN/SEQ] NaN/Inf gradient at epoch {epoch} step {step + 1} '
-                        f'— skipping optimizer step, zeroing grads'
+                        f'— skipping optimizer step, zeroing grads '
+                        f'([RC-29] {opt_skipped}/{opt_windows} windows skipped so far)'
                     )
                     optimizer.zero_grad(set_to_none=True)
                 else:
@@ -1067,8 +1081,17 @@ def train_one_epoch(
                         list(model.parameters()) + list(criterion.parameters()),
                         C.GRAD_CLIP_NORM,
                     )
+                    _scale_before = scaler.get_scale()  # [RC-29] fp16 silent-skip detect
                     scaler.step(optimizer)
                     scaler.update()
+                    if scaler.get_scale() < _scale_before:
+                        opt_skipped += 1
+                        if opt_skipped in (1, 10, 50) or opt_skipped % 200 == 0:
+                            logger.warning(
+                                f'  [RC-29] GradScaler SKIPPED optimizer step '
+                                f'({opt_skipped}/{opt_windows} windows so far, seq path) — '
+                                f'inf/NaN grads under AMP.'
+                            )
                     if ema is not None and (not staged_training or stage >= 3):
                         ema.update()
                     optimizer.zero_grad(set_to_none=True)
@@ -1346,6 +1369,10 @@ def train_one_epoch(
             # If any param gradient is NaN/Inf, skip this optimizer step to avoid
             # corrupting model weights. This can happen when Kendall precision
             # weights amplify small gradient instabilities into numerical overflow.
+            # [RC-29 TELEMETRY] Skips — whether from this manual guard or from
+            # GradScaler's silent fp16 skip — are now COUNTED. A guard that skips
+            # every window freezes the run while the progress bar looks alive;
+            # the per-epoch "optimizer windows" summary makes that visible.
             _grads_nan = False
             for _pg in optimizer.param_groups:
                 for _p in _pg['params']:
@@ -1354,7 +1381,9 @@ def train_one_epoch(
                         break
                 if _grads_nan:
                     break
+            opt_windows += 1
             if _grads_nan:
+                opt_skipped += 1
                 _nan_params = []
                 for _pg_idx, _pg in enumerate(optimizer.param_groups):
                     for _p in _pg['params']:
@@ -1367,7 +1396,8 @@ def train_one_epoch(
                         break
                 logger.warning(
                     f'  [GRAD_NAN] epoch {epoch} step {step + 1} — '
-                    f'{"; ".join(_nan_params)}; zeroing grads'
+                    f'{"; ".join(_nan_params)}; zeroing grads '
+                    f'([RC-29] {opt_skipped}/{opt_windows} windows skipped so far)'
                 )
                 optimizer.zero_grad(set_to_none=True)
             else:
@@ -1375,8 +1405,17 @@ def train_one_epoch(
                     list(model.parameters()) + list(criterion.parameters()),
                     C.GRAD_CLIP_NORM,
                 )
+                _scale_before = scaler.get_scale()  # [RC-29] fp16 silent-skip detect
                 scaler.step(optimizer)
                 scaler.update()
+                if scaler.get_scale() < _scale_before:
+                    opt_skipped += 1
+                    if opt_skipped in (1, 10, 50) or opt_skipped % 200 == 0:
+                        logger.warning(
+                            f'  [RC-29] GradScaler SKIPPED optimizer step '
+                            f'({opt_skipped}/{opt_windows} windows so far) — '
+                            f'inf/NaN grads under AMP.'
+                        )
                 if ema is not None and (not staged_training or stage >= 3):
                     ema.update()
                 optimizer.zero_grad(set_to_none=True)
@@ -1499,6 +1538,28 @@ def train_one_epoch(
             del loss
 
     total_all_steps = total_steps + seq_steps
+
+    # [RC-29 TELEMETRY] Epoch verdict: did the optimizer actually commit steps?
+    if opt_windows > 0:
+        _committed = opt_windows - opt_skipped
+        logger.info(
+            f'  Epoch {epoch}: optimizer windows={opt_windows}  '
+            f'committed={_committed}  skipped={opt_skipped} '
+            f'({opt_skipped / opt_windows:.1%})  scaler_scale={scaler.get_scale():.1f}'
+        )
+        if _committed == 0:
+            logger.error(
+                f'  [RC-29] Epoch {epoch}: ZERO optimizer steps committed — the model '
+                f'did NOT train this epoch (every AMP window had inf/NaN grads). '
+                f'Validation metrics will be IDENTICAL to the previous cycle. '
+                f'Switch to FP32 (MIXED_PRECISION=False / --preset recovery).'
+            )
+        elif opt_skipped / opt_windows > 0.5:
+            logger.warning(
+                f'  [RC-29] Epoch {epoch}: {opt_skipped / opt_windows:.0%} of optimizer '
+                f'steps skipped under AMP — training is severely degraded; prefer FP32.'
+            )
+
     if nan_skips > 0:
         logger.warning(f'  Epoch {epoch}: skipped {nan_skips} NaN/Inf batches total')
         if nan_skips / max(total_all_steps, 1) > 0.10:
