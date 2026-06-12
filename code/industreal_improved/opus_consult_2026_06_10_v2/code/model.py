@@ -78,44 +78,8 @@ logger = logging.getLogger(__name__)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.checkpoint import checkpoint as _torch_checkpoint
 
 from src import config as C
-
-# Tier 2.5/2.7/2.8/3.11 — optional tier modules. Each is a no-op if the
-# corresponding C.USE_* flag is False. Importing them here makes them
-# available for conditional instantiation in POPWMultiTaskModel.__init__.
-try:
-    from src.models.video_stream import K400VideoStream  # Tier 2.8
-    _HAS_K400_STREAM = True
-except Exception:  # noqa: BLE001
-    K400VideoStream = None
-    _HAS_K400_STREAM = False
-
-try:
-    from src.models.roi_detector import ROIDetector  # Tier 2.5
-    _HAS_ROI_DET = True
-except Exception:  # noqa: BLE001
-    ROIDetector = None
-    _HAS_ROI_DET = False
-
-try:
-    from src.models.psr_transition import PSRTransitionPredictor  # Tier 2.7
-    _HAS_PSR_TRANS = True
-except Exception:  # noqa: BLE001
-    PSRTransitionPredictor = None
-    _HAS_PSR_TRANS = False
-
-try:
-    from src.models.head_pose_geo import (  # Tier 3.11
-        GeometryAwareHeadPose, rotation_6d_to_matrix, legacy_9dof_to_6d_rotation,
-    )
-    _HAS_GEO_HEAD_POSE = True
-except Exception:  # noqa: BLE001
-    GeometryAwareHeadPose = None
-    rotation_6d_to_matrix = None
-    legacy_9dof_to_6d_rotation = None
-    _HAS_GEO_HEAD_POSE = False
 
 
 # ===========================================================================
@@ -536,6 +500,7 @@ class DetectionHead(nn.Module):
             for _ in range(4):
                 layers.extend([
                     nn.Conv2d(in_channels, in_channels, 3, padding=1),
+                    nn.GroupNorm(8, in_channels),
                     nn.ReLU(True),
                 ])
             return nn.Sequential(*layers)
@@ -556,12 +521,10 @@ class DetectionHead(nn.Module):
                     if m.bias is not None:
                         nn.init.zeros_(m.bias)
 
-        # Init bias to RetinaNet prior -- pi=0.01 (1% positive rate)
-        # IKEA assembly frames have 0-3 small parts in ~25K anchors, so true positive
-        # rate is <0.1%. The previous pi=0.10 (10%) made the bias +2.2 — every
-        # sigmoid output started at 0.9, flooding eval with junk boxes.
-        # bias = -log(99) = -4.595 (sigmoid(0) = 0.5 → bias_init → 0.01)
-        pi = 0.01
+        # Init bias to a less aggressive prior -- pi=0.03 (3% positive rate) instead of 0.01
+        # This prevents all predictions collapsing to "no object" when EMA locks in the bias.
+        # The bias learns from data during training; starting at -3.4 is not catastrophic.
+        pi = 0.03
         nn.init.normal_(self.cls_score.weight, std=0.01)
         nn.init.constant_(self.cls_score.bias, -math.log((1 - pi) / pi))
         nn.init.normal_(self.reg_pred.weight, std=0.01)
@@ -1130,11 +1093,11 @@ class ViTTemporalBlock(nn.Module):
         v = v.transpose(1, 2)
 
         scale = self.head_dim ** -0.5
-        # PATCH P5 [opus RC-16]: Standard attention divides by sqrt(d) (or
-        # multiplies by `scale = 1/sqrt(d)`). The previous code divided by
-        # `d ** -0.5` (== 1/sqrt(d)), making attention logits 8× larger than
-        # standard for head_dim=64. After any training, softmax saturates to
-        # one-hot and gradients through attention vanish.
+        # [AUDIT FIX 2026-06-11 / RC-16] was `/ scale`: dividing by d^-0.5
+        # MULTIPLIES the attention logits by sqrt(d)=8 instead of dividing —
+        # logits 64x larger than standard scaled dot-product attention →
+        # softmax saturates to near-one-hot and gradients through attention
+        # vanish (activity-ViT collapse mechanism). Standard form: qk^T * d^-0.5.
         attn = torch.matmul(q, k.transpose(-2, -1)) * scale
         attn = F.softmax(attn, dim=-1)
         attn = self.attn_dropout(attn)
@@ -1327,35 +1290,21 @@ class ActivityHead(nn.Module):
             self.videomae_proj = None
             classifier_input_dim = embed_dim
 
-        # Activity classifier — num_classes must match config.NUM_CLASSES_ACT (75 = 74 AR + NA at 0).
-        # [FIX #1 HIGH] Previously hardcoded num_classes=74, causing:
-        #   - Classifier output shape [B, 74] instead of [B, 75]
-        #   - GT class 0 (NA) shifts to prediction index 1 → all NA samples predicted as class 1
-        #   - NA class 0 never predicted → 0.0% accuracy for NA and all classes shifted by 1
-        # Paper: 74 action classes (AR IDs 1-74, no ID 0) + NA padding at index 0 = 75 total.
+        # Activity classifier
         self.activity_classifier = nn.Sequential(
             nn.LayerNorm(classifier_input_dim),
             nn.Dropout(0.1),
             nn.Linear(classifier_input_dim, num_classes),
         )
-        # Initialize final classifier bias to +6.0 uniform — THIS IS WRONG.
-        # Softmax is translation-invariant: +6.0 on ALL 75 biases has ZERO effect on
-        # argmax. All it does is make softmax near-uniform (logits ≈ 6.0 + tiny_weight·x),
-        # causing CE loss ≈ 0.86/batch regardless of input — exactly the frozen act=0.8634977
-        # observed across all 518 batches. Zero-init is the standard fix for CE classifiers.
-        # The old comment claimed this biases argmax toward class 0 (NA); it does not.
-        nn.init.zeros_(self.activity_classifier[-1].bias)
 
     def forward(self, proj_feat: torch.Tensor,
                 temporal_bank: Optional[torch.Tensor] = None,
-                videomae_feat: Optional[torch.Tensor] = None,
-                k400_feat: Optional[torch.Tensor] = None) -> torch.Tensor:
+                videomae_feat: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
         Args:
             proj_feat: [B, 512] -- pre-projected joint features
             temporal_bank: [B, T, 512] feature bank sequence, or None for single-frame
             videomae_feat: [B, 384] optional VideoMAE V2 feature (Doc 2 A.1)
-            k400_feat: [B, hidden] optional K400 video stream feature (Tier 2.8)
         Returns:
             act_logits: [B, num_classes]
         """
@@ -1388,18 +1337,6 @@ class ActivityHead(nn.Module):
             feat = torch.cat([feat, videomae_emb], dim=-1)
         elif self.use_videomae:
             feat = torch.cat([feat, torch.zeros_like(feat)], dim=-1)
-
-        # Tier 2.8 — K400 stream fusion: only when both are present.
-        # Lazily build the K400 projection on the correct hidden size.
-        if k400_feat is not None:
-            k400_dim = k400_feat.shape[-1]
-            if not hasattr(self, 'k400_proj') or self.k400_proj.in_features != k400_dim:
-                self.k400_proj = nn.Linear(k400_dim, 128).to(feat.device)
-            k400_emb = self.k400_proj(k400_feat)
-            feat = torch.cat([feat, k400_emb], dim=-1)
-        elif getattr(self, 'use_videomae', False) and getattr(self, '_k400_zero_pad', False):
-            # Match concat-width for shape stability across training steps.
-            pass
 
         feat = F.dropout(feat, p=0.1, training=self.training)
         logits = self.activity_classifier(feat)
@@ -1475,11 +1412,6 @@ class PSRHead(nn.Module):
         super().__init__()
         self.num_components = num_components
         self.gru_hidden = gru_hidden
-        # [FIX #13 TIER C 2026-06-08] Gradient checkpointing toggle for the causal
-        # transformer. Halves activation memory at the cost of one extra forward pass
-        # during backward. Use when VRAM is tight (12GB RTX 3060 + full PSR context).
-        # The cached-mode path (inference) is exempt — checkpointing is for training only.
-        self._use_grad_ckpt = bool(getattr(C, 'USE_PSR_GRADIENT_CHECKPOINTING', True))
 
         self.gap_p3 = nn.AdaptiveAvgPool2d(1)
         self.gap_p4 = nn.AdaptiveAvgPool2d(1)
@@ -1494,14 +1426,6 @@ class PSRHead(nn.Module):
             nn.Linear(gru_hidden * 2, gru_hidden),
             nn.LayerNorm(gru_hidden),
         )
-        # [FIX #4c] proj_feat from activity head is 512-dim; per_frame_mlp expects 768.
-        # Add a projection to bridge the dim mismatch.
-        self.proj_to_psr_hidden = nn.Linear(512, per_scale_ch)
-        # [FIX #4d] Feature bank stores 512-dim; per_frame_mlp outputs 256.
-        # Project up to 512 so bank_seq replace is valid.
-        self.proj_256_to_512 = nn.Linear(gru_hidden, 512)
-        # [FIX #4e] Feature bank is 512-dim but transformer expects d_model=256.
-        self.proj_512_to_256 = nn.Linear(512, gru_hidden)
 
         # C.1: Causal Transformer (3 layers, 4 heads, d_model=256) -- paper ?PSR Head
         encoder_layer = nn.TransformerEncoderLayer(
@@ -1530,18 +1454,6 @@ class PSRHead(nn.Module):
             ) for _ in range(num_components)
         ])
 
-        # [FIX #4 HIGH] PSR output head initialization:
-        # - bias=0.0 (default) + weight std=0.125 → sigmoid(0.125) ≈ 0.53 (near 0.5)
-        # - With default init, logits start at ±0.125, sigmoid clusters in [0.4, 0.65]
-        # - Threshold=0.0 then makes binary decisions from 3rd decimal of sigmoid output
-        # → only 4 unique binary patterns (essentially random)
-        # - Fix: initialize bias to -1.0 per head so sigmoid(bias) ≈ 0.27 (skewed toward 0)
-        #   This gives the model clear initial separation — rare components benefit from
-        #   prior of not-done (class 0), and training can push toward 1 as needed.
-        for head in self.output_heads:
-            nn.init.constant_(head[-1].bias, -1.0)  # sigmoid(-1.0)≈0.27 → skewed toward 0 (not-done)
-            nn.init.normal_(head[-1].weight, std=0.05)
-
         self._cache: Dict[Tuple[str, str], List[torch.Tensor]] = {}
         self._MAX_CACHE_LEN = 32
 
@@ -1551,14 +1463,6 @@ class PSRHead(nn.Module):
         p5_gap = self.gap_p5(pyramid['p5']).flatten(1)
         fused = torch.cat([p3_gap, p4_gap, p5_gap], dim=1)
         return self.per_frame_mlp(fused)  # [B, gru_hidden]
-
-    def _get_frame_feat_from_proj(self, proj_feat: torch.Tensor) -> torch.Tensor:
-        """Project 512-dim activity features to 768-dim PSR per_frame_mlp input."""
-        proj_768 = self.proj_to_psr_hidden(proj_feat)  # [B, 768]
-        frame_256 = self.per_frame_mlp(proj_768)  # [B, gru_hidden=256]
-        # [FIX #4d] Feature bank stores 512-dim; per_frame_mlp outputs 256.
-        # Project up to 512 so bank_seq[:, -1, :] assignment is valid.
-        return self.proj_256_to_512(frame_256)  # [B, 512]
 
     def _get_causal_mask(self, seq_len: int, device: torch.device) -> torch.Tensor:
         """Generate causal mask (upper-triangular, prevents attending to future)."""
@@ -1570,17 +1474,6 @@ class PSRHead(nn.Module):
             # invert so True = ignore (cannot attend), False = attend
             self._cached_mask = mask
         return self._cached_mask
-
-    def _run_transformer(self, seq: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        """[FIX #13 TIER C 2026-06-08] Run the causal transformer with optional
-        gradient checkpointing during training. Trades ~30% extra compute for
-        ~50% activation memory savings on the 3-layer PSR encoder. Inference path
-        is exempt (no checkpointing needed)."""
-        if self._use_grad_ckpt and self.training:
-            # `checkpoint` works for any inputs (requires_grad or not); what matters
-            # is that the wrapped function contains nn.Parameters (our transformer does).
-            return _torch_checkpoint(self.transformer, seq, mask=mask, use_reentrant=False)
-        return self.transformer(seq, mask=mask)
 
     def forward(self, pyramid: Dict[str, torch.Tensor],
                 video_ids: Optional[List[str]] = None,
@@ -1624,7 +1517,7 @@ class PSRHead(nn.Module):
                 T = seq.size(0)
                 seq = seq.unsqueeze(0)  # [1, T, gru_hidden]
                 causal_mask = self._get_causal_mask(T, seq.device)
-                encoded = self._run_transformer(seq, causal_mask)  # [1, T, gru_hidden]
+                encoded = self.transformer(seq, mask=causal_mask)  # [1, T, gru_hidden]
                 # Use the last position's output (causal = only sees past)
                 last_out = encoded[:, -1, :]  # [1, gru_hidden]
 
@@ -1644,7 +1537,7 @@ class PSRHead(nn.Module):
         feat_seq = frame_feat.unsqueeze(1)  # [B, 1, gru_hidden]
         T = feat_seq.size(1)
         causal_mask = self._get_causal_mask(T, feat_seq.device)
-        encoded = self._run_transformer(feat_seq, causal_mask)  # [B, 1, gru_hidden]
+        encoded = self.transformer(feat_seq, mask=causal_mask)  # [B, 1, gru_hidden]
         # For single frame, use the last position output
         last_out = encoded.squeeze(1)  # [B, gru_hidden]
 
@@ -1662,66 +1555,6 @@ class PSRHead(nn.Module):
 
     def reset_all(self):
         self._cache.clear()
-
-
-# ===========================================================================
-# Cross-Head Fusion -- FiLM-style per-level modulation from cross-level context
-# ===========================================================================
-class CrossHeadFusion(nn.Module):
-    """
-    [FIX #12 TIER C] Per-level FiLM modulation from cross-level global context.
-
-    For each FPN level, compute global average pool, concatenate all 5 level
-    summaries into a single context vector, predict per-level (gamma, beta) via
-    a small MLP, then modulate spatial features:  feat_l' = feat_l * (1 + gamma_l) + beta_l.
-
-    This lets the network inject cross-level semantic information into the per-level
-    features that feed the 5 downstream heads (det/pose/head_pose/act/psr). Heads that
-    benefit from cross-scale context (e.g. det at small stride, psr at large stride) can
-    learn to amplify the relevant level without retraining the FPN.
-
-    Cost: ~125K params with hidden=32 (Linear 1280->32, Linear 32->2560, 5 scale gates).
-    Initializes to identity (gamma=beta=0) so the module is a no-op at the start of training.
-
-    Order is fixed to [p3, p4, p5, p6, p7] to match the FPN output dict.
-    """
-    def __init__(self, num_levels: int = 5, channels: int = 256, hidden: int = 32):
-        super().__init__()
-        self.num_levels = num_levels
-        self.channels = channels
-        self.hidden = hidden
-        self.mlp = nn.Sequential(
-            nn.Linear(channels * num_levels, hidden),
-            nn.ReLU(inplace=True),
-            nn.Linear(hidden, num_levels * channels * 2),
-        )
-        # Initialize final linear to zero so gamma=beta=0 at start (identity modulation)
-        nn.init.zeros_(self.mlp[-1].weight)
-        nn.init.zeros_(self.mlp[-1].bias)
-        # Per-level scale gate (multiplicative; init to 1.0)
-        self.level_scale = nn.Parameter(torch.ones(num_levels))
-
-    def forward(self, pyramid: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        levels = ('p3', 'p4', 'p5', 'p6', 'p7')
-        # [B, 5, 256] -- one GAP per level
-        gaps = torch.stack(
-            [F.adaptive_avg_pool2d(pyramid[l], 1).flatten(1) for l in levels],
-            dim=1,
-        )
-        B = gaps.shape[0]
-        # [B, 5*256] -- cross-level context
-        ctx = gaps.reshape(B, -1)
-        # [B, 5*256*2] -- (gamma, beta) for every level
-        params = self.mlp(ctx)
-        gamma, beta = params.chunk(2, dim=-1)
-        gamma = gamma.reshape(B, self.num_levels, self.channels)
-        beta = beta.reshape(B, self.num_levels, self.channels)
-        out = {}
-        for i, l in enumerate(levels):
-            g_i = gamma[:, i, :].view(B, self.channels, 1, 1) * self.level_scale[i]
-            b_i = beta[:, i, :].view(B, self.channels, 1, 1)
-            out[l] = pyramid[l] * (1.0 + g_i) + b_i
-        return out
 
 
 # ===========================================================================
@@ -1755,14 +1588,6 @@ class POPWMultiTaskModel(nn.Module):
         use_hand_film: bool = True,  # [FIX] Hand-FiLM conditional — enables ablation (paper: always on)
         use_videomae: bool = False,
         train_pose: bool = True,
-        # Tier 2.5 — ROI-centric detection (replaces dense RetinaNet)
-        use_roi_detector: bool = False,
-        # Tier 2.7 — PSR transition prediction
-        use_psr_transition: bool = False,
-        # Tier 2.8 — K400 video stream
-        use_k400_stream: bool = False,
-        # Tier 3.11 — 6D rotation head pose
-        use_geo_head_pose: bool = False,
     ):
         super().__init__()
         self.backbone_type = backbone_type
@@ -1770,10 +1595,6 @@ class POPWMultiTaskModel(nn.Module):
         self.use_hand_film = use_hand_film
         self.use_videomae = use_videomae
         self.train_pose = train_pose
-        self.use_roi_detector = use_roi_detector
-        self.use_psr_transition = use_psr_transition
-        self.use_k400_stream = use_k400_stream
-        self.use_geo_head_pose = use_geo_head_pose
 
         # === Backbone (Doc 01 D.1) ===
         self.backbone = build_backbone(backbone_type, pretrained=pretrained)
@@ -1793,15 +1614,6 @@ class POPWMultiTaskModel(nn.Module):
 
         # === FPN Neck ===
         self.fpn = FPN(in_channels=fpn_in_channels, out_channels=256)
-
-        # === Cross-Head Fusion (FiLM-style per-level modulation) ===
-        # [FIX #12 TIER C] Wire CrossHeadFusion behind the FPN to inject cross-level
-        # context into per-level features. Toggle with C.USE_CROSS_HEAD_FUSION.
-        self.use_cross_fusion = getattr(C, 'USE_CROSS_HEAD_FUSION', True)
-        if self.use_cross_fusion:
-            self.cross_fusion = CrossHeadFusion(num_levels=5, channels=256, hidden=32)
-        else:
-            self.cross_fusion = None
 
         # === Detection Head ===
         self.detection_head = DetectionHead(in_channels=256, num_classes=C.NUM_DET_CLASSES)
@@ -1862,43 +1674,6 @@ class POPWMultiTaskModel(nn.Module):
         if use_videomae:
             self.videomae_stream = VideoMAEStream()
 
-        # === Tier 2.5 — ROI-Centric Detection (replaces dense RetinaNet) ===
-        if use_roi_detector and _HAS_ROI_DET:
-            self.roi_detector = ROIDetector(
-                num_states=C.NUM_DET_CLASSES,
-                top_k=getattr(C, 'ROI_DET_TOP_K', 10),
-                score_thresh=getattr(C, 'ROI_DET_SCORE_THRESH', 0.05),
-                nms_thresh=getattr(C, 'ROI_DET_NMS_THRESH', 0.5),
-            )
-
-        # === Tier 2.7 — PSR Transition Predictor ===
-        if use_psr_transition and _HAS_PSR_TRANS:
-            self.psr_transition = PSRTransitionPredictor(
-                in_dim=self.psr_head.hidden_dim,
-                num_components=C.NUM_PSR_COMPONENTS,
-                sigma=getattr(C, 'PSR_TRANSITION_GAUSSIAN_SIGMA', 3.0),
-                use_monotonic=getattr(C, 'PSR_USE_MONOTONIC_DECODER', True),
-            )
-
-        # === Tier 2.8 — K400-Pretrained Video Stream ===
-        if use_k400_stream and _HAS_K400_STREAM:
-            self.k400_stream = K400VideoStream(
-                model_name=getattr(C, 'K400_VIDEO_MODEL', 'mvitv2_s'),
-                clip_frames=getattr(C, 'K400_CLIP_FRAMES', 16),
-                clip_stride=getattr(C, 'K400_CLIP_STRIDE', 2),
-                pretrained=pretrained,
-                finetune_epochs=getattr(C, 'K400_FINETUNE_EPOCHS', 0),
-            )
-
-        # === Tier 3.11 — Geometry-Aware 6D Head Pose ===
-        if use_geo_head_pose and _HAS_GEO_HEAD_POSE:
-            self.geo_head_pose = GeometryAwareHeadPose(
-                in_channels_c4=c4_ch,
-                in_channels_c5=c5_ch,
-                hidden_dim=512,
-                dropout=0.1,
-            )
-
     @staticmethod
     def _decode_boxes(anchors: torch.Tensor, deltas: torch.Tensor) -> torch.Tensor:
         """Decode anchor deltas to bounding boxes."""
@@ -1949,28 +1724,17 @@ class POPWMultiTaskModel(nn.Module):
         """
         B = images.shape[0]
 
-        # Handle [B, T, C, H, W] sequence input from PSR sequence mode.
-        # [FIX 2026-06-10] Sequence-ness is decided by the INPUT SHAPE, not by
-        # the persistent model._seq_len tag. The old logic regrouped ANY 4-D
-        # batch whose size was divisible by _seq_len (train batch=4, val
-        # batch=16, eval BS=4) into fake 4-frame 'sequences' of unrelated
-        # frames, then emitted ONE PSR prediction copied across the group —
-        # the direct mechanism behind 'unique_binary_patterns=1' at eval.
+        # Handle [B, T, C, H, W] sequence input from PSR sequence mode
+        # _prepare_images flattens it to [B*T, C, H, W]; detect via _seq_len attribute
+        seq_len = getattr(self, '_seq_len', 1)
         BT = B
         if images.dim() == 5:
-            seq_len = images.shape[1]  # trust the tensor, not the global tag
             BT = images.shape[0] * images.shape[1]
             images = images.reshape(BT, images.shape[2], images.shape[3], images.shape[4])
-        else:
-            seq_len = 1  # 4-D input = independent frames; NEVER fake-sequence them
 
         c2, c3, c4, c5 = self.backbone(images)
 
         pyramid = self.fpn(c3, c4, c5)
-
-        # [FIX #12 TIER C] Cross-level FiLM modulation (identity at init)
-        if self.cross_fusion is not None:
-            pyramid = self.cross_fusion(pyramid)
 
         cls_preds, reg_preds = self.detection_head(pyramid)
         anchors = self.anchor_gen(pyramid)
@@ -2040,69 +1804,20 @@ class POPWMultiTaskModel(nn.Module):
 
         # [FIX] pose_film conditional on use_hand_film flag (ablation support)
         if self.use_hand_film and hasattr(self, 'pose_film'):
-            # Tier 3.10 — cross-task conditioning audit: scale the FiLM gamma
-            # by mean pose confidence so pseudo-keypoint frames (low conf)
-            # don't dominate. This is a no-op for high-confidence frames.
-            kp_mean_conf = pose_confidence.mean(dim=-1, keepdim=True)  # [B, 1]
-            kp_for_film = keypoints * kp_mean_conf.unsqueeze(-1)        # [B, 17, 2] * [B, 1, 1]
-            c5_mod = self.pose_film(c5, kp_for_film, pose_confidence)
+            c5_mod = self.pose_film(c5, keypoints, pose_confidence)
         else:
             c5_mod = c5  # No hand-keypoint conditioning when USE_HAND_FILM=False
 
         with torch.no_grad():
-            # PATCH P7 [opus RC-19]: det_conf was raw, unbounded max logits
-            # concatenated with GAP features (~O(0.1–1)). With the collapsed det
-            # trunk, the 24 det_conf dims had enormous, frame-invariant magnitude
-            # (L2 243.39 ± 0.001) that dominated the activity head input. Sigmoid
-            # bounds to [0,1], making the conditioning signal informative rather
-            # than a constant noise source.
-            det_conf = cls_preds.sigmoid().max(dim=1)[0]
-
-        # [HOT-FIX 2026-06-07] Moved head_pose_head + headpose_film here from below
-        # the activity_head call. Old placement (line ~1924) computed headpose_film
-        # output into a `c5_mod` variable that was NEVER consumed downstream —
-        # activity_head used `proj_feat` (built from pre-headpose_film c5_mod), so
-        # headpose_film params received no gradient and stayed bit-for-bit frozen
-        # across epochs 16-21. The rewire: compute headpose_film before activity_proj
-        # so the modulated c5_mod actually flows into activity_proj. head_pose.detach()
-        # preserved (paper-spec stop_grad on the FiLM input).
-        # Compute head_pose when TRAIN_HEAD_POSE=True (paper: disabled for IKEA ASM)
-        # or always during eval (self.training=False) so evaluate.py gets tensors.
-        if self.train_pose or not self.training:
-            if self.use_geo_head_pose and hasattr(self, 'geo_head_pose'):
-                # Tier 3.11 — 6D rotation + normalized position. Returns
-                # (rotation_6d, rotation_matrix, position). Convert to 9-DoF
-                # for downstream compatibility with the existing FiLM head.
-                rot_6d, rot_matrix, pos = self.geo_head_pose(c4, c5)
-                head_pose = self.geo_head_pose.to_legacy_9dof(rot_6d, pos)
-                # Also expose 6D outputs in the return dict for the loss to use.
-                self._head_pose_6d = rot_6d
-                self._head_pose_R = rot_matrix
-                self._head_pose_pos = pos
-            else:
-                head_pose = self.head_pose_head(c4, c5)
-                self._head_pose_6d = None
-                self._head_pose_R = None
-                self._head_pose_pos = None
-            if self.use_headpose_film and hasattr(self, 'headpose_film'):
-                c5_mod = self.headpose_film(c5_mod, head_pose.detach())  # stop_grad per paper ?HeadPoseFiLM
-        else:
-            head_pose = None
-            self._head_pose_6d = None
-            self._head_pose_R = None
-            self._head_pose_pos = None
-
-        # [FIX #4b] Compute Feature Bank BEFORE PSR block so bank_output is available
-        # in the T=1 path (else branch below). Inlined activity_proj/proj_feat from below.
-        # [HOT-FIX 2026-06-07] activity_proj now consumes headpose_film-modulated c5_mod
-        # (see rewire comment above).
-        activity_proj = torch.cat([
-            det_conf,
-            F.adaptive_avg_pool2d(c5_mod, 1).flatten(1),
-            F.adaptive_avg_pool2d(pyramid['p4'], 1).flatten(1),
-        ], dim=1)
-        proj_feat = self.activity_head.proj_features(activity_proj)
-        bank_output = self.feature_bank(proj_feat, video_ids, None)
+            # [AUDIT FIX 2026-06-11 / RC-19, P7] sigmoid-bound the detection
+            # confidence. Raw max-logits are unbounded: a saturated det head
+            # injected O(10-100), near-constant values into the activity-head
+            # input (measured L2 243.39 +/- 0.001 across frames), drowning the
+            # GAP features. max(sigmoid(x)) == sigmoid(max(x)) (monotonic), so
+            # ranking semantics are unchanged; the scale is now [0, 1].
+            det_conf = torch.sigmoid(cls_preds.max(dim=1)[0])
+        if C.ZERO_DET_CONF_FOR_RECOVERY:
+            det_conf = torch.zeros_like(det_conf)
 
         # PSR Head: pass full temporal sequence for proper Causal Transformer engagement
         # Pyramid dicts have per-level features [BT, C, H, W]. Reshape each to [B, T, C, H, W].
@@ -2130,16 +1845,15 @@ class POPWMultiTaskModel(nn.Module):
             # Causal mask: [T, T] — PyTorch broadcasts this identically across all batch items
             causal_mask = torch.triu(torch.ones(T, T, device=seq.device), diagonal=1).bool()
             # batch_first=True, so [B, T, hidden]
-            # [FIX #13 TIER C] Route through _run_transformer for optional grad-ckpt
-            encoded = self.psr_head._run_transformer(seq, causal_mask)  # [B, T, hidden]
-            # [FIX 2026-06-10] Per-position predictions. The old code took only
-            # encoded[:, -1, :] and .expand()ed one prediction across all T
-            # frames: the per-frame focal loss then compared ONE prediction to
+            encoded = self.psr_head.transformer(seq, mask=causal_mask)  # [B, T, hidden]
+            # [AUDIT FIX 2026-06-11 — FIX-4 reapplied] The old code took only
+            # encoded[:, -1, :] and .expand()ed ONE prediction across all T
+            # frames: the per-frame focal loss then compared one prediction to
             # T different labels (optimum = window-average label = constant
             # output collapse), and the temporal-smooth loss had identically
-            # zero gradient (differences of the same tensor). Causal masking
-            # already guarantees position t only sees frames <= t, so every
-            # position is a valid (and supervised) per-frame prediction.
+            # zero gradient (differences of the same expanded tensor). Causal
+            # masking already guarantees position t only sees frames <= t, so
+            # every position is a valid (and supervised) per-frame prediction.
             enc_flat = encoded.reshape(B_main * T_main, -1)  # [BT, hidden]
             psr_full = torch.cat([
                 head(enc_flat) for head in self.psr_head.output_heads
@@ -2148,55 +1862,45 @@ class POPWMultiTaskModel(nn.Module):
             psr_logits = torch.cat([psr_full, confidence], dim=-1)  # [BT, 12]
             psr_confidence = psr_logits[..., 11:]  # [BT, 1]
         else:
-            # [FIX #4] PSR T=1 collapse: use Feature Bank temporal context when no
-            # sequence dim available. Feature Bank stores T=16 sliding window per video.
-            # This gives PSR temporal context from recent history instead of T=1 single frame.
-            bank = bank_output  # [B, T=16, 512] from self.feature_bank call above
-            T_bank = bank.size(1)
-            # Project activity features → PSR hidden dim via per_frame_mlp (shared weights)
-            frame_feat_proj = self.psr_head._get_frame_feat_from_proj(proj_feat)  # [B, 512]
-            # Build temporal sequence from feature bank + current frame
-            # Replace last bank position with current frame (most recent = most informative)
-            bank_seq = bank.clone()
-            bank_seq[:, -1, :] = frame_feat_proj  # [B, T, 512]
-            # [FIX #4e] Project 512→256 for transformer (d_model=256), then project output back
-            bank_seq_256 = self.psr_head.proj_512_to_256(bank_seq)  # [B, T, 256]
-            causal_mask = torch.triu(torch.ones(T_bank, T_bank, device=bank.device), diagonal=1).bool()
-            encoded = self.psr_head._run_transformer(bank_seq_256, causal_mask)  # [B, T, 256]
-            last_out = encoded[:, -1, :]  # [B, 256]
-            psr_full = torch.cat([
-                head(last_out) for head in self.psr_head.output_heads
-            ], dim=-1)  # [B, 11]
-            confidence = torch.sigmoid(psr_full).max(dim=-1, keepdim=True)[0]  # [B, 1]
-            psr_logits = torch.cat([psr_full, confidence], dim=-1)  # [B, 12]
-            psr_confidence = psr_logits[..., 11:]  # [B, 1]
+            psr_full = self.psr_head(pyramid, video_ids=video_ids)  # [B, 12]
+            psr_logits = psr_full[..., :11]  # [B, 11]
+            psr_confidence = psr_full[..., 11:]  # [B, 1]
 
-        # [HOT-FIX 2026-06-07] head_pose_head + headpose_film moved to BEFORE
-        # activity_proj (see [HOT-FIX] comment near det_conf above). This
-        # downstream position is now dead code: the modulated c5_mod computed
-        # here was never consumed by activity_head (which used proj_feat from
-        # pre-modulated c5_mod), leaving headpose_film params at init and frozen.
+        # Head pose: computed when TRAIN_HEAD_POSE=True (paper: disabled for IKEA ASM)
+        # ALSO compute during eval mode (self.training=False) so evaluate.py gets tensors.
+        # During training: respect train_pose flag (may be stage-gated to False in early epochs).
+        # During eval: always compute head_pose so evaluate.py doesn't crash on None.
+        if self.train_pose or not self.training:
+            head_pose = self.head_pose_head(c4, c5)
+            if self.use_headpose_film and hasattr(self, 'headpose_film'):
+                c5_mod = self.headpose_film(c5_mod, head_pose.detach())  # stop_grad per paper ?HeadPoseFiLM
+        else:
+            head_pose = None
+
+        activity_proj = torch.cat([
+            det_conf,
+            F.adaptive_avg_pool2d(c5_mod, 1).flatten(1),
+            F.adaptive_avg_pool2d(pyramid['p4'], 1).flatten(1),
+        ], dim=1)
+
+        proj_feat = self.activity_head.proj_features(activity_proj)
+
+        bank_output = self.feature_bank(proj_feat, video_ids, None)
 
         videomae_feat = None
         if self.use_videomae and clip_rgb is not None and hasattr(self, 'videomae_stream'):
             videomae_feat = self.videomae_stream(clip_rgb)
 
-        # === Tier 2.8 — K400 video stream (parallel to VideoMAE) ===
-        k400_feat = None
-        if self.use_k400_stream and clip_rgb is not None and hasattr(self, 'k400_stream'):
-            k400_feat = self.k400_stream(clip_rgb)
-
         act_logits = self.activity_head(
             proj_feat=proj_feat,
             temporal_bank=bank_output,
             videomae_feat=videomae_feat,
-            k400_feat=k400_feat,
         )
 
-        result_dict = {
+        return {
             'cls_preds': cls_preds,
             'reg_preds': reg_preds,
-            'anchors': anchors.float(),
+            'anchors': anchors,
             'heatmaps': heatmaps,
             'keypoints': keypoints,
             'pose_confidence': pose_confidence,
@@ -2204,26 +1908,11 @@ class POPWMultiTaskModel(nn.Module):
             'c5_mod': c5_mod,
             'det_conf': det_conf,
             'act_logits': act_logits,
-            'psr_logits': psr_logits[..., :11],
-            'psr_confidence': psr_confidence if not self.training else None,
+            'psr_logits': psr_logits[..., :11],  # [BT, 11] for loss compatibility
+            'psr_confidence': psr_confidence if not self.training else None,  # Item 32
             'temporal_features': bank_output,
             'c5_raw': c5,
         }
-
-        # Tier 2.7 — PSR transition prediction (per-component event detection).
-        if self.use_psr_transition and hasattr(self, 'psr_transition') and psr_logits.dim() >= 2:
-            with torch.no_grad():
-                if psr_logits.dim() == 3:
-                    psr_seq = psr_logits
-                else:
-                    psr_seq = psr_logits.unsqueeze(1)
-                trans_targets = self.psr_transition.build_targets_from_seq(psr_seq.detach())
-            trans_out = self.psr_transition(psr_seq)
-            result_dict['psr_transition_logits'] = trans_out['logits']
-            result_dict['psr_transition_targets'] = trans_targets
-            result_dict['psr_transition_decoded'] = trans_out.get('decoded')
-
-        return result_dict
 
 
 def count_parameters(model: POPWMultiTaskModel) -> Dict[str, int]:
@@ -2281,14 +1970,7 @@ class EMA:
     def update(self):
         for name, param in self.model.named_parameters():
             if param.requires_grad:
-                # [FIX 2026-06-06] Auto-register newly-trainable params on the fly.
-                # Required for staged training: at Stage 3 entry, _set_stage_requires_grad
-                # sets requires_grad=True on ALL params (including videomae_stream, which
-                # was frozen at startup and never registered in shadow). Seed shadow with
-                # current param value (no decay history yet — bootstrap from identity).
-                if name not in self.shadow:
-                    self.shadow[name] = param.data.clone().detach()
-                    continue
+                assert name in self.shadow, f"EMA: shadow missing {name}"
                 new_avg = self.decay * self.shadow[name] + (1.0 - self.decay) * param.data
                 self.shadow[name] = new_avg.clone()
         for name, buffer in self.model.named_buffers():

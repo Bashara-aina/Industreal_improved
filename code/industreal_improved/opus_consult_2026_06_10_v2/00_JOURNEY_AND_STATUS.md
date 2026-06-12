@@ -91,12 +91,39 @@
 - ViT attention scaling was INVERTED: dividing by d^-0.5 multiplies by √d = 8 (64× too large)
 - FeatureBank was dead: always returned current frame replicated 16× (video_ids=None)
 
-### Phase 6: Current State (June 11, 2026)
+### Phase 6: Opus v2 Consultation (June 11, 2026)
 - All root causes identified (RC-13 through RC-24, 12 new findings)
-- Patches P1–P11 designed but NOT YET APPLIED to a clean retrain
-- Config updated with Tier 1-3 improvements (simplified loss, ROI detector, PSR transition, K400 video stream, geometry-aware head pose, knowledge distillation, task-aware sampling)
-- **The model has NEVER produced real, trustworthy multi-task metrics**
-- We are at the "fix the measurement chain" stage — zero GPU-cost experiments remain
+- Opus v2 answer received: identified RC-25 (feature-magnitude explosion in trunk) as the dominant failure mode
+- Prescribed RC-25 (FPN reinit), RC-27 (GroupNorm in detection subnets), step-0 assertion, det_conf zeroing during recovery, EMA re-anchor, and D7-D9 diagnostics
+- All Opus v2 prescriptions IMPLEMENTED in the codebase by June 11 evening
+
+### Phase 7: RC-25 Recovery Attempts (June 11–12, 2026) — DEADLOCK DISCOVERED
+
+**Run 1** (June 11, ~14:00–03:00): `--preset recovery --reinit-heads --subset-ratio 0.25 --max-epochs 45`
+- Resumed from epoch-43 `latest.pth` (948MB), reinit FPN+heads
+- Step-0 assertion PASSED: median |z| = 2.95 < 8
+- Train loss non-zero, non-NaN (25–160 per batch)
+- 2 epochs completed (44–45): **identical** validation results
+- det_mAP50=0.0000, act_macro_f1=0.0007, psr_f1=0.0000, combined=0.1067
+- Crash checkpoint saved at `crash_recovery.pth` (301MB)
+
+**Run 2** (June 12, 07:21–10:56): `--preset recovery --resume crash_recovery.pth --subset-ratio 0.25 --max-epochs 55 --num-workers 0`
+- NO --reinit-heads (continuing from 2-epoch trained state)
+- 2 more epochs completed (46–47): **STILL identical** validation results
+- **KILLED at epoch 47/55** — zero progress after 4 total epochs across both runs
+- 4 validation cycles: identical to 4 decimal places (combined=0.1067)
+
+**The 3-Way Deadlock (RC-28)**
+
+Architecture coupling: Backbone+FPN → detection_head → det_conf → activity_head input
+
+| Head | Status | Why Stuck |
+|------|--------|-----------|
+| Detection | Scores flat at 0.154 (std=0.0095) | Focal Loss at pi=0.05 with ~2.76M neg anchors per batch. Only 10–15% of batches have GT. Negative Focal Loss dominates gradient. |
+| Activity | 1/75 classes (class 20, 100% of frames) | `ZERO_DET_CONF_FOR_RECOVERY=True` zeros det_conf input into activity head. Activity gets NO detection signal — can't differentiate frames. |
+| PSR | 1 unique binary pattern | Depends on learned FPN features, but backbone gradient is dominated by detection's negative Focal Loss signal. |
+
+**The recovery flag IS the deadlock**: `ZERO_DET_CONF_FOR_RECOVERY` was designed for the original collapse (saturated det_conf O(10-100) poisoning activity). But at pi=0.05 with healthy logits (Step-0 PASSED), it's **starving** the activity head. Without detection signal, activity can't learn. Without activity gradient, the shared backbone gets no useful signal for 2 of 3 tasks.
 
 ---
 
@@ -115,46 +142,64 @@
 
 ---
 
-## 5. What Does NOT Work
+## 5. What Does NOT Work (Updated June 12)
 
 | Component | Status | Root Cause |
 |-----------|--------|------------|
-| Detection head | ❌ Collapsed | EMA contamination (RC-13), trunk not reinit'd (RC-14), anchor/GT mismatch (RC-22) |
-| Activity head | ❌ Collapsed | Mixup/CutMix label corruption (RC-15), inverted ViT scaling (RC-16), eval input mismatch (RC-17), dead FeatureBank (RC-18), det_conf domination (RC-19) |
-| PSR head | ❌ Collapsed | Constant output (1 unique pattern), near-constant labels on small subset (RC-24) |
-| Combined metric | ❌ Broken | Mathematically pose-only: 0.15/(1+0.344) = 0.1116 (RC-20) |
-| EMA system | ❌ Broken | No-op reset, collapsed shadow restore, best.pth = EMA blend (RC-13) |
-| Checkpoint selection | ❌ Broken | Driven by contaminated EMA metrics (RC-13) |
-| Training subset | ❌ Insufficient | 5% = 4 recordings, 12/75 classes present (RC-24) |
+| Detection head | ❌ Collapsed | **RC-28**: Focal Loss at pi=0.05 + 2.76M neg anchors per batch → equilibrium at score=0.154, no escape |
+| Activity head | ❌ Collapsed | **RC-28**: ZERO_DET_CONF_FOR_RECOVERY=True starves activity of detection signal → 1/75 classes |
+| PSR head | ❌ Collapsed | **RC-28**: Backbone gradient dominated by detection's negative Focal Loss → 1 binary pattern |
+| Combined metric | ❌ Broken | act_top5=0.2425 + psr_edit=0.4773 only → combined=0.1067 (pose dead at MAE=66°) |
+| RC-25 recovery strategy | ❌ Failed | FPN reinit + prior-based heads necessary but INSUFFICIENT — 3-way coupling deadlock prevents any head from escaping |
+| EMA system | ✅ Fixed | USE_EMA=False, re-anchor after reinit implemented |
+| Checkpoint selection | ✅ Fixed | Best measured from RAW model, not EMA |
 
 ---
 
-## 6. Current Configuration State
+## 6. Current Configuration State (As Tested June 12)
 
-The config.py has been updated with extensive Tier 1-3 improvements:
-- `USE_SIMPLIFIED_LOSS = True` — replaces LDAM with CE+label_smoothing, fixed per-task weights
-- `ASSERT_AND_CRASH = True` — no more silent NaN guards
-- `USE_EMA = False` — disabled for recovery run
-- `USE_MIXUP = False`, `CUTMIX_ALPHA = 0.0` — disabled until implementation fixed
-- `USE_DET_SIGMOID_CONDITIONING = True` — sigmoid-bounded det_conf
-- Tier 2.4: Embedding cache pipeline (configured but not yet used)
-- Tier 2.5: ROI-centric detection (configured, `USE_ROI_DETECTOR = False`)
-- Tier 2.7: PSR transition prediction (configured, `USE_PSR_TRANSITION = False`)
-- Tier 2.8: K400 video stream (configured, `USE_K400_VIDEO_STREAM = False`)
-- Tier 3.9: Knowledge distillation (configured, `USE_DISTILLATION = False`)
-- Tier 3.11: Geometry-aware head pose (configured, `USE_GEO_HEAD_POSE = False`)
-- Tier 3.12: Task-aware sampling (configured, `USE_TASK_AWARE_SAMPLING = False`)
+**Recovery preset used in both runs:**
+```python
+'recovery': {
+    'dataset_mode': 'manual_only', 'backbone': 'convnext_tiny',
+    'use_tma_cell': True, 'use_temporal_bank': True,
+    'use_hand_film': True, 'benchmark_mode': False,
+    'batch_size': 1, 'grad_accum_steps': 4,
+    'zero_det_conf': True,     # ← THE DEADLOCK
+    'staged_training': False,
+    'mixed_precision': True,   # AMP for 12GB VRAM
+    'use_mixup': False, 'use_ema': False,
+},
+```
+- `EVAL_MAX_BATCHES = 75` (temp: limit val runtime)
+- `CUDA_MEMORY_FRACTION = 0.80` (temp: 12GB VRAM)
+- `ZERO_DET_CONF_FOR_RECOVERY = True` ← starves activity head
+- `--subset-ratio 0.25` (25% of training data)
+- `--reinit-heads` on Run 1 only
+
+**Evidence in logs/ directory:**
+- `recovery_train1_run1.log` — Run 1 (epochs 44–45, with --reinit-heads)
+- `recovery_train2_run2.log` — Run 2 (epochs 46–47, without --reinit-heads)
 
 ---
 
-## 7. What We Need From Opus
+## 7. What We Need From Opus v3
 
-We need Opus to analyze our entire codebase and produce **at least 5 detailed implementation guides** (MD files) that we can directly implement. The guides should cover:
+**The core question has changed.** We now know RC-25 was real (FPN reinit fixed step-0 saturation), but the recovery strategy has a **3-way coupling deadlock** that prevents any head from escaping zero.
 
-1. **How to fix the measurement chain** — the zero-GPU-cost experiments that tell us the truth
-2. **How to redesign the architecture** for maximum multi-task learning (we are open to changing backbone, heads, training flow — anything)
-3. **How to make each head actually learn** — specific loss functions, training strategies, data sampling
-4. **How to beat the paper baselines** — concrete strategies for each metric
-5. **How to make the unified model genuinely better than separate specialists** — the core thesis
+We need Opus to:
 
-We are NOT looking for incremental fixes. We want a fundamental redesign if needed. The goal is a model that LEARNS, not one that catastrophically fails.
+1. **Verify the deadlock diagnosis (RC-28)** — is the 3-way coupling (det→act via ZERO_DET_CONF, det→backbone via Focal Loss mass, backbone→PSR) the correct explanation?
+
+2. **Design an ESCAPE strategy** — how to break the deadlock so at least ONE head can reach non-zero metrics:
+   - Should we disable ZERO_DET_CONF_FOR_RECOVERY immediately?
+   - Should we train detection alone first (staged) before unfreezing activity/PSR?
+   - Should we use a higher LR for detection head (1e-3 vs 1e-4) to escape Focal Loss equilibrium faster?
+   - Should we reduce the negative anchor mass (e.g., use subsampling of negatives)?
+   - Should we use a different prior (pi=0.01 instead of pi=0.05)?
+
+3. **Prescribe concrete changes** — exact config values, training stages, LR schedule, number of epochs per stage
+
+4. **Is a fresh ImageNet-init retrain better?** — Or can we salvage the epoch-43 lineage with the right escape strategy?
+
+5. **Design a staged recovery protocol** — if coupled training can't work, what's the right sequence to bootstrap each head independently before joint training?

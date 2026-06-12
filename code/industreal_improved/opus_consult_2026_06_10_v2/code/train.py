@@ -67,23 +67,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.amp as amp
-from torch.amp.autocast_mode import autocast as _torch_autocast
-float16 = torch.float16
-float32 = torch.float32
-bfloat16 = torch.bfloat16
-uint8 = torch.uint8
-device = torch.device
-tensor = torch.tensor
-randperm = torch.randperm
-isfinite = torch.isfinite
-zeros_like = torch.zeros_like
-_torch_from_numpy = torch.from_numpy
-_torch_sigmoid = torch.sigmoid
-_torch_max = torch.max
-_torch_abs = torch.abs
-# AMP_DTYPE: float16 (default) or bfloat16 (set by --bf16 flag).
-# bf16 prevents overflow in the first backbone conv on 720x1280 inputs.
-AMP_DTYPE = float16
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts, LinearLR, SequentialLR
 from torch.optim.swa_utils import AveragedModel
@@ -154,6 +137,9 @@ CFG_EVAL_MAX_BATCHES = int(getattr(C, 'EVAL_MAX_BATCHES', 0))
 # Wrapped around evaluate_all() calls via try/finally in the epoch loop.
 IN_EVALUATION_PHASE = False
 
+# RC-25 guard: set True when --reinit-heads is active; gates step-0 assertions.
+_REINIT_HEADS_ACTIVE = False
+
 
 def _refresh_runtime_cfg() -> None:
     global CFG_TRAIN_DET, CFG_TRAIN_HEAD_POSE, CFG_TRAIN_ACT
@@ -187,9 +173,9 @@ def seed_everything(seed: int = C.SEED) -> None:
         pass
 
 
-def _prepare_images(images: torch.Tensor, device: device, training: bool = True) -> torch.Tensor:
+def _prepare_images(images: torch.Tensor, device: torch.device, training: bool = True) -> torch.Tensor:
     images = images.to(device, non_blocking=True)
-    if images.dtype == uint8:
+    if images.dtype == torch.uint8:
         images = images.float().div_(255.0)
 
         if bool(getattr(C, 'USE_RANDAUGMENT', False)) and training:
@@ -204,8 +190,8 @@ def _prepare_images(images: torch.Tensor, device: device, training: bool = True)
             except Exception:
                 pass
 
-        mean = tensor(C.IMAGENET_MEAN, device=device, dtype=images.dtype)
-        std = tensor(C.IMAGENET_STD, device=device, dtype=images.dtype)
+        mean = torch.tensor(C.IMAGENET_MEAN, device=device, dtype=images.dtype)
+        std = torch.tensor(C.IMAGENET_STD, device=device, dtype=images.dtype)
         if images.dim() == 5:
             mean = mean.view(1, 1, 3, 1, 1)
             std = std.view(1, 1, 3, 1, 1)
@@ -257,10 +243,7 @@ def _build_loader(
         shuffle=False,
         num_workers=num_workers,
         collate_fn=collate_fn,
-        # [MEMORY LEAK FIX] pin_memory=True + num_workers>0 holds a threading.Lock
-        # in the pin_memory_thread that prevents GC after eval (see lines 297-301).
-        # Only enable pin_memory when num_workers==0 to avoid the hang.
-        pin_memory=(C.PIN_MEMORY and C.NUM_WORKERS == 0),
+        pin_memory=C.PIN_MEMORY,
         drop_last=is_train,
         persistent_workers=bool(persistent),
         prefetch_factor=_eff_prefetch,
@@ -415,7 +398,7 @@ def mixup_activity(
     if same_label_mask.sum() > 0.5 * B * B:
         return outputs, targets
 
-    indices = randperm(B)
+    indices = torch.randperm(B)
 
     act_logits = outputs['act_logits']
     mixed_act_logits = lam * act_logits + (1 - lam) * act_logits[indices]
@@ -473,7 +456,7 @@ def cutmix_activity(
     y1 = np.clip(cy - cut_h // 2, 0, H)
     y2 = np.clip(cy + cut_h // 2, 0, H)
 
-    indices = randperm(B, device=images.device)
+    indices = torch.randperm(B, device=images.device)
 
     images_mixed = images.clone()
     images_mixed[:, :, y1:y2, x1:x2] = images[indices, :, y1:y2, x1:x2]
@@ -622,7 +605,7 @@ def _checkpoint_has_nan(model) -> bool:
     """Guard: check model tensors for NaN/Inf before saving."""
     for name, param in model.named_parameters():
         if param.requires_grad:
-            if not isfinite(param).all():
+            if not torch.isfinite(param).all():
                 logger.warning(
                     f'  [NaN_GUARD] Parameter {name} contains NaN/Inf -- '
                     f'skipping checkpoint save'
@@ -702,32 +685,30 @@ def _save_crash_recovery(tag: str = '') -> None:
                         model_state[k] = v
 
                 optimizer_state = {}
-                if optimizer is not None:
-                    for k, v in optimizer.state_dict().items():
-                        if isinstance(v, torch.Tensor):
+                for k, v in optimizer.state_dict().items():
+                    if isinstance(v, torch.Tensor):
+                        try:
+                            optimizer_state[k] = v.detach().cpu()
+                        except Exception:
                             try:
-                                optimizer_state[k] = v.detach().cpu()
+                                optimizer_state[k] = v.clone().cpu()
                             except Exception:
-                                try:
-                                    optimizer_state[k] = v.clone().cpu()
-                                except Exception:
-                                    optimizer_state[k] = v
-                        else:
-                            optimizer_state[k] = v
+                                optimizer_state[k] = v
+                    else:
+                        optimizer_state[k] = v
 
                 scaler_state = {}
-                if scaler is not None:
-                    for k, v in scaler.state_dict().items():
-                        if isinstance(v, torch.Tensor):
+                for k, v in scaler.state_dict().items():
+                    if isinstance(v, torch.Tensor):
+                        try:
+                            scaler_state[k] = v.detach().cpu()
+                        except Exception:
                             try:
-                                scaler_state[k] = v.detach().cpu()
+                                scaler_state[k] = v.clone().cpu()
                             except Exception:
-                                try:
-                                    scaler_state[k] = v.clone().cpu()
-                                except Exception:
-                                    scaler_state[k] = v
-                        else:
-                            scaler_state[k] = v
+                                scaler_state[k] = v
+                    else:
+                        scaler_state[k] = v
 
                 save_dict = {
                     'tag': tag,
@@ -858,9 +839,6 @@ def train_one_epoch(
     num_batches = 0
     nan_skips = 0
     total_steps = 0
-    # [PYRIGHT] Initialize loss_dict so it is always bound when the averaging
-    # loop at the end of the epoch body reads from it.
-    loss_dict: Dict[str, float] = {}
     seq_steps = 0
     t_start = time.time()
 
@@ -927,12 +905,6 @@ def train_one_epoch(
     for step, (images, targets) in enumerate(pbar):
         total_steps = step + 1
 
-        # [FIX 2026-06-09] Initialize loss_dict at top of loop — when all batches
-        # in the epoch are NaN-skipped (continue), loss_dict is never assigned
-        # in the loop body. The post-loop aggregation at line 1474 then crashes
-        # with UnboundLocalError. Initializing here keeps the local bound.
-        loss_dict: Dict[str, float] = {}
-
         # [FIX] Clamp Kendall log_var parameters to safe range BEFORE forward
         # so the gradient we compute this step is from bounded values, not
         # corrupted ones that escaped the previous step's clamp.
@@ -960,8 +932,8 @@ def train_one_epoch(
         # Catch NaN/Inf in images BEFORE the expensive CUDA forward pass.
         # A single bad frame can crash the GPU kernel silently.
         if step > 0:  # skip step 0 (first batch can have weird init values)
-            _finite, _idx = _torch_max(_torch_abs(images), dim=0)
-            _finite = isfinite(_finite).all()
+            _finite, _idx = torch.max(torch.abs(images), dim=0)
+            _finite = torch.isfinite(_finite).all()
             if not _finite:
                 nan_skips += 1
                 logger.warning(
@@ -977,13 +949,10 @@ def train_one_epoch(
         # Doc 01 §D.2: Alternate PSR sequence batch every seq_every steps
         is_seq_batch = (seq_iter is not None and step > 0 and step % seq_every == 0)
         if is_seq_batch:
-            assert seq_iter is not None, 'seq_iter is None in is_seq_batch branch'
             try:
                 images_seq, targets_seq = next(seq_iter)
             except StopIteration:
-                assert seq_loader is not None, 'seq_loader is None when seq_iter is exhausted'
                 seq_iter = iter(seq_loader)
-                assert seq_iter is not None, 'fresh seq_iter is None'
                 images_seq, targets_seq = next(seq_iter)
             B_seq = images_seq.shape[0]
             T_seq = images_seq.shape[1]
@@ -993,9 +962,8 @@ def train_one_epoch(
             clip_rgb_seq = targets_seq.get('clip_rgb')
             if clip_rgb_seq is not None:
                 clip_rgb_seq = clip_rgb_seq.to(device)
-            with _torch_autocast('cuda', enabled=C.MIXED_PRECISION, dtype=AMP_DTYPE):
-                video_ids_seq = [m['recording_id'] for m in targets_seq.get('metadata', [])]
-                outputs_seq = model(images_seq, video_ids=video_ids_seq, clip_rgb=clip_rgb_seq)
+            with amp.autocast('cuda', enabled=C.MIXED_PRECISION):
+                outputs_seq = model(images_seq, clip_rgb=clip_rgb_seq)
                 for _k in ('cls_preds', 'reg_preds', 'head_pose', 'psr_logits', 'act_logits'):
                     if _k in outputs_seq and isinstance(outputs_seq[_k], torch.Tensor):
                         outputs_seq[_k] = outputs_seq[_k].float()
@@ -1033,28 +1001,10 @@ def train_one_epoch(
                     # train_act=False, train_pose=False in this branch.
                 }
                 loss_seq, loss_dict_seq = criterion(fake_outputs, fake_targets)
-                # [FIX] __nan_detected__ sentinel check MUST run BEFORE the zeroing
-                # below — the line `loss_dict_seq = {k: 0.0 for k in loss_dict_seq}`
-                # wipes the original bool to 0.0, masking the signal. When
-                # __nan_detected__ is True, loss_seq may be finite (e.g. 1e-4) but
-                # with broken autograd (all-NaN → torch.where returns constant
-                # fallback with no grad_fn). scaler.scale(loss_seq).backward()
-                # would crash with "element 0 of tensors does not require grad".
-                if loss_dict_seq.get('__nan_detected__', False):
-                    nan_skips += 1
-                    optimizer.zero_grad(set_to_none=True)
-                    del outputs_seq, loss_seq, loss_dict_seq, fake_outputs, fake_targets
-                    torch.cuda.empty_cache()
-                    # restore criterion flags before continuing
-                    criterion.train_det = _saved_train_det
-                    criterion.train_pose = _saved_train_pose
-                    criterion.train_act = _saved_train_act
-                    criterion.train_psr = _saved_train_psr
-                    continue
                 loss_dict_seq = {k: 0.0 for k in loss_dict_seq}
                 # [FIX] isfinite check BEFORE assigning .item() to loss_dict_seq
                 # Prevents NaN contamination of loss_dict_seq when loss_seq is NaN
-                if not isfinite(loss_seq):
+                if not torch.isfinite(loss_seq):
                     loss_dict_seq['psr'] = 0.0
                     loss_dict_seq['total'] = 0.0
                 else:
@@ -1062,35 +1012,11 @@ def train_one_epoch(
                     loss_dict_seq['total'] = loss_seq.item()
 
                 loss_seq = loss_seq / float(accum_steps)
-            if not isfinite(loss_seq):
+            if not torch.isfinite(loss_seq):
                 nan_skips += 1
                 optimizer.zero_grad(set_to_none=True)
                 del outputs_seq, loss_seq, loss_dict_seq, fake_outputs, fake_targets
                 torch.cuda.empty_cache()
-                # [FIX 2026-06-10] Restore criterion flags — without this, an
-                # early exit here leaves train_det/pose/act=False PERMANENTLY
-                # and every later normal batch silently trains PSR only.
-                criterion.train_det  = _saved_train_det
-                criterion.train_pose = _saved_train_pose
-                criterion.train_act  = _saved_train_act
-                criterion.train_psr  = _saved_train_psr
-                continue
-            # [FIX-BELT] Belt-and-suspenders: even when loss_seq is finite, the autograd
-            # graph may be broken (e.g. PSR fully NaN-replaced via torch.where → all-1e-4
-            # leaf tensor with no grad_fn). Check requires_grad before backward() to
-            # avoid RuntimeError "element 0 of tensors does not require grad".
-            if not loss_seq.requires_grad:
-                nan_skips += 1
-                optimizer.zero_grad(set_to_none=True)
-                del outputs_seq, loss_seq, loss_dict_seq, fake_outputs, fake_targets
-                torch.cuda.empty_cache()
-                # [FIX 2026-06-10] Restore criterion flags — without this, an
-                # early exit here leaves train_det/pose/act=False PERMANENTLY
-                # and every later normal batch silently trains PSR only.
-                criterion.train_det  = _saved_train_det
-                criterion.train_pose = _saved_train_pose
-                criterion.train_act  = _saved_train_act
-                criterion.train_psr  = _saved_train_psr
                 continue
             scaler.scale(loss_seq).backward()
             for k in running:
@@ -1102,7 +1028,7 @@ def train_one_epoch(
                         running[k] += 0.0
             num_batches += 1
             pbar.set_postfix_str(
-                f"loss={loss_dict_seq.get('total', loss_seq.item() if isfinite(loss_seq) else 0.0):.3f} "
+                f"loss={loss_dict_seq.get('total', loss_seq.item() if torch.isfinite(loss_seq) else 0.0):.3f} "
                 f"det={loss_dict_seq.get('det', 0.0):.3f} "
                 f"pose={loss_dict_seq.get('head_pose', 0.0):.3f} "
                 f"act={loss_dict_seq.get('activity', 0.0):.3f} "
@@ -1140,57 +1066,18 @@ def train_one_epoch(
         targets['head_pose'] = targets['head_pose'].to(device)
         targets['psr_labels'] = targets['psr_labels'].to(device)
         targets['activity'] = targets['activity'].to(device)
-        hand_joints = targets.get('hand_joints', zeros_like(
+        hand_joints = targets.get('hand_joints', torch.zeros_like(
             images[:, :1, 0, 0]
         )).to(device, non_blocking=True)
 
-        with _torch_autocast('cuda', enabled=C.MIXED_PRECISION, dtype=AMP_DTYPE):
+        with amp.autocast('cuda', enabled=C.MIXED_PRECISION):
             clip_rgb = targets.get('clip_rgb')
             if clip_rgb is not None:
                 clip_rgb = clip_rgb.to(device)
-            video_ids = [m['recording_id'] for m in targets.get('metadata', [])]
-            outputs = model(images, video_ids=video_ids, clip_rgb=clip_rgb)
+            outputs = model(images, clip_rgb=clip_rgb)
         for _k in ('cls_preds', 'reg_preds', 'head_pose', 'psr_logits', 'act_logits'):
             if _k in outputs and isinstance(outputs[_k], torch.Tensor):
                 outputs[_k] = outputs[_k].float()
-
-        # Tier 2.4 — Embedding cache write (only first time / for cache rebuild).
-        # We use the model's det_conf + GAP features to populate the cache; the
-        # full forward of stage-2 temporal heads is skipped, replaced with the
-        # cached sequence training (CacheDataset) which is 100x faster.
-        if getattr(C, 'EMBEDDING_CACHE_WRITE_ENABLED', False):
-            cache = globals().get('_embedding_cache_writer', None)
-            if cache is not None:
-                with torch.no_grad():
-                    det_conf = outputs.get('det_conf')
-                    proj_feat = outputs.get('temporal_features')
-                    c5 = outputs.get('c5_raw')
-                    if det_conf is not None and proj_feat is not None and c5 is not None:
-                        rec_ids = targets.get('rec_ids') or ['__batch__'] * images.shape[0]
-                        for b in range(images.shape[0]):
-                            try:
-                                proj_b = proj_feat[b].mean(dim=0).cpu() if proj_feat.dim() == 3 else proj_feat[b].cpu()
-                                c5_gap_b = F.adaptive_avg_pool2d(c5[b:b+1], 1).flatten(1)[0].cpu()
-                                if 'pyramid' in outputs and 'p4' in outputs['pyramid']:
-                                    p4_gap_b = F.adaptive_avg_pool2d(
-                                        outputs['pyramid']['p4'][b:b+1], 1
-                                    ).flatten(1)[0].cpu()
-                                else:
-                                    p4_gap_b = F.adaptive_avg_pool2d(c5[b:b+1], 1).flatten(1)[0].cpu()
-                                cache.add_frame(
-                                    rec_id=rec_ids[b] if b < len(rec_ids) else f'batch_{b}',
-                                    proj_feat=proj_b,
-                                    det_conf=det_conf[b].cpu(),
-                                    c5_gap=c5_gap_b,
-                                    p4_gap=p4_gap_b,
-                                    activity=int(targets['activity'][b].item()),
-                                    psr=targets['psr_labels'][b].cpu(),
-                                    frame_idx=int(targets.get('frame_idx', [0] * images.shape[0])[b] if b < len(targets.get('frame_idx', [])) else 0),
-                                    camera=targets.get('camera_view', 'S0')[b] if isinstance(targets.get('camera_view'), list) and b < len(targets['camera_view']) else 'S0',
-                                )
-                            except Exception:
-                                # Cache write is best-effort; never break training
-                                pass
 
         # Doc 2 D.2: Alternate Mixup/CutMix each epoch
         # Activity is fixed in stage 2 (train_stage == 2) — skip MixUp to avoid
@@ -1205,6 +1092,37 @@ def train_one_epoch(
         # Doc 2 B.1: Staged loss computation
         criterion.set_epoch(epoch)
         loss, loss_dict = criterion(outputs, targets)
+
+        # ── Step-0 Assertion (RC-25 permanent guard) ──
+        if step == 0:
+            cls_loss_val = loss_dict.get('det_cls', loss_dict.get('cls', 0.0))
+            # [AUDIT FIX 2026-06-11] losses._s() maps NaN/inf to 0.0, so a
+            # det_cls of inf would EVADE the >= 1e4 check. Also fail on a
+            # non-finite total loss at step 0 — same disease, worse stage.
+            _step0_loss_finite = (
+                bool(torch.isfinite(loss).all()) if isinstance(loss, torch.Tensor)
+                else math.isfinite(float(loss))
+            )
+            if cls_loss_val >= 1e4 or not _step0_loss_finite:
+                raise RuntimeError(
+                    f'STEP-0 ASSERTION FAILED: cls_loss={cls_loss_val:.1f} '
+                    f'(>= 1e4 or sanitized-from-NaN), total_loss_finite={_step0_loss_finite}. '
+                    'Detection head is saturated or loss is non-finite at step 0. '
+                    'Reinit FPN+heads with --reinit-heads (or restart from ImageNet init) '
+                    'before retraining. (RC-25 guard)'
+                )
+            if _REINIT_HEADS_ACTIVE:
+                cls_logits = outputs.get('cls_preds')
+                if cls_logits is not None:
+                    cls_logits_median = cls_logits.detach().abs().median().item()
+                    if cls_logits_median >= 8.0:
+                        raise RuntimeError(
+                            f'STEP-0 ASSERTION FAILED: cls_logits.abs().median()={cls_logits_median:.3f} >= 8.0. '
+                            'FPN reinit insufficient — backbone weight norms may also need reinit. '
+                            '(RC-25 guard)'
+                        )
+                else:
+                    logger.warning('[STEP-0 ASSERT] cls_preds not found in outputs — skipping logit check.')
 
         # Override losses based on stage — keep `loss` as 0D tensor for NaN/isfinite guard
         if staged_training:
@@ -1241,8 +1159,8 @@ def train_one_epoch(
                     del images, targets
                     torch.cuda.empty_cache()
                     continue
-                loss = tensor(_det_val / float(accum_steps),
-                                     dtype=float32, device=device)
+                loss = torch.tensor(_det_val / float(accum_steps),
+                                     dtype=torch.float32, device=device)
                 loss.requires_grad_(True)
             elif stage == 2:
                 _det_val = float(loss_dict.get('det', 0.0))
@@ -1260,8 +1178,8 @@ def train_one_epoch(
                     del images, targets
                     torch.cuda.empty_cache()
                     continue
-                loss = tensor((_det_val + _hp_val) / float(accum_steps),
-                                     dtype=float32, device=device)
+                loss = torch.tensor((_det_val + _hp_val) / float(accum_steps),
+                                     dtype=torch.float32, device=device)
                 loss.requires_grad_(True)
             elif stage == 3:
                 _det_val = float(loss_dict.get('det', 0.0))
@@ -1283,11 +1201,11 @@ def train_one_epoch(
                     del images, targets
                     torch.cuda.empty_cache()
                     continue
-                loss = tensor((_det_val + _hp_val + _act_val + _psr_val) / float(accum_steps),
-                                     dtype=float32, device=device)
+                loss = torch.tensor((_det_val + _hp_val + _act_val + _psr_val) / float(accum_steps),
+                                     dtype=torch.float32, device=device)
                 loss.requires_grad_(True)
 
-        if not isfinite(loss):
+        if not torch.isfinite(loss):
             nan_skips += 1
             det_val = float(loss_dict.get('det', float('nan')))
             pose_val = float(loss_dict.get('head_pose', float('nan')))
@@ -1317,7 +1235,6 @@ def train_one_epoch(
         # values and surface the issue (logger.warning rate-limited to first 10) and abort
         # if the clamp trips more than 100 times (which would indicate real divergence).
         if criterion.use_kendall:
-            _kendall_nan_this_step = False
             for key in ['det', 'det_cls', 'det_reg', 'pose', 'head_pose', 'activity', 'psr']:
                 v = loss_dict.get(key)
                 if v is not None and not math.isfinite(v):
@@ -1328,8 +1245,7 @@ def train_one_epoch(
                     if criterion._kendall_clamp_logged < 10:
                         logger.warning(
                             f'  [KENDALL_NAN] {key}={v} at epoch {epoch} step {step + 1} '
-                            f'(clamp #{criterion._kendall_clamp_count}) — skipping this step '
-                            f'(autograd-graph would break if we substituted a constant)'
+                            f'(clamp #{criterion._kendall_clamp_count}) — replacing with 1e-4'
                         )
                         criterion._kendall_clamp_logged += 1
                     if criterion._kendall_clamp_count > 100:
@@ -1338,19 +1254,7 @@ def train_one_epoch(
                             f'(current #{criterion._kendall_clamp_count} at epoch {epoch} '
                             f'step {step + 1}) — divergence detected, aborting training'
                         )
-                    _kendall_nan_this_step = True
-            if _kendall_nan_this_step:
-                # SKIP the backward step entirely. A NaN component means the autograd
-                # graph for the rest of the loss is corrupted (the NaN propagates through
-                # the combine op). Substituting a Python float for the tensor breaks the
-                # graph entirely, leading to "element 0 of tensors does not require grad".
-                # Safest: zero grads, free memory, move on. The next step will start fresh.
-                nan_skips += 1
-                optimizer.zero_grad(set_to_none=True)
-                del outputs, loss, loss_dict
-                del images, targets
-                torch.cuda.empty_cache()
-                continue
+                    loss_dict[key] = 1e-4
             # [DEBUG] Per-batch loss + model output shape logging every _debug_interval batches
             if step > 0 and step % _debug_interval == 0:
                 # Log all individual loss components
@@ -1366,39 +1270,6 @@ def train_one_epoch(
                     f'psr={loss_dict["psr"]:.4f}'
                 )
             _debug_logged_once = True
-
-        # [FIX] __nan_detected__ sentinel from losses.py — if True, a NaN/inf loss
-        # was caught and replaced with a grad-safe fallback. We can still attempt
-        # backward() (the replacement preserves the autograd path via torch.where),
-        # but the gradient signal is weak for the replaced head, so we skip the step
-        # to avoid corrupting EMA with garbage gradients.
-        if loss_dict.get('__nan_detected__', False):
-            nan_skips += 1
-            optimizer.zero_grad(set_to_none=True)
-            if 'outputs' in dir():
-                del outputs
-            del loss, loss_dict
-            if 'images' in dir():
-                del images
-            del targets
-            torch.cuda.empty_cache()
-            continue
-
-        # [FIX-BELT] Belt-and-suspenders: even when loss is finite, the autograd
-        # graph may be broken (e.g. all-PSR-NaN replaced via torch.where → all-1e-4
-        # leaf tensor with no grad_fn chain to parameters). PyTorch backward() then
-        # raises "element 0 of tensors does not require grad". Skip if no grad_fn.
-        if not loss.requires_grad:
-            nan_skips += 1
-            optimizer.zero_grad(set_to_none=True)
-            if 'outputs' in dir():
-                del outputs
-            del loss, loss_dict
-            if 'images' in dir():
-                del images
-            del targets
-            torch.cuda.empty_cache()
-            continue
 
         scaler.scale(loss).backward()
 
@@ -1442,20 +1313,16 @@ def train_one_epoch(
 
         # [2% FIX] Enforce TRAIN_MAX_STEPS at batch granularity — BEFORE logging
         if getattr(C, 'TRAIN_MAX_STEPS', 0) > 0:
-            _gs = getattr(C, '_global_step', 0)
-            C._global_step = _gs + 1  # type: ignore[attr-defined]
-            if C._global_step >= C.TRAIN_MAX_STEPS:  # type: ignore[attr-defined]
-                logger.info(f'  [2pct] batch-level TRAIN_MAX_STEPS limit reached ({C._global_step}). Stopping.')  # type: ignore[attr-defined]
+            if not hasattr(C, '_global_step'):
+                C._global_step = 0
+            C._global_step += 1
+            if C._global_step >= C.TRAIN_MAX_STEPS:
+                logger.info(f'  [2pct] batch-level TRAIN_MAX_STEPS limit reached ({C._global_step}). Stopping.')
                 break
 
         # Doc 2 §B.3: Loss component breakdown (logged every 50 steps)
         if (step + 1) % 50 == 0:
-            _total_val = loss_dict.get('total', loss)
-            try:
-                _total_val = _total_val.item()  # type: ignore[union-attr]
-            except AttributeError:
-                pass
-            loss_dict['total'] = float(_total_val)  # type: ignore[assignment]
+            loss_dict['total'] = loss_dict.get('total', loss)
             _log_loss_component_breakdown(loss_dict, stage, epoch)
 
         pbar.set_postfix_str(
@@ -1557,8 +1424,8 @@ def train_one_epoch(
     avg = {}
     for k in running:
         v = running[k]
-        if k in loss_dict:  # type: ignore[used-before-def]
-            src = loss_dict.get(k, 0.0)  # type: ignore[used-before-def]
+        if k in loss_dict:
+            src = loss_dict.get(k, 0.0)
         else:
             src = v
         is_log_var = k.startswith('log_var_')
@@ -1640,175 +1507,6 @@ def _load_model_compat(model, state_dict):
         for comp, keys in sorted(missing_by_component.items()):
             logger.info(f'  MISSING ({comp}): {keys}')
     return result, skipped
-
-
-def _reinit_dead_heads(model):
-    """[Recovery 2026-06-09] Re-initialize the 3 collapsed heads (det/act/psr).
-
-    Crash forensics (see diag_collapse_3heads.py + diag_features_alive.py) showed:
-    - Detection cls_score: logits mean=-83, std=49 (all deeply negative) — bias 18x more
-      negative than init -4.6, so conv weights inside the head also collapsed.
-    - Activity classifier: predicts class 0 for 100% of frames, activity_classifier
-      INPUT is constant across images (L2 norm 243.39 ± 0.001) because det_conf
-      (the dominant signal) is itself constant. Re-init must include proj_features
-      + vit + cls_token, not just the final classifier.
-    - PSR output_heads: 2 unique binary patterns across 800 samples — input invariant.
-      Re-init output_heads with bias=-1.0 prior (FIX #4 from previous report).
-
-    What we keep: backbone (ConvNeXt-Tiny), backbone Film layers, head_pose_head.
-    What we re-init: det.cls_score, det.reg_pred, act.proj_features+vit+cls_token+
-    activity_classifier, psr.per_frame_mlp + output_heads.
-    """
-    import math
-    nn = torch.nn
-    init_count = {'det': 0, 'act': 0, 'psr': 0, 'other': 0}
-
-    # 1) DETECTION HEAD: cls_score (pi=0.01 prior) + reg_pred
-    # Try both attribute names (det_head and detection_head) since the codebase
-    # has historically used both. The current model uses `detection_head`.
-    for _det_attr in ('det_head', 'detection_head'):
-        if hasattr(model, _det_attr):
-            dh = getattr(model, _det_attr)
-            if hasattr(dh, 'cls_score'):
-                # [FIX 2026-06-10] pi=0.01 -> bias=-4.6 caused sigmoid saturation near 0
-                # initially, but after a few training steps the weights grew to compensate
-                # and pushed scores back to ~1.0 (overshoot). Use pi=0.05 (more reasonable
-                # prior for an active detection task) so the head starts in a healthier
-                # operating range.
-                pi = 0.05
-                nn.init.normal_(dh.cls_score.weight, std=0.01)
-                nn.init.constant_(dh.cls_score.bias, -math.log((1 - pi) / pi))
-                init_count['det'] += 1
-                logger.info(f'  [REINIT] {_det_attr}.cls_score: pi={pi}, bias={-math.log((1 - pi) / pi):.4f} (was pi=0.01)')
-            if hasattr(dh, 'reg_pred'):
-                nn.init.normal_(dh.reg_pred.weight, std=0.01)
-                nn.init.zeros_(dh.reg_pred.bias)
-                init_count['det'] += 1
-                logger.info(f'  [REINIT] {_det_attr}.reg_pred: std=0.01, bias=0')
-            # PATCH P3 [opus RC-14]: DetectionHead uses `cls_subnet`/`reg_subnet`
-            # (model.py:508-509), not `cls_tower`/`reg_tower`. The old name
-            # never matched, so the 8-conv trunks stayed at their collapsed
-            # state. With trunks collapsed, a fresh 0.01-std final conv on top
-            # yields the observed bimodal score distribution (median 1e-39,
-            # max 0.97).
-            for tower_attr in ('cls_subnet', 'reg_subnet'):
-                tw = getattr(dh, tower_attr, None)
-                if tw is not None:
-                    for m in tw.modules():
-                        if isinstance(m, nn.Conv2d):
-                            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                            if m.bias is not None:
-                                nn.init.zeros_(m.bias)
-                    init_count['det'] += 1
-                    logger.info(f'  [REINIT] {_det_attr}.{tower_attr}: Kaiming-normal + zero bias')
-            break  # only process first found
-
-    # 2) ACTIVITY HEAD: full re-init including proj_features, vit, cls_token, classifier.
-    if hasattr(model, 'activity_head'):
-        ah = model.activity_head
-        # proj_features Linear
-        if hasattr(ah, 'proj_features'):
-            nn.init.normal_(ah.proj_features.weight, std=0.02)
-            if ah.proj_features.bias is not None:
-                nn.init.zeros_(ah.proj_features.bias)
-            init_count['act'] += 1
-            logger.info('  [REINIT] act.proj_features: std=0.02, bias=0')
-        # cls_token (TimeSformer-style learnable)
-        if hasattr(ah, 'cls_token'):
-            nn.init.trunc_normal_(ah.cls_token, std=0.02)
-            init_count['act'] += 1
-            logger.info('  [REINIT] act.cls_token: trunc_normal std=0.02')
-        # ViT blocks (full reset)
-        if hasattr(ah, 'vit'):
-            for blk in ah.vit:
-                for m in blk.modules():
-                    if isinstance(m, nn.Linear):
-                        nn.init.xavier_uniform_(m.weight)
-                        if m.bias is not None:
-                            nn.init.zeros_(m.bias)
-                    elif isinstance(m, nn.LayerNorm):
-                        nn.init.ones_(m.weight)
-                        nn.init.zeros_(m.bias)
-            init_count['act'] += 1
-            logger.info(f'  [REINIT] act.vit ({len(ah.vit)} blocks): Xavier-uniform + LayerNorm reset')
-        # Final classifier (LayerNorm + Dropout + Linear)
-        if hasattr(ah, 'activity_classifier'):
-            for m in ah.activity_classifier.modules():
-                if isinstance(m, nn.Linear):
-                    nn.init.normal_(m.weight, std=0.01)
-                    if m.bias is not None:
-                        # [FIX 2026-06-10] Zero bias + sym init makes activity head
-                        # collapse to majority class (27) under any uncalibrated input.
-                        # Use small NEGATIVE bias so the head starts as "no class" and
-                        # must learn to activate specific classes via the weights.
-                        nn.init.constant_(m.bias, -0.5)
-                elif isinstance(m, nn.LayerNorm):
-                    nn.init.ones_(m.weight)
-                    nn.init.zeros_(m.bias)
-            init_count['act'] += 1
-            logger.info('  [REINIT] act.activity_classifier: std=0.01 + bias=-0.5 (was 0; majority-class collapse fix)')
-        # TCN (TemporalConvBlock)
-        if hasattr(ah, 'tcn'):
-            for m in ah.tcn.modules():
-                if isinstance(m, nn.Conv1d):
-                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                    if m.bias is not None:
-                        nn.init.zeros_(m.bias)
-                elif isinstance(m, nn.LayerNorm):
-                    nn.init.ones_(m.weight)
-                    nn.init.zeros_(m.bias)
-            init_count['act'] += 1
-            logger.info('  [REINIT] act.tcn: Kaiming-normal + LayerNorm reset')
-
-    # 3) PSR HEAD: per_frame_mlp + output_heads (11 separate tiny MLPs)
-    if hasattr(model, 'psr_head'):
-        ph = model.psr_head
-        if hasattr(ph, 'per_frame_mlp'):
-            for m in ph.per_frame_mlp.modules():
-                if isinstance(m, nn.Linear):
-                    nn.init.normal_(m.weight, std=0.02)
-                    if m.bias is not None:
-                        nn.init.zeros_(m.bias)
-            init_count['psr'] += 1
-            logger.info('  [REINIT] psr.per_frame_mlp: std=0.02, bias=0')
-        if hasattr(ph, 'output_heads'):
-            for h in ph.output_heads:
-                for m in h.modules():
-                    if isinstance(m, nn.Linear):
-                        nn.init.normal_(m.weight, std=0.01)
-                        if m.bias is not None:
-                            # [FIX 2026-06-10] bias=-1.0 -> sigmoid 0.27 (always-below 0.5
-                            # threshold) caused PSR head to always predict all-zeros. Use
-                            # bias=-0.2 -> sigmoid 0.45 (just below threshold) so the head
-                            # starts near decision boundary and can learn either direction.
-                            nn.init.constant_(m.bias, -0.2)
-            init_count['psr'] += 1
-            logger.info(f'  [REINIT] psr.output_heads ({len(ph.output_heads)} heads): std=0.01, bias=-0.2 (was -1.0; sigmoid 0.45 near threshold)')
-        # GAP convs for p3/p4/p5 if present
-        for gap_attr in ('gap_p3', 'gap_p4', 'gap_p5'):
-            g = getattr(ph, gap_attr, None)
-            if g is not None and isinstance(g, nn.Conv2d):
-                nn.init.kaiming_normal_(g.weight, mode='fan_out', nonlinearity='relu')
-                if g.bias is not None:
-                    nn.init.zeros_(g.bias)
-                init_count['psr'] += 1
-                logger.info(f'  [REINIT] psr.{gap_attr}: Kaiming-normal + zero bias')
-
-    # 4) ALSO RE-INIT CRITERION log_var (Kendall uncertainty) — old values were
-    # suboptimal because they were learned during collapse.
-    if hasattr(model, 'criterion') and hasattr(model.criterion, 'log_var'):
-        for name, p in model.criterion.named_parameters():
-            if 'log_var' in name and p.dim() == 0:
-                # Keep individual heads' log_var, just nudge toward neutral (0.0)
-                with torch.no_grad():
-                    p.data.fill_(0.0)
-                init_count['other'] += 1
-                logger.info(f'  [REINIT] criterion.{name}: reset to 0.0 (neutral)')
-
-    total = sum(init_count.values())
-    logger.info(f'  [REINIT] Total submodules re-initialized: {total} (det={init_count["det"]}, '
-                f'act={init_count["act"]}, psr={init_count["psr"]}, other={init_count["other"]})')
-    return init_count
 
 
 def _check_ram(label: str = '', warn_gb: float = 50.0) -> float:
@@ -1909,7 +1607,7 @@ def _on_stage_transition(
     current_stage: int,
     epoch: int,
     backbone_type: str,
-    stage3_warmup_state: Optional[Dict] = None,
+    stage3_warmup_state: dict = None,
 ) -> None:
     """Handle stage transition at epoch boundary.
 
@@ -1960,6 +1658,150 @@ def _on_stage_transition(
                    stage3_warmup_state['warmup_epochs'],
                     stage3_warmup_state['param_group_idx'])
             )
+
+
+def _reinit_dead_heads(model):
+    """Re-initialize the 3 collapsed heads (det/act/psr) + FPN from documented priors.
+
+    Keeps backbone, pose heads, and pretrained ConvNeXt weights intact.
+    Used to recover from head collapse without losing learned backbone features.
+
+    RC-14 fix: cls_tower/reg_tower don't exist — use cls_subnet/reg_subnet.
+    RC-25 fix: also re-init FPN modules (lateral_c3/c4/c5, smooth_p3/p4/p5,
+    p6_conv, p7_conv) to fix feature-magnitude explosion at step 0.
+    """
+    import math
+    nn = torch.nn
+    init_count = {'det': 0, 'act': 0, 'psr': 0, 'fpn': 0, 'other': 0}
+
+    # 0) FPN: 8 Conv2d modules (RC-25 fix — feature-magnitude explosion)
+    fpn_attrs = [
+        'lateral_c3', 'lateral_c4', 'lateral_c5',
+        'smooth_p3', 'smooth_p4', 'smooth_p5',
+        'p6_conv', 'p7_conv',
+    ]
+    fpn_reinit = 0
+    for attr in fpn_attrs:
+        m = getattr(model.fpn, attr, None)
+        if m is not None and isinstance(m, nn.Conv2d):
+            nn.init.kaiming_uniform_(m.weight, a=1)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+            fpn_reinit += 1
+    assert fpn_reinit == 8, f'FPN reinit: expected 8 modules, got {fpn_reinit}'
+    init_count['fpn'] = fpn_reinit
+    logger.info(f'  [REINIT] fpn: {fpn_reinit}/8 Conv2d modules (Kaiming-uniform a=1 + zero bias)')
+
+    # 1) DETECTION HEAD: cls_score (pi=0.05 prior) + reg_pred + cls_subnet + reg_subnet
+    for _det_attr in ('det_head', 'detection_head'):
+        if hasattr(model, _det_attr):
+            dh = getattr(model, _det_attr)
+            if hasattr(dh, 'cls_score'):
+                pi = 0.05
+                nn.init.normal_(dh.cls_score.weight, std=0.01)
+                nn.init.constant_(dh.cls_score.bias, -math.log((1 - pi) / pi))
+                init_count['det'] += 1
+                logger.info(f'  [REINIT] {_det_attr}.cls_score: pi={pi}, bias={-math.log((1 - pi) / pi):.4f}')
+            if hasattr(dh, 'reg_pred'):
+                nn.init.normal_(dh.reg_pred.weight, std=0.01)
+                nn.init.zeros_(dh.reg_pred.bias)
+                init_count['det'] += 1
+                logger.info(f'  [REINIT] {_det_attr}.reg_pred: std=0.01, bias=0')
+            # RC-14 fix: cls_subnet/reg_subnet (not cls_tower/reg_tower)
+            for subnet_attr in ('cls_subnet', 'reg_subnet'):
+                sw = getattr(dh, subnet_attr, None)
+                if sw is not None:
+                    for m in sw.modules():
+                        if isinstance(m, nn.Conv2d):
+                            nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                            if m.bias is not None:
+                                nn.init.zeros_(m.bias)
+                    init_count['det'] += 1
+                    logger.info(f'  [REINIT] {_det_attr}.{subnet_attr}: Kaiming-normal + zero bias')
+            break
+
+    # 2) ACTIVITY HEAD: full re-init
+    if hasattr(model, 'activity_head'):
+        ah = model.activity_head
+        if hasattr(ah, 'proj_features'):
+            nn.init.normal_(ah.proj_features.weight, std=0.02)
+            if ah.proj_features.bias is not None:
+                nn.init.zeros_(ah.proj_features.bias)
+            init_count['act'] += 1
+            logger.info('  [REINIT] act.proj_features: std=0.02, bias=0')
+        if hasattr(ah, 'cls_token'):
+            nn.init.trunc_normal_(ah.cls_token, std=0.02)
+            init_count['act'] += 1
+            logger.info('  [REINIT] act.cls_token: trunc_normal std=0.02')
+        if hasattr(ah, 'vit'):
+            for blk in ah.vit:
+                for m in blk.modules():
+                    if isinstance(m, nn.Linear):
+                        nn.init.xavier_uniform_(m.weight)
+                        if m.bias is not None:
+                            nn.init.zeros_(m.bias)
+                    elif isinstance(m, nn.LayerNorm):
+                        nn.init.ones_(m.weight)
+                        nn.init.zeros_(m.bias)
+            init_count['act'] += 1
+            logger.info(f'  [REINIT] act.vit ({len(ah.vit)} blocks): Xavier-uniform + LayerNorm reset')
+        if hasattr(ah, 'activity_classifier'):
+            for m in ah.activity_classifier.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.normal_(m.weight, std=0.01)
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, -0.5)
+                elif isinstance(m, nn.LayerNorm):
+                    nn.init.ones_(m.weight)
+                    nn.init.zeros_(m.bias)
+            init_count['act'] += 1
+            logger.info('  [REINIT] act.activity_classifier: std=0.01 + bias=-0.5')
+        if hasattr(ah, 'tcn'):
+            for m in ah.tcn.modules():
+                if isinstance(m, nn.Conv1d):
+                    nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+                elif isinstance(m, nn.LayerNorm):
+                    nn.init.ones_(m.weight)
+                    nn.init.zeros_(m.bias)
+            init_count['act'] += 1
+            logger.info('  [REINIT] act.tcn: Kaiming-normal + LayerNorm reset')
+
+    # 3) PSR HEAD
+    if hasattr(model, 'psr_head'):
+        ph = model.psr_head
+        if hasattr(ph, 'per_frame_mlp'):
+            for m in ph.per_frame_mlp.modules():
+                if isinstance(m, nn.Linear):
+                    nn.init.normal_(m.weight, std=0.02)
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+            init_count['psr'] += 1
+            logger.info('  [REINIT] psr.per_frame_mlp: std=0.02, bias=0')
+        if hasattr(ph, 'output_heads'):
+            for h in ph.output_heads:
+                for m in h.modules():
+                    if isinstance(m, nn.Linear):
+                        nn.init.normal_(m.weight, std=0.01)
+                        if m.bias is not None:
+                            nn.init.constant_(m.bias, -0.2)
+            init_count['psr'] += 1
+            logger.info(f'  [REINIT] psr.output_heads ({len(ph.output_heads)} heads): std=0.01, bias=-0.2')
+        for gap_attr in ('gap_p3', 'gap_p4', 'gap_p5'):
+            g = getattr(ph, gap_attr, None)
+            if g is not None and isinstance(g, nn.Conv2d):
+                nn.init.kaiming_normal_(g.weight, mode='fan_out', nonlinearity='relu')
+                if g.bias is not None:
+                    nn.init.zeros_(g.bias)
+                init_count['psr'] += 1
+                logger.info(f'  [REINIT] psr.{gap_attr}: Kaiming-normal + zero bias')
+
+    total = sum(init_count.values())
+    logger.info(f'  [REINIT] Total submodules re-initialized: {total} '
+                f'(det={init_count["det"]}, act={init_count["act"]}, '
+                f'psr={init_count["psr"]}, fpn={init_count["fpn"]}, other={init_count["other"]})')
+    return init_count
 
 
 def _log_loss_component_breakdown(
@@ -2079,23 +1921,12 @@ def _check_per_class_activity_sanity(
     if epoch % 10 != 0 or epoch < int(getattr(C, 'STAGE1_EPOCHS', 5)) + int(getattr(C, 'STAGE2_EPOCHS', 10)):
         return
 
-    # [FIX 2026-06-10] report_per_class_accuracy expects a 2-D confusion
-    # matrix (it does cm.sum(axis=1)). Passing the 1-D act_per_class_acc
-    # list raised numpy AxisError at evaluate.py report_per_class_accuracy
-    # and KILLED the whole run after every eval at epoch % 10 == 0,
-    # before latest.pth was written (see train_digest.log tracebacks).
-    cm = val_metrics.get('act_confusion_matrix', None)
-    if cm is None:
-        cm = val_metrics.get('act_per_class_acc', [])  # 1-D fallback; evaluate.py now accepts it
-    if cm is None or len(cm) == 0:
+    per_class_acc = val_metrics.get('act_per_class_acc', [])
+    if not per_class_acc:
         return
 
-    try:
-        _rpca = getattr(_evaluate_module, 'report_per_class_accuracy', None)
-        if _rpca is not None:
-            _rpca(cm, C.ACT_CLASS_NAMES, k=5)
-    except Exception as exc:  # logging helper must NEVER abort training
-        logger.warning(f'  [SANITY] per-class activity report failed (non-fatal): {exc}')
+    from evaluate import report_per_class_accuracy
+    report_per_class_accuracy(per_class_acc, C.ACT_CLASS_NAMES, k=5)
 
 
 def _get_ema_decay(epoch: int) -> float:
@@ -2115,7 +1946,7 @@ def _get_ema_decay(epoch: int) -> float:
 def _check_psr_prevalence_sanity(
     model: nn.Module,
     loader: DataLoader,
-    device: device,
+    device: torch.device,
     epoch: int,
 ) -> None:
     """
@@ -2134,9 +1965,8 @@ def _check_psr_prevalence_sanity(
         with torch.no_grad():
             for images, targets in tqdm(loader, desc='PSR prevalence check', leave=False):
                 images = _prepare_images(images, device, training=False)
-                video_ids = [m['recording_id'] for m in targets.get('metadata', [])]
-                outputs = model(images, video_ids=video_ids)
-                preds = _torch_sigmoid(outputs['psr_logits'])
+                outputs = model(images)
+                preds = torch.sigmoid(outputs['psr_logits'])
                 all_preds.append(preds.cpu().numpy())
                 all_labels.append(targets['psr_labels'].numpy())
 
@@ -2167,7 +1997,7 @@ def _compare_raw_vs_ema(
     model: nn.Module,
     criterion: nn.Module,
     val_ds,
-    device: device,
+    device: torch.device,
     val_metrics: Dict,
     epoch: int,
     ckpt_dir: Path,
@@ -2213,7 +2043,7 @@ def _compare_raw_vs_ema(
         logger.warning(f'  [Stage 3] Raw-vs-EMA comparison failed: {exc}')
 
 
-def _apply_runtime_safety(device: device) -> None:
+def _apply_runtime_safety(device: torch.device) -> None:
     nice_value = int(getattr(C, 'TRAIN_NICE', 0))
     if nice_value > 0:
         try:
@@ -2225,11 +2055,11 @@ def _apply_runtime_safety(device: device) -> None:
     thread_cap = int(getattr(C, 'TORCH_NUM_THREADS', 0))
     if thread_cap > 0:
         try:
-            torch.set_num_threads(thread_cap)  # type: ignore[attr-defined]
-            torch.set_num_interop_threads(max(1, min(4, thread_cap)))  # type: ignore[attr-defined]
+            torch.set_num_threads(thread_cap)
+            torch.set_num_interop_threads(max(1, min(4, thread_cap)))
             logger.info(
-                f'Torch CPU threads capped: intraop={torch.get_num_threads()} '  # type: ignore[attr-defined]
-                f'interop={torch.get_num_interop_threads()}'  # type: ignore[attr-defined]
+                f'Torch CPU threads capped: intraop={torch.get_num_threads()} '
+                f'interop={torch.get_num_interop_threads()}'
             )
         except RuntimeError as exc:
             logger.warning(f'Could not update torch thread limits: {exc}')
@@ -2295,10 +2125,10 @@ def main(args):
     # This custom handler flushes after EVERY write() call.
     class _FlushingFileHandler(logging.FileHandler):
         def emit(self, record):
-            super(_FlushingFileHandler, self).emit(record)
+            super().emit(record)
             self.flush()   # force write to disk immediately
         def write(self, msg):
-            super(_FlushingFileHandler, self).write(msg)  # type: ignore[safe-super]
+            super().write(msg)
             self.flush()   # force write on every chunk
 
     _train_log_path = log_dir / 'train.log'
@@ -2311,7 +2141,7 @@ def main(args):
     _root_logger.addHandler(logging.StreamHandler())   # stdout still goes to train_log_YYYYMMDD.log
     # --------------------------------------------------------
 
-    device = device('cuda' if torch.cuda.is_available() else 'cpu')  # type: ignore[has-type]
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     logger.info(f'Device: {device}')
     if torch.cuda.is_available():
         logger.info(f'GPU : {torch.cuda.get_device_name()}')
@@ -2320,22 +2150,6 @@ def main(args):
 
     _apply_runtime_safety(device)
 
-    # Tier 2.4 — Embedding cache initialization
-    global _embedding_cache_writer
-    _embedding_cache_writer = None
-    if getattr(C, 'EMBEDDING_CACHE_WRITE_ENABLED', False):
-        try:
-            from src.training.embedding_cache import EmbeddingCache
-            _embedding_cache_writer = EmbeddingCache(
-                cache_dir=getattr(C, 'EMBEDDING_CACHE_DIR', 'runs/embedding_cache'),
-                mode='write',
-            ).open()
-            logger.info('[Tier 2.4] Embedding cache writer opened at %s',
-                        getattr(C, 'EMBEDDING_CACHE_DIR', 'runs/embedding_cache'))
-        except Exception as _exc:
-            logger.warning('[Tier 2.4] Could not open embedding cache writer: %s', _exc)
-            _embedding_cache_writer = None
-
     logger.info(
         f'Ablation: TRAIN_DET={CFG_TRAIN_DET}  '
         f'TRAIN_HEAD_POSE={CFG_TRAIN_HEAD_POSE}  '
@@ -2343,20 +2157,6 @@ def main(args):
         f'TRAIN_PSR={CFG_TRAIN_PSR}  '
         f'USE_KENDALL={CFG_USE_KENDALL}'
     )
-
-    # Tier 2.6 — Synthetic data detection pretraining (run before main training)
-    if bool(getattr(C, 'SYNTHETIC_PRETRAIN_ENABLED', False)) and getattr(C, 'SYNTHETIC_DATA_DIR', None):
-        try:
-            from src.training.pretrain_synthetic import main as _pretrain_main
-            logger.info('[Tier 2.6] Running synthetic detection pretrain first')
-            import argparse as _argparse
-            _pretrain_args = _argparse.Namespace(
-                max_recordings=getattr(args, 'max_recordings', None),
-                resume=None,
-            )
-            _pretrain_main(_pretrain_args)
-        except Exception as _exc:
-            logger.warning('[Tier 2.6] Synthetic pretrain failed: %s', _exc)
 
     # Debug mode overrides
     max_recordings_train = None
@@ -2513,7 +2313,7 @@ def main(args):
     criterion.set_class_counts(class_counts)
 
     if hasattr(train_ds, 'psr_prevalence'):
-        psr_prev = _torch_from_numpy(train_ds.psr_prevalence)
+        psr_prev = torch.from_numpy(train_ds.psr_prevalence)
         criterion.set_psr_class_counts(psr_prev)
         logger.info(
             f'PSR per-component prevalence: '
@@ -2590,7 +2390,7 @@ def main(args):
         ]
         if loss_params:
             param_groups.append({'params': loss_params, 'lr': head_lr})
-        optimizer = Lion(param_groups, weight_decay=C.WEIGHT_DECAY * 3)  # type: ignore[possibly-unbound]
+        optimizer = Lion(param_groups, weight_decay=C.WEIGHT_DECAY * 3)
         logger.info('Optimizer: Lion (backbone=0.1×, heads=1×, act/psr=1×, bias=0.3×)')
     else:
         param_groups = [
@@ -2658,22 +2458,10 @@ def main(args):
         scheduler = SequentialLR(optimizer, [warmup, cosine],
                                milestones=[C.WARMUP_EPOCHS])
 
-    scaler = amp.GradScaler('cuda', enabled=C.MIXED_PRECISION)  # type: ignore[attr-defined]
+    scaler = amp.GradScaler('cuda', enabled=C.MIXED_PRECISION)
 
     start_epoch = 0
     best_metric = 0.0
-
-    # TIER 1.3 — Per-task best metric tracking and checkpoint selection.
-    # The combined metric is mathematically pose-only when det/act/psr=0
-    # (RC-20). Per-task bests save checkpoints the paper tables need.
-    _per_task_best = {
-        'det_mAP50': 0.0,
-        'act_f1': 0.0,
-        'psr_f1': 0.0,
-        'pose_mae': float('inf'),  # lower is better
-    }
-    _per_task_ckpt_dir = ckpt_dir / 'per_task'
-    _per_task_ckpt_dir.mkdir(parents=True, exist_ok=True)
     patience_counter = 0
 
     videomae_warmup_state = {
@@ -2716,57 +2504,6 @@ def main(args):
                 f'{load_result.missing_keys}'
             )
 
-        # FIX [RECOVERY 2026-06-09]: Optionally re-initialize the 3 dead heads
-        # (det, act, psr) from their documented priors while keeping the backbone,
-        # pose head, and pretrained ConvNeXt weights intact. Used to recover from
-        # head collapse (all 3 heads producing constant output) without losing
-        # the learned backbone features.
-        _reinit_param_names: set = set()  # type: ignore[assignment]
-        if getattr(args, 'reinit_heads', False):
-            logger.warning(
-                '  [REINIT-HEADS] Flag --reinit-heads set: re-initializing 3 '
-                'dead heads (det/act/psr) from priors. Backbone + pose + pretrained '
-                'ConvNeXt weights are PRESERVED.'
-            )
-            reinit_counts = _reinit_dead_heads(model)
-            logger.warning(
-                f'  [REINIT-HEADS] Re-initialized submodules: {reinit_counts}'
-            )
-            # Re-zero EMA shadow for re-initialized params so EMA tracks fresh weights.
-            if ema is not None and ema.shadow:
-                import re as _re
-                for _tag, _pfx in [
-                    ('det', 'det_head.'),
-                    ('act', 'activity_head.'),
-                    ('psr', 'psr_head.'),
-                ]:
-                    if reinit_counts.get(_tag, 0) > 0:
-                        for _n, _p in model.named_parameters():
-                            if _n.startswith(_pfx):
-                                _reinit_param_names.add(_n)
-                _ema_reset = 0
-                _live_params = dict(model.named_parameters())
-                for _n in list(ema.shadow.keys()):
-                    if any(_n.startswith(p) or _n == p for p in _reinit_param_names) or \
-                       any(_n.startswith(_pfx) for _pfx in ('det_head.', 'detection_head.', 'activity_head.', 'psr_head.')):
-                        if _n in _live_params:
-                            # PATCH P1 [opus RC-13]: re-anchor EMA shadow to the
-                            # freshly reinit'd parameter values, not to the old
-                            # (collapsed) shadow.
-                            ema.shadow[_n] = _live_params[_n].data.clone().detach()
-                        else:
-                            # Buffer (e.g. BN running stats) — leave alone.
-                            ema.shadow[_n] = ema.shadow[_n].clone().detach()
-                        _ema_reset += 1
-                logger.warning(
-                    f'  [REINIT-HEADS] EMA shadow reset for {_ema_reset} head tensors '
-                    '(re-tracks fresh init).'
-                )
-            logger.warning(
-                '  [REINIT-HEADS] Heads reset. Continuing training to let them '
-                're-learn from alive backbone features.'
-            )
-
         # Restore EMA shadow if present in checkpoint
         # FIX: Accept both 'ema_shadow' (named checkpoints) and 'ema_state' (crash_recovery)
         ema_key = 'ema_state' if 'ema_state' in ckpt else 'ema_shadow'
@@ -2777,22 +2514,6 @@ def main(args):
                 if k in ema.shadow
             })
             logger.info('  EMA shadow weights restored from checkpoint.')
-
-        # PATCH P1 [opus RC-13]: After the checkpoint restore, re-anchor the EMA
-        # shadow to the freshly-reinit'd parameter values for any reinit'd
-        # prefix. Without this, the restored shadow reverts the reinit.
-        if ema is not None and ema.shadow and _reinit_param_names:
-            _live_params = dict(model.named_parameters())
-            _re_anchored = 0
-            for _n in list(ema.shadow.keys()):
-                if _n in _reinit_param_names and _n in _live_params:
-                    ema.shadow[_n] = _live_params[_n].data.clone().detach()
-                    _re_anchored += 1
-            if _re_anchored:
-                logger.info(
-                    f'  [REINIT-HEADS] Re-anchored EMA shadow to fresh reinit values '
-                    f'for {_re_anchored} reinit\'d tensors (post-restore).'
-                )
 
         try:
             # FIX: Accept 'optimizer' (named checkpoints), 'optimizer_state' (crash_recovery), 'optimizer_state_dict' (crash_recovery v2)
@@ -2807,34 +2528,6 @@ def main(args):
                 f'  Could not restore optimizer state ({e}). '
                 f'Re-initialized -- LR schedule continues.'
             )
-
-        # PATCH R1 [opus 2026-06-10]: When --reinit-heads + --reset-optimizer-for-reinit
-        # are both set, zero Adam m/v (exp_avg / exp_avg_sq) for the reinit'd head
-        # params. Without this, the optimizer's stale momentum from the collapsed
-        # weights causes the first Adam step on fresh reinit weights to explode
-        # (verified: det_cls_loss=197844 at step 0 in 5pct/bs=2 retrain, heads
-        # collapsed FURTHER by end of epoch: act→1 class, PSR→1 pattern, det→flat).
-        if getattr(args, 'reinit_heads', False) and getattr(args, 'reset_optimizer_for_reinit', False):
-            _opt_state = optimizer.state
-            _reset_state_count = 0
-            for _n, _p in model.named_parameters():
-                if not any(_n.startswith(p) for p in ('detection_head.', 'det_head.',
-                                                       'activity_head.', 'psr_head.')):
-                    continue
-                if _n in _opt_state:
-                    _st = _opt_state[_n]
-                    if isinstance(_st, dict):
-                        if 'exp_avg' in _st:
-                            _st['exp_avg'].zero_()
-                        if 'exp_avg_sq' in _st:
-                            _st['exp_avg_sq'].zero_()
-                        # AdamW may also have 'step' — leave alone
-                        _reset_state_count += 1
-            if _reset_state_count:
-                logger.warning(
-                    f'  [REINIT-HEADS] Zeroed Adam m/v for {_reset_state_count} head '
-                    'tensors (stale-momentum collapse guard).'
-                )
         try:
             # FIX: Accept 'scheduler' (named checkpoint), 'lr_scheduler_state' (crash_recovery), 'scheduler_state_dict'
             sched_state = ckpt.get('scheduler_state_dict', ckpt.get('scheduler', ckpt.get('lr_scheduler_state', {})))
@@ -2901,21 +2594,6 @@ def main(args):
                 '  Reset Kendall log_var params (early epoch resume): '
                 'det=0.0  head_pose=-1.0  act=0.0  psr=0.0'
             )
-        elif getattr(args, 'reset_kendall_log_vars', False):
-            # PATCH R2 [opus 2026-06-10]: When --reset-kendall-log-vars is set,
-            # force-reset log_vars to neutral even on late-epoch resume. The
-            # epoch-43 log_vars were learned against a collapsed state and will
-            # unbalance the loss for fresh reinit heads.
-            with torch.no_grad():
-                criterion.log_var_det.fill_(0.0)
-                criterion.log_var_pose.fill_(-1.0)
-                criterion.log_var_act.fill_(0.0)
-                criterion.log_var_psr.fill_(0.0)
-            logger.warning(
-                '  [REINIT-HEADS] Reset Kendall log_vars to neutral '
-                '(forced via --reset-kendall-log-vars): '
-                'det=0.0  head_pose=-1.0  act=0.0  psr=0.0'
-            )
         else:
             logger.info(
                 f'  Keeping learned Kendall log_var params '
@@ -2925,6 +2603,92 @@ def main(args):
                 f'act={criterion.log_var_act.item():.3f}  '
                 f'psr={criterion.log_var_psr.item():.3f}'
             )
+
+    # ── RC-25 Recovery: Re-initialize dead heads + FPN ──
+    if getattr(args, 'reinit_heads', False):
+        global _REINIT_HEADS_ACTIVE
+        _REINIT_HEADS_ACTIVE = True
+        logger.warning(
+            '  [REINIT-HEADS] Flag --reinit-heads set: re-initializing 3 '
+            'dead heads (det/act/psr) + FPN from priors. Backbone + pose + '
+            'pretrained ConvNeXt weights are PRESERVED.'
+        )
+        reinit_counts = _reinit_dead_heads(model)
+        logger.warning(
+            f'  [REINIT-HEADS] Re-initialized submodules: {reinit_counts}'
+        )
+        # Re-anchor EMA shadow to fresh reinit weights
+        if ema is not None and ema.shadow:
+            import re as _re
+            _head_prefixes = ('det_head.', 'detection_head.', 'activity_head.',
+                              'psr_head.', 'fpn.')
+            _ema_reset = 0
+            for _n, _p in model.named_parameters():
+                if any(_n.startswith(pf) for pf in _head_prefixes):
+                    ema.shadow[_n] = _p.data.clone().detach().to(ema.device if ema.device else _p.device)
+                    _ema_reset += 1
+            logger.warning(
+                f'  [REINIT-HEADS] EMA shadow re-anchored for {_ema_reset} head/fpn tensors.'
+            )
+        # Reset Kendall log_vars to neutral for recovery
+        with torch.no_grad():
+            criterion.log_var_det.fill_(0.0)
+            criterion.log_var_act.fill_(0.0)
+            criterion.log_var_psr.fill_(0.0)
+        logger.info('  [REINIT-HEADS] Kendall log_vars reset to neutral (det=act=psr=0.0).')
+
+    # ── Step-0 Assertion (RC-25 gate) ──
+    # [AUDIT FIX 2026-06-11] The previous version had two fatal flaws:
+    # (1) `sample_batch['image']` — collate_fn returns a TUPLE (images, targets),
+    #     so the probe raised TypeError on every run; and
+    # (2) the blanket `except Exception` wrapped the probe's own RuntimeError,
+    #     downgrading the assertion to a warning. The guard could never fail a
+    #     run. Probe-infrastructure failures now crash loudly too: a guard that
+    #     silently no-ops is how RC-25 survived three investigation rounds.
+    if getattr(args, 'reinit_heads', False):
+        logger.info('[STEP-0 ASSERT] Running step-0 diagnostic forward pass...')
+        model.eval()
+        _probe_median = None
+        try:
+            try:
+                _probe_images, _probe_targets = next(iter(train_loader))
+            except StopIteration:
+                raise RuntimeError(
+                    '[STEP-0 ASSERT] train_loader is EMPTY — cannot probe. '
+                    'Check subset_ratio / dataset paths before training.'
+                )
+            # Same preprocessing as the training loop (uint8 -> float,
+            # ImageNet normalize). Raw uint8 input would distort the
+            # feature-magnitude measurement this guard exists to make.
+            _probe_images = _prepare_images(_probe_images[:1], device, training=False)
+            _probe_clip = None
+            if isinstance(_probe_targets, dict):
+                _probe_clip = _probe_targets.get('clip_rgb')
+                if _probe_clip is not None and _probe_clip.numel() > 0:
+                    _probe_clip = _probe_clip[:1].to(device)
+                else:
+                    _probe_clip = None
+            with torch.no_grad():
+                _probe_out = model(_probe_images, clip_rgb=_probe_clip)
+            _probe_median = _probe_out['cls_preds'].detach().abs().median().item()
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                f'[STEP-0 ASSERT] diagnostic forward pass failed: {exc!r}. '
+                'Fix the probe — do not train without this RC-25 gate.'
+            ) from exc
+        finally:
+            model.train()
+        logger.info(f'  [STEP-0 ASSERT] cls_logits.abs().median() = {_probe_median:.3f}')
+        if _probe_median >= 8.0:
+            raise RuntimeError(
+                f'STEP-0 ASSERTION FAILED: cls_logits.abs().median()={_probe_median:.3f} >= 8.0. '
+                'FPN/backbone feature magnitude still saturating detection head. '
+                'Run D7-D9 diagnostics then reinit FPN (or restart from ImageNet init) '
+                'before retraining.'
+            )
+        logger.info('  [STEP-0 ASSERT] PASSED: logit scale in healthy range (< 8).')
 
     log_file = open(log_dir / 'metrics.jsonl', 'a')
 
@@ -2953,8 +2717,7 @@ def main(args):
     # FIX: If resuming mid-epoch, pass resume_batch to train_one_epoch so it can
     # fast-forward the DataLoader iterator without re-computing forward passes.
     # _resume_batch_info is set in the resume block above.
-    _resume_batch_info: list = [0]  # type: ignore[assignment]
-    _resume_batch = _resume_batch_info[0] if '_resume_batch_info' in dir() and _resume_batch_info[0] > 0 else 0  # type: ignore[possibly-unbound]
+    _resume_batch = _resume_batch_info[0] if '_resume_batch_info' in dir() and _resume_batch_info[0] > 0 else 0
 
     try:
         _train_start_epoch = _override_start_epoch if _override_start_epoch is not None else start_epoch
@@ -2971,24 +2734,18 @@ def main(args):
             )
         for epoch in range(_train_start_epoch, C.EPOCHS):
             logger.info(f'\n--- Epoch {epoch}/{C.EPOCHS - 1} ---')
-            if criterion is not None:
-                criterion.set_epoch(epoch)
+            criterion.set_epoch(epoch)
 
             # [MEMORY LEAK FIX] At epoch start (skip epoch 0 — cache is fresh),
             # release the previous epoch's FRAME_CACHE so the OS can reclaim
             # ~5-7GB RAM. The next epoch's loader will re-preload on first access.
             if epoch > _train_start_epoch and getattr(C, 'CLEAR_FRAME_CACHE_EPOCH_END', True):
                 try:
-                    from data.industreal_dataset import clear_frame_cache, FRAME_CACHE
-                    _cache_pre_size = len(FRAME_CACHE)
+                    from data.industreal_dataset import clear_frame_cache
                     clear_frame_cache()
                     import gc as _gc
                     _gc.collect()
                     torch.cuda.empty_cache()
-                    logger.info(
-                        f'  [MEM] Cleared FRAME_CACHE at epoch {epoch} '
-                        f'(was {_cache_pre_size} entries, now {len(FRAME_CACHE)})'
-                    )
                 except Exception as _exc:
                     logger.warning(f'  [MEMORY] clear_frame_cache failed: {_exc}')
 
@@ -3231,11 +2988,11 @@ def main(args):
             if _train_max_steps > 0:
                 _batch_count = train_metrics.get('num_batches', 0)
                 if not hasattr(C, '_global_step'):
-                    C._global_step = 0  # type: ignore[attr-defined]
-                C._global_step += _batch_count  # type: ignore[attr-defined]
-                logger.info(f'  [2pct] global_step={C._global_step}/{_train_max_steps}')  # type: ignore[attr-defined]
-                if C._global_step >= _train_max_steps:  # type: ignore[attr-defined]
-                    logger.info(f'  [2pct] TRAIN_MAX_STEPS limit reached ({C._global_step}). Will exit after val completes.')  # type: ignore[attr-defined]
+                    C._global_step = 0
+                C._global_step += _batch_count
+                logger.info(f'  [2pct] global_step={C._global_step}/{_train_max_steps}')
+                if C._global_step >= _train_max_steps:
+                    logger.info(f'  [2pct] TRAIN_MAX_STEPS limit reached ({C._global_step}). Will exit after val completes.')
 
             current_lr = optimizer.param_groups[1]['lr']
             ema_decay_str = ''
@@ -3289,18 +3046,17 @@ def main(args):
                 epoch == 0 or (epoch + 1) % C.LOG_EFFICIENCY_EVERY == 0
             ):
                 if _eff_cache['epoch'] != epoch:
-                    _cem = getattr(_evaluate_module, 'compute_efficiency_metrics', None)
-                    if _cem is not None:
-                        _eff_cache['epoch'] = epoch
-                        _eff_cache['metrics'] = _cem(
-                            model,
-                            img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
-                            device=device,
-                            num_hand_coords=52,
-                            warmup_runs=3,
-                            timed_runs=20,
-                            batch_size=1,
-                        )
+                    from evaluate import compute_efficiency_metrics
+                    _eff_cache['epoch'] = epoch
+                    _eff_cache['metrics'] = compute_efficiency_metrics(
+                        model,
+                        img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
+                        device=device,
+                        num_hand_coords=52,
+                        warmup_runs=3,
+                        timed_runs=20,
+                        batch_size=1,
+                    )
                 eff = _eff_cache['metrics']
                 logger.info(
                     f'Efficiency: params={eff["eff_params_m"]:.2f}M  '
@@ -3361,7 +3117,7 @@ def main(args):
                 # With STAGED_TRAINING=True, only swap once stage>=3 (EMA has been updating).
                 _ema_staged = bool(getattr(C, 'STAGED_TRAINING', True))
                 ema_warmed = (ema is not None) and (not _ema_staged or current_stage >= 3)
-                if ema_warmed and ema is not None:
+                if ema_warmed:
                     ema.get_ema()
                     logger.info('  [EMA] Using exponential-moving-average weights for val')
                 elif ema is not None:
@@ -3373,7 +3129,6 @@ def main(args):
                 val_max_batches_rt = CFG_EVAL_MAX_BATCHES
 
                 val_attempt = 0
-                val_loader = None  # type: ignore[assignment]
                 while True:
                     val_attempt += 1
                     if val_attempt > 2:
@@ -3471,9 +3226,8 @@ def main(args):
                         IN_EVALUATION_PHASE = False
                         # HARDENED: val_workers_rt=0, but call shutdown anyway to be safe.
                         # With 0 workers the function returns immediately (no-op).
-                        if val_loader is not None:  # type: ignore[possibly-unbound,used-before-def]
-                            _shutdown_loader_workers(val_loader, logger)  # type: ignore[arg-type,possibly-unbound]
-                            del val_loader  # type: ignore[possibly-unbound]
+                        _shutdown_loader_workers(val_loader, logger)
+                        del val_loader
                         gc.collect()
                         torch.cuda.empty_cache()
                         logger.info('  [POST_EVAL] val_loader cleaned up, resuming train...')
@@ -3498,8 +3252,8 @@ def main(args):
                             f'Raising to trigger epoch retry loop.'
                         )
 
-                    if ema_warmed and ema is not None:
-                        ema.restore()  # type: ignore[union-attr]
+                    if ema_warmed:
+                        ema.restore()
                         logger.info('  [EMA] Restored original weights after val')
 
                     def _s(v, alt=float('nan')):
@@ -3547,7 +3301,7 @@ def main(args):
                            # Without this, while True: iterates again and calls
                            # evaluate_all() a second time immediately after POST_EVAL.
 
-                if ema is not None and current_stage == 3 and criterion is not None:
+                if ema is not None and current_stage == 3:
                     _compare_raw_vs_ema(
                         model, criterion, val_ds, device, val_metrics, epoch, ckpt_dir
                     )
@@ -3626,73 +3380,17 @@ def main(args):
                         else:
                             save_dict['model'] = model.state_dict()
                         # FIX: Save criterion (Kendall log_vars) in best checkpoint
-                        if criterion is not None:
-                            save_dict['criterion'] = {
-                                'log_var_det': criterion.log_var_det.data.clone(),  # type: ignore[union-attr]
-                                'log_var_pose': criterion.log_var_pose.data.clone(),  # type: ignore[union-attr]
-                                'log_var_act': criterion.log_var_act.data.clone(),  # type: ignore[union-attr]
-                                'log_var_psr': criterion.log_var_psr.data.clone(),  # type: ignore[union-attr]
-                            }
+                        save_dict['criterion'] = {
+                            'log_var_det': criterion.log_var_det.data.clone(),
+                            'log_var_pose': criterion.log_var_pose.data.clone(),
+                            'log_var_act': criterion.log_var_act.data.clone(),
+                            'log_var_psr': criterion.log_var_psr.data.clone(),
+                        }
                         torch.save(save_dict, ckpt_dir / 'best.pth')
                         logger.info(
                             f'  ** New best model (combined={combined:.4f}) **'
                         )
-
-                    # [PATCH RC-20] TIER 1.3 — Per-task best checkpoints.
-                    # Saves independent best_*.pth for each head. These are the
-                    # checkpoints your paper tables need — combined is pose-only
-                    # when det/act/psr are collapsed (RC-20). Runs every epoch
-                    # (independent of the combined-metric gate) so that even when
-                    # combined is flat, an isolated head that recovers still gets
-                    # its own best snapshot. Note: `save_dict` is built above in
-                    # the if-branch, so we build a per-task save_dict here that
-                    # captures the current (raw, non-EMA-swapped) model state.
-                    _cur_save = {
-                        'epoch':            epoch,
-                        'optimizer':        optimizer.state_dict(),
-                        'scheduler':        scheduler.state_dict(),
-                        'scaler':           scaler.state_dict(),
-                        'val_metrics':      val_metrics,
-                        'criterion': {
-                            'log_var_det':  criterion.log_var_det.data.clone(),
-                            'log_var_pose': criterion.log_var_pose.data.clone(),
-                            'log_var_act':  criterion.log_var_act.data.clone(),
-                            'log_var_psr':  criterion.log_var_psr.data.clone(),
-                        } if criterion is not None else {},
-                    }
-                    if ema is not None:
-                        ema.get_ema()
-                        _cur_save['model'] = model.state_dict()
-                        ema.restore()
                     else:
-                        _cur_save['model'] = model.state_dict()
-
-                    _task_checks = [
-                        ('det_mAP50', _map50, 'best_det.pth', 'max'),
-                        ('act_f1',    _f1_act, 'best_act.pth', 'max'),
-                        ('psr_f1',    _f1_psr, 'best_psr.pth', 'max'),
-                        ('pose_mae',  _mae_pose, 'best_pose.pth', 'min'),
-                    ]
-                    for _task_key, _task_val, _task_fname, _task_dir in _task_checks:
-                        _improved = False
-                        if _task_dir == 'max':
-                            _improved = _task_val > _per_task_best[_task_key]
-                        else:
-                            _improved = _task_val < _per_task_best[_task_key]
-                        if _improved:
-                            _per_task_best[_task_key] = _task_val
-                            _task_save = dict(_cur_save)
-                            _task_save['best_metric'] = _task_val
-                            torch.save(_task_save, _per_task_ckpt_dir / _task_fname)
-                            logger.info(
-                                f'  ** New best {_task_key} ({_task_val:.4f}) → '
-                                f'saved {_task_fname}'
-                            )
-
-                    # Patience increment — fires only when combined did NOT improve.
-                    # The if/else above already resets patience_counter=0 on improvement;
-                    # the for-loop above saves per-task bests independently.
-                    if combined <= best_metric:
                         patience_counter += 1
                         logger.info(
                             f'  No improvement ({patience_counter}/{C.PATIENCE})'
@@ -3728,10 +3426,10 @@ def main(args):
 
             # [2pct FIX] Exit epoch loop AFTER validation completes when step limit reached.
             # Previously this was BEFORE val, causing TRAIN_MAX_STEPS to skip validation.
-            if _train_max_steps > 0 and C._global_step >= _train_max_steps:  # type: ignore[attr-defined]
+            if _train_max_steps > 0 and C._global_step >= _train_max_steps:
                 logger.info(
                     f'  [2pct] TRAIN_MAX_STEPS={_train_max_steps} reached '
-                    f'(global_step={C._global_step}). Exiting epoch loop after val.'  # type: ignore[attr-defined]
+                    f'(global_step={C._global_step}). Exiting epoch loop after val.'
                 )
                 break  # Exit for epoch loop — val completed, training done
 
@@ -3777,7 +3475,7 @@ def main(args):
 
             swa_model = AveragedModel(model)
             swa_scheduler = SWALR(optimizer, swa_lr)
-            swa_start_epoch = epoch + 1  # type: ignore[possibly-unbound]
+            swa_start_epoch = epoch + 1
 
             for swa_epoch in range(swa_start_epoch, swa_start_epoch + swa_epochs):
                 logger.info(f'\n--- SWA Epoch {swa_epoch} ---')
@@ -3841,7 +3539,8 @@ if __name__ == '__main__':
         '--preset',
         type=str,
         default=None,
-        help='Preset (kept for backwards compat -- no-op on IndustReal)',
+        help='Config preset name from config.PRESETS '
+             "(e.g. 'recovery', 'benchmark_full', 'benchmark_quick').",
     )
     parser.add_argument(
         '--max-epochs',
@@ -3903,65 +3602,31 @@ if __name__ == '__main__':
     parser.add_argument(
         '--reinit-heads',
         action='store_true',
-        help='[Recovery] Re-initialize det/act/psr heads from crash_recovery.pth before training. '
-             'Use after head collapse (all 3 heads producing constant output). Keeps backbone + '
-             'pose_head + pretrained ConvNeXt. Resets heads to their documented priors: '
-             'det.cls_score pi=0.01, det.reg_pred std=0.01, act.proj_features + vit + cls_token '
-             '+ activity_classifier Xavier-zero, psr.per_frame_mlp + output_heads (bias=-1.0).',
-    )
-    parser.add_argument(
-        '--bf16',
-        action='store_true',
-        help='[FIX 2026-06-09] Use bf16 instead of fp16 for AMP. fp16 overflows in the first '
-             'backbone conv (720x1280 input) producing Inf gradients — diagnostic showed 83/386 '
-             'Inf grads in backbone.model.features.0.0.* with fp16, 0 Inf with bf16. '
-             'bf16 has the same dynamic range as fp32 (no overflow) and uses Ampere tensor cores '
-             'at the same speed as fp16 on RTX 3060/3090/4090.',
-    )
-    parser.add_argument(
-        '--no-amp',
-        action='store_true',
-        help='[FIX 2026-06-09] Disable AMP entirely, FP32. Slower than bf16 — about 30 percent — but completely '
-             'avoids the bf16+seq-mode NaN cascade that poisoned all 4 head losses after step 60 '
-             'in the 5% retrain. Diagnostic diag_amp_nan.py shows FP32 produces 0 NaN/Inf grads '
-             'across all 386 parameters.',
-    )
-    parser.add_argument(
-        '--reset-optimizer-for-reinit',
-        action='store_true',
-        help='[Recovery 2026-06-10] When used with --reinit-heads, zero the Adam m/v buffers for '
-             'det/act/psr head params. Without this, the resumed optimizer state carries stale '
-             'momentum from the pre-collapse weights; the first Adam step on fresh reinit weights '
-             'produces wild updates — e.g. det_cls_loss=197844 at step 0 in the 5pct retrain — '
-             'collapsing the heads further. ALWAYS pair this with --reinit-heads when recovering '
-             'from collapse.',
-    )
-    parser.add_argument(
-        '--reset-kendall-log-vars',
-        action='store_true',
-        help='[Recovery 2026-06-10] Reset Kendall log_vars to neutral: det=0, head_pose=-1, act=0, '
-             'psr=0 when resuming. The epoch-43 ckpt has log_vars learned against a collapsed '
-             'state. Fresh heads need a fresh balancing — defaults to the documented neutral values.',
+        help='[Recovery] Re-initialize det/act/psr heads + FPN from priors before training. '
+             'Keeps backbone + pose_head + pretrained ConvNeXt. Resets FPN with Kaiming-uniform, '
+             'det.cls_score pi=0.05, act full reinit, psr bias=-0.2. '
+             'Use after head collapse (all 3 heads producing constant output).',
     )
 
     args = parser.parse_args()
 
-    if args.no_amp:
-        import config as _cfg_mod_amp
-        _cfg_mod_amp.MIXED_PRECISION = False  # type: ignore[attr-defined]
-        logger.info('[train] --no-amp set: MIXED_PRECISION=False (FP32).')
-
     if args.preset:
-        try:
-            import config as _cfg_mod
-            if hasattr(_cfg_mod, 'apply_preset'):
-                _cfg_mod.apply_preset(args.preset)  # type: ignore[attr-defined]
-                _refresh_runtime_cfg()
-                logger.info(f'[train] Applied preset: {args.preset}')
-            else:
-                logger.warning('[train] Config has no apply_preset — ignoring --preset')
-        except Exception as exc:
-            logger.warning(f'[train] Failed to apply preset {args.preset}: {exc}')
+        # [AUDIT FIX 2026-06-11 — config split-brain] `import config as _cfg_mod`
+        # resolved to the root config.py copy, a DIFFERENT module object from
+        # `from src import config as C` used by this file, model.py and
+        # losses.py. apply_preset() therefore mutated globals nobody read —
+        # `--preset recovery` (zero_det_conf, FP32, staged off) was a silent
+        # no-op for training. Apply the preset on C directly, and let an
+        # unknown preset name crash loudly instead of degrading to a warning.
+        C.apply_preset(args.preset)
+        _refresh_runtime_cfg()
+        logger.info(
+            f'[train] Applied preset: {args.preset} '
+            f'(MIXED_PRECISION={C.MIXED_PRECISION}, STAGED_TRAINING={C.STAGED_TRAINING}, '
+            f'ZERO_DET_CONF_FOR_RECOVERY={C.ZERO_DET_CONF_FOR_RECOVERY}, '
+            f'USE_EMA={C.USE_EMA}, USE_MIXUP={C.USE_MIXUP}, '
+            f'BATCH_SIZE={C.BATCH_SIZE}x{C.GRAD_ACCUM_STEPS})'
+        )
 
     if args.max_epochs is not None:
         C.EPOCHS = args.max_epochs
@@ -3975,7 +3640,7 @@ if __name__ == '__main__':
     # TRAIN_MAX_STEPS: limit total optimizer steps for quick runs (env var)
     _env_max_steps = int(os.environ.get('TRAIN_MAX_STEPS', '0'))
     if _env_max_steps > 0:
-        C.TRAIN_MAX_STEPS = _env_max_steps  # type: ignore[attr-defined]
+        C.TRAIN_MAX_STEPS = _env_max_steps
         logger.info(f'[train] TRAIN_MAX_STEPS={_env_max_steps} — will early-stop at this step count')
 
     # EVAL_MAX_BATCHES: cap val batches per epoch (env var) — for quick smoke runs
@@ -3991,12 +3656,6 @@ if __name__ == '__main__':
     if args.start_epoch is not None:
         _override_start_epoch = args.start_epoch
         logger.info(f'[train] start_epoch override: {_override_start_epoch} (fresh init, no checkpoint)')
-
-    if args.bf16:
-        # Override autocast dtype globally. fp16 overflows the first backbone conv on
-        # 720x1280 inputs (Inf gradients); bf16 has the same speed on Ampere but no overflow.
-        AMP_DTYPE = bfloat16
-        logger.warning('[train] AMP_DTYPE=bfloat16 (--bf16) — prevents first-conv fp16 overflow')
 
     if args.debug:
         C.DEBUG_MODE = True
