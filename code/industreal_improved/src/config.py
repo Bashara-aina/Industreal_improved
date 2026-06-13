@@ -476,7 +476,7 @@ USE_PSR_SEQUENCE_MODE = True   # Doc 01 §D.2: PSR sequence-mode — THE biggest
 PSR_SEQUENCE_LENGTH = 4        # stayed at 4 — T=8 caused CUDA OOM with SEQ_EVERY_N_BATCHES=2
                               # (sequence-mode memory doubled and fires 5x more often). T=4 is
                               # the memory-bounded choice; the bigger unlock is below.
-PSR_SEQ_EVERY_N_BATCHES = 10  # Draw one sequence batch every N normal batches
+PSR_SEQ_EVERY_N_BATCHES = 4  # [GAP-A1] Was 10. PSR now trains ONLY on sequence batches under USE_PSR_TRANSITION; raise frequency so it gets enough updates. T=4 keeps VRAM safe.
 
 # [OPUS v5] PSR transition objective — use Gaussian-smeared transition targets
 # + MonotonicDecoder instead of per-frame BCE/focal on fill-forward labels.
