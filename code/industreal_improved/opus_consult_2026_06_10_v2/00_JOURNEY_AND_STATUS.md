@@ -125,7 +125,21 @@ Architecture coupling: Backbone+FPN → detection_head → det_conf → activity
 
 **The recovery flag IS the deadlock**: `ZERO_DET_CONF_FOR_RECOVERY` was designed for the original collapse (saturated det_conf O(10-100) poisoning activity). But at pi=0.05 with healthy logits (Step-0 PASSED), it's **starving** the activity head. Without detection signal, activity can't learn. Without activity gradient, the shared backbone gets no useful signal for 2 of 3 tasks.
 
-### Phase 8: Fresh Start Run 8 (June 12-13, 2026) — COLLAPSE CONFIRMED ARCHITECTURAL
+### Phase 9: Opus v4 Answer + RC-28/RC-29 Fix Implementation (June 13, 2026)
+
+See `14_POST_OPUS_V4_IMPLEMENTATION.md` for full details.
+
+**Key finding from Opus v4**: Run 8's "architectural collapse" conclusion was WRONG. The RC-28/RC-29 fixes were written on June 12 but never merged into the training box. Run 8 trained on pre-fix code — measuring a known equilibrium, not proving focal loss is broken.
+
+**What we did**:
+1. Cherry-picked `c219569` from `claude/keen-lamport-vxnhxg` (RC-28 empty-frame skip, RC-29 telemetry, recovery presets)
+2. R0 smoke test PASSED: committed=55, skipped=0, det c dropped 49→0.05 in 400 steps
+3. R1 detection bootstrap: 4 attempts, 3 eval crashes (activity/PSR eval pipeline assumes all heads trained), finally running v4 with all eval guards
+4. Detection IS localizing: bestIoU up to 0.94 on GT frames, model correctly silent on empty frames
+
+**Current state**: R1 v4 epoch 0 val: **det_mAP50=0.0091** — FIRST TIME ABOVE ZERO in project history! Detection is learning. Epoch 1 in progress. R1 v1-v3 crashed in eval (activity/PSR guards needed). See `14_POST_OPUS_V4_IMPLEMENTATION.md`.
+
+### Phase 8: Fresh Start Run 8 (June 12-13, 2026) — PRE-FIX CODE (NOT ARCHITECTURAL)
 
 **Run 8** — fresh ConvNeXt-Tiny ImageNet init, no staged training, FP32, full dataset:
 ```
