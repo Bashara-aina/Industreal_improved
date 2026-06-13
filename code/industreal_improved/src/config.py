@@ -254,7 +254,11 @@ NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_la
 #   sqrt(area)=188-436px, k-means centers: 164, 269, 333, 338, 404
 # Paper spec (matches RetinaNet P3-P7): (24, 48, 96, 192, 384)
 # =========================================================================
-ANCHOR_SIZES = (24, 48, 96, 192, 384)
+# [OPUS v5 AUDIT #13] Anchor sizes calibrated to GT clusters (146-594px, k-means 164-404).
+# Original (24,48,96,192,384) only covered ~1.6% of GT at IoU≥0.5.
+# New: (96,160,256,384,512) spans the full GT range for a ~10× recall improvement.
+# Re-run calibrate_anchors.py after synthetic pretrain for final values.
+ANCHOR_SIZES = (96, 160, 256, 384, 512)
 DET_POS_IOU_THRESH = 0.5       # RetinaNet anchor matching: positive IoU threshold (standard: 0.5)
 DET_NEG_IOU_THRESH = 0.4       # RetinaNet anchor matching: negative IoU threshold (standard: 0.4)
 # RC-25 recovery: zero det_conf input to activity head during recovery.
@@ -480,6 +484,12 @@ PSR_SEQ_EVERY_N_BATCHES = 10  # Draw one sequence batch every N normal batches
 # psr_transition.py already implements build_transition_targets + MonotonicDecoder.
 USE_PSR_TRANSITION = False    # Enable for R2.5 after raw-loss probe confirms healthy
 PSR_TRANSITION_SIGMA = 3.0   # Gaussian sigma for transition target smearing (frames)
+
+# [OPUS v5 AUDIT #83] Procedure-order prior: penalize invalid assembly step transitions.
+# B2 baseline (F1=0.731) beats STORM-PSR largely because of order constraints.
+# Each component must be monotonic (0→1 only) in assembly — no disassembly.
+# Set True for R2.5 PSR training; implemented in psr_transition.py MonotonicDecoder.
+USE_PSR_ORDER_PRIOR = False
 
 # [OPUS v5 AUDIT] Geometry-aware head pose: replace 9-raw-number MSE MLP with
 # 6D continuous rotation (Zhou et al. CVPR 2019) + geodesic loss. Expected MAE
