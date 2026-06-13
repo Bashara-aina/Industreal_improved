@@ -3231,7 +3231,7 @@ def main(args):
             _train_ok = (
                 isinstance(train_metrics, dict)
                 and train_metrics.get('num_batches', 0) > 0
-                and train_metrics.get('total', 0) > 0
+                and torch.isfinite(torch.tensor(train_metrics.get('total', 0.0)))
             )
             if not _train_ok:
                 logger.error(
