@@ -421,7 +421,7 @@ CLEAR_FRAME_CACHE_EPOCH_END = True  # free ~5-7GB FRAME_CACHE between epochs
 # =========================================================================
 # NOTE: USE_LDAM_DRW is set to False below for A/B testing (CB-Focal vs LDAM).
 # Set back to True for the full 100-epoch run after confirming activity loss moves.
-USE_LDAM_DRW = True   # [OPUS FIX #2 + USER-AUTH] LDAM+DRW (long-tail fix, +~2% Top-1)
+USE_LDAM_DRW = False  # [OPUS v5] Disabled — s=30 amplifies 30× on top of CB sampling + LS → 1-class collapse. Use plain CE + label smoothing for first joint runs.
 LDAM_MAX_M = 0.5
 LDAM_S = 30
 LDAM_DRW_EPOCH = 0    # Switch to CB weights at this epoch (DRW deferred re-weighting)
@@ -456,9 +456,16 @@ PSR_SEQUENCE_LENGTH = 4        # stayed at 4 — T=8 caused CUDA OOM with SEQ_EV
                               # the memory-bounded choice; the bigger unlock is below.
 PSR_SEQ_EVERY_N_BATCHES = 10  # Draw one sequence batch every N normal batches
 
+# [OPUS v5] PSR transition objective — use Gaussian-smeared transition targets
+# + MonotonicDecoder instead of per-frame BCE/focal on fill-forward labels.
+# Per-frame focal on 95%-static labels makes constant output near-optimal.
+# psr_transition.py already implements build_transition_targets + MonotonicDecoder.
+USE_PSR_TRANSITION = False    # Enable for R2.5 after raw-loss probe confirms healthy
+PSR_TRANSITION_SIGMA = 3.0   # Gaussian sigma for transition target smearing (frames)
+
 # Fix 1 (2026-06-06): penalize constant per-frame PSR predictions in T=1 mode.
 # Stage 3 epoch 16 collapsed logit std to 0.12%; this penalty keeps it > 1e-3.
-PSR_SENSITIVITY_WEIGHT = 0.01  # 5% of typical binary-focal magnitude — gentle nudge
+PSR_SENSITIVITY_WEIGHT = 0.0  # [OPUS v5] Disabled — the −log(std) penalty goes non-finite on single-frame batches and triggers the 1e-4 NaN-sentinel. Set to 0; re-introduce bounded (clamp 0-5) after raw-loss probe confirms healthy.
 
 # =========================================================================
 # Augmentation (Doc 2 D)
@@ -501,6 +508,12 @@ LOG_EFFICIENCY_EVERY = 10  # log GFLOPs/FPS every N epochs (0=disable)
 # Detection metrics: compute_det_metrics_extended does 11×(24 classes × 35084 frames) nested
 # Python loops = ~87 min/epoch. Set to True to enable, False to skip (epoch快了~87min).
 SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP (~87 min/epoch) — saves ~90 min per epoch
+
+# [OPUS v5] Eval cadence: compute full detection mAP every N epochs; fast gate-only eval
+# (EVAL_MAX_BATCHES capped) on other epochs. 0 = eval every epoch (no skip).
+DET_METRICS_EVERY_N = 5  # Full mAP eval every 5 epochs; gate-only eval on others
+GATE_EVAL_MAX_BATCHES = 200  # [OPUS v5] Max val batches on non-full-eval epochs (~10 min vs 87 min)
+
 # Efficiency metrics: compute_efficiency_metrics does 35 forward passes each epoch.
 # Set to True to skip except when (epoch % LOG_EFFICIENCY_EVERY == 0).
 SKIP_EFFICIENCY_METRICS = True  # True = only compute every LOG_EFFICIENCY_EVERY epochs

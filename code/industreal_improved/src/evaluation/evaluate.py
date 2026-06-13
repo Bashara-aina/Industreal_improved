@@ -3345,6 +3345,17 @@ def evaluate_all(
             'det_mAP50_all_frames': float('nan'),
             'det_per_class_ap_all_frames': {},
         }
+    elif getattr(C, 'DET_METRICS_EVERY_N', 0) > 0 and (epoch + 1) % C.DET_METRICS_EVERY_N != 0:
+        # [OPUS v5] Eval cadence: full detection mAP only every N epochs.
+        # On other epochs, run gate-only eval (mAP@0.5 b-boxed, capped batches).
+        logger.info(f'  [SKIP_DET] DET_METRICS_EVERY_N={C.DET_METRICS_EVERY_N} — skipping full mAP (epoch {epoch})')
+        det_metrics = {
+            'det_mAP50': float('nan'),
+            'det_mAP_50_95': float('nan'),
+            'det_per_class_ap': {},
+            'det_mAP50_all_frames': float('nan'),
+            'det_per_class_ap_all_frames': {},
+        }
     else:
         # [DEBUG] Print detection boxes/scores statistics
         _dp_total = sum(len(b) for b in dp_boxes) if dp_boxes else 0
