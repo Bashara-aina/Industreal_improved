@@ -56,19 +56,15 @@ from src import config as C
 
 
 def _get_kendall_stage(epoch: int) -> int:
-    """Mirror of train.get_stage() — must stay in sync.
-    
-    Stage 1 (epochs 1-5):   detection only
-    Stage 2 (epochs 6-15):  detection + head_pose  
-    Stage 3 (epochs 16+):   all tasks
+    """Use train.get_stage() so reinit_epoch_offset is respected.
+
+    This was a duplicate of train.get_stage() that didn't incorporate
+    the _REINIT_EPOCH_OFFSET, causing Kendall weighting to apply Stage 3
+    when the training loop applied Stage 1 — Kendall log_vars drifted
+    incorrectly during recovery retraining.
     """
-    stage1_end = int(getattr(C, 'STAGE1_EPOCHS', 5))
-    stage2_end = stage1_end + int(getattr(C, 'STAGE2_EPOCHS', 10))
-    if epoch <= stage1_end:
-        return 1
-    if epoch <= stage2_end:
-        return 2
-    return 3
+    from training.train import get_stage
+    return get_stage(epoch)
 
 
 # ===========================================================================
@@ -867,7 +863,9 @@ class MultiTaskLoss(nn.Module):
         self.log_var_psr = nn.Parameter(torch.zeros(1))
 
         # Sub-losses
-        self.det_loss_fn = FocalLoss(alpha=C.FOCAL_ALPHA, gamma=C.FOCAL_GAMMA, pos_iou_thresh=C.DET_POS_IOU_THRESH)
+        self.det_loss_fn = FocalLoss(alpha=C.FOCAL_ALPHA, gamma=C.FOCAL_GAMMA,
+                                      pos_iou_thresh=C.DET_POS_IOU_THRESH,
+                                      neg_iou_thresh=C.DET_NEG_IOU_THRESH)
         self.pose_loss_fn = PoseLoss(wing_omega=C.WING_OMEGA, wing_epsilon=C.WING_EPSILON)
 
         # C.2: LDAM-DRW or CB-Focal for activity
@@ -1063,17 +1061,29 @@ class MultiTaskLoss(nn.Module):
 
         # === Activity ===
         if self.train_act:
-            # C.2: LDAM-DRW needs epoch for DRW decision
-            if self.use_ldam:
-                drw_epoch = int(getattr(C, 'LDAM_DRW_EPOCH', 60))
-                loss_act = self.act_loss_fn(
-                    outputs['act_logits'],
-                    targets['activity'],
-                    epoch=self._current_epoch,
-                    drw_epoch=drw_epoch,
-                )
+            act_logits = outputs['act_logits']
+            act_targets = targets['activity']
+            act_mask = targets.get('activity_mask', torch.ones_like(act_targets, dtype=torch.float32))
+            valid_mask = act_mask.bool()
+            if valid_mask.any():
+                # Filter to labeled frames only (-1 sentinel = unlabeled, excluded)
+                if valid_mask.all():
+                    filt_logits, filt_targets = act_logits, act_targets
+                else:
+                    filt_logits = act_logits[valid_mask]
+                    filt_targets = act_targets[valid_mask].clamp(0, act_logits.shape[1] - 1)
+                # C.2: LDAM-DRW needs epoch for DRW decision
+                if self.use_ldam:
+                    drw_epoch = int(getattr(C, 'LDAM_DRW_EPOCH', 60))
+                    loss_act = self.act_loss_fn(
+                        filt_logits, filt_targets,
+                        epoch=self._current_epoch,
+                        drw_epoch=drw_epoch,
+                    )
+                else:
+                    loss_act = self.act_loss_fn(filt_logits, filt_targets)
             else:
-                loss_act = self.act_loss_fn(outputs['act_logits'], targets['activity'])
+                loss_act = zero
         else:
             loss_act = zero
 
@@ -1344,6 +1354,13 @@ class MultiTaskLoss(nn.Module):
                     total = torch.stack(finite_parts).sum()
                 else:
                     total = loss_det
+                # [FIX 2026-06-12] The NaN guard replaces total with fallback
+                # values from _safe (which creates torch.tensor(1e-4) without
+                # grad_fn when losses are NaN). The rebuilt total has NO gradient
+                # connection, causing "element 0 does not require grad" at
+                # backward(). Reconnect through log_vars (zero-weighted, no
+                # gradient effect — just keeps the graph alive).
+                total = total + 0.0 * (lv_det + lv_hp + lv_act + lv_psr)
         else:
             prec_det = prec_hp = prec_act = prec_psr = torch.tensor(1.0, device=device)
             _loss_act_staged = loss_act

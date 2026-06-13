@@ -1,3 +1,10 @@
+# CRITICAL: Set CUDA alloc config BEFORE importing torch so it takes effect.
+# expandable_segments:True prevents fragmentation OOMs on RTX 3060 12GB by
+# allowing PyTorch to extend existing segments instead of allocating new ones.
+# Must be set before any CUDA context is created (i.e. before `import torch`).
+import os
+os.environ['PYTORCH_ALLOC_CONF'] = 'expandable_segments:True'
+
 import faulthandler
 import signal
 faulthandler.enable()
@@ -5,7 +12,6 @@ faulthandler.enable()
 faulthandler.register(signal.SIGUSR1)  # faulthandler.dump traceback on SIGUSR1
 
 import sys
-import os
 from pathlib import Path
 
 # Resolve symlinks so /home/... and /media/... both resolve to the same real path
@@ -70,7 +76,6 @@ import torch.amp as amp
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts, LinearLR, SequentialLR
 from torch.optim.swa_utils import AveragedModel
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 # --- THREAD CONVOVOY FIX (Bashara 2026-05-07) ---
 # Reduce OpenMP/numpy/PyTorch thread counts to eliminate lock convoy.
 # Without this: 28 threads all contend on jemalloc + GIL futex → deadlock.
@@ -139,6 +144,7 @@ IN_EVALUATION_PHASE = False
 
 # RC-25 guard: set True when --reinit-heads is active; gates step-0 assertions.
 _REINIT_HEADS_ACTIVE = False
+_REINIT_EPOCH_OFFSET = 0  # set to (start_epoch - 1) when --reinit-heads is used
 
 
 def _refresh_runtime_cfg() -> None:
@@ -483,28 +489,28 @@ def cutmix_activity(
     return mixed_outputs, mixed_targets
 
 
-def get_stage(epoch: int) -> int:
+def get_stage(epoch: int, reinit_epoch_offset: int = None) -> int:
     """
     Doc 2 B.1: Three-stage training schedule.
 
     Stage 1 (epochs 1-5): Detection-only warmup
-      - Active losses: L_det only
-      - Backbone: layer1-3 frozen, layer4 + FPN + det head trainable
-
     Stage 2 (epochs 6-15): Add pose + head pose
-      - Active losses: L_det + L_pose + L_head_pose
-      - Activity and PSR heads exist but NOT in loss yet
-
     Stage 3 (epochs 16-100): Full multi-task with EMA
-      - All losses active
-      - EMA decay 0.999 starts here
+
+    When reinit_epoch_offset > 0 (--reinit-heads was used), the stage is
+    computed from the effective epoch (epoch - offset), so the freshly
+    reinitialized heads follow the full staged schedule starting from
+    Stage 1 regardless of the resumed epoch number.
     """
+    if reinit_epoch_offset is None:
+        reinit_epoch_offset = _REINIT_EPOCH_OFFSET
+    effective_epoch = max(1, epoch - reinit_epoch_offset)
     stage1_end = int(getattr(C, 'STAGE1_EPOCHS', 5))
     stage2_end = stage1_end + int(getattr(C, 'STAGE2_EPOCHS', 10))
 
-    if epoch <= stage1_end:
+    if effective_epoch <= stage1_end:
         return 1
-    if epoch <= stage2_end:
+    if effective_epoch <= stage2_end:
         return 2
     return 3
 
@@ -1012,9 +1018,10 @@ def train_one_epoch(
                     loss_dict_seq['total'] = loss_seq.item()
 
                 loss_seq = loss_seq / float(accum_steps)
-            if not torch.isfinite(loss_seq):
+            if not torch.isfinite(loss_seq) or not loss_seq.requires_grad:
                 nan_skips += 1
                 optimizer.zero_grad(set_to_none=True)
+                model.feature_bank.reset()  # clear contaminated temporal state
                 del outputs_seq, loss_seq, loss_dict_seq, fake_outputs, fake_targets
                 torch.cuda.empty_cache()
                 continue
@@ -1041,15 +1048,30 @@ def train_one_epoch(
             seq_steps += 1
             if (step + 1) % accum_steps == 0 or (step + 1) == len(loader):
                 scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(
-                    list(model.parameters()) + list(criterion.parameters()),
-                    C.GRAD_CLIP_NORM,
-                )
-                scaler.step(optimizer)
-                scaler.update()
-                if ema is not None and (not staged_training or stage >= 3):
-                    ema.update()
-                optimizer.zero_grad(set_to_none=True)
+                _seq_grads_nan = False
+                for _pg in optimizer.param_groups:
+                    for _p in _pg['params']:
+                        if _p.grad is not None and not torch.isfinite(_p.grad).all():
+                            _seq_grads_nan = True
+                            break
+                    if _seq_grads_nan:
+                        break
+                if _seq_grads_nan:
+                    logger.warning(
+                        f'  [GRAD_NAN/SEQ] NaN/Inf gradient at epoch {epoch} step {step + 1} '
+                        f'— skipping optimizer step, zeroing grads'
+                    )
+                    optimizer.zero_grad(set_to_none=True)
+                else:
+                    torch.nn.utils.clip_grad_norm_(
+                        list(model.parameters()) + list(criterion.parameters()),
+                        C.GRAD_CLIP_NORM,
+                    )
+                    scaler.step(optimizer)
+                    scaler.update()
+                    if ema is not None and (not staged_training or stage >= 3):
+                        ema.update()
+                    optimizer.zero_grad(set_to_none=True)
             # [FIX #1] Restore criterion flags AFTER PSR-only sequence batch
             criterion.train_det  = _saved_train_det
             criterion.train_pose = _saved_train_pose
@@ -1066,15 +1088,20 @@ def train_one_epoch(
         targets['head_pose'] = targets['head_pose'].to(device)
         targets['psr_labels'] = targets['psr_labels'].to(device)
         targets['activity'] = targets['activity'].to(device)
+        if 'activity_mask' in targets:
+            targets['activity_mask'] = targets['activity_mask'].to(device)
         hand_joints = targets.get('hand_joints', torch.zeros_like(
             images[:, :1, 0, 0]
         )).to(device, non_blocking=True)
 
         with amp.autocast('cuda', enabled=C.MIXED_PRECISION):
             clip_rgb = targets.get('clip_rgb')
-            if clip_rgb is not None:
+            if clip_rgb is not None and isinstance(clip_rgb, torch.Tensor) and clip_rgb.numel() > 0:
                 clip_rgb = clip_rgb.to(device)
-            outputs = model(images, clip_rgb=clip_rgb)
+            else:
+                clip_rgb = None
+            video_ids = [m['recording_id'] for m in targets['metadata']] if 'metadata' in targets else None
+            outputs = model(images, video_ids=video_ids, clip_rgb=clip_rgb)
         for _k in ('cls_preds', 'reg_preds', 'head_pose', 'psr_logits', 'act_logits'):
             if _k in outputs and isinstance(outputs[_k], torch.Tensor):
                 outputs[_k] = outputs[_k].float()
@@ -1092,6 +1119,15 @@ def train_one_epoch(
         # Doc 2 B.1: Staged loss computation
         criterion.set_epoch(epoch)
         loss, loss_dict = criterion(outputs, targets)
+
+        # [DIAGNOSTIC] Verify loss tensor is connected to computation graph
+        if step == 0 and not loss.requires_grad and loss.grad_fn is None:
+            logger.error(
+                f'  [CRITICAL] loss has NO grad_fn at step 0! '
+                f'type={type(loss).__name__} shape={loss.shape} '
+                f'requires_grad={loss.requires_grad} grad_fn={loss.grad_fn}'
+            )
+            raise RuntimeError('loss tensor has no grad_fn at step 0 — cannot train')
 
         # ── Step-0 Assertion (RC-25 permanent guard) ──
         if step == 0:
@@ -1222,9 +1258,9 @@ def train_one_epoch(
             optimizer.zero_grad(set_to_none=True)
             del outputs, loss, loss_dict
             del images, targets
+            model.feature_bank.reset()  # clear contaminated temporal state
             torch.cuda.empty_cache()
             continue
-        # Guard: clamp per-component losses to prevent NaN/Inf from propagating into Kendall total.
         # (only needed when Kendall is active; staged non-Kendall losses are already scalar tensors)
         # Each NaN/Inf is replaced with 1e-4 (tiny but > 0 to allow gradient flow).
         # HARDENING (2026-06-06): removed the `or v < 1e-6` floor — that was a bug. The staged
@@ -1254,7 +1290,7 @@ def train_one_epoch(
                             f'(current #{criterion._kendall_clamp_count} at epoch {epoch} '
                             f'step {step + 1}) — divergence detected, aborting training'
                         )
-                    loss_dict[key] = 1e-4
+                    loss_dict[key] = 1.0
             # [DEBUG] Per-batch loss + model output shape logging every _debug_interval batches
             if step > 0 and step % _debug_interval == 0:
                 # Log all individual loss components
@@ -1271,6 +1307,28 @@ def train_one_epoch(
                 )
             _debug_logged_once = True
 
+        # [DIAGNOSTIC] Check loss grad_fn before backward
+        if not loss.requires_grad:
+            logger.error(
+                f'  [GRAD_FN_DIAG] loss.requires_grad=False at step {step}! '
+                f'loss={loss.item():.8f}  det={loss_dict.get("det", "?"):.8f}  '
+                f'pose={loss_dict.get("pose", "?"):.8f}  act={loss_dict.get("activity", "?"):.8f}  '
+                f'psr={loss_dict.get("psr", "?"):.8f}  '
+                f'head_pose={loss_dict.get("head_pose", "?"):.8f}  '
+                f'lv_det={criterion.log_var_det.item():.4f}  '
+                f'lv_pose={criterion.log_var_pose.item():.4f}  '
+                f'lv_act={criterion.log_var_act.item():.4f}  '
+                f'lv_psr={criterion.log_var_psr.item():.4f}  '
+                f'total_finite={torch.isfinite(loss).item()}'
+            )
+            # Create a fallback loss that's connected to the graph via log_vars
+            loss = (
+                torch.exp(-criterion.log_var_det) * loss.detach() +
+                torch.exp(-criterion.log_var_pose) * loss.detach() +
+                torch.exp(-criterion.log_var_act) * loss.detach() +
+                torch.exp(-criterion.log_var_psr) * loss.detach()
+            ).squeeze()
+            logger.warning(f'  [GRAD_FN_DIAG] Created fallback loss with grad_fn={loss.grad_fn is not None}')
         scaler.scale(loss).backward()
 
         # Doc 2 §B.1: Kendall gradient sentinel — log gradient norms of log_var params
@@ -1284,15 +1342,44 @@ def train_one_epoch(
             # (despite the comment saying "before"), so the current step's
             # gradient was always computed from corrupted values.
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(
-                list(model.parameters()) + list(criterion.parameters()),
-                C.GRAD_CLIP_NORM,
-            )
-            scaler.step(optimizer)
-            scaler.update()
-            if ema is not None and (not staged_training or stage >= 3):
-                ema.update()
-            optimizer.zero_grad(set_to_none=True)
+            # --- NaN gradient guard BEFORE clip+step ---
+            # If any param gradient is NaN/Inf, skip this optimizer step to avoid
+            # corrupting model weights. This can happen when Kendall precision
+            # weights amplify small gradient instabilities into numerical overflow.
+            _grads_nan = False
+            for _pg in optimizer.param_groups:
+                for _p in _pg['params']:
+                    if _p.grad is not None and not torch.isfinite(_p.grad).all():
+                        _grads_nan = True
+                        break
+                if _grads_nan:
+                    break
+            if _grads_nan:
+                _nan_params = []
+                for _pg_idx, _pg in enumerate(optimizer.param_groups):
+                    for _p in _pg['params']:
+                        if _p.grad is not None and not torch.isfinite(_p.grad).all():
+                            _nan_frac = 1.0 - torch.isfinite(_p.grad).float().mean().item()
+                            _nan_params.append(f'pg{_pg_idx}[{_p.shape}]={_nan_frac:.2%}')
+                            if len(_nan_params) >= 3:
+                                break
+                    if len(_nan_params) >= 3:
+                        break
+                logger.warning(
+                    f'  [GRAD_NAN] epoch {epoch} step {step + 1} — '
+                    f'{"; ".join(_nan_params)}; zeroing grads'
+                )
+                optimizer.zero_grad(set_to_none=True)
+            else:
+                torch.nn.utils.clip_grad_norm_(
+                    list(model.parameters()) + list(criterion.parameters()),
+                    C.GRAD_CLIP_NORM,
+                )
+                scaler.step(optimizer)
+                scaler.update()
+                if ema is not None and (not staged_training or stage >= 3):
+                    ema.update()
+                optimizer.zero_grad(set_to_none=True)
 
         # --- NaN/ZERO GUARD: zero per-component losses that are NaN before accumulating.
         # Prevents NaN from propagating into running averages (logged every epoch).
@@ -1571,13 +1658,21 @@ def _clamp_kendall_log_vars(criterion):
     (train.py:1245-1248), which is too late: the current step's gradient
     was already computed from the corrupted values, and only future steps
     benefit.
+
+    NOTE: torch.clamp_ does NOT fix NaN (NaN comparisons are always False
+    per IEEE 754). If a log_var drifts to NaN from a bad gradient update,
+    clamp_ silently preserves the NaN, which propagates through
+    exp(-lv) → 0 in the precision → NaN in the Kendall total → detached
+    loss in the NaN guard fallback → "no grad_fn" at backward().
     """
     if not hasattr(criterion, 'log_var_det'):
         return
-    criterion.log_var_det.data.clamp_(-4.0, 2.0)
-    criterion.log_var_pose.data.clamp_(-4.0, 2.0)
-    criterion.log_var_act.data.clamp_(-4.0, 2.0)
-    criterion.log_var_psr.data.clamp_(-4.0, 2.0)
+    for _param in ('log_var_det', 'log_var_pose', 'log_var_act', 'log_var_psr'):
+        _p = getattr(criterion, _param)
+        if not torch.isfinite(_p.data).all():
+            logger.warning(f'  [KENDALL_NAN] {_param} was NaN — resetting to 0.0')
+            _p.data.fill_(0.0)
+        _p.data.clamp_(-4.0, 2.0)
 
 
 def _log_kendall_gradient_sentinel(criterion, step_idx: int, log_interval: int) -> None:
@@ -2175,12 +2270,10 @@ def main(args):
         import pandas as pd
         train_csv_path = C.TRAIN_CSV
         val_csv_path = C.VAL_CSV
-        train_df = pd.read_csv(train_csv_path, header=None,
-                               names=['rec_id', 'frame', 'action', 'f0', 'f1'])
-        val_df = pd.read_csv(val_csv_path, header=None,
-                              names=['rec_id', 'frame', 'action', 'f0', 'f1'])
-        n_train_recs = train_df['rec_id'].nunique()
-        n_val_recs = val_df['rec_id'].nunique()
+        train_df = pd.read_csv(train_csv_path)
+        val_df = pd.read_csv(val_csv_path)
+        n_train_recs = train_df['recording_id'].nunique()
+        n_val_recs = val_df['recording_id'].nunique()
         max_recordings_train = max(4, int(n_train_recs * subset_ratio))
         max_recordings_val = max(4, int(n_val_recs * subset_ratio))
         logger.info(
@@ -2606,12 +2699,15 @@ def main(args):
 
     # ── RC-25 Recovery: Re-initialize dead heads + FPN ──
     if getattr(args, 'reinit_heads', False):
-        global _REINIT_HEADS_ACTIVE
+        global _REINIT_HEADS_ACTIVE, _REINIT_EPOCH_OFFSET
         _REINIT_HEADS_ACTIVE = True
+        _REINIT_EPOCH_OFFSET = max(0, start_epoch - 1)  # reset stage counter
         logger.warning(
             '  [REINIT-HEADS] Flag --reinit-heads set: re-initializing 3 '
             'dead heads (det/act/psr) + FPN from priors. Backbone + pose + '
             'pretrained ConvNeXt weights are PRESERVED.'
+            f' Stage counter reset: effective_epoch = epoch - {_REINIT_EPOCH_OFFSET}'
+            f' (epoch {start_epoch} → effective epoch {max(1, start_epoch - _REINIT_EPOCH_OFFSET)} = Stage {get_stage(start_epoch)})'
         )
         reinit_counts = _reinit_dead_heads(model)
         logger.warning(

@@ -138,12 +138,7 @@ def probe_detection_batch(
         "bestIoU_max": float(best_ious.max()) if best_ious.size else 0.0,
         "bestIoU_mean": float(best_ious.mean()) if best_ious.size else 0.0,
     }
-    # V3_PATCH_NO_GT_VERDICT: distinguish "no GT in batch" from "model collapse"
-    # Batches with 0 GT (e.g., 20_assy_0_1) were mislabelled as "TOTAL COLLAPSE",
-    # which masks the real signal. A batch with 0 GT is vacuously collapse-immune.
-    if summary.get("n_gt", 0) == 0:
-        verdict = f"NO-GT (n_gt=0, max={summary['bestIoU_max']:.2f}, score_max={summary.get('score_max', 0.0):.3f})"
-    elif n_matched == 0 and summary["bestIoU_max"] < iou_match:
+    if n_matched == 0 and summary["bestIoU_max"] < iou_match:
         verdict = f"TOTAL COLLAPSE (0 preds at IoU>{iou_match}, max={summary['bestIoU_max']:.2f})"
     elif n_matched == 0:
         verdict = f"NEAR-COLLAPSE (no match at {iou_match} but max IoU {summary['bestIoU_max']:.2f})"
@@ -866,14 +861,8 @@ def report_per_class_accuracy(cm_list, class_names=None, k: int = 5):
         logger.info('Per-class activity report skipped: empty confusion matrix.')
         return
 
-    # [FIX 2026-06-10] Accept either a 2-D confusion matrix or a 1-D
-    # per-class-accuracy vector (train.py historically passed the latter,
-    # producing AxisError: axis 1 is out of bounds for array of dimension 1).
-    if cm.ndim == 1:
-        per_class_acc = cm
-    else:
-        row_sums = cm.sum(axis=1).clip(min=1.0)
-        per_class_acc = cm.diagonal() / row_sums
+    row_sums = cm.sum(axis=1).clip(min=1.0)
+    per_class_acc = cm.diagonal() / row_sums
     names = class_names if class_names is not None else [f'class_{i}' for i in range(len(per_class_acc))]
 
     sorted_idx = np.argsort(per_class_acc)
@@ -1134,15 +1123,8 @@ def compute_ap_per_class(
             ious = compute_iou_matrix(pb, gb)
             matched = set()
             for j in ps.argsort()[::-1]:
-                # [FIX] COCO/PASCAL-2010+ best-UNMATCHED-GT matching — same
-                # fix as compute_ap_multi_thresh (line 1311). See that fix's
-                # comment for rationale. Without masking, PASCAL VOC 2007
-                # "any GT" undercounts TPs and deflates mAP at IoU=0.5.
-                ious_masked = ious[j].copy()
-                for m in matched:
-                    ious_masked[m] = -1.0
-                bi = ious_masked.argmax()
-                if ious_masked[bi] >= iou_thresh:
+                bi = ious[j].argmax()
+                if ious[j, bi] >= iou_thresh and bi not in matched:
                     all_tp.append(1)
                     matched.add(bi)
                 else:
@@ -1217,15 +1199,8 @@ def compute_ap_per_class_all_frames(
             ious = compute_iou_matrix(pb, gb)
             matched = set()
             for j in ps.argsort()[::-1]:
-                # [FIX] COCO/PASCAL-2010+ best-UNMATCHED-GT matching — same
-                # fix as compute_ap_multi_thresh (line 1311). See that fix's
-                # comment for rationale. compute_det_metrics_all_frames
-                # (line 1453) uses this function for det_mAP50_all_frames.
-                ious_masked = ious[j].copy()
-                for m in matched:
-                    ious_masked[m] = -1.0
-                bi = ious_masked.argmax()
-                if ious_masked[bi] >= iou_thresh:
+                bi = ious[j].argmax()
+                if ious[j, bi] >= iou_thresh and bi not in matched:
                     all_tp.append(1)
                     matched.add(bi)
                 else:
@@ -1305,7 +1280,11 @@ def compute_ap_multi_thresh(
             ps_cls = ps[pm]
 
             if len(ps_cls) == 0:
-                # No predictions for this class in this frame — nothing to score
+                # No predictions for this class in this frame
+                for iou_t in iou_thresholds:
+                    all_results[cls][float(iou_t)][0].extend([0] * len(ps_cls) if len(ps_cls) > 0 else [])
+                    if len(ps_cls) == 0:
+                        pass  # nothing to add
                 continue
 
             if len(gb) == 0:
@@ -1329,19 +1308,8 @@ def compute_ap_multi_thresh(
                 tp_this = []
                 sc_this = []
                 for j in range(len(ps_sorted)):
-                    # [FIX] COCO/PASCAL-2010+ best-UNMATCHED-GT matching.
-                    # Mask already-matched GTs to -1 so argmax picks the best
-                    # still-available GT, not a previously-matched one.
-                    # PASCAL VOC 2007 "any GT" undercounts TPs when a pred's
-                    # best-overall GT is already taken but a different
-                    # unmatched GT has IoU >= threshold. Matches the YOLOv8m
-                    # COCO-eval baseline that this eval compares against
-                    # (docstring line 1394).
-                    ious_masked = ious_sorted[j].copy()
-                    for m in matched:
-                        ious_masked[m] = -1.0
-                    bi = ious_masked.argmax()
-                    if ious_masked[bi] >= iou_t:
+                    bi = ious_sorted[j].argmax()
+                    if ious_sorted[j, bi] >= iou_t and bi not in matched:
                         tp_this.append(1)
                         matched.add(bi)
                     else:
@@ -1374,7 +1342,7 @@ def compute_ap_multi_thresh(
                 continue
 
             order = scs.argsort()[::-1]
-            tp = tps[order]
+            tp = tp_s = tps[order]
             tc = np.cumsum(tp)
             fc = np.cumsum(1 - tp)
             rec = tc / total_gt
@@ -1595,16 +1563,14 @@ def compute_head_pose_metrics(
         result['up_raw_MAE']                = _mse_err_deg(pred[:, 6:9], gt[:, 6:9])
         result['head_pose_status']          = 'non_unit_vectors'
 
-    # Position MAE in mm. Standardization chain (verified 2026-06-04):
-    #   raw pose.csv  : cm-scale (|pos|max~110, e.g. 110cm = 1.1m head displacement)
-    #   dataset load  : pose_data[:, 3:6] /= HEAD_POSE_POS_SCALE (=100) → metres (O(1))
-    #   this eval     : pos_err * 1000.0 → mm
-    # Model is trained on standardized metres, so the residual is in metres;
-    # multiplying by 1000 converts to mm. Sanity-check at dataset load
-    # (_parse_pose, industreal_dataset.py:538-542) warns if standardized |pos|
-    # exceeds 5 — that warning would fire here too if units ever drift.
+    # Position MAE in mm. pose.csv position columns (4-6) contain values like
+    # ~110, ~-53, ~8 which are NOT in metres (110m is absurd for head-camera
+    # distance). The unit is UNVERIFIED — possibly decimetres,0.1m-normalized
+    # or dataset-specific. multiplying by1000 here is likely WRONG.
+    # TODO: confirm pose.csv columns 4-6 units from IndustReal documentation.
+    # Until confirmed, position_MAE_mm is unreliable — do not use for reporting.
     pos_err_m = np.linalg.norm(pred[:, 3:6] - gt[:, 3:6], axis=1)
-    pos_err_mm = pos_err_m * 1000.0  # m → mm
+    pos_err_mm = pos_err_m * 1000.0  # may produce meaningless values
     result['position_MAE_mm'] = float(pos_err_mm.mean())
 
     return result
@@ -1789,35 +1755,48 @@ def _get_dl_osa_numba():
 
     @njit(cache=True, fastmath=True)
     def _dl_osa_numba(a: np.ndarray, b: np.ndarray) -> int:
-        """Numba-JITted OSA Damerau-Levenshtein. ~300x faster than pure-numpy."""
+        """Numba-JITted OSA Damerau-Levenshtein. O(3n) rolling DP — avoids 4.9GB O(mn) matrix for 35K seqs."""
         m, n = len(a), len(b)
         if m == 0:
             return n
         if n == 0:
             return m
-        dp = np.zeros((m + 1, n + 1), dtype=np.int32)
-        dp[:, 0] = np.arange(m + 1, dtype=np.int32)
-        dp[0, :] = np.arange(n + 1, dtype=np.int32)
-        for i in range(1, m + 1):
+        # Three-row rolling DP: prev2=dp[i-2], prev1=dp[i-1], curr=dp[i]
+        prev2 = np.arange(n + 1, dtype=np.int32)
+        prev1 = np.empty(n + 1, dtype=np.int32)
+        curr = np.empty(n + 1, dtype=np.int32)
+        # i=1
+        prev1[0] = 1
+        a0 = a[0]
+        for j in range(1, n + 1):
+            cost = 0 if a0 == b[j - 1] else 1
+            prev1[j] = min(prev2[j] + 1, prev1[j - 1] + 1, prev2[j - 1] + cost)
+        # i=2..m
+        for i in range(2, m + 1):
+            curr[0] = i
             ai = a[i - 1]
+            aim1 = a[i - 2]
             for j in range(1, n + 1):
-                d = dp[i - 1, j] + 1
-                d2 = dp[i, j - 1] + 1
-                d3 = dp[i - 1, j - 1]
-                if ai != b[j - 1]:
-                    d3 += 1
-                if d > d2:
+                bj = b[j - 1]
+                cost = 0 if ai == bj else 1
+                d = prev1[j] + 1          # deletion
+                d2 = curr[j - 1] + 1      # insertion
+                d3 = prev1[j - 1] + cost  # substitution
+                if d2 < d:
                     d = d2
-                if d > d3:
+                if d3 < d:
                     d = d3
-                if i > 1 and j > 1 and ai == b[j - 2] and a[i - 2] == b[j - 1]:
-                    d4 = dp[i - 2, j - 2]
-                    if ai != b[j - 1]:
+                # OSA transposition
+                if j > 1 and ai == b[j - 2] and aim1 == bj:
+                    d4 = prev2[j - 2]
+                    if ai != bj:
                         d4 += 1
-                    if d > d4:
+                    if d4 < d:
                         d = d4
-                dp[i, j] = d
-        return int(dp[m, n])
+                curr[j] = d
+            # Rotate buffers: prev2←prev1, prev1←curr, curr←prev2 (recycled)
+            prev2, prev1, curr = prev1, curr, prev2
+        return int(prev1[n])
 
     _NUMBA_DL_DEFINED = True
     return _dl_osa_numba
@@ -2860,6 +2839,8 @@ def evaluate_all(
         targets['head_pose'] = targets['head_pose'].to(device)
         targets['psr_labels'] = targets['psr_labels'].to(device)
         targets['activity'] = targets['activity'].to(device)
+        if 'activity_mask' in targets:
+            targets['activity_mask'] = targets['activity_mask'].to(device)
         if 'keypoints' in targets:
             targets['keypoints'] = targets['keypoints'].to(device)
         if 'pose_confidence' in targets:
@@ -2872,9 +2853,9 @@ def evaluate_all(
 
         def run_model(inp: torch.Tensor,
                       clip: Optional[torch.Tensor] = None,
-                      vids: Optional[List[str]] = None,
+                      vid_ids: Optional[List[str]] = None,
                       ) -> Dict[str, torch.Tensor]:
-            out = model(inp, video_ids=vids, clip_rgb=clip)
+            out = model(inp, video_ids=vid_ids, clip_rgb=clip)
             for _k in out:
                 if isinstance(out[_k], torch.Tensor):
                     out[_k] = out[_k].float()
@@ -2905,7 +2886,7 @@ def evaluate_all(
                                for k in ['act_logits', 'psr_logits', 'head_pose']
                                if k in outputs_raw}
             for crop in crop_list:
-                out_crop = run_model(crop, None, batch_recording_ids)
+                out_crop = run_model(crop, None)
                 for k in crop_logits_acc:
                     crop_logits_acc[k] = crop_logits_acc[k] + out_crop[k]
             n_crops = len(crop_list)
@@ -2936,13 +2917,17 @@ def evaluate_all(
                 f'  [EVAL batch {bi}] act_logits shape={act_logits_batch.shape}, '
                 f'act_pred shape={act_pred_batch.shape}, B={B}'
             )
-        # Bug D fix — dataset returns raw action IDs as class indices directly.
-        # No shift is applied: raw ID → model class is 1:1 for IDs 1-73.
-        # Class 0 = NA (prepended by config). Variable renamed from misleading
-        # `act_labels_shifted` to `act_labels_batch` to reflect reality.
+        # Dataset returns raw action IDs as class indices 0-74. Frames without
+        # AR annotation have label=-1 (sentinel) and are excluded from eval.
         act_labels_batch = targets['activity'].cpu().numpy()
-        act_preds.append(act_pred_batch)
-        act_labels.append(act_labels_batch)
+        act_mask_batch = targets.get('activity_mask')
+        if act_mask_batch is not None:
+            act_mask_batch = act_mask_batch.cpu().numpy().astype(bool)
+            act_valid = act_mask_batch
+        else:
+            act_valid = (act_labels_batch >= 0)
+        act_preds.append(act_pred_batch[act_valid])
+        act_labels.append(act_labels_batch[act_valid])
         for i in range(B):
             metadata_item = targets['metadata'][i] if i < len(targets['metadata']) else {}
             rec_id = metadata_item.get('recording_id', metadata_item.get('rec_id', None))
@@ -3342,10 +3327,6 @@ def evaluate_all(
             'det_per_class_ap': {},
             'det_mAP50_all_frames': 0.0,
             'det_per_class_ap_all_frames': {},
-            'det_mAP50_pc': 0.0,
-            'det_mAP_50_95_pc': 0.0,
-            'det_n_present_classes': 0,
-            'det_per_class_gt': {},
         }
     elif getattr(C, 'SKIP_DET_METRICS_EVAL', False):
         logger.info('  [SKIP_DET] SKIP_DET_METRICS_EVAL=True — detection metrics skipped')
@@ -3355,10 +3336,6 @@ def evaluate_all(
             'det_per_class_ap': {},
             'det_mAP50_all_frames': float('nan'),
             'det_per_class_ap_all_frames': {},
-            'det_mAP50_pc': float('nan'),
-            'det_mAP_50_95_pc': float('nan'),
-            'det_n_present_classes': 0,
-            'det_per_class_gt': {},
         }
     else:
         # [DEBUG] Print detection boxes/scores statistics
@@ -3663,26 +3640,11 @@ def _print_single_run_results(results: Dict[str, Any], split: str) -> None:
     print(f'  mAP@[0.5:0.95]         : {results["det_mAP_50_95"]:.4f}')
 
     det_per_class = cast(Dict[int, float], results.get('det_per_class_ap', {}))
-    det_per_class_gt = cast(Dict[int, int], results.get('det_per_class_gt', {}))
     if det_per_class:
-        print('\n  Per-class AP@0.5 (with GT count — 0.0 with GT=0 means absent-class, not model failure):')
+        print('\n  Per-class AP@0.5:')
         for cls_id, ap in sorted(det_per_class.items()):
             name = C.DET_CLASS_NAMES.get(cls_id + 1, f'class_{cls_id}')
-            gt_count = det_per_class_gt.get(cls_id, 0)
-            print(f'    {name:20s}: {ap:.4f}  (GT={gt_count})')
-        # Top-3 worst + best per-class AP (only among classes with GT>0, so absent-class zeros don't dominate)
-        classes_with_gt = [(cid, ap) for cid, ap in det_per_class.items() if det_per_class_gt.get(cid, 0) > 0]
-        if classes_with_gt:
-            worst3 = sorted(classes_with_gt, key=lambda x: x[1])[:3]
-            best3 = sorted(classes_with_gt, key=lambda x: -x[1])[:3]
-            print('\n  3 Worst ASD classes (GT>0 only):')
-            for cid, ap in worst3:
-                name = C.DET_CLASS_NAMES.get(cid + 1, f'class_{cid}')
-                print(f'    {name:20s}: {ap:.4f}  (GT={det_per_class_gt.get(cid, 0)})')
-            print('  3 Best ASD classes (GT>0 only):')
-            for cid, ap in best3:
-                name = C.DET_CLASS_NAMES.get(cid + 1, f'class_{cid}')
-                print(f'    {name:20s}: {ap:.4f}  (GT={det_per_class_gt.get(cid, 0)})')
+            print(f'    {name:20s}: {ap:.4f}')
 
     # ── 2. Activity Recognition ───────────────────────────────────────────
     print('\nACTIVITY RECOGNITION')

@@ -1144,6 +1144,9 @@ class FeatureBank(nn.Module):
         """
         if projected_features.dim() == 3:
             # Batch mode with temporal dim: [B, T, 512] -> use as-is
+            # NaN guard: if input has NaN, sanitize to zeros to prevent cascade
+            if not torch.isfinite(projected_features).all():
+                return torch.zeros_like(projected_features)
             return projected_features
 
         B = projected_features.shape[0]
@@ -1161,17 +1164,39 @@ class FeatureBank(nn.Module):
 
             feat_i = projected_features[i]  # [512]
 
+            # NaN/Inf guard: skip storing corrupted features in the bank.
+            # A single NaN feature contaminates all future temporal windows
+            # and triggers a permanent NaN cascade (PSR → all heads collapse
+            # to 1e-4 fallback). If the bank has prior valid data, pad with
+            # the last valid feature instead; otherwise use zeros.
             if key not in self._bank:
                 self._bank[key] = []
-
-            self._bank[key].append(feat_i.detach().clone())
+            feat_is_valid = torch.isfinite(feat_i).all()
+            if not feat_is_valid:
+                if key in self._bank and len(self._bank[key]) > 0:
+                    # Pad with last valid feature
+                    self._bank[key].append(self._bank[key][-1].clone())
+                else:
+                    # No prior data — use zeros
+                    zero_feat = torch.zeros_like(feat_i)
+                    # Initialize bank with copies of zero_feat
+                    self._bank[key] = [zero_feat.clone() for _ in range(self.window_size)]
+                    bank_i = torch.stack(self._bank[key])
+                    outputs.append(bank_i)
+                    continue
+            else:
+                self._bank[key].append(feat_i.detach().clone())
 
             if len(self._bank[key]) > self.window_size:
                 self._bank[key].pop(0)
 
             seq = self._bank[key]
             while len(seq) < self.window_size:
-                seq = [feat_i.detach().clone()] + seq
+                if feat_is_valid:
+                    pad_feat = feat_i.detach().clone()
+                else:
+                    pad_feat = self._bank[key][0].clone()
+                seq = [pad_feat] + seq
             seq = seq[-self.window_size:]
 
             bank_i = torch.stack(seq)  # [T, 512]
@@ -1224,10 +1249,11 @@ class ActivityHead(nn.Module):
     With VideoMAE stream:
       VideoMAE(384-D) -> fused with CLS output -> classifier
 
-    Note: The final classifier outputs 74 classes (not 75). Class index 0 is
-    'NA' padding prepended at dataset load time. The raw AR action IDs (1-74
-    in AR_labels.csv, since 0 and 37,64 are missing) are mapped to indices 1-74
-    by adding 1, so classifier output [B, 74] indexes ACT_CLASS_NAMES directly.
+    Note: The final classifier outputs 75 classes (indices 0-74). The dataset
+    emits raw action_id values (0-74) directly as class indices — no shift.
+    Action_id=0 is \"take_short_brace\" (a real action, not NA). Only ID 37 is
+    absent from the dataset (permanent cold channel). Frames without any AR
+    annotation are marked with label=-1 and excluded from the activity loss.
     """
     def __init__(self, c5_channels: int = 2048, p4_channels: int = 256,
                  det_conf_size: int = 24, embed_dim: int = 512,
@@ -1734,7 +1760,28 @@ class POPWMultiTaskModel(nn.Module):
 
         c2, c3, c4, c5 = self.backbone(images)
 
-        pyramid = self.fpn(c3, c4, c5)
+        # NaN guard: sanitize backbone features before FPN. A single NaN in
+        # c2-c5 infects all downstream heads. torch.where preserves gradient
+        # flow: finite entries pass through, NaN entries are zeroed.
+        def _sanitize(x, bound=100.0):
+            if torch.isfinite(x).all():
+                return x.clamp(-bound, bound)
+            return torch.where(torch.isfinite(x), x.clamp(-bound, bound), torch.zeros_like(x))
+
+        _c3, _c4, _c5 = _sanitize(c3), _sanitize(c4), _sanitize(c5)
+        pyramid = self.fpn(_c3, _c4, _c5)
+
+        # NaN guard for pyramid: torch.clamp alone does NOT replace NaN values.
+        # A single NaN in any pyramid level propagates through all 5 heads.
+        for _k in pyramid:
+            if not torch.isfinite(pyramid[_k]).all():
+                pyramid[_k] = torch.where(
+                    torch.isfinite(pyramid[_k]),
+                    pyramid[_k].clamp(-100.0, 100.0),
+                    torch.zeros_like(pyramid[_k]),
+                )
+            else:
+                pyramid[_k] = pyramid[_k].clamp(-100.0, 100.0)
 
         cls_preds, reg_preds = self.detection_head(pyramid)
         anchors = self.anchor_gen(pyramid)
@@ -1885,6 +1932,11 @@ class POPWMultiTaskModel(nn.Module):
 
         proj_feat = self.activity_head.proj_features(activity_proj)
 
+        # NaN guard: sanitize proj_feat before FeatureBank update to prevent
+        # permanent contamination of the temporal ring buffer.
+        if not torch.isfinite(proj_feat).all():
+            proj_feat = torch.zeros_like(proj_feat)
+
         bank_output = self.feature_bank(proj_feat, video_ids, None)
 
         videomae_feat = None
@@ -1896,6 +1948,32 @@ class POPWMultiTaskModel(nn.Module):
             temporal_bank=bank_output,
             videomae_feat=videomae_feat,
         )
+
+        # [CRITICAL FIX 2026-06-12] NaN guard on ALL head outputs before return.
+        # A single NaN in any output contaminates the loss computation and, via
+        # _safe→constant replacement, eventually disconnects the autograd graph.
+        # Check each tensor and replace NaN with zeros.
+        for _out_name, _out_val in [
+            ('cls_preds', cls_preds), ('reg_preds', reg_preds),
+            ('heatmaps', heatmaps), ('keypoints', keypoints),
+            ('pose_confidence', pose_confidence),
+            ('head_pose', head_pose), ('act_logits', act_logits),
+            ('psr_logits', psr_logits),
+        ]:
+            if _out_val is not None and not torch.isfinite(_out_val).all():
+                if not self.training:
+                    logger.warning(f'[MODEL_NAN] {_out_name} has NaN (eval mode)')
+                # Zero the output: preserves shape/dtype, disconnects NaN from loss
+                _out_val = torch.zeros_like(_out_val)
+                # Reassign to local variable
+                if _out_name == 'cls_preds': cls_preds = _out_val
+                elif _out_name == 'reg_preds': reg_preds = _out_val
+                elif _out_name == 'heatmaps': heatmaps = _out_val
+                elif _out_name == 'keypoints': keypoints = _out_val
+                elif _out_name == 'pose_confidence': pose_confidence = _out_val
+                elif _out_name == 'head_pose': head_pose = _out_val
+                elif _out_name == 'act_logits': act_logits = _out_val
+                elif _out_name == 'psr_logits': psr_logits = _out_val
 
         return {
             'cls_preds': cls_preds,
