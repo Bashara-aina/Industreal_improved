@@ -206,10 +206,29 @@ class FocalLoss(nn.Module):
         device = cls_preds.device
         total_cls = torch.tensor(0.0, device=device)
         total_reg = torch.tensor(0.0, device=device)
+        n_img_with_gt = 0
 
         for i in range(B):
             gt_boxes = targets[i]['boxes'].to(device)
             gt_labels = targets[i]['labels'].to(device)
+
+            # [RC-28 FIX 2026-06-12] SKIP images with no GT boxes entirely.
+            # Previously an empty image fell through to `num_pos = max(0, 1) = 1`
+            # and contributed its FULL summed negative focal loss (~173K anchors
+            # x 24 classes ~ 4.15M elements ~ 130-200 loss units) divided by 1,
+            # while a GT image contributed ~3-4. With ~85% of sampled frames
+            # empty (the activity-balanced sampler does not favor GT-box
+            # frames), the detection gradient was ~30:1 dominated by a uniform
+            # "push every score down" signal — the head converged to the
+            # degenerate constant-output solution (scores flat at 0.154,
+            # std 0.0095) instead of learning localization. Standard detector
+            # practice (COCO/RetinaNet) excludes annotation-free images from
+            # detection training; hard-negative mining on empty frames can be
+            # reintroduced later deliberately, with a bounded weight.
+            if gt_boxes.shape[0] == 0:
+                continue
+            n_img_with_gt += 1
+
             matched_labels, matched_boxes = self._match_anchors(anchors, gt_boxes, gt_labels)
             probe_anchor_matching(matched_labels, num_gt=gt_boxes.shape[0], img_idx=i)
 
@@ -269,7 +288,11 @@ class FocalLoss(nn.Module):
                 )
                 total_reg = total_reg + giou_loss / num_pos
 
-        return total_cls / B, total_reg / B
+        # [RC-28 FIX 2026-06-12] Normalize by the number of images that
+        # actually contributed (GT-bearing), not the full batch size — with
+        # empty images skipped, dividing by B would shrink the det gradient
+        # by the empty-frame fraction (~85%) for no reason.
+        return total_cls / max(n_img_with_gt, 1), total_reg / max(n_img_with_gt, 1)
 
 
 # ===========================================================================

@@ -42,6 +42,7 @@ TRAIN_HEAD_POSE = True    # Train 9-DoF head pose head with Kendall uncertainty 
 TRAIN_ACT       = True
 TRAIN_PSR       = True
 USE_KENDALL     = True   # Kendall weighting active for 4 tasks (det, act, psr, head_pose 9-DoF MSE)
+TRAIN_MAX_STEPS = int(os.environ.get('TRAIN_MAX_STEPS', 0))  # 0=disabled; set >0 to stop after N batches
 
 # Hand-FiLM conditioning (hand keypoints → FiLM modulation on activity features)
 USE_HAND_FILM   = True
@@ -499,7 +500,7 @@ MONITOR_LOG_INTERVAL = 10
 LOG_EFFICIENCY_EVERY = 10  # log GFLOPs/FPS every N epochs (0=disable)
 # Detection metrics: compute_det_metrics_extended does 11×(24 classes × 35084 frames) nested
 # Python loops = ~87 min/epoch. Set to True to enable, False to skip (epoch快了~87min).
-SKIP_DET_METRICS_EVAL = True  # True = skip detection mAP (~87 min/epoch) — saves ~90 min per epoch
+SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP (~87 min/epoch) — saves ~90 min per epoch
 # Efficiency metrics: compute_efficiency_metrics does 35 forward passes each epoch.
 # Set to True to skip except when (epoch % LOG_EFFICIENCY_EVERY == 0).
 SKIP_EFFICIENCY_METRICS = True  # True = only compute every LOG_EFFICIENCY_EVERY epochs
@@ -553,10 +554,9 @@ PRESETS = {
     },
     'recovery': {
         'description': (
-            'Recovery preset. Trains detection-first with staged training, '
-            'AMP enabled for 12GB VRAM, EMA active. '
-            'ZERO_DET_CONF disabled — det_conf flows into activity head normally. '
-            'Use with --reinit-heads --subset-ratio 0.25 for recovery retrain.'
+            'RC-25/RC-28 recovery preset (joint heads). FP32 ONLY, no staged '
+            'training, det_conf live (sigmoid-bounded). Run recovery_det_only '
+            'FIRST to bootstrap detection, then this for joint training.'
         ),
         'dataset_mode':       'manual_only',
         'backbone':           'convnext_tiny',
@@ -565,12 +565,57 @@ PRESETS = {
         'use_hand_film':      True,
         'benchmark_mode':     False,
         'batch_size':         1,
-        'grad_accum_steps':   32,
-        'zero_det_conf':      False,  # RC-28 FIX: was True — starved activity head
-        'staged_training':    False,  # All 5 heads active from epoch 0
-        'mixed_precision':    True,   # OOM FIX: was False — AMP safe now (RC-25 fixed)
+        'grad_accum_steps':   8,      # [RC-28] effective batch 8: with empty frames now
+                                      # skipped in det loss, ~1 GT frame lands per update;
+                                      # 32 starved update frequency, 4 (as hand-edited on
+                                      # the training box) was too noisy for LDAM/Kendall.
+        'zero_det_conf':      False,  # [RC-28 FIX 2026-06-12] was True. The zeroing
+                                      # guarded against SATURATED raw det_conf (O(10-100));
+                                      # that is fixed at the source (sigmoid bound + healthy
+                                      # logits, step-0 median |z|=2.95). Zeroing now only
+                                      # starves the activity head of a legitimate signal.
+        'staged_training':    False,  # All heads active from epoch 0
+        'mixed_precision':    False,  # [RC-29 — DO NOT FLIP THIS TO True] fp16 GradScaler
+                                      # SILENTLY skips optimizer.step() on inf/NaN grads;
+                                      # the June 11-12 recovery runs (preset hand-edited to
+                                      # mixed_precision=True on the training box) produced
+                                      # 4 validation cycles IDENTICAL to 4 decimals — the
+                                      # signature of zero committed steps. Watch the
+                                      # "[RC-29] optimizer windows" epoch summary line.
         'use_mixup':          False,  # RC-15: logit-mixing corrupts activity labels
-        'use_ema':            True,   # EMA improves final model quality
+        'use_ema':            False,  # short recovery runs: best.pth must hold the RAW
+                                      # trained weights, not an EMA blend lagging at init
+        # Explicit task flags so this preset is self-contained even if another
+        # preset (e.g. recovery_det_only) was applied earlier in the process.
+        'train_det':          True,
+        'train_act':          True,
+        'train_psr':          True,
+        'train_head_pose':    True,
+    },
+    'recovery_det_only': {
+        'description': (
+            'Stage R1 detection bootstrap: det + head_pose ONLY (activity/PSR '
+            'losses off). With empty frames skipped in det loss, all det '
+            'gradient comes from GT-bearing frames. Gate: det_mAP50 >= 0.05 '
+            'before switching to the joint recovery preset.'
+        ),
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         1,
+        'grad_accum_steps':   8,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,  # [RC-29] FP32 only — see 'recovery' preset comment
+        'use_mixup':          False,
+        'use_ema':            False,
+        'train_det':          True,
+        'train_act':          False,  # activity loss OFF — pure detection bootstrap
+        'train_psr':          False,  # PSR loss OFF
+        'train_head_pose':    True,   # cheap, healthy, gives backbone a 2nd stable signal
     },
     'benchmark_quick': {
         'description': (
@@ -595,6 +640,7 @@ def apply_preset(preset_name: str) -> None:
     global GRAD_ACCUM_STEPS, EFFECTIVE_BATCH
     global ZERO_DET_CONF_FOR_RECOVERY, STAGED_TRAINING, MIXED_PRECISION
     global USE_MIXUP, USE_EMA
+    global TRAIN_DET, TRAIN_ACT, TRAIN_PSR, TRAIN_HEAD_POSE
 
     if preset_name not in PRESETS:
         raise ValueError(f'Unknown preset: {preset_name}. Available: {list(PRESETS.keys())}')
@@ -611,6 +657,13 @@ def apply_preset(preset_name: str) -> None:
     MIXED_PRECISION = preset.get('mixed_precision', MIXED_PRECISION)
     USE_MIXUP = preset.get('use_mixup', USE_MIXUP)
     USE_EMA = preset.get('use_ema', USE_EMA)
+    # [RC-28] per-task ablation flags (recovery_det_only). train.py caches
+    # these into CFG_TRAIN_* via _refresh_runtime_cfg() right after the preset
+    # is applied, and passes them into MultiTaskLoss / model construction.
+    TRAIN_DET = preset.get('train_det', TRAIN_DET)
+    TRAIN_ACT = preset.get('train_act', TRAIN_ACT)
+    TRAIN_PSR = preset.get('train_psr', TRAIN_PSR)
+    TRAIN_HEAD_POSE = preset.get('train_head_pose', TRAIN_HEAD_POSE)
     # [AUDIT FIX 2026-06-11] EFFECTIVE_BATCH was computed once at import and
     # went stale when a preset changed BATCH_SIZE / GRAD_ACCUM_STEPS.
     EFFECTIVE_BATCH = BATCH_SIZE * GRAD_ACCUM_STEPS

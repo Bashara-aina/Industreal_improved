@@ -806,8 +806,11 @@ def compute_activity_metrics(
     if all_logits is not None and len(all_logits) > 0:
         all_logits = np.asarray(all_logits)
         top5_indices = np.argsort(all_logits, axis=1)[:, -5:]
-        top5_correct = np.any(top5_indices == all_gt[:, None], axis=1)
-        top5_acc = float(top5_correct.mean()) if len(top5_correct) > 0 else 0.0
+        if len(top5_indices) == len(all_gt):
+            top5_correct = np.any(top5_indices == all_gt[:, None], axis=1)
+            top5_acc = float(top5_correct.mean()) if len(top5_correct) > 0 else 0.0
+        else:
+            top5_acc = 0.0
 
     # 8. Per-class report
     report = {}
@@ -3168,27 +3171,32 @@ def evaluate_all(
                 f'(top-1 class={_top1} with {_top1_freq*100:.1f}% of frames). '
                 f'act_macro_f1=0 is a model collapse, not an eval bug.'
             )
-    act_metrics = compute_activity_metrics(
-        all_act_gt, all_act_pred, all_act_logits,
-        class_names=C.ACT_CLASS_NAMES,
-        save_dir=save_dir,
-        clip_ids=np.asarray(act_clip_ids) if act_clip_ids else None,
-    )
+    if getattr(C, 'TRAIN_ACT', True):
+        act_metrics = compute_activity_metrics(
+            all_act_gt, all_act_pred, all_act_logits,
+            class_names=C.ACT_CLASS_NAMES,
+            save_dir=save_dir,
+            clip_ids=np.asarray(act_clip_ids) if act_clip_ids else None,
+        )
+    else:
+        act_metrics = {'act_macro_f1': 0.0, 'act_top5_acc': 0.0, 'act_frame_acc': 0.0}
     results.update(act_metrics)
-    report_per_class_accuracy(
-        act_metrics.get('act_confusion_matrix', []),
-        class_names=C.ACT_CLASS_NAMES,
-        k=5,
+    if getattr(C, 'TRAIN_ACT', True):
+        report_per_class_accuracy(
+            act_metrics.get('act_confusion_matrix', []),
+            class_names=C.ACT_CLASS_NAMES,
+            k=5,
     )
-    logger.info(
-        f'  Activity — Acc: {results["act_accuracy"]:.4f}  '
-        f'Macro-F1: {results["act_macro_f1"]:.4f}  '
-        f'Weighted-F1: {results["act_weighted_f1"]:.4f}  '
-        f'Top-5: {results["act_top5_accuracy"]:.4f}  '
-        f'Frame Acc (all): {results["act_frame_accuracy"]:.4f}  '
-        f'Frame Acc (no NA): {results["act_accuracy_no_na"]:.4f}  '
-        f'Macro-Recall: {results["act_macro_recall"]:.4f}'
-    )
+    if getattr(C, 'TRAIN_ACT', True):
+        logger.info(
+            f'  Activity — Acc: {results["act_accuracy"]:.4f}  '
+            f'Macro-F1: {results["act_macro_f1"]:.4f}  '
+            f'Weighted-F1: {results["act_weighted_f1"]:.4f}  '
+            f'Top-5: {results["act_top5_accuracy"]:.4f}  '
+            f'Frame Acc (all): {results["act_frame_accuracy"]:.4f}  '
+            f'Frame Acc (no NA): {results["act_accuracy_no_na"]:.4f}  '
+            f'Macro-Recall: {results["act_macro_recall"]:.4f}'
+        )
 
     # -------------------------------------------------------------------------
     # Head Pose Metrics
@@ -3244,25 +3252,25 @@ def evaluate_all(
         )
 
     # GPU-fused: computes both tolerance=3 AND tolerance=5 in a SINGLE pass
-    psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
+    if getattr(C, 'TRAIN_PSR', True):
+        psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
+    else:
+        psr_metrics = {'psr_f1': 0.0, 'psr_edit': 0.0, 'psr_pos': 0.0}
     results.update(psr_metrics)
-    # Alias for train.py combined metric compatibility (Item 45)
-    results['psr_macro_f1'] = results.get('psr_overall_f1', 0.0)
-    # Overall F1 doesn't depend on tolerance; reuse the same value
-    results['psr_overall_f1_at5'] = results.get('psr_overall_f1', 0.0)
-    # F1@±5 is already in psr_metrics['psr_f1_at_t5']
-
-    logger.info(
-        f'  PSR — Overall F1: {results["psr_overall_f1"]:.4f}  '
-        f'F1@±3: {results["psr_f1_at_t"]:.4f}  '
-        f'P@±3: {results["psr_precision_at_t"]:.4f}  '
-        f'R@±3: {results["psr_recall_at_t"]:.4f}  '
-        f'F1@±5: {results["psr_f1_at_t5"]:.4f}  '
-        f'P@±5: {results["psr_precision_at_t5"]:.4f}  '
-        f'R@±5: {results["psr_recall_at_t5"]:.4f}  '
-        f'Edit: {results["psr_edit_score"]:.4f}  '
-        f'POS: {results["psr_pos"]:.4f}'
-    )
+    if getattr(C, 'TRAIN_PSR', True):
+        results['psr_macro_f1'] = results.get('psr_overall_f1', 0.0)
+        results['psr_overall_f1_at5'] = results.get('psr_overall_f1', 0.0)
+        logger.info(
+            f'  PSR — Overall F1: {results["psr_overall_f1"]:.4f}  '
+            f'F1@±3: {results["psr_f1_at_t"]:.4f}  '
+            f'P@±3: {results["psr_precision_at_t"]:.4f}  '
+            f'R@±3: {results["psr_recall_at_t"]:.4f}  '
+            f'F1@±5: {results["psr_f1_at_t5"]:.4f}  '
+            f'P@±5: {results["psr_precision_at_t5"]:.4f}  '
+            f'R@±5: {results["psr_recall_at_t5"]:.4f}  '
+            f'Edit: {results["psr_edit_score"]:.4f}  '
+            f'POS: {results["psr_pos"]:.4f}'
+        )
 
     # -------------------------------------------------------------------------
     # Assembly State Recognition Metrics (Paper 8 — IEEE RAL 2024)

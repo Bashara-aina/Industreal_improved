@@ -1,0 +1,314 @@
+ code/industreal_improved/src/config.py          | 73 +++++++++++++++++++++----
+ code/industreal_improved/src/training/losses.py | 25 ++++++++-
+ code/industreal_improved/src/training/train.py  | 67 ++++++++++++++++++++++-
+ 3 files changed, 151 insertions(+), 14 deletions(-)
+---
+diff --git a/code/industreal_improved/src/config.py b/code/industreal_improved/src/config.py
+index 95995f8..2b45f93 100644
+--- a/code/industreal_improved/src/config.py
++++ b/code/industreal_improved/src/config.py
+@@ -42,6 +42,7 @@ TRAIN_HEAD_POSE = True    # Train 9-DoF head pose head with Kendall uncertainty
+ TRAIN_ACT       = True
+ TRAIN_PSR       = True
+ USE_KENDALL     = True   # Kendall weighting active for 4 tasks (det, act, psr, head_pose 9-DoF MSE)
++TRAIN_MAX_STEPS = int(os.environ.get('TRAIN_MAX_STEPS', 0))  # 0=disabled; set >0 to stop after N batches
+ 
+ # Hand-FiLM conditioning (hand keypoints → FiLM modulation on activity features)
+ USE_HAND_FILM   = True
+@@ -499,7 +500,7 @@ MONITOR_LOG_INTERVAL = 10
+ LOG_EFFICIENCY_EVERY = 10  # log GFLOPs/FPS every N epochs (0=disable)
+ # Detection metrics: compute_det_metrics_extended does 11×(24 classes × 35084 frames) nested
+ # Python loops = ~87 min/epoch. Set to True to enable, False to skip (epoch快了~87min).
+-SKIP_DET_METRICS_EVAL = True  # True = skip detection mAP (~87 min/epoch) — saves ~90 min per epoch
++SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP (~87 min/epoch) — saves ~90 min per epoch
+ # Efficiency metrics: compute_efficiency_metrics does 35 forward passes each epoch.
+ # Set to True to skip except when (epoch % LOG_EFFICIENCY_EVERY == 0).
+ SKIP_EFFICIENCY_METRICS = True  # True = only compute every LOG_EFFICIENCY_EVERY epochs
+@@ -553,10 +554,9 @@ PRESETS = {
+     },
+     'recovery': {
+         'description': (
+-            'Recovery preset. Trains detection-first with staged training, '
+-            'AMP enabled for 12GB VRAM, EMA active. '
+-            'ZERO_DET_CONF disabled — det_conf flows into activity head normally. '
+-            'Use with --reinit-heads --subset-ratio 0.25 for recovery retrain.'
++            'RC-25/RC-28 recovery preset (joint heads). FP32 ONLY, no staged '
++            'training, det_conf live (sigmoid-bounded). Run recovery_det_only '
++            'FIRST to bootstrap detection, then this for joint training.'
+         ),
+         'dataset_mode':       'manual_only',
+         'backbone':           'convnext_tiny',
+@@ -565,12 +565,57 @@ PRESETS = {
+         'use_hand_film':      True,
+         'benchmark_mode':     False,
+         'batch_size':         1,
+-        'grad_accum_steps':   32,
+-        'zero_det_conf':      False,  # RC-28 FIX: was True — starved activity head
+-        'staged_training':    False,  # All 5 heads active from epoch 0
+-        'mixed_precision':    True,   # OOM FIX: was False — AMP safe now (RC-25 fixed)
++        'grad_accum_steps':   8,      # [RC-28] effective batch 8: with empty frames now
++                                      # skipped in det loss, ~1 GT frame lands per update;
++                                      # 32 starved update frequency, 4 (as hand-edited on
++                                      # the training box) was too noisy for LDAM/Kendall.
++        'zero_det_conf':      False,  # [RC-28 FIX 2026-06-12] was True. The zeroing
++                                      # guarded against SATURATED raw det_conf (O(10-100));
++                                      # that is fixed at the source (sigmoid bound + healthy
++                                      # logits, step-0 median |z|=2.95). Zeroing now only
++                                      # starves the activity head of a legitimate signal.
++        'staged_training':    False,  # All heads active from epoch 0
++        'mixed_precision':    False,  # [RC-29 — DO NOT FLIP THIS TO True] fp16 GradScaler
++                                      # SILENTLY skips optimizer.step() on inf/NaN grads;
++                                      # the June 11-12 recovery runs (preset hand-edited to
++                                      # mixed_precision=True on the training box) produced
++                                      # 4 validation cycles IDENTICAL to 4 decimals — the
++                                      # signature of zero committed steps. Watch the
++                                      # "[RC-29] optimizer windows" epoch summary line.
+         'use_mixup':          False,  # RC-15: logit-mixing corrupts activity labels
+-        'use_ema':            True,   # EMA improves final model quality
++        'use_ema':            False,  # short recovery runs: best.pth must hold the RAW
++                                      # trained weights, not an EMA blend lagging at init
++        # Explicit task flags so this preset is self-contained even if another
++        # preset (e.g. recovery_det_only) was applied earlier in the process.
++        'train_det':          True,
++        'train_act':          True,
++        'train_psr':          True,
++        'train_head_pose':    True,
++    },
++    'recovery_det_only': {
++        'description': (
++            'Stage R1 detection bootstrap: det + head_pose ONLY (activity/PSR '
++            'losses off). With empty frames skipped in det loss, all det '
++            'gradient comes from GT-bearing frames. Gate: det_mAP50 >= 0.05 '
++            'before switching to the joint recovery preset.'
++        ),
++        'dataset_mode':       'manual_only',
++        'backbone':           'convnext_tiny',
++        'use_tma_cell':       True,
++        'use_temporal_bank':  True,
++        'use_hand_film':      True,
++        'benchmark_mode':     False,
++        'batch_size':         1,
++        'grad_accum_steps':   8,
++        'zero_det_conf':      False,
++        'staged_training':    False,
++        'mixed_precision':    False,  # [RC-29] FP32 only — see 'recovery' preset comment
++        'use_mixup':          False,
++        'use_ema':            False,
++        'train_det':          True,
++        'train_act':          False,  # activity loss OFF — pure detection bootstrap
++        'train_psr':          False,  # PSR loss OFF
++        'train_head_pose':    True,   # cheap, healthy, gives backbone a 2nd stable signal
+     },
+     'benchmark_quick': {
+         'description': (
+@@ -595,6 +640,7 @@ def apply_preset(preset_name: str) -> None:
+     global GRAD_ACCUM_STEPS, EFFECTIVE_BATCH
+     global ZERO_DET_CONF_FOR_RECOVERY, STAGED_TRAINING, MIXED_PRECISION
+     global USE_MIXUP, USE_EMA
++    global TRAIN_DET, TRAIN_ACT, TRAIN_PSR, TRAIN_HEAD_POSE
+ 
+     if preset_name not in PRESETS:
+         raise ValueError(f'Unknown preset: {preset_name}. Available: {list(PRESETS.keys())}')
+@@ -611,6 +657,13 @@ def apply_preset(preset_name: str) -> None:
+     MIXED_PRECISION = preset.get('mixed_precision', MIXED_PRECISION)
+     USE_MIXUP = preset.get('use_mixup', USE_MIXUP)
+     USE_EMA = preset.get('use_ema', USE_EMA)
++    # [RC-28] per-task ablation flags (recovery_det_only). train.py caches
++    # these into CFG_TRAIN_* via _refresh_runtime_cfg() right after the preset
++    # is applied, and passes them into MultiTaskLoss / model construction.
++    TRAIN_DET = preset.get('train_det', TRAIN_DET)
++    TRAIN_ACT = preset.get('train_act', TRAIN_ACT)
++    TRAIN_PSR = preset.get('train_psr', TRAIN_PSR)
++    TRAIN_HEAD_POSE = preset.get('train_head_pose', TRAIN_HEAD_POSE)
+     # [AUDIT FIX 2026-06-11] EFFECTIVE_BATCH was computed once at import and
+     # went stale when a preset changed BATCH_SIZE / GRAD_ACCUM_STEPS.
+     EFFECTIVE_BATCH = BATCH_SIZE * GRAD_ACCUM_STEPS
+diff --git a/code/industreal_improved/src/training/losses.py b/code/industreal_improved/src/training/losses.py
+index eda7e8f..75970ff 100644
+--- a/code/industreal_improved/src/training/losses.py
++++ b/code/industreal_improved/src/training/losses.py
+@@ -206,10 +206,29 @@ class FocalLoss(nn.Module):
+         device = cls_preds.device
+         total_cls = torch.tensor(0.0, device=device)
+         total_reg = torch.tensor(0.0, device=device)
++        n_img_with_gt = 0
+ 
+         for i in range(B):
+             gt_boxes = targets[i]['boxes'].to(device)
+             gt_labels = targets[i]['labels'].to(device)
++
++            # [RC-28 FIX 2026-06-12] SKIP images with no GT boxes entirely.
++            # Previously an empty image fell through to `num_pos = max(0, 1) = 1`
++            # and contributed its FULL summed negative focal loss (~173K anchors
++            # x 24 classes ~ 4.15M elements ~ 130-200 loss units) divided by 1,
++            # while a GT image contributed ~3-4. With ~85% of sampled frames
++            # empty (the activity-balanced sampler does not favor GT-box
++            # frames), the detection gradient was ~30:1 dominated by a uniform
++            # "push every score down" signal — the head converged to the
++            # degenerate constant-output solution (scores flat at 0.154,
++            # std 0.0095) instead of learning localization. Standard detector
++            # practice (COCO/RetinaNet) excludes annotation-free images from
++            # detection training; hard-negative mining on empty frames can be
++            # reintroduced later deliberately, with a bounded weight.
++            if gt_boxes.shape[0] == 0:
++                continue
++            n_img_with_gt += 1
++
+             matched_labels, matched_boxes = self._match_anchors(anchors, gt_boxes, gt_labels)
+             probe_anchor_matching(matched_labels, num_gt=gt_boxes.shape[0], img_idx=i)
+ 
+@@ -269,7 +288,11 @@ class FocalLoss(nn.Module):
+                 )
+                 total_reg = total_reg + giou_loss / num_pos
+ 
+-        return total_cls / B, total_reg / B
++        # [RC-28 FIX 2026-06-12] Normalize by the number of images that
++        # actually contributed (GT-bearing), not the full batch size — with
++        # empty images skipped, dividing by B would shrink the det gradient
++        # by the empty-frame fraction (~85%) for no reason.
++        return total_cls / max(n_img_with_gt, 1), total_reg / max(n_img_with_gt, 1)
+ 
+ 
+ # ===========================================================================
+diff --git a/code/industreal_improved/src/training/train.py b/code/industreal_improved/src/training/train.py
+index b1b1331..1a92e75 100644
+--- a/code/industreal_improved/src/training/train.py
++++ b/code/industreal_improved/src/training/train.py
+@@ -846,6 +846,17 @@ def train_one_epoch(
+     nan_skips = 0
+     total_steps = 0
+     seq_steps = 0
++    # [RC-29 TELEMETRY 2026-06-12] GradScaler SILENTLY skips optimizer.step()
++    # when unscaled grads contain inf/NaN (fp16 AMP). Two 4-epoch recovery runs
++    # produced validation metrics identical to 4 decimal places — the signature
++    # of weights that never update — while per-batch train losses looked alive
++    # (forward pass is unaffected). Count committed vs skipped optimizer
++    # windows so a frozen run is visible within minutes, not GPU-days.
++    # Detection idiom: scaler.update() REDUCES the scale iff the step was
++    # skipped (growth events only ever increase it). Inert when AMP disabled
++    # (scale constant at 1.0).
++    opt_windows = 0
++    opt_skipped = 0
+     t_start = time.time()
+ 
+     _heartbeat_interval = 10   # log heartbeat every N batches
+@@ -1056,10 +1067,13 @@ def train_one_epoch(
+                             break
+                     if _seq_grads_nan:
+                         break
++                opt_windows += 1  # [RC-29 TELEMETRY] count every window, committed or not
+                 if _seq_grads_nan:
++                    opt_skipped += 1
+                     logger.warning(
+                         f'  [GRAD_NAN/SEQ] NaN/Inf gradient at epoch {epoch} step {step + 1} '
+-                        f'— skipping optimizer step, zeroing grads'
++                        f'— skipping optimizer step, zeroing grads '
++                        f'([RC-29] {opt_skipped}/{opt_windows} windows skipped so far)'
+                     )
+                     optimizer.zero_grad(set_to_none=True)
+                 else:
+@@ -1067,8 +1081,17 @@ def train_one_epoch(
+                         list(model.parameters()) + list(criterion.parameters()),
+                         C.GRAD_CLIP_NORM,
+                     )
++                    _scale_before = scaler.get_scale()  # [RC-29] fp16 silent-skip detect
+                     scaler.step(optimizer)
+                     scaler.update()
++                    if scaler.get_scale() < _scale_before:
++                        opt_skipped += 1
++                        if opt_skipped in (1, 10, 50) or opt_skipped % 200 == 0:
++                            logger.warning(
++                                f'  [RC-29] GradScaler SKIPPED optimizer step '
++                                f'({opt_skipped}/{opt_windows} windows so far, seq path) — '
++                                f'inf/NaN grads under AMP.'
++                            )
+                     if ema is not None and (not staged_training or stage >= 3):
+                         ema.update()
+                     optimizer.zero_grad(set_to_none=True)
+@@ -1346,6 +1369,10 @@ def train_one_epoch(
+             # If any param gradient is NaN/Inf, skip this optimizer step to avoid
+             # corrupting model weights. This can happen when Kendall precision
+             # weights amplify small gradient instabilities into numerical overflow.
++            # [RC-29 TELEMETRY] Skips — whether from this manual guard or from
++            # GradScaler's silent fp16 skip — are now COUNTED. A guard that skips
++            # every window freezes the run while the progress bar looks alive;
++            # the per-epoch "optimizer windows" summary makes that visible.
+             _grads_nan = False
+             for _pg in optimizer.param_groups:
+                 for _p in _pg['params']:
+@@ -1354,7 +1381,9 @@ def train_one_epoch(
+                         break
+                 if _grads_nan:
+                     break
++            opt_windows += 1
+             if _grads_nan:
++                opt_skipped += 1
+                 _nan_params = []
+                 for _pg_idx, _pg in enumerate(optimizer.param_groups):
+                     for _p in _pg['params']:
+@@ -1367,7 +1396,8 @@ def train_one_epoch(
+                         break
+                 logger.warning(
+                     f'  [GRAD_NAN] epoch {epoch} step {step + 1} — '
+-                    f'{"; ".join(_nan_params)}; zeroing grads'
++                    f'{"; ".join(_nan_params)}; zeroing grads '
++                    f'([RC-29] {opt_skipped}/{opt_windows} windows skipped so far)'
+                 )
+                 optimizer.zero_grad(set_to_none=True)
+             else:
+@@ -1375,8 +1405,17 @@ def train_one_epoch(
+                     list(model.parameters()) + list(criterion.parameters()),
+                     C.GRAD_CLIP_NORM,
+                 )
++                _scale_before = scaler.get_scale()  # [RC-29] fp16 silent-skip detect
+                 scaler.step(optimizer)
+                 scaler.update()
++                if scaler.get_scale() < _scale_before:
++                    opt_skipped += 1
++                    if opt_skipped in (1, 10, 50) or opt_skipped % 200 == 0:
++                        logger.warning(
++                            f'  [RC-29] GradScaler SKIPPED optimizer step '
++                            f'({opt_skipped}/{opt_windows} windows so far) — '
++                            f'inf/NaN grads under AMP.'
++                        )
+                 if ema is not None and (not staged_training or stage >= 3):
+                     ema.update()
+                 optimizer.zero_grad(set_to_none=True)
+@@ -1499,6 +1538,28 @@ def train_one_epoch(
+             del loss
+ 
+     total_all_steps = total_steps + seq_steps
++
++    # [RC-29 TELEMETRY] Epoch verdict: did the optimizer actually commit steps?
++    if opt_windows > 0:
++        _committed = opt_windows - opt_skipped
++        logger.info(
++            f'  Epoch {epoch}: optimizer windows={opt_windows}  '
++            f'committed={_committed}  skipped={opt_skipped} '
++            f'({opt_skipped / opt_windows:.1%})  scaler_scale={scaler.get_scale():.1f}'
++        )
++        if _committed == 0:
++            logger.error(
++                f'  [RC-29] Epoch {epoch}: ZERO optimizer steps committed — the model '
++                f'did NOT train this epoch (every AMP window had inf/NaN grads). '
++                f'Validation metrics will be IDENTICAL to the previous cycle. '
++                f'Switch to FP32 (MIXED_PRECISION=False / --preset recovery).'
++            )
++        elif opt_skipped / opt_windows > 0.5:
++            logger.warning(
++                f'  [RC-29] Epoch {epoch}: {opt_skipped / opt_windows:.0%} of optimizer '
++                f'steps skipped under AMP — training is severely degraded; prefer FP32.'
++            )
++
+     if nan_skips > 0:
+         logger.warning(f'  Epoch {epoch}: skipped {nan_skips} NaN/Inf batches total')
+         if nan_skips / max(total_all_steps, 1) > 0.10:
+@@ -3170,7 +3231,7 @@ def main(args):
+             _train_ok = (
+                 isinstance(train_metrics, dict)
+                 and train_metrics.get('num_batches', 0) > 0
+-                and train_metrics.get('total', 0) > 0
++                and torch.isfinite(torch.tensor(train_metrics.get('total', 0.0)))
+             )
+             if not _train_ok:
+                 logger.error(
