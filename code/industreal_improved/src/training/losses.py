@@ -911,6 +911,7 @@ class MultiTaskLoss(nn.Module):
         # C.3: Binary focal loss for PSR (instead of BCE)
         self.psr_loss_fn = nn.BCEWithLogitsLoss(reduction='mean')
         self.use_psr_focal = bool(getattr(C, 'PSR_FOCAL_GAMMA', 0) > 0)
+        self.use_psr_transition = bool(getattr(C, 'USE_PSR_TRANSITION', False))  # [OPUS v5] transition objective
         self.psr_focal_alpha = float(getattr(C, 'PSR_FOCAL_ALPHA', 0.25))
         self.psr_focal_gamma = float(getattr(C, 'PSR_FOCAL_GAMMA', 2.0))
         self._psr_per_component_alpha: torch.Tensor = None
@@ -1047,6 +1048,10 @@ class MultiTaskLoss(nn.Module):
                     loss_act = _fallback
                 elif _name == 'psr':
                     loss_psr = _fallback
+                    logger.warning(
+                        f'  [PSR_NAN_GUARD_L1041] loss_psr was non-finite before Kendall assembly '
+                        f'— replaced with 1e-4 fallback (epoch {self._current_epoch})'
+                    )
                 elif _name == 'head_pose':
                     loss_head_pose = _fallback
 
@@ -1162,10 +1167,25 @@ class MultiTaskLoss(nn.Module):
         preds = None
         if self.train_psr:
             # C.3: Binary focal loss for PSR (Doc 01 §D.4: per-component alpha)
+            # [OPUS v5] USE_PSR_TRANSITION: convert fill-forward labels to transition targets
+            # before computing loss. Per-frame focal on 95%-static labels makes constant
+            # output near-optimal; transition targets (Gaussian-smeared 0→1 events) force
+            # the model to learn changepoints. psr_transition.py implements the conversion.
+            _psr_targets = targets['psr_labels']
+            if self.use_psr_transition:
+                try:
+                    from src.models.psr_transition import build_transition_targets
+                    _psr_targets = build_transition_targets(
+                        targets['psr_labels'].to(outputs['psr_logits'].device),
+                        sigma=float(getattr(C, 'PSR_TRANSITION_SIGMA', 3.0)),
+                    )
+                except Exception as e:
+                    logger.warning(f'  [PSR_TRANSITION] build_transition_targets failed: {e} — falling back to fill-forward labels')
+
             if self.use_psr_focal:
                 loss_psr = binary_focal_loss(
                     outputs['psr_logits'],
-                    targets['psr_labels'],
+                    _psr_targets,
                     alpha=self.psr_focal_alpha,
                     gamma=self.psr_focal_gamma,
                     per_component_alpha=self._psr_per_component_alpha,
@@ -1173,7 +1193,7 @@ class MultiTaskLoss(nn.Module):
             else:
                 loss_psr = self.psr_loss_fn(
                     outputs['psr_logits'],
-                    targets['psr_labels'],
+                    _psr_targets,
                 )
 
             # --- FIX 1 (2026-06-06): PSR input-sensitivity penalty ---
