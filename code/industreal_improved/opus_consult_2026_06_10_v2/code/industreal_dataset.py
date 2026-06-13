@@ -410,11 +410,12 @@ class _PerRecordingCache:
         """
         Parse AR_labels.csv and interpolate to per-frame labels.
         Format: recording_id,action_class_id,action_description,start_frame.jpg,end_frame.jpg
-        Returns: np.ndarray of shape [num_frames] with action IDs (shifted by +1 for NA=0).
+        Returns: np.ndarray of shape [num_frames] with raw action IDs.
+        Frames without any AR coverage get -1 (sentinel for "unlabeled").
         """
         ar_file = self.rec_dir / 'AR_labels.csv'
         if not ar_file.exists():
-            return np.zeros(self._num_frames, dtype=np.int64)
+            return np.full(self._num_frames, -1, dtype=np.int64)
 
         # Load all action spans
         spans: List[Tuple[int, int, int]] = []  # (start_frame, end_frame, action_id)
@@ -423,8 +424,6 @@ class _PerRecordingCache:
             for row in reader:
                 if len(row) < 5:
                     continue
-                # row[0]=recording_id, row[1]=action_class_id, row[2]=description,
-                # row[3]=start_frame.jpg, row[4]=end_frame.jpg
                 try:
                     action_id = int(row[1])
                     start_frame = int(Path(row[3]).stem)
@@ -436,10 +435,9 @@ class _PerRecordingCache:
         # Sort by start frame
         spans.sort(key=lambda x: x[0])
 
-        # Interpolate: each frame gets the action active during that frame.
-        # action_id 0 → NA/background → class index 0 (prepended as ACT_CLASS_NAMES[0])
-        # action_id > 0 → class index = action_id (no shift needed; raw IDs 1-74 map to indices 1-74)
-        labels = np.zeros(self._num_frames, dtype=np.int64)
+        # Initialize to -1 = unlabeled (sentinel); frames covered by action spans
+        # get their raw action_id (including 0 for "take_short_brace").
+        labels = np.full(self._num_frames, -1, dtype=np.int64)
         for start, end, action_id in spans:
             end = min(end, self._num_frames - 1)
             if start < self._num_frames:
@@ -482,12 +480,19 @@ class _PerRecordingCache:
         dense = np.zeros((self._num_frames, C.NUM_PSR_COMPONENTS), dtype=np.float32)
         current = np.zeros(C.NUM_PSR_COMPONENTS, dtype=np.float32)
 
+        # [OPUS v5 AUDIT] -1 transient fix: -1 is an error component — do NOT carry it
+        # forward. It over-counts ignores if propagated to all later frames. Instead,
+        # keep the last valid value (not -1) when encountering -1 in sparse data.
+        _last_valid = np.zeros(C.NUM_PSR_COMPONENTS, dtype=np.int64)  # defaults: all absent
         sparse_idx = 0
         for frame in range(self._num_frames):
             if sparse_idx < len(sparse) and frame == sparse[sparse_idx][0]:
-                current = sparse[sparse_idx][1].copy()
+                _new = sparse[sparse_idx][1].copy()
                 sparse_idx += 1
-            dense[frame] = current
+                # Only update components that are NOT -1 (error); keep last valid
+                _valid_mask = _new >= 0
+                _last_valid[_valid_mask] = _new[_valid_mask]
+            dense[frame] = _last_valid.copy()
 
         return dense
 
@@ -681,8 +686,9 @@ class IndustRealMultiTaskDataset(Dataset):
         self.activity_ids = np.array(
             [s['action_label'] for s in self.samples], dtype=np.int64
         )
+        valid_ids = self.activity_ids[self.activity_ids >= 0]  # exclude -1 sentinel
         self.class_counts = np.bincount(
-            self.activity_ids, minlength=C.NUM_ACT_CLASSES
+            valid_ids, minlength=C.NUM_ACT_CLASSES
         )
 
         # Doc 01 §D.1: Build sequence sample index for PSR sequence training
@@ -1100,17 +1106,60 @@ class IndustRealMultiTaskDataset(Dataset):
 
         recordings_root = self.recordings_root / self.split
 
-        rec_count = 0
-        for rec_dir in sorted(recordings_root.iterdir()):
+        # Collect candidate recording dirs
+        _candidates = []
+        for rec_dir in recordings_root.iterdir():
             if not rec_dir.is_dir():
                 continue
-            recording_id = rec_dir.name
-
-            if recording_id not in split_rec_ids:
+            _rid = rec_dir.name
+            if _rid not in split_rec_ids:
                 continue
+            _candidates.append((_rid, rec_dir))
 
-            if self.max_recordings and rec_count >= self.max_recordings:
-                break
+        # [OPUS v5 AUDIT] Greedy coverage stratification when subset_ratio < 1.0.
+        # Alphabetical subset can exclude entire action classes → confounded activity metrics.
+        # Greedily pick recordings that maximize unique AR class coverage.
+        _max_recs = self.max_recordings
+        if _max_recs and len(_candidates) > _max_recs:
+            # Pre-scan: map recording_id → set of AR action classes present
+            _rec_ar_classes: dict = {}
+            for _rid, _rdir in _candidates:
+                _ar_file = _rdir / 'AR_labels.csv'
+                _cls_set = set()
+                if _ar_file.exists():
+                    import csv as _csv
+                    with open(_ar_file, encoding='utf-8') as _f:
+                        for _row in _csv.reader(_f):
+                            if len(_row) >= 2:
+                                try:
+                                    _cls_set.add(int(_row[1]))
+                                except ValueError:
+                                    pass
+                _rec_ar_classes[_rid] = _cls_set
+
+            # Greedy coverage: iteratively pick recording that adds most new classes
+            _chosen = []
+            _covered = set()
+            _remaining = list(_candidates)
+            for _ in range(_max_recs):
+                _best, _best_new = None, 0
+                for _rid, _rdir in _remaining:
+                    _new = len(_rec_ar_classes.get(_rid, set()) - _covered)
+                    if _new > _best_new:
+                        _best, _best_new = (_rid, _rdir), _new
+                if _best is None or _best_new == 0:
+                    break
+                _chosen.append(_best)
+                _covered |= _rec_ar_classes.get(_best[0], set())
+                _remaining.remove(_best)
+            # Append remaining recordings (in alphabetical order) if we didn't fill
+            _chosen += _remaining
+            _candidates[:] = _chosen[: _max_recs]
+
+        # Build ordered list: if greedy coverage was applied, use that order; otherwise alphabetical
+        _ordered = _candidates if (_max_recs and len(_candidates) <= _max_recs) else _candidates
+        rec_count = 0
+        for recording_id, rec_dir in _ordered:
 
             rgb_dir = rec_dir / 'rgb'
             if not rgb_dir.exists():
@@ -1184,7 +1233,8 @@ class IndustRealMultiTaskDataset(Dataset):
         class_weights = 1.0 / np.maximum(effective, 1e-8)
         class_weights /= class_weights.sum()
         sample_weights = np.array(
-            [class_weights[aid] for aid in self.activity_ids], dtype=np.float64
+            [class_weights[aid] if aid >= 0 else 0.0 for aid in self.activity_ids],
+            dtype=np.float64,
         )
 
         # Tier 3.12 — Task-aware sample weighting. When enabled, upweight frames
@@ -1302,13 +1352,17 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Tuple[torch.Tensor, Dict[str, Any
     ], dim=0)  # [B, 17, 2]
     pose_confidence = torch.ones_like(keypoints[:, :, 0])  # [B, 17]
 
+    activity_stacked = torch.stack(activity_labels, dim=0)
+    activity_mask = (activity_stacked >= 0).float()  # 1.0 for labeled, 0.0 for unlabeled (-1 sentinel)
+
     targets: Dict[str, Any] = {
         'detection': detection_list,
         'box_mask': {'rgb': stacked_box_mask},
         'head_pose': torch.stack(head_poses, dim=0),
         'psr_labels': torch.stack(psr_labels_list, dim=0),
         'hand_joints': torch.stack(hand_joints_list, dim=0),
-        'activity': torch.stack(activity_labels, dim=0),
+        'activity': activity_stacked,
+        'activity_mask': activity_mask,
         'metadata': [item['metadata'] for item in batch],
         'keypoints': keypoints,
         'pose_confidence': pose_confidence,
@@ -1402,6 +1456,7 @@ def collate_fn_sequences(
         'sequence_lengths': sequence_lengths,
         'hand_joints': hand_joints,
         'activity': activity_labels,
+        'activity_mask': (activity_labels >= 0).float(),  # [OPUS v5] was missing from sequence collate
         'metadata': metadata_list,
     }
 
