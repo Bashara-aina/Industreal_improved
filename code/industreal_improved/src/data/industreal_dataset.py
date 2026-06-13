@@ -1006,13 +1006,30 @@ class IndustRealMultiTaskDataset(Dataset):
                 torch.zeros(0, dtype=torch.long),
             )
 
+        # [GAP Part 4.1] Rescale boxes to match IMG_SIZE. COCO annotations are in
+        # native image coordinates (1280×720); _load_image resizes to self.img_size.
+        # Currently self.img_size == native (1280,720), so scale is identity — but
+        # this guard ensures correctness if IMG_SIZE changes.
+        _img_w, _img_h = 1280, 720  # IndustReal native resolution
+        try:
+            _raw_coco = json.loads(Path(coco_file).read_text())
+            for _img in _raw_coco.get('images', []):
+                if _img.get('id') == frame_num or str(_img.get('file_name', '')).startswith(str(frame_num)):
+                    _img_w = int(_img.get('width', 1280)); _img_h = int(_img.get('height', 720))
+                    break
+        except Exception:
+            pass
+        _sx = self.img_size[0] / max(_img_w, 1)
+        _sy = self.img_size[1] / max(_img_h, 1)
+
         boxes = []
         classes = []
         for ann in annots:
             bbox = ann.get('bbox', [])
             if len(bbox) == 4:
                 x, y, w, h = bbox
-                boxes.append([x, y, x + w, y + h])  # Convert to xyxy format
+                # [GAP 4.1] Rescale to IMG_SIZE
+                boxes.append([x*_sx, y*_sy, (x+w)*_sx, (y+h)*_sy])
                 # [OPUS FIX #5] COCO category_id is 1-24; head outputs 0-23.
                 # Subtract 1 to convert to 0-indexed (matches head output).
                 raw_cat = ann.get('category_id', 0)
