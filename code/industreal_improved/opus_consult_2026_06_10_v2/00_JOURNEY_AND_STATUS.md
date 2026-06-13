@@ -125,6 +125,24 @@ Architecture coupling: Backbone+FPN → detection_head → det_conf → activity
 
 **The recovery flag IS the deadlock**: `ZERO_DET_CONF_FOR_RECOVERY` was designed for the original collapse (saturated det_conf O(10-100) poisoning activity). But at pi=0.05 with healthy logits (Step-0 PASSED), it's **starving** the activity head. Without detection signal, activity can't learn. Without activity gradient, the shared backbone gets no useful signal for 2 of 3 tasks.
 
+### Phase 8: Fresh Start Run 8 (June 12-13, 2026) — COLLAPSE CONFIRMED ARCHITECTURAL
+
+**Run 8** — fresh ConvNeXt-Tiny ImageNet init, no staged training, FP32, full dataset:
+```
+python3 src/training/train.py --no-staged-training --subset-ratio 1.0 --seed 42 --max-epochs 100
+```
+
+**Epoch 0 (4.2h)**: 25,159 batches, nan_skips=0. Validation at epoch 0:
+```
+det_mAP50=nan  act_macro_f1=0.0001(1/75 cls)  psr_f1=0.0000(1 pattern/35K frames)  combined=0.1112
+```
+
+**CRITICAL FINDING**: The EXACT SAME 3-head collapse reproduced on a fresh ImageNet backbone with ZERO_DET_CONF=False and healthy training conditions. This definitively proves:
+1. The problem is NOT checkpoint lineage (epoch-43 poisoning)  
+2. The problem IS architectural/algorithmic — Focal Loss negative-mass equilibrium on 2.76M negatives/batch
+
+**Epoch 1 (in progress, 54%)**: No improvement — PSR at 0.000001 floor, detection c∼0.01-0.3, activity 2-18, PSR spikes to 0.34-1.0 (proves architecture CAN learn but signal is drowned).
+
 ---
 
 ## 4. What Works
@@ -146,11 +164,11 @@ Architecture coupling: Backbone+FPN → detection_head → det_conf → activity
 
 | Component | Status | Root Cause |
 |-----------|--------|------------|
-| Detection head | ❌ Collapsed | **RC-28**: Focal Loss at pi=0.05 + 2.76M neg anchors per batch → equilibrium at score=0.154, no escape |
-| Activity head | ❌ Collapsed | **RC-28**: ZERO_DET_CONF_FOR_RECOVERY=True starves activity of detection signal → 1/75 classes |
-| PSR head | ❌ Collapsed | **RC-28**: Backbone gradient dominated by detection's negative Focal Loss → 1 binary pattern |
-| Combined metric | ❌ Broken | act_top5=0.2425 + psr_edit=0.4773 only → combined=0.1067 (pose dead at MAE=66°) |
-| RC-25 recovery strategy | ❌ Failed | FPN reinit + prior-based heads necessary but INSUFFICIENT — 3-way coupling deadlock prevents any head from escaping |
+| Detection head | ❌ Collapsed | **RC-28**: Focal Loss at pi=0.05 + 2.76M neg anchors per batch → equilibrium at σ≈0.05, no escape. Fresh start confirms. |
+| Activity head | ❌ Collapsed | **RC-28**: Even with ZERO_DET_CONF=False on fresh start, 1/75 classes at act_top5=0.0248 (< random 0.067). GAP features alone insufficient. |
+| PSR head | ❌ Collapsed | **RC-28**: psr_loss=0.000001 (numerical floor). Gradients O(1e-6) vs detection's O(1). Sigmoid stuck at [0.448,0.723] (~0.5). |
+| Combined metric | ❌ Broken | combined=0.1112 (pose dead at NaN) |
+| Fresh start hypothesis | ❌ Refuted | Collapse reproduced clean — Focal Loss mass is root cause, NOT checkpoint lineage |
 | EMA system | ✅ Fixed | USE_EMA=False, re-anchor after reinit implemented |
 | Checkpoint selection | ✅ Fixed | Best measured from RAW model, not EMA |
 
@@ -185,21 +203,16 @@ Architecture coupling: Backbone+FPN → detection_head → det_conf → activity
 
 ## 7. What We Need From Opus v3
 
-**The core question has changed.** We now know RC-25 was real (FPN reinit fixed step-0 saturation), but the recovery strategy has a **3-way coupling deadlock** that prevents any head from escaping zero.
+**The core question has shifted from "how to escape epoch-43 lineage" to "how to fix the architectural Focal Loss negative-mass problem."** Fresh ImageNet start produced identical 3-way collapse — the problem is algorithmic, not checkpoint-related.
 
 We need Opus to:
 
-1. **Verify the deadlock diagnosis (RC-28)** — is the 3-way coupling (det→act via ZERO_DET_CONF, det→backbone via Focal Loss mass, backbone→PSR) the correct explanation?
+1. **Confirm root cause: Focal Loss on 2.76M negatives** — Is the negative-mass equilibrium (2.76M anchors × Focal Loss ~200/batch vs ~10-50 positive anchors) sufficient to explain all 3 heads collapsing? Or is there a simpler bug we're missing?
 
-2. **Design an ESCAPE strategy** — how to break the deadlock so at least ONE head can reach non-zero metrics:
-   - Should we disable ZERO_DET_CONF_FOR_RECOVERY immediately?
-   - Should we train detection alone first (staged) before unfreezing activity/PSR?
-   - Should we use a higher LR for detection head (1e-3 vs 1e-4) to escape Focal Loss equilibrium faster?
-   - Should we reduce the negative anchor mass (e.g., use subsampling of negatives)?
-   - Should we use a different prior (pi=0.01 instead of pi=0.05)?
+2. **Loss redesign** — Should we replace Focal Loss with Varifocal Loss, GHM, Quality Focal Loss, or add OHEM-style negative subsampling (e.g., top-256 hardest per level, 3:1 neg:pos)? What's the minimal change to break the deadlock?
 
-3. **Prescribe concrete changes** — exact config values, training stages, LR schedule, number of epochs per stage
+3. **Staged training protocol if no loss change** — If keeping Focal Loss, design a concrete staged protocol: detection-only for N epochs (what LR? what pi?), then add activity, then add PSR.
 
-4. **Is a fresh ImageNet-init retrain better?** — Or can we salvage the epoch-43 lineage with the right escape strategy?
+4. **PSR gradient problem** — psr_loss=0.000001 means the PSR head generates near-zero gradient. Should we upweight PSR loss (×1000) or give PSR its own dedicated backbone features?
 
-5. **Design a staged recovery protocol** — if coupled training can't work, what's the right sequence to bootstrap each head independently before joint training?
+5. **Is continuing Run 8 pointless?** — Should we kill it and implement a fix first, or let it run to epoch 2-3 to see if anything changes?

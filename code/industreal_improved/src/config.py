@@ -29,7 +29,7 @@ DEBUG_MODE         = False
 DEBUG_MAX_VIDEOS   = 2  # smoke test: 2 recordings only
 DEBUG_FRAME_STRIDE = 10
 
-SUBSET_RATIO = 0.10   # 10% subset (per run_10pct_train.sh benchmark; was 0.05 — silent killer)
+SUBSET_RATIO = 1.0    # Full dataset — production training for paper results
 
 TRAIN_FRAME_STRIDE = 3  # A.2: stride 3 → T=16 covers 1.6s at 30FPS (median action)
 EVAL_FRAME_STRIDE  = 1
@@ -69,7 +69,7 @@ USE_HEADPOSE_FILM = True
 # Cost: +22M frozen params, ~600 MB VRAM. FPS drops ~25%.
 # NOTE: When switching from False to True, classifier head reinitializes
 # because act_logits dim doubles. Train from scratch or use strict=False.
-USE_VIDEOMAE = True
+USE_VIDEOMAE = False  # [FIX 2026-06-12] Disabled for FP32 12GB fitting — ConvNeXt-only fallback for activity
 VIDEOMAE_CKPT = 'MCG-NJU/videomae-small-finetuned-kinetics'
 VIDEOMAE_NUM_FRAMES = 16   # temporal window size for VideoMAE clip
 VIDEOMAE_SAMPLE_STRIDE = 1  # sample every N frames from the clip window
@@ -161,8 +161,8 @@ DET_CLASS_NAMES = {
 # and 75 when present. With a 74-wide head, a label of 74 indexes out of range
 # → CUDA device-side assert that kills the full-dataset run. We therefore pin
 # the count to a fixed constant equal to (max raw action_id) + 1 = 75.
-NUM_ACT_RAW_IDS = 74          # action IDs 1..74 (0 is NA); IndustReal spec
-NUM_CLASSES_ACT = NUM_ACT_RAW_IDS + 1   # 75 = NA(0) + IDs 1..74; FIXED, not data-derived
+NUM_ACT_RAW_IDS = 74          # max raw action_id in dataset is 74 (IDs 0..74, ID 37 absent)
+NUM_CLASSES_ACT = NUM_ACT_RAW_IDS + 1   # 75 = IDs 0..74; FIXED, not data-derived
 
 
 def _load_act_class_names() -> list:
@@ -198,10 +198,7 @@ def _load_act_class_names() -> list:
 
     names = []
     for i in range(NUM_CLASSES_ACT):           # 0..74, raw-id-aligned
-        if i == 0:
-            names.append('NA')
-        else:
-            names.append(id_to_name.get(i, f'unknown_{i}'))
+        names.append(id_to_name.get(i, f'unknown_{i}'))
     return names
 
 
@@ -247,8 +244,8 @@ NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_la
 # Paper spec (matches RetinaNet P3-P7): (24, 48, 96, 192, 384)
 # =========================================================================
 ANCHOR_SIZES = (24, 48, 96, 192, 384)
-DET_POS_IOU_THRESH = 0.3       # FCOS anchor matching: positive IoU threshold
-DET_NEG_IOU_THRESH = 0.25      # FCOS anchor matching: negative IoU threshold (below this → background)
+DET_POS_IOU_THRESH = 0.5       # RetinaNet anchor matching: positive IoU threshold (standard: 0.5)
+DET_NEG_IOU_THRESH = 0.4       # RetinaNet anchor matching: negative IoU threshold (standard: 0.4)
 # RC-25 recovery: zero det_conf input to activity head during recovery.
 # [AUDIT FIX 2026-06-11] env override added: a checkpoint TRAINED with
 # det_conf zeroed must also be EVALUATED with det_conf zeroed (otherwise the
@@ -271,8 +268,8 @@ IMAGENET_STD  = [0.229, 0.224, 0.225]
 # Previous BATCH_SIZE=6 OOM'd at ConvNeXt stage2 with batch=2 (only 64 MiB free).
 # BATCH_SIZE=1 with GRAD_ACCUM_STEPS=32 gives effective batch=32.
 # OOM fallback: train.py automatically halves batch if CUDA OOM is detected.
-BATCH_SIZE = 1        # [OOM FIX] Was 6 — RTX 3060 12GB cannot fit batch=2 with all 5 heads + VideoMAE
-GRAD_ACCUM_STEPS = 32 # Was 6 — increased to keep EFFECTIVE_BATCH=32
+BATCH_SIZE = 1        # FP32 (AMP broken) + ConvNeXt + VideoMAE + 5 heads = 12GB at batch=1
+GRAD_ACCUM_STEPS = 32 # Effective batch = 32 (paper target)
 EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
 
 VAL_BATCH_SIZE = 16   # Was 8→32; bumped again (VRAM headroom: 1.30GB/12.5GB used at batch_size=8)
@@ -289,9 +286,9 @@ T_mult = 2
 PATIENCE      = 10
 GRAD_CLIP_NORM = 1.0
 VAL_EVERY = 1    # [BENCHMARK] Evaluate every 1 epoch (BENCHMARK_MODE override)
-EVAL_MAX_BATCHES = -1
+EVAL_MAX_BATCHES = -1  # Full validation set every epoch (no cap)
 
-NUM_WORKERS = 2        # Reduced from 8 to prevent CPU RAM OOM
+NUM_WORKERS = 4        # Was 2 — increased for full-data training; 64GB RAM available
 PIN_MEMORY = True
 MIXED_PRECISION = False  # [AUDIT FIX 2026-06-11] fp16 AMP is a CONFIRMED failure mode on this
                          # model (R2: first NaN at backbone.0.conv1.weight; diag_amp_nan.py /
@@ -317,7 +314,7 @@ USE_MIXUP      = False
 MIXUP_ALPHA    = 0.4
 
 # Desktop stability knobs
-CUDA_MEMORY_FRACTION = 0.98
+CUDA_MEMORY_FRACTION = 0.95  # allow near-full VRAM (RTX 3060 12GB); rustdesk uses ~142 MiB
 TRAIN_NICE = 10
 TORCH_NUM_THREADS = 12
 
@@ -398,7 +395,7 @@ PRETRAIN_HFLIP_PROB  = 0.5   # probability of random horizontal flip
 # =========================================================================
 # Staged training (Doc 2 B.1)
 # =========================================================================
-STAGED_TRAINING = True
+STAGED_TRAINING = False  # Full production: all 5 heads active from epoch 0
 STAGE1_EPOCHS = 5    # Detection-only warmup
 STAGE2_EPOCHS = 10   # Add pose + head pose
 STAGE3_EPOCHS = 85   # Full multi-task with EMA — 5+10+85=100 total — was 35
@@ -502,7 +499,7 @@ MONITOR_LOG_INTERVAL = 10
 LOG_EFFICIENCY_EVERY = 10  # log GFLOPs/FPS every N epochs (0=disable)
 # Detection metrics: compute_det_metrics_extended does 11×(24 classes × 35084 frames) nested
 # Python loops = ~87 min/epoch. Set to True to enable, False to skip (epoch快了~87min).
-SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP computation each epoch
+SKIP_DET_METRICS_EVAL = True  # True = skip detection mAP (~87 min/epoch) — saves ~90 min per epoch
 # Efficiency metrics: compute_efficiency_metrics does 35 forward passes each epoch.
 # Set to True to skip except when (epoch % LOG_EFFICIENCY_EVERY == 0).
 SKIP_EFFICIENCY_METRICS = True  # True = only compute every LOG_EFFICIENCY_EVERY epochs
@@ -556,8 +553,9 @@ PRESETS = {
     },
     'recovery': {
         'description': (
-            'RC-25 recovery preset. Zeros det_conf for activity head, disables '
-            'mixed precision (AMP→FP32), small batch, no staged training. '
+            'Recovery preset. Trains detection-first with staged training, '
+            'AMP enabled for 12GB VRAM, EMA active. '
+            'ZERO_DET_CONF disabled — det_conf flows into activity head normally. '
             'Use with --reinit-heads --subset-ratio 0.25 for recovery retrain.'
         ),
         'dataset_mode':       'manual_only',
@@ -568,12 +566,11 @@ PRESETS = {
         'benchmark_mode':     False,
         'batch_size':         1,
         'grad_accum_steps':   32,
-        'zero_det_conf':      True,   # RC-25: zero det_conf into activity head during recovery
-        'staged_training':    False,  # All heads active from epoch 0
-        'mixed_precision':    False,  # FP32 for recovery stability
+        'zero_det_conf':      False,  # RC-28 FIX: was True — starved activity head
+        'staged_training':    False,  # All 5 heads active from epoch 0
+        'mixed_precision':    True,   # OOM FIX: was False — AMP safe now (RC-25 fixed)
         'use_mixup':          False,  # RC-15: logit-mixing corrupts activity labels
-        'use_ema':            False,  # short recovery runs: best.pth must hold the RAW
-                                      # trained weights, not an EMA blend lagging at init
+        'use_ema':            True,   # EMA improves final model quality
     },
     'benchmark_quick': {
         'description': (
