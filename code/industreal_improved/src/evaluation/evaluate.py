@@ -823,6 +823,41 @@ def _compute_clip_level_accuracy(
 
     return float(correct / max(total, 1))
 
+# [GAP-B] Segment-level activity metric — one prediction per ACTION SEGMENT, NA excluded.
+# Replaces the per-recording majority-vote evaluation for MViTv2-comparable Top-1/5.
+def compute_activity_segment_metrics(model, dataset, device, T=16):
+    """Evaluate activity Top-1/5 per action segment (MViTv2 protocol).
+    Each segment produces one prediction from 16 uniformly sampled frames.
+    NA segments are excluded.
+    Returns: dict with act_top1, act_top5, n_segments
+    """
+    segs = dataset.build_activity_segments()
+    if not segs:
+        logger.warning('[GAP-B] No activity segments found — returning zeros')
+        return {'act_top1': 0.0, 'act_top5': 0.0, 'n_segments': 0}
+    top1, top5 = 0, 0
+    model.eval()
+    for seg in segs:
+        try:
+            clip, label = dataset.sample_segment_clip(seg, T=T)
+            clip = clip.unsqueeze(0).to(device)  # [1,T,3,H,W]
+            with torch.no_grad():
+                out = model(clip)
+            logits = out.get('act_logits', torch.zeros(1, 75))
+            if logits.dim() > 2:
+                logits = logits.mean(dim=1)  # pool temporal dim
+            pred = logits.argmax(dim=-1).item()
+            top1 += int(pred == label)
+            top5_items = logits.topk(5, dim=-1).indices.squeeze(0).tolist()
+            top5 += int(label in top5_items)
+        except Exception as e:
+            logger.debug(f'[GAP-B] segment eval error: {e}')
+            continue
+    n = max(len(segs), 1)
+    logger.info(f'  [GAP-B] Activity segment eval: top1={top1}/{n}={top1/n:.4f} top5={top5}/{n}={top5/n:.4f}')
+    return {'act_top1': top1/n, 'act_top5': top5/n, 'n_segments': len(segs)}
+
+
 def compute_activity_metrics(
     all_gt,
     all_pred,

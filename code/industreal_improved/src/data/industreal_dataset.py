@@ -445,6 +445,30 @@ class _PerRecordingCache:
 
         return labels
 
+    def _parse_ar_segments(self) -> list:
+        """[GAP-B] Return action segments from AR_labels.csv without frame interpolation.
+        Each segment = (start_frame, end_frame, action_id). NA (action_id=0) excluded.
+        Returns: list of (start, end, action_id) tuples.
+        """
+        ar_file = self.rec_dir / 'AR_labels.csv'
+        if not ar_file.exists():
+            return []
+        segments = []
+        with open(ar_file, encoding='utf-8') as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) < 5: continue
+                try:
+                    action_id = int(row[1])
+                    if action_id == 0: continue  # NA excluded from metric clips
+                    start = int(Path(row[3]).stem)
+                    end = int(Path(row[4]).stem)
+                    end = min(end, self._num_frames - 1)
+                    if start < self._num_frames and end > start:
+                        segments.append((start, end, action_id))
+                except (ValueError, IndexError): continue
+        return segments
+
     def _parse_psr_raw(self) -> np.ndarray:
         """
         Parse PSR_labels_raw.csv and fill forward to get per-frame dense labels.
@@ -729,6 +753,42 @@ class IndustRealMultiTaskDataset(Dataset):
 
         self._psr_prevalence_cache = (component_sums / max(total_frames, 1)).astype(np.float32)
         return self._psr_prevalence_cache
+
+    # [GAP-B] Action-segment clip protocol (MViTv2-comparable activity eval)
+    def build_activity_segments(self):
+        """Returns [(rec_id, start, end, action_id), ...] from AR spans; NA excluded."""
+        segs = []
+        for rec_dir in sorted((self.recordings_root / self.split).iterdir()):
+            if not rec_dir.is_dir(): continue
+            rec_id = rec_dir.name
+            cache = self._anno_cache.get(rec_id)
+            if cache is None:
+                cache = _PerRecordingCache(rec_dir); cache.load(99999)
+                self._anno_cache[rec_id] = cache
+            for start, end, aid in cache._parse_ar_segments():
+                segs.append((rec_id, int(start), int(end), int(aid)))
+        return segs
+
+    def sample_segment_clip(self, seg, T=16):
+        """Sample T uniform frames from a segment [start, end].
+        Returns: frames [T,3,H,W], action_id (int, never NA).
+        """
+        rec_id, start, end, aid = seg
+        idxs = np.linspace(start, end, T).round().astype(int)
+        frames = []
+        for fn in idxs:
+            img_path = self.recordings_root / self.split / rec_id / 'rgb' / f'{fn:06d}.jpg'
+            try:
+                img = Image.open(img_path).convert('RGB')
+                img = img.resize((self.img_size[0], self.img_size[1]), _BILINEAR)
+                arr = np.array(img, dtype=np.float32) / 255.0
+                arr = (arr - np.array([0.485,0.456,0.406])) / np.array([0.229,0.224,0.225])
+                frames.append(torch.from_numpy(arr).permute(2,0,1))
+            except Exception:
+                frames.append(torch.zeros(3, self.img_size[1], self.img_size[0]))
+        if not frames:
+            return torch.zeros(T, 3, self.img_size[1], self.img_size[0]), 0
+        return torch.stack(frames), aid
 
     def __len__(self) -> int:
         if self.sequence_mode:
