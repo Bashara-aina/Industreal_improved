@@ -49,6 +49,11 @@ TRAIN_MAX_STEPS = int(os.environ.get('TRAIN_MAX_STEPS', 0))  # 0=disabled; set >
 ASSERT_AND_CRASH = int(os.environ.get('ASSERT_AND_CRASH', '0')) == 1
 LIVENESS_EVERY = 200  # [OPUS v5] Print per-head liveness (loss/finite/ALIVE) every N steps
 
+# [OPUS v5 AUDIT] Simplify loss assembly during bring-up (#49).
+# Disables per-task ramps and smooth-caps so gradient attribution is clean.
+# Enable for production, disable for diagnosis (with ASSERT_AND_CRASH).
+SIMPLIFY_LOSS = int(os.environ.get('SIMPLIFY_LOSS', '0')) == 1  # 1 = no ramps/caps (diagnosis)
+
 # Hand-FiLM conditioning (hand keypoints → FiLM modulation on activity features)
 USE_HAND_FILM   = True
 HAND_FILM_CHANNELS = 768   # ConvNeXt C5 channel count
@@ -480,6 +485,15 @@ PSR_TRANSITION_SIGMA = 3.0   # Gaussian sigma for transition target smearing (fr
 # 6D continuous rotation (Zhou et al. CVPR 2019) + geodesic loss. Expected MAE
 # 10-25° vs current 60-70°. No baseline exists → uncontested row.
 USE_GEO_HEAD_POSE = False    # Enable for R4 — geometry-aware rotation representation
+
+# [OPUS v5 AUDIT] FeatureBank gradient control — the bank stores temporal features
+# but .detach() prevents gradient flow through bank entries. Slot -1 overwrite
+# further limits learning to the current frame only (#14-16).
+# Set False for R2 to allow temporal gradient through the bank.
+FEATURE_BANK_DETACH = True   # True = legacy behavior (no gradient through bank)
+                              # False = gradient flows through bank (enables temporal learning)
+FEATURE_BANK_SLOT_OVERWRITE = True  # True = legacy: live frame overwrites slot -1
+                                     # False = bank accumulates without overwrite (#16)
 
 # Fix 1 (2026-06-06): penalize constant per-frame PSR predictions in T=1 mode.
 # Stage 3 epoch 16 collapsed logit std to 0.12%; this penalty keeps it > 1e-3.
