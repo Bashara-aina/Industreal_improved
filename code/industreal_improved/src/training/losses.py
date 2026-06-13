@@ -1066,6 +1066,9 @@ class MultiTaskLoss(nn.Module):
         # through all log_vars. Soft cap formula: x if x<=cap, cap*(1+log(x/cap)) if x>cap.
         # Gradient: 1.0 below cap, cap/x above cap (never zero → no gradient death).
         def _smooth_cap(x, cap):
+            # [OPUS v5 AUDIT] SIMPLIFY_LOSS (#49): bypass caps during bring-up
+            if getattr(C, 'SIMPLIFY_LOSS', False):
+                return x
             x_safe = x.clamp(min=1e-6, max=1e6)
             return torch.where(x > cap, cap * (1 + torch.log(x_safe / cap)), x.clamp(min=1e-6))
 

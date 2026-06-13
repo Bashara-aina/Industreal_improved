@@ -2920,8 +2920,10 @@ def evaluate_all(
                 f'  [EVAL batch {bi}] act_logits shape={act_logits_batch.shape}, '
                 f'act_pred shape={act_pred_batch.shape}, B={B}'
             )
-        # Dataset returns raw action IDs as class indices 0-74. Frames without
-        # AR annotation have label=-1 (sentinel) and are excluded from eval.
+        # [OPUS v5 AUDIT] Dataset returns raw action IDs 0-74. Class 0 = NA/background.
+        # Frames without AR annotation have label=-1 (sentinel, excluded via activity_mask).
+        # activity_mask: True = labeled (incl. NA), False = -1 sentinel (excluded).
+        # For MViTv2-comparable metric, NA must be excluded from Top-1/5 scoring.
         act_labels_batch = targets['activity'].cpu().numpy()
         act_mask_batch = targets.get('activity_mask')
         if act_mask_batch is not None:
