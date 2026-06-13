@@ -42,6 +42,7 @@ TRAIN_HEAD_POSE = True    # Train 9-DoF head pose head with Kendall uncertainty 
 TRAIN_ACT       = True
 TRAIN_PSR       = True
 USE_KENDALL     = True   # Kendall weighting active for 4 tasks (det, act, psr, head_pose 9-DoF MSE)
+TRAIN_MAX_STEPS = int(os.environ.get('TRAIN_MAX_STEPS', 0))  # 0=disabled; set >0 to stop after N batches
 
 # Hand-FiLM conditioning (hand keypoints → FiLM modulation on activity features)
 USE_HAND_FILM   = True
@@ -499,7 +500,7 @@ MONITOR_LOG_INTERVAL = 10
 LOG_EFFICIENCY_EVERY = 10  # log GFLOPs/FPS every N epochs (0=disable)
 # Detection metrics: compute_det_metrics_extended does 11×(24 classes × 35084 frames) nested
 # Python loops = ~87 min/epoch. Set to True to enable, False to skip (epoch快了~87min).
-SKIP_DET_METRICS_EVAL = True  # True = skip detection mAP (~87 min/epoch) — saves ~90 min per epoch
+SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP (~87 min/epoch) — saves ~90 min per epoch
 # Efficiency metrics: compute_efficiency_metrics does 35 forward passes each epoch.
 # Set to True to skip except when (epoch % LOG_EFFICIENCY_EVERY == 0).
 SKIP_EFFICIENCY_METRICS = True  # True = only compute every LOG_EFFICIENCY_EVERY epochs
