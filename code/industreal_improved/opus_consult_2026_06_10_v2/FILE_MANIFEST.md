@@ -59,4 +59,5 @@
 | `14_POST_OPUS_V4_IMPLEMENTATION.md` | **What we did after Opus v4** — all fixes, crashes, retries, breakthrough |
 | `15_GIT_DIFF_SUMMARY.txt` | Complete git diff of all source changes (c454163..HEAD) |
 | `16_MASTER_PROMPT_v5.md` | **SEND THIS TO OPUS** — Ultimate path to SOTA-ready model, all SOTA targets, current state, key questions |
+| `17_OPUS_ANSWER_v5.md` | **Opus v5 answer** — ultimate path (R1→R4 ladder), det-gap framing, activity/PSR enable order, PSR `1e-4` sentinel diagnosis, efficiency-first cell-fill strategy, timeline |
 | `popw_paper_improved.tex` | Target paper with all benchmark tables and SOTA comparisons |
