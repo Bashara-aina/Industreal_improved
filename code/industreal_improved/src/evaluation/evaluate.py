@@ -2920,8 +2920,10 @@ def evaluate_all(
                 f'  [EVAL batch {bi}] act_logits shape={act_logits_batch.shape}, '
                 f'act_pred shape={act_pred_batch.shape}, B={B}'
             )
-        # Dataset returns raw action IDs as class indices 0-74. Frames without
-        # AR annotation have label=-1 (sentinel) and are excluded from eval.
+        # [OPUS v5 AUDIT] Dataset returns raw action IDs 0-74. Class 0 = NA/background.
+        # Frames without AR annotation have label=-1 (sentinel, excluded via activity_mask).
+        # activity_mask: True = labeled (incl. NA), False = -1 sentinel (excluded).
+        # For MViTv2-comparable metric, NA must be excluded from Top-1/5 scoring.
         act_labels_batch = targets['activity'].cpu().numpy()
         act_mask_batch = targets.get('activity_mask')
         if act_mask_batch is not None:
@@ -3179,7 +3181,11 @@ def evaluate_all(
             clip_ids=np.asarray(act_clip_ids) if act_clip_ids else None,
         )
     else:
-        act_metrics = {'act_macro_f1': 0.0, 'act_top5_acc': 0.0, 'act_frame_acc': 0.0}
+        act_metrics = {
+            'act_macro_f1': 0.0, 'act_top5_accuracy': 0.0, 'act_frame_accuracy': 0.0,
+            'act_accuracy': 0.0, 'act_clip_accuracy': 0.0, 'act_weighted_f1': 0.0,
+            'act_accuracy_no_na': 0.0, 'act_macro_recall': 0.0,
+        }  # [OPUS v5] Include all Val-line keys to avoid cosmetic NaN
     results.update(act_metrics)
     if getattr(C, 'TRAIN_ACT', True):
         report_per_class_accuracy(
@@ -3255,7 +3261,12 @@ def evaluate_all(
     if getattr(C, 'TRAIN_PSR', True):
         psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
     else:
-        psr_metrics = {'psr_f1': 0.0, 'psr_edit': 0.0, 'psr_pos': 0.0}
+        psr_metrics = {
+            'psr_f1': 0.0, 'psr_edit': 0.0, 'psr_pos': 0.0,
+            'psr_f1_at_t': 0.0, 'psr_f1_at_t5': 0.0, 'psr_edit_score': 0.0,
+            'psr_overall_f1': 0.0, 'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
+            'psr_precision_at_t5': 0.0, 'psr_recall_at_t5': 0.0, 'psr_overall_f1_at5': 0.0,
+        }  # [OPUS v5] Include all Val-line keys to avoid cosmetic NaN
     results.update(psr_metrics)
     if getattr(C, 'TRAIN_PSR', True):
         results['psr_macro_f1'] = results.get('psr_overall_f1', 0.0)

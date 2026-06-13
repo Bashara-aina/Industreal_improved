@@ -1047,6 +1047,11 @@ class MultiTaskLoss(nn.Module):
                 elif _name == 'act':
                     loss_act = _fallback
                 elif _name == 'psr':
+                    if getattr(C, 'ASSERT_AND_CRASH', False):
+                        raise FloatingPointError(
+                            f'[ASSERT_AND_CRASH] loss_psr is non-finite before Kendall assembly '
+                            f'(epoch {self._current_epoch}). The 1e-4 sentinel would silently replace it.'
+                        )
                     loss_psr = _fallback
                     logger.warning(
                         f'  [PSR_NAN_GUARD_L1041] loss_psr was non-finite before Kendall assembly '
@@ -1061,6 +1066,9 @@ class MultiTaskLoss(nn.Module):
         # through all log_vars. Soft cap formula: x if x<=cap, cap*(1+log(x/cap)) if x>cap.
         # Gradient: 1.0 below cap, cap/x above cap (never zero → no gradient death).
         def _smooth_cap(x, cap):
+            # [OPUS v5 AUDIT] SIMPLIFY_LOSS (#49): bypass caps during bring-up
+            if getattr(C, 'SIMPLIFY_LOSS', False):
+                return x
             x_safe = x.clamp(min=1e-6, max=1e6)
             return torch.where(x > cap, cap * (1 + torch.log(x_safe / cap)), x.clamp(min=1e-6))
 
@@ -1172,7 +1180,10 @@ class MultiTaskLoss(nn.Module):
             # output near-optimal; transition targets (Gaussian-smeared 0→1 events) force
             # the model to learn changepoints. psr_transition.py implements the conversion.
             _psr_targets = targets['psr_labels']
-            if self.use_psr_transition:
+            # [OPUS v5 BUGFIX] Transition objective requires a time axis (dim==3).
+            # Single-frame batches (dim==2, [B,11]) cannot be converted — the
+            # transition is temporal by definition. Gate to sequence batches only.
+            if self.use_psr_transition and outputs['psr_logits'].dim() == 3:
                 try:
                     from src.models.psr_transition import build_transition_targets
                     _psr_targets = build_transition_targets(
@@ -1243,6 +1254,11 @@ class MultiTaskLoss(nn.Module):
             # spits extreme logits. Adding smooth_loss weight to NaN gives NaN.
             # Catch it here so _smooth_cap never sees x<=0 (its log would give NaN).
             if not torch.isfinite(loss_psr).all():
+                if getattr(C, 'ASSERT_AND_CRASH', False):
+                    raise FloatingPointError(
+                        f'[ASSERT_AND_CRASH] loss_psr is non-finite before smooth_cap '
+                        f'(epoch {self._current_epoch}). The 1e-4 sentinel would silently replace it.'
+                    )
                 logger.warning(
                     f'  [PSR_NAN] loss_psr={loss_psr.item() if loss_psr.numel()==1 else loss_psr} '
                     f'— replacing with 1e-4 before smooth_cap (epoch {self._current_epoch})'
@@ -1287,6 +1303,32 @@ class MultiTaskLoss(nn.Module):
             )
         loss_psr = _safe(loss_psr, zero)
         loss_head_pose = _safe(loss_head_pose, zero)
+
+        # === [OPUS v5] Per-head liveness probe — checks I1 (non-NaN) + I2 (non-zero) ===
+        # Prints every LIVENESS_EVERY steps (default 200). A head is ALIVE iff:
+        # loss > 10× its floor, and the loss is finite.
+        _liveness_every = int(getattr(C, 'LIVENESS_EVERY', 200))
+        if hasattr(self, '_step_counter'):
+            self._step_counter += 1
+        else:
+            self._step_counter = 1
+        if self._step_counter % _liveness_every == 0:
+            _floor = {'det': 1e-2, 'act': 1e-3, 'psr': 1e-4, 'head_pose': 1e-4, 'pose': 1e-5}
+            _heads = [
+                ('det', loss_det, 'det'),
+                ('act', loss_act if self.train_act else zero, 'act'),
+                ('psr', loss_psr if self.train_psr else zero, 'psr'),
+                ('head_pose', loss_head_pose, 'head_pose'),
+                ('pose', loss_pose, 'pose'),
+            ]
+            _parts = []
+            for _hname, _hloss, _hkey in _heads:
+                _hf = _floor.get(_hkey, 1e-4)
+                _hval = float(_hloss.item()) if isinstance(_hloss, torch.Tensor) and _hloss.numel() == 1 else float(_hloss)
+                _hfin = torch.isfinite(_hloss).all() if isinstance(_hloss, torch.Tensor) else True
+                _halive = _hfin and _hval > 10 * _hf
+                _parts.append(f'{_hname}={_hval:.2e} {"ALIVE" if _halive else ("NaN" if not _hfin else "DEAD")}')
+            logger.info(f'  [LIVENESS step={self._step_counter}] ' + ' | '.join(_parts))
 
         # === Kendall weighting ===
         if self.use_kendall:

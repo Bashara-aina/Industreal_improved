@@ -3285,6 +3285,14 @@ def main(args):
                 val_prefetch_rt = 1
                 val_max_batches_rt = CFG_EVAL_MAX_BATCHES
 
+                # [OPUS v5] Eval cadence: if DET_METRICS_EVERY_N is set and this is NOT a full-det-eval epoch,
+                # cap val batches to GATE_EVAL_MAX_BATCHES for fast gate-only check.
+                _det_every_n = int(getattr(C, 'DET_METRICS_EVERY_N', 0))
+                _gate_max = int(getattr(C, 'GATE_EVAL_MAX_BATCHES', 200))
+                if _det_every_n > 0 and (epoch + 1) % _det_every_n != 0:
+                    val_max_batches_rt = _gate_max
+                    logger.info(f'  [GATE EVAL] epoch {epoch}: capped at {_gate_max} batches (full det mAP every {_det_every_n} epochs)')
+
                 val_attempt = 0
                 while True:
                     val_attempt += 1

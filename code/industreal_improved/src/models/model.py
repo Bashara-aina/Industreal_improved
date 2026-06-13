@@ -1185,7 +1185,11 @@ class FeatureBank(nn.Module):
                     outputs.append(bank_i)
                     continue
             else:
-                self._bank[key].append(feat_i.detach().clone())
+                # [OPUS v5 AUDIT] FeatureBank gradient: when FEATURE_BANK_DETACH=False,
+                # gradient flows through bank entries enabling temporal learning (#14-16).
+                _bank_detach = bool(getattr(C, 'FEATURE_BANK_DETACH', True))
+                _stored = feat_i.detach().clone() if _bank_detach else feat_i.clone()
+                self._bank[key].append(_stored)
 
             if len(self._bank[key]) > self.window_size:
                 self._bank[key].pop(0)
@@ -1193,7 +1197,8 @@ class FeatureBank(nn.Module):
             seq = self._bank[key]
             while len(seq) < self.window_size:
                 if feat_is_valid:
-                    pad_feat = feat_i.detach().clone()
+                    _bank_detach = bool(getattr(C, 'FEATURE_BANK_DETACH', True))
+                    pad_feat = feat_i.detach().clone() if _bank_detach else feat_i.clone()
                 else:
                     pad_feat = self._bank[key][0].clone()
                 seq = [pad_feat] + seq
@@ -1338,7 +1343,11 @@ class ActivityHead(nn.Module):
 
         if temporal_bank is not None:
             bank_seq = temporal_bank.clone()
-            bank_seq[:, -1, :] = proj_feat
+            # [OPUS v5 AUDIT] Slot -1 overwrite: when FEATURE_BANK_SLOT_OVERWRITE=False,
+            # the bank accumulates naturally without the live frame replacing the last position.
+            # This enables all T positions to contribute to temporal learning (#16).
+            if getattr(C, 'FEATURE_BANK_SLOT_OVERWRITE', True):
+                bank_seq[:, -1, :] = proj_feat
         elif self.use_vit:
             bank_seq = proj_feat.unsqueeze(1).expand(-1, self.window_size, -1)
         else:
@@ -1666,11 +1675,22 @@ class POPWMultiTaskModel(nn.Module):
             )
 
         # === Head Pose Head ===
-        self.head_pose_head = HeadPoseHead(
-            c4_channels=c4_ch,
-            c5_channels=c5_ch,
-            hidden_dim=128,
-        )
+        # [OPUS v5 AUDIT] Geometry-aware head pose: replace raw 9-number MSE MLP
+        # with 6D continuous rotation (Zhou et al. CVPR 2019) + geodesic loss.
+        # Expected: 10-25° MAE vs 60-70° from raw MSE. No baseline exists → free win.
+        if getattr(C, 'USE_GEO_HEAD_POSE', False):
+            from src.models.head_pose_geo import GeometryAwareHeadPose
+            self.head_pose_head = GeometryAwareHeadPose(
+                in_channels_c4=c4_ch,
+                in_channels_c5=c5_ch,
+                hidden_dim=512,
+            )
+        else:
+            self.head_pose_head = HeadPoseHead(
+                c4_channels=c4_ch,
+                c5_channels=c5_ch,
+                hidden_dim=128,
+            )
 
         # === Activity Head ===
         self.activity_head = ActivityHead(
