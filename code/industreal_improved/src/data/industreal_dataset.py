@@ -480,12 +480,19 @@ class _PerRecordingCache:
         dense = np.zeros((self._num_frames, C.NUM_PSR_COMPONENTS), dtype=np.float32)
         current = np.zeros(C.NUM_PSR_COMPONENTS, dtype=np.float32)
 
+        # [OPUS v5 AUDIT] -1 transient fix: -1 is an error component — do NOT carry it
+        # forward. It over-counts ignores if propagated to all later frames. Instead,
+        # keep the last valid value (not -1) when encountering -1 in sparse data.
+        _last_valid = np.zeros(C.NUM_PSR_COMPONENTS, dtype=np.int64)  # defaults: all absent
         sparse_idx = 0
         for frame in range(self._num_frames):
             if sparse_idx < len(sparse) and frame == sparse[sparse_idx][0]:
-                current = sparse[sparse_idx][1].copy()
+                _new = sparse[sparse_idx][1].copy()
                 sparse_idx += 1
-            dense[frame] = current
+                # Only update components that are NOT -1 (error); keep last valid
+                _valid_mask = _new >= 0
+                _last_valid[_valid_mask] = _new[_valid_mask]
+            dense[frame] = _last_valid.copy()
 
         return dense
 
@@ -1449,6 +1456,7 @@ def collate_fn_sequences(
         'sequence_lengths': sequence_lengths,
         'hand_joints': hand_joints,
         'activity': activity_labels,
+        'activity_mask': (activity_labels >= 0).float(),  # [OPUS v5] was missing from sequence collate
         'metadata': metadata_list,
     }
 
