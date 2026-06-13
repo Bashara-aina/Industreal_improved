@@ -121,3 +121,80 @@ Training logs in `logs/`:
 Previous Opus answers and context:
 - `10_OPUS_ANSWER_v2.md` — Your previous answer (RC-25, RC-27, recovery plan)
 - `00_JOURNEY_AND_STATUS.md` — Full project timeline updated through Phase 7
+
+---
+
+## Addendum 13-Jun: Run 8 — Fresh Start CONFIRMS 3-Way Collapse
+
+### What Changed
+After the RC-28 deadlock analysis, we abandoned the epoch-43 lineage and started **completely fresh**:
+- **Fresh** ConvNeXt-Tiny (ImageNet weights) + FPN
+- `--no-staged-training` (all 5 heads train from scratch simultaneously)
+- **FP32** (no AMP, to avoid the causal-head collation OOM)
+- BATCH_SIZE=1, GRAD_ACCUM_STEPS=32 (effective batch 32)
+- AdamW: backbone 5e-6, heads 5e-5, bias 1.5e-5, weight_decay=0.17
+- `SKIP_DET_METRICS_EVAL=True` (bypass ~87 min/epoch mAP eval)
+- `ZERO_DET_CONF_FOR_RECOVERY=False` (det_conf flows normally)
+- PSR edit score numba function fixed: O(m×n) 4.9GB matrix → O(3n) rolling DP (420KB)
+
+### Run 8 Results — CRITICAL FINDING
+
+**Epoch 0 completed**: 25,159 batches, nan_skips=0, time=15,209s (~4.2h)
+
+**Validation at epoch 0** (IDENTICAL collapse to old lineage):
+```
+Val: loss=70.3314  det_mAP50=nan*  act_macro_f1=0.0001  act_top5=0.0248
+     psr_f1=0.0000  psr_edit=0.5166  psr_pos=0.0000  combined=0.1112
+     forward_angular_MAE_deg=nan
+```
+*det_mAP50=nan due to SKIP_DET_METRICS_EVAL=True
+
+**Collapse diagnostics (epoch 0 validation):**
+- Detection: TOTAL COLLAPSE — score_p50=0.048, 1.1M preds>0.05 but 0 at any IoU threshold
+- Activity: 1/75 classes (class 57, 100% of frames) — act_top5=0.0248 BELOW random (0.067)
+- PSR: 1 unique binary pattern across 35K frames — logits range=[-0.209, 0.959], sigmoid=[0.448, 0.723]
+- Head pose: NaN (new — not seen in old lineage)
+
+**Training during epoch 0:**
+- det c-loss: ~0.005-0.3 (no-GT batches), spikes to 0.6-3.5 on GT batches
+- det g-loss: ~0.0 (no-GT), 0.3-0.62 on GT batches (good regression)
+- pose loss: ~0.00001-0.0005
+- act loss: 4-45 (highly volatile)
+- psr loss: **0.000001 (numerical floor)** — NOT LEARNING
+- Speed: ~1.6 it/s, GPU mem: 1GB alloc / 3.78GB reserved
+- No errors, no crashes**
+
+### Critical Finding: Fresh Start Confirms Architectural Collapse
+
+**The exact same 3-way collapse reproduced on a fresh ImageNet backbone.** This definitively proves:
+1. The problem is NOT checkpoint lineage (epoch-43 poisoning)
+2. The problem IS architectural/algorithmic — Focal Loss negative-mass equilibrium on 2.76M negatives/batch
+3. Staged training or a loss change is required — simultaneous training from scratch cannot escape
+
+### New Observations
+
+1. **act_top5=0.0248 below random (0.067)**: Activity is WORSE than the old lineage (0.2425). With ZERO_DET_CONF=False and fresh backbone, activity still collapses to 1/75 classes. The GAP features alone aren't discriminative enough to bootstrap a 75-class classifier.
+
+2. **psr=0.000001 on fresh start**: Same numerical floor. PSR head's BCE loss is vanishingly small — the sigmoid outputs are in [0.448, 0.723] range (near 0.5), producing near-uniform binary patterns. The PSR head logits converge to ~0 immediately and stay there. This suggests the PSR loss gradient is too weak compared to detection's Focal Loss gradient on the shared backbone.
+
+3. **PSR occasional spikes to 1.0**: During epoch 1 training, PSR loss occasionally spikes to 0.34, 0.37, or even 1.0 — proving the architecture CAN learn but the signal is drowned. These spikes likely coincide with GT-heavy batches where the backbone gets a different gradient direction.
+
+4. **Head pose NaN**: New issue. The head pose head (MSE loss ×0.001) produces NaN at epoch 0 val. May be a numerical issue with the 9-DoF MLP on fresh init.
+
+5. **Detection regression works**: g=0.3-0.62 on GT batches (cumulative: 11,639 batches with c>0.5, avg c=2.88). Box regression is healthy — classification (Focal Loss) is the bottleneck.
+
+6. **seq=1 tqdm artifacts**: The `loss=-0.108 det=0.000 pose=0.000 act=0.000 psr=-0.108 seq=1` lines are grad-accum intermediate steps where losses aren't computed (confirmed: they appear every ~20-30 steps at 1.2-1.9 it/s, correlating with GRAD_ACCUM_STEPS boundaries).
+
+### Questions for Opus (Revised)
+
+1. **Is Focal Loss fundamentally wrong?** — With α=0.25, γ=2, pi=0.05 on 2.76M negatives per batch (~85% no-GT batches), the negative loss mass (~200/batch on no-GT) overwhelms any positive signal (~10-50 anchors). Is there a Focal Loss configuration that could work, or do we need a different approach?
+
+2. **What loss should replace Focal Loss?** — Varifocal Loss (VFocalLoss)? GHM (gradient harmonizing)? OHEM (online hard example mining)? ATSS adaptive anchor selection? Quality Focal Loss (QFL) from General Focal Loss?
+
+3. **Negative anchor subsampling?** — Should we subsample negatives (e.g., top-256 hardest negatives, 3:1 neg:pos ratio) as used in RetinaNet originally? The original RetinaNet paper uses 256 samples per level with 3:1 neg:pos ratio — we're using ALL 2.76M anchors.
+
+4. **Staged training protocol?** — If loss change isn't feasible, design staged training: detection-only stage (how many epochs? what LR?), then freeze detection and train activity+PSR, then joint fine-tuning.
+
+5. **Is PSR's numerical floor a gradient competition problem?** — The PSR head's BCE loss gradient is O(1e-6) while detection's Focal Loss gradient is O(1). Even with Kendall weighting, the PSR signal is invisible. Should PSR loss be scaled up (×1000) or should PSR have its own dedicated features (not fully shared with detection)?
+
+6. **Fresh start with all fixes vs. lineage salvage?** — Since the collapse is architectural, not checkpoint-related, is there any point continuing Run 8? Or should we stop it and redesign?

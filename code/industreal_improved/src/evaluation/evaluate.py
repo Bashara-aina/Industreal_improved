@@ -1755,35 +1755,48 @@ def _get_dl_osa_numba():
 
     @njit(cache=True, fastmath=True)
     def _dl_osa_numba(a: np.ndarray, b: np.ndarray) -> int:
-        """Numba-JITted OSA Damerau-Levenshtein. ~300x faster than pure-numpy."""
+        """Numba-JITted OSA Damerau-Levenshtein. O(3n) rolling DP — avoids 4.9GB O(mn) matrix for 35K seqs."""
         m, n = len(a), len(b)
         if m == 0:
             return n
         if n == 0:
             return m
-        dp = np.zeros((m + 1, n + 1), dtype=np.int32)
-        dp[:, 0] = np.arange(m + 1, dtype=np.int32)
-        dp[0, :] = np.arange(n + 1, dtype=np.int32)
-        for i in range(1, m + 1):
+        # Three-row rolling DP: prev2=dp[i-2], prev1=dp[i-1], curr=dp[i]
+        prev2 = np.arange(n + 1, dtype=np.int32)
+        prev1 = np.empty(n + 1, dtype=np.int32)
+        curr = np.empty(n + 1, dtype=np.int32)
+        # i=1
+        prev1[0] = 1
+        a0 = a[0]
+        for j in range(1, n + 1):
+            cost = 0 if a0 == b[j - 1] else 1
+            prev1[j] = min(prev2[j] + 1, prev1[j - 1] + 1, prev2[j - 1] + cost)
+        # i=2..m
+        for i in range(2, m + 1):
+            curr[0] = i
             ai = a[i - 1]
+            aim1 = a[i - 2]
             for j in range(1, n + 1):
-                d = dp[i - 1, j] + 1
-                d2 = dp[i, j - 1] + 1
-                d3 = dp[i - 1, j - 1]
-                if ai != b[j - 1]:
-                    d3 += 1
-                if d > d2:
+                bj = b[j - 1]
+                cost = 0 if ai == bj else 1
+                d = prev1[j] + 1          # deletion
+                d2 = curr[j - 1] + 1      # insertion
+                d3 = prev1[j - 1] + cost  # substitution
+                if d2 < d:
                     d = d2
-                if d > d3:
+                if d3 < d:
                     d = d3
-                if i > 1 and j > 1 and ai == b[j - 2] and a[i - 2] == b[j - 1]:
-                    d4 = dp[i - 2, j - 2]
-                    if ai != b[j - 1]:
+                # OSA transposition
+                if j > 1 and ai == b[j - 2] and aim1 == bj:
+                    d4 = prev2[j - 2]
+                    if ai != bj:
                         d4 += 1
-                    if d > d4:
+                    if d4 < d:
                         d = d4
-                dp[i, j] = d
-        return int(dp[m, n])
+                curr[j] = d
+            # Rotate buffers: prev2←prev1, prev1←curr, curr←prev2 (recycled)
+            prev2, prev1, curr = prev1, curr, prev2
+        return int(prev1[n])
 
     _NUMBA_DL_DEFINED = True
     return _dl_osa_numba
@@ -2826,6 +2839,8 @@ def evaluate_all(
         targets['head_pose'] = targets['head_pose'].to(device)
         targets['psr_labels'] = targets['psr_labels'].to(device)
         targets['activity'] = targets['activity'].to(device)
+        if 'activity_mask' in targets:
+            targets['activity_mask'] = targets['activity_mask'].to(device)
         if 'keypoints' in targets:
             targets['keypoints'] = targets['keypoints'].to(device)
         if 'pose_confidence' in targets:
@@ -2837,20 +2852,21 @@ def evaluate_all(
         B, C_img, H_img, W_img = images.shape
 
         def run_model(inp: torch.Tensor,
-                      clip: Optional[torch.Tensor] = None
+                      clip: Optional[torch.Tensor] = None,
+                      vid_ids: Optional[List[str]] = None,
                       ) -> Dict[str, torch.Tensor]:
-            out = model(inp, clip_rgb=clip)
+            out = model(inp, video_ids=vid_ids, clip_rgb=clip)
             for _k in out:
                 if isinstance(out[_k], torch.Tensor):
                     out[_k] = out[_k].float()
             return out
 
-        outputs_raw = run_model(images, clip_rgb)
+        outputs_raw = run_model(images, clip_rgb, batch_recording_ids)
 
         # Doc 2 F.1: Horizontal Flip TTA
         if use_flip_tta:
             flip_images = torch.flip(images, dims=[3])
-            out_flip = run_model(flip_images, clip_rgb)
+            out_flip = run_model(flip_images, clip_rgb, batch_recording_ids)
             for key in ['act_logits', 'psr_logits']:
                 if key in out_flip:
                     outputs_raw[key] = 0.5 * (outputs_raw[key] + torch.flip(out_flip[key], dims=[2]))
@@ -2901,13 +2917,17 @@ def evaluate_all(
                 f'  [EVAL batch {bi}] act_logits shape={act_logits_batch.shape}, '
                 f'act_pred shape={act_pred_batch.shape}, B={B}'
             )
-        # Bug D fix — dataset returns raw action IDs as class indices directly.
-        # No shift is applied: raw ID → model class is 1:1 for IDs 1-73.
-        # Class 0 = NA (prepended by config). Variable renamed from misleading
-        # `act_labels_shifted` to `act_labels_batch` to reflect reality.
+        # Dataset returns raw action IDs as class indices 0-74. Frames without
+        # AR annotation have label=-1 (sentinel) and are excluded from eval.
         act_labels_batch = targets['activity'].cpu().numpy()
-        act_preds.append(act_pred_batch)
-        act_labels.append(act_labels_batch)
+        act_mask_batch = targets.get('activity_mask')
+        if act_mask_batch is not None:
+            act_mask_batch = act_mask_batch.cpu().numpy().astype(bool)
+            act_valid = act_mask_batch
+        else:
+            act_valid = (act_labels_batch >= 0)
+        act_preds.append(act_pred_batch[act_valid])
+        act_labels.append(act_labels_batch[act_valid])
         for i in range(B):
             metadata_item = targets['metadata'][i] if i < len(targets['metadata']) else {}
             rec_id = metadata_item.get('recording_id', metadata_item.get('rec_id', None))
