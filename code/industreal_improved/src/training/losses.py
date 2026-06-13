@@ -1180,7 +1180,10 @@ class MultiTaskLoss(nn.Module):
             # output near-optimal; transition targets (Gaussian-smeared 0→1 events) force
             # the model to learn changepoints. psr_transition.py implements the conversion.
             _psr_targets = targets['psr_labels']
-            if self.use_psr_transition:
+            # [OPUS v5 BUGFIX] Transition objective requires a time axis (dim==3).
+            # Single-frame batches (dim==2, [B,11]) cannot be converted — the
+            # transition is temporal by definition. Gate to sequence batches only.
+            if self.use_psr_transition and outputs['psr_logits'].dim() == 3:
                 try:
                     from src.models.psr_transition import build_transition_targets
                     _psr_targets = build_transition_targets(
