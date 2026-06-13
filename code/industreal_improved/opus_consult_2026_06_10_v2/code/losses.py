@@ -911,6 +911,7 @@ class MultiTaskLoss(nn.Module):
         # C.3: Binary focal loss for PSR (instead of BCE)
         self.psr_loss_fn = nn.BCEWithLogitsLoss(reduction='mean')
         self.use_psr_focal = bool(getattr(C, 'PSR_FOCAL_GAMMA', 0) > 0)
+        self.use_psr_transition = bool(getattr(C, 'USE_PSR_TRANSITION', False))  # [OPUS v5] transition objective
         self.psr_focal_alpha = float(getattr(C, 'PSR_FOCAL_ALPHA', 0.25))
         self.psr_focal_gamma = float(getattr(C, 'PSR_FOCAL_GAMMA', 2.0))
         self._psr_per_component_alpha: torch.Tensor = None
@@ -1046,7 +1047,16 @@ class MultiTaskLoss(nn.Module):
                 elif _name == 'act':
                     loss_act = _fallback
                 elif _name == 'psr':
+                    if getattr(C, 'ASSERT_AND_CRASH', False):
+                        raise FloatingPointError(
+                            f'[ASSERT_AND_CRASH] loss_psr is non-finite before Kendall assembly '
+                            f'(epoch {self._current_epoch}). The 1e-4 sentinel would silently replace it.'
+                        )
                     loss_psr = _fallback
+                    logger.warning(
+                        f'  [PSR_NAN_GUARD_L1041] loss_psr was non-finite before Kendall assembly '
+                        f'— replaced with 1e-4 fallback (epoch {self._current_epoch})'
+                    )
                 elif _name == 'head_pose':
                     loss_head_pose = _fallback
 
@@ -1162,10 +1172,25 @@ class MultiTaskLoss(nn.Module):
         preds = None
         if self.train_psr:
             # C.3: Binary focal loss for PSR (Doc 01 §D.4: per-component alpha)
+            # [OPUS v5] USE_PSR_TRANSITION: convert fill-forward labels to transition targets
+            # before computing loss. Per-frame focal on 95%-static labels makes constant
+            # output near-optimal; transition targets (Gaussian-smeared 0→1 events) force
+            # the model to learn changepoints. psr_transition.py implements the conversion.
+            _psr_targets = targets['psr_labels']
+            if self.use_psr_transition:
+                try:
+                    from src.models.psr_transition import build_transition_targets
+                    _psr_targets = build_transition_targets(
+                        targets['psr_labels'].to(outputs['psr_logits'].device),
+                        sigma=float(getattr(C, 'PSR_TRANSITION_SIGMA', 3.0)),
+                    )
+                except Exception as e:
+                    logger.warning(f'  [PSR_TRANSITION] build_transition_targets failed: {e} — falling back to fill-forward labels')
+
             if self.use_psr_focal:
                 loss_psr = binary_focal_loss(
                     outputs['psr_logits'],
-                    targets['psr_labels'],
+                    _psr_targets,
                     alpha=self.psr_focal_alpha,
                     gamma=self.psr_focal_gamma,
                     per_component_alpha=self._psr_per_component_alpha,
@@ -1173,7 +1198,7 @@ class MultiTaskLoss(nn.Module):
             else:
                 loss_psr = self.psr_loss_fn(
                     outputs['psr_logits'],
-                    targets['psr_labels'],
+                    _psr_targets,
                 )
 
             # --- FIX 1 (2026-06-06): PSR input-sensitivity penalty ---
@@ -1223,6 +1248,11 @@ class MultiTaskLoss(nn.Module):
             # spits extreme logits. Adding smooth_loss weight to NaN gives NaN.
             # Catch it here so _smooth_cap never sees x<=0 (its log would give NaN).
             if not torch.isfinite(loss_psr).all():
+                if getattr(C, 'ASSERT_AND_CRASH', False):
+                    raise FloatingPointError(
+                        f'[ASSERT_AND_CRASH] loss_psr is non-finite before smooth_cap '
+                        f'(epoch {self._current_epoch}). The 1e-4 sentinel would silently replace it.'
+                    )
                 logger.warning(
                     f'  [PSR_NAN] loss_psr={loss_psr.item() if loss_psr.numel()==1 else loss_psr} '
                     f'— replacing with 1e-4 before smooth_cap (epoch {self._current_epoch})'
@@ -1267,6 +1297,32 @@ class MultiTaskLoss(nn.Module):
             )
         loss_psr = _safe(loss_psr, zero)
         loss_head_pose = _safe(loss_head_pose, zero)
+
+        # === [OPUS v5] Per-head liveness probe — checks I1 (non-NaN) + I2 (non-zero) ===
+        # Prints every LIVENESS_EVERY steps (default 200). A head is ALIVE iff:
+        # loss > 10× its floor, and the loss is finite.
+        _liveness_every = int(getattr(C, 'LIVENESS_EVERY', 200))
+        if hasattr(self, '_step_counter'):
+            self._step_counter += 1
+        else:
+            self._step_counter = 1
+        if self._step_counter % _liveness_every == 0:
+            _floor = {'det': 1e-2, 'act': 1e-3, 'psr': 1e-4, 'head_pose': 1e-4, 'pose': 1e-5}
+            _heads = [
+                ('det', loss_det, 'det'),
+                ('act', loss_act if self.train_act else zero, 'act'),
+                ('psr', loss_psr if self.train_psr else zero, 'psr'),
+                ('head_pose', loss_head_pose, 'head_pose'),
+                ('pose', loss_pose, 'pose'),
+            ]
+            _parts = []
+            for _hname, _hloss, _hkey in _heads:
+                _hf = _floor.get(_hkey, 1e-4)
+                _hval = float(_hloss.item()) if isinstance(_hloss, torch.Tensor) and _hloss.numel() == 1 else float(_hloss)
+                _hfin = torch.isfinite(_hloss).all() if isinstance(_hloss, torch.Tensor) else True
+                _halive = _hfin and _hval > 10 * _hf
+                _parts.append(f'{_hname}={_hval:.2e} {"ALIVE" if _halive else ("NaN" if not _hfin else "DEAD")}')
+            logger.info(f'  [LIVENESS step={self._step_counter}] ' + ' | '.join(_parts))
 
         # === Kendall weighting ===
         if self.use_kendall:
