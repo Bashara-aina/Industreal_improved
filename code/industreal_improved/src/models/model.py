@@ -1666,11 +1666,22 @@ class POPWMultiTaskModel(nn.Module):
             )
 
         # === Head Pose Head ===
-        self.head_pose_head = HeadPoseHead(
-            c4_channels=c4_ch,
-            c5_channels=c5_ch,
-            hidden_dim=128,
-        )
+        # [OPUS v5 AUDIT] Geometry-aware head pose: replace raw 9-number MSE MLP
+        # with 6D continuous rotation (Zhou et al. CVPR 2019) + geodesic loss.
+        # Expected: 10-25° MAE vs 60-70° from raw MSE. No baseline exists → free win.
+        if getattr(C, 'USE_GEO_HEAD_POSE', False):
+            from src.models.head_pose_geo import GeometryAwareHeadPose
+            self.head_pose_head = GeometryAwareHeadPose(
+                in_channels_c4=c4_ch,
+                in_channels_c5=c5_ch,
+                hidden_dim=512,
+            )
+        else:
+            self.head_pose_head = HeadPoseHead(
+                c4_channels=c4_ch,
+                c5_channels=c5_ch,
+                hidden_dim=128,
+            )
 
         # === Activity Head ===
         self.activity_head = ActivityHead(
