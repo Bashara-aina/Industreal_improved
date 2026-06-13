@@ -708,7 +708,7 @@ PRESETS = {
         # [BLOCKER-C] Winnable-task flags — actually set by apply_preset now
         'use_psr_transition':       True,
         'use_geo_head_pose':        True,
-        'feature_bank_detach':      False,  # gradient through bank
+        'feature_bank_detach':      True,   # keep detached — gradient through bank causes double-backward crash (#3092789)
         'feature_bank_slot_overwrite': False,
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.0,
