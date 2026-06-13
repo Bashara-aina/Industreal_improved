@@ -476,6 +476,11 @@ PSR_SEQ_EVERY_N_BATCHES = 10  # Draw one sequence batch every N normal batches
 USE_PSR_TRANSITION = False    # Enable for R2.5 after raw-loss probe confirms healthy
 PSR_TRANSITION_SIGMA = 3.0   # Gaussian sigma for transition target smearing (frames)
 
+# [OPUS v5 AUDIT] Geometry-aware head pose: replace 9-raw-number MSE MLP with
+# 6D continuous rotation (Zhou et al. CVPR 2019) + geodesic loss. Expected MAE
+# 10-25° vs current 60-70°. No baseline exists → uncontested row.
+USE_GEO_HEAD_POSE = False    # Enable for R4 — geometry-aware rotation representation
+
 # Fix 1 (2026-06-06): penalize constant per-frame PSR predictions in T=1 mode.
 # Stage 3 epoch 16 collapsed logit std to 0.12%; this penalty keeps it > 1e-3.
 PSR_SENSITIVITY_WEIGHT = 0.0  # [OPUS v5] Disabled — the −log(std) penalty goes non-finite on single-frame batches and triggers the 1e-4 NaN-sentinel. Set to 0; re-introduce bounded (clamp 0-5) after raw-loss probe confirms healthy.

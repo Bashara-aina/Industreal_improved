@@ -3179,7 +3179,11 @@ def evaluate_all(
             clip_ids=np.asarray(act_clip_ids) if act_clip_ids else None,
         )
     else:
-        act_metrics = {'act_macro_f1': 0.0, 'act_top5_acc': 0.0, 'act_frame_acc': 0.0}
+        act_metrics = {
+            'act_macro_f1': 0.0, 'act_top5_accuracy': 0.0, 'act_frame_accuracy': 0.0,
+            'act_accuracy': 0.0, 'act_clip_accuracy': 0.0, 'act_weighted_f1': 0.0,
+            'act_accuracy_no_na': 0.0, 'act_macro_recall': 0.0,
+        }  # [OPUS v5] Include all Val-line keys to avoid cosmetic NaN
     results.update(act_metrics)
     if getattr(C, 'TRAIN_ACT', True):
         report_per_class_accuracy(
@@ -3255,7 +3259,12 @@ def evaluate_all(
     if getattr(C, 'TRAIN_PSR', True):
         psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
     else:
-        psr_metrics = {'psr_f1': 0.0, 'psr_edit': 0.0, 'psr_pos': 0.0}
+        psr_metrics = {
+            'psr_f1': 0.0, 'psr_edit': 0.0, 'psr_pos': 0.0,
+            'psr_f1_at_t': 0.0, 'psr_f1_at_t5': 0.0, 'psr_edit_score': 0.0,
+            'psr_overall_f1': 0.0, 'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
+            'psr_precision_at_t5': 0.0, 'psr_recall_at_t5': 0.0, 'psr_overall_f1_at5': 0.0,
+        }  # [OPUS v5] Include all Val-line keys to avoid cosmetic NaN
     results.update(psr_metrics)
     if getattr(C, 'TRAIN_PSR', True):
         results['psr_macro_f1'] = results.get('psr_overall_f1', 0.0)
