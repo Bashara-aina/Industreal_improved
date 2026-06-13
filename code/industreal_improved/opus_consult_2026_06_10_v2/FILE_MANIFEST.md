@@ -60,4 +60,6 @@
 | `15_GIT_DIFF_SUMMARY.txt` | Complete git diff of all source changes (c454163..HEAD) |
 | `16_MASTER_PROMPT_v5.md` | **SEND THIS TO OPUS** — Ultimate path to SOTA-ready model, all SOTA targets, current state, key questions |
 | `17_OPUS_ANSWER_v5.md` | **Opus v5 answer** — ultimate path (R1→R4 ladder), det-gap framing, activity/PSR enable order, PSR `1e-4` sentinel diagnosis, efficiency-first cell-fill strategy, timeline |
+| `18_ULTIMATE_MASTER_GUIDE_INDUSTREAL.md` | **Ultimate end-to-end master guide** — three invariants (non-NaN/non-zero/non-degenerate); pre-flight liveness probe; data/label fixes (activity segment sampler + NA mask, PSR transitions, subset stratification, IMG_SIZE guard); per-task recipes; R0→R5 ladder; full eval-protocol table; loss/numerical hygiene; **all 50 checklist items answered**; efficiency table; failure-mode playbook; Definition of Done |
+| `19_PRE_TRAINING_READINESS_AUDIT_100.md` | **100-item pre-training readiness audit** — go/no-go gates with why-analysis per item, across architecture, backbone/FPN/anchors, cross-task conditioning, data/labels, loss/numerical hygiene, Kendall/gradient balance, optimization/training loop, per-head liveness, and per-task readiness (det/act/psr/headpose/assembly); 6 master gates; usage protocol |
 | `popw_paper_improved.tex` | Target paper with all benchmark tables and SOTA comparisons |
