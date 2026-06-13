@@ -44,6 +44,11 @@ TRAIN_PSR       = True
 USE_KENDALL     = True   # Kendall weighting active for 4 tasks (det, act, psr, head_pose 9-DoF MSE)
 TRAIN_MAX_STEPS = int(os.environ.get('TRAIN_MAX_STEPS', 0))  # 0=disabled; set >0 to stop after N batches
 
+# [OPUS v5 AUDIT] Bring-up mode: flip guards from silent-fallback to assert-and-crash
+# so bugs surface in 200 steps, not 8 GPU-hours. Disable for production.
+ASSERT_AND_CRASH = int(os.environ.get('ASSERT_AND_CRASH', '0')) == 1
+LIVENESS_EVERY = 200  # [OPUS v5] Print per-head liveness (loss/finite/ALIVE) every N steps
+
 # Hand-FiLM conditioning (hand keypoints → FiLM modulation on activity features)
 USE_HAND_FILM   = True
 HAND_FILM_CHANNELS = 768   # ConvNeXt C5 channel count
@@ -257,6 +262,14 @@ ZERO_DET_CONF_FOR_RECOVERY = bool(int(os.environ.get('ZERO_DET_CONF', '0')))
 IMG_WIDTH       = 1280
 IMG_HEIGHT      = 720
 IMG_SIZE        = (IMG_WIDTH, IMG_HEIGHT)
+
+# [OPUS v5 AUDIT] IMG_SIZE guard: anchors are normalized by IMG_WIDTH/HEIGHT.
+# If IMG_SIZE differs from (IMG_WIDTH, IMG_HEIGHT), boxes are not rescaled
+# and detection silently zeroes. Assert at import time.
+assert IMG_SIZE[0] == IMG_WIDTH and IMG_SIZE[1] == IMG_HEIGHT, (
+    f'IMG_SIZE={IMG_SIZE} must equal (IMG_WIDTH={IMG_WIDTH}, IMG_HEIGHT={IMG_HEIGHT}). '
+    f'Boxes are NOT rescaled on image resize — mismatch silently zeroes detection.'
+)
 ORIGINAL_WIDTH  = 1280
 ORIGINAL_HEIGHT = 720
 
@@ -341,7 +354,7 @@ TRAIN_PREFETCH_FACTOR = 4  # 2 workers × 2 prefetch = 4 batches queued (was 4)
 # had no positives and returned mAP=0. 0.02 is high enough to filter the random-init noise
 # floor (probe shows only 3107 anchors above 0.05 across 1.66M) but lets through the real
 # localizations that the probe confirms (151 preds at IoU>0.5 in batch 0 alone).
-DET_EVAL_SCORE_THRESH = 0.02
+DET_EVAL_SCORE_THRESH = 0.001  # [OPUS v5 AUDIT] Lowered from 0.02 → 0.001 for YOLOv8 comparability. YOLOv8 reports at ~0.001; 0.02 understates our mAP.
 DET_EVAL_MAX_PER_IMAGE = 300
 DET_EVAL_NMS_IOU_THRESH = 0.5  # NMS IoU threshold for detection evaluation
 SAVE_VAL_CONFUSION_MATRIX = False
