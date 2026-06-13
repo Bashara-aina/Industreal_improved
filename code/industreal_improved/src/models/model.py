@@ -1939,6 +1939,14 @@ class POPWMultiTaskModel(nn.Module):
         # During eval: always compute head_pose so evaluate.py doesn't crash on None.
         if self.train_pose or not self.training:
             head_pose = self.head_pose_head(c4, c5)
+            # [GAP-C] GeometryAwareHeadPose returns (rot6d, rot_matrix, position) tuple.
+            # Convert to [B,9] for downstream compatibility (FiLM, eval, loss).
+            if isinstance(head_pose, tuple):
+                _rot6d, _rot_mat, _pos = head_pose
+                # Reconstruct [B,9] = forward(3) + position(3) + up(3)
+                _forward = _rot_mat[:, :, 0]                  # first column = forward dir
+                _up = _rot_mat[:, :, 2]                        # third column = up dir
+                head_pose = torch.cat([_forward, _pos, _up], dim=1)  # [B, 9]
             if self.use_headpose_film and hasattr(self, 'headpose_film'):
                 c5_mod = self.headpose_film(c5_mod, head_pose.detach())  # stop_grad per paper ?HeadPoseFiLM
         else:
