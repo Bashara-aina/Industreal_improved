@@ -685,6 +685,27 @@ PRESETS = {
         'benchmark_mode':     True,
         'batch_size':         4,
     },
+    # [OPUS v5] Paper-run preset: enables ALL winnable-task fixes for the final run.
+    'paper_run': {
+        'description': 'Final paper-run preset — PSR transition, geo head pose, bank gradient.',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         1,
+        'grad_accum_steps':   8,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          True,
+        'train_act':          True,
+        'train_psr':          True,
+        'train_head_pose':    True,
+    },
 }
 
 
