@@ -1,7 +1,8 @@
 # 20 — 100/100 Pre-Training Readiness Audit: Verification Status
 
 **Reference**: `19_PRE_TRAINING_READINESS_AUDIT_100.md`  
-**Date**: 2026-06-13
+**Date**: 2026-06-13  
+**Bring-up Smoke**: G1-G3 PASSED (see `logs/bringup_smoke_g1g3.log`)
 
 Every item cross-referenced against current `src/` code.
 
