@@ -705,6 +705,14 @@ PRESETS = {
         'train_act':          True,
         'train_psr':          True,
         'train_head_pose':    True,
+        # [BLOCKER-C] Winnable-task flags — actually set by apply_preset now
+        'use_psr_transition':       True,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      False,  # gradient through bank
+        'feature_bank_slot_overwrite': False,
+        'use_psr_order_prior':      True,
+        'psr_sensitivity_weight':   0.0,
+        'use_ldam_drw':             False,
     },
 }
 
@@ -717,6 +725,9 @@ def apply_preset(preset_name: str) -> None:
     global ZERO_DET_CONF_FOR_RECOVERY, STAGED_TRAINING, MIXED_PRECISION
     global USE_MIXUP, USE_EMA
     global TRAIN_DET, TRAIN_ACT, TRAIN_PSR, TRAIN_HEAD_POSE
+    # [OPUS v5 BLOCKER-C FIX] Winnable-task flags — must be in global list for preset to set them
+    global USE_PSR_TRANSITION, USE_GEO_HEAD_POSE, FEATURE_BANK_DETACH, FEATURE_BANK_SLOT_OVERWRITE
+    global USE_LDAM_DRW, PSR_SENSITIVITY_WEIGHT, USE_PSR_ORDER_PRIOR
 
     if preset_name not in PRESETS:
         raise ValueError(f'Unknown preset: {preset_name}. Available: {list(PRESETS.keys())}')
@@ -740,6 +751,15 @@ def apply_preset(preset_name: str) -> None:
     TRAIN_ACT = preset.get('train_act', TRAIN_ACT)
     TRAIN_PSR = preset.get('train_psr', TRAIN_PSR)
     TRAIN_HEAD_POSE = preset.get('train_head_pose', TRAIN_HEAD_POSE)
+    # [OPUS v5 BLOCKER-C FIX] Winnable-task flags — actually set them from preset.
+    # These were declared but never assigned → paper_run was a no-op for its key flags.
+    USE_PSR_TRANSITION = bool(preset.get('use_psr_transition', USE_PSR_TRANSITION))
+    USE_GEO_HEAD_POSE = bool(preset.get('use_geo_head_pose', USE_GEO_HEAD_POSE))
+    FEATURE_BANK_DETACH = bool(preset.get('feature_bank_detach', FEATURE_BANK_DETACH))
+    FEATURE_BANK_SLOT_OVERWRITE = bool(preset.get('feature_bank_slot_overwrite', FEATURE_BANK_SLOT_OVERWRITE))
+    USE_LDAM_DRW = bool(preset.get('use_ldam_drw', USE_LDAM_DRW))
+    PSR_SENSITIVITY_WEIGHT = float(preset.get('psr_sensitivity_weight', PSR_SENSITIVITY_WEIGHT))
+    USE_PSR_ORDER_PRIOR = bool(preset.get('use_psr_order_prior', USE_PSR_ORDER_PRIOR))
     # [AUDIT FIX 2026-06-11] EFFECTIVE_BATCH was computed once at import and
     # went stale when a preset changed BATCH_SIZE / GRAD_ACCUM_STEPS.
     EFFECTIVE_BATCH = BATCH_SIZE * GRAD_ACCUM_STEPS
