@@ -802,7 +802,6 @@ def _compute_clip_level_accuracy(
             # single-frame clips or DEBUG_MAX_VIDEOS=2 smoke test subset)
             if len(pred_clip_valid) == 0 or np.isnan(pred_clip_valid).all():
                 pred_mode = 0  # fallback when all predictions are NaN
-                total += 1
                 gt_mode = int(stats.mode(gt_clip, keepdims=False)[0])
                 if pred_mode == gt_mode:
                     correct += 1
@@ -840,6 +839,8 @@ def compute_activity_segment_metrics(model, dataset, device, T=16):
     for seg in segs:
         try:
             clip, label = dataset.sample_segment_clip(seg, T=T)
+            if label == 0:  # NA segment — skip per docstring contract
+                continue
             clip = clip.unsqueeze(0).to(device)  # [1,T,3,H,W]
             with torch.no_grad():
                 out = model(clip)
@@ -3070,6 +3071,8 @@ def evaluate_all(
         act_preds.append(act_pred_batch[act_valid])
         act_labels.append(act_labels_batch[act_valid])
         for i in range(B):
+            if not act_valid[i]:
+                continue
             metadata_item = targets['metadata'][i] if i < len(targets['metadata']) else {}
             rec_id = metadata_item.get('recording_id', metadata_item.get('rec_id', None))
             if rec_id is not None:
@@ -3315,6 +3318,22 @@ def evaluate_all(
                 f'act_macro_f1=0 is a model collapse, not an eval bug.'
             )
     if getattr(C, 'TRAIN_ACT', True):
+        # [OPUS V5 FIX] Validate act_clip_ids vs all_act_gt length before passing
+        # to compute_activity_metrics. Mismatch causes IndexError that kills eval.
+        _n_pred = len(all_act_gt) if all_act_gt is not None else 0
+        _n_clip = len(act_clip_ids) if act_clip_ids else 0
+        if _n_pred > 0 and _n_clip > 0 and _n_pred != _n_clip:
+            logger.warning(
+                f'  [EVAL_GUARD] act_clip_ids len={_n_clip} != all_act_gt len={_n_pred} — '
+                f'truncating to shorter and continuing. This indicates a masking bug '
+                f'where activity_mask filtering produced inconsistent counts.'
+            )
+            _min_len = min(_n_pred, _n_clip)
+            all_act_gt = all_act_gt[:_min_len]
+            all_act_pred = all_act_pred[:_min_len]
+            if all_act_logits is not None:
+                all_act_logits = all_act_logits[:_min_len]
+            act_clip_ids = act_clip_ids[:_min_len]
         act_metrics = compute_activity_metrics(
             all_act_gt, all_act_pred, all_act_logits,
             class_names=C.ACT_CLASS_NAMES,
@@ -3349,18 +3368,26 @@ def evaluate_all(
     # Each segment produces one prediction from 16 uniformly sampled frames.
     # This is the protocol used by MViTv2 (65.25 Top-1) — per-recording majority
     # vote is not directly comparable.
+    # [OPUS V5 FIX] Wrap in try/except so segment eval crash doesn't kill full eval.
+    # The segment protocol is supplementary to the main clip-level metric.
     if getattr(C, 'TRAIN_ACT', True):
-        seg_metrics = compute_activity_segment_metrics(
-            model, loader.dataset, device, T=16,
-        )
-        results['act_seg_top1'] = seg_metrics['act_top1']
-        results['act_seg_top5'] = seg_metrics['act_top5']
-        results['act_seg_n'] = seg_metrics['n_segments']
-        logger.info(
-            f'  [GAP-B] Activity Segment — Top-1: {seg_metrics["act_top1"]:.4f}  '
-            f'Top-5: {seg_metrics["act_top5"]:.4f}  '
-            f'Segments: {seg_metrics["n_segments"]}'
-        )
+        try:
+            seg_metrics = compute_activity_segment_metrics(
+                model, loader.dataset, device, T=16,
+            )
+            results['act_seg_top1'] = seg_metrics['act_top1']
+            results['act_seg_top5'] = seg_metrics['act_top5']
+            results['act_seg_n'] = seg_metrics['n_segments']
+            logger.info(
+                f'  [GAP-B] Activity Segment — Top-1: {seg_metrics["act_top1"]:.4f}  '
+                f'Top-5: {seg_metrics["act_top5"]:.4f}  '
+                f'Segments: {seg_metrics["n_segments"]}'
+            )
+        except Exception as e:
+            logger.error(f'  [GAP-B] Segment eval FAILED: {e} — skipping segment metrics')
+            results['act_seg_top1'] = 0.0
+            results['act_seg_top5'] = 0.0
+            results['act_seg_n'] = 0
     else:
         results['act_seg_top1'] = 0.0
         results['act_seg_top5'] = 0.0
