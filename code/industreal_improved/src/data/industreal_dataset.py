@@ -441,6 +441,15 @@ class _PerRecordingCache:
         for start, end, action_id in spans:
             end = min(end, self._num_frames - 1)
             if start < self._num_frames:
+                # [FIX 2026-06-14] Clamp action_id to valid range [0, NUM_CLASSES_ACT-1]
+                # to prevent ScatterGatherKernel OOB in loss functions during validation.
+                if action_id < 0 or action_id >= C.NUM_CLASSES_ACT:
+                    logger.warning(
+                        f'[industreal_dataset] Clamping OOB action_id={action_id} '
+                        f'(valid 0..{C.NUM_CLASSES_ACT - 1}) in {self.rec_dir.name} '
+                        f'frames [{start}:{end}]'
+                    )
+                    action_id = max(0, min(action_id, C.NUM_CLASSES_ACT - 1))
                 labels[start: end + 1] = action_id
 
         return labels

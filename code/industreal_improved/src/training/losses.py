@@ -242,7 +242,15 @@ class FocalLoss(nn.Module):
 
             if pos_mask.sum() > 0:
                 pos_in_valid = pos_mask[valid_mask]
-                cls_target[pos_in_valid, matched_labels[valid_mask][pos_in_valid]] = 1.0
+                pos_labels = matched_labels[valid_mask][pos_in_valid]
+                num_det_classes = cls_target.shape[1]
+                if pos_labels.max() >= num_det_classes or pos_labels.min() < 0:
+                    logger.warning(
+                        f'Out-of-range detection labels: min={pos_labels.min().item()}, '
+                        f'max={pos_labels.max().item()}, num_classes={num_det_classes}'
+                    )
+                    pos_labels = pos_labels.clamp(0, num_det_classes - 1)
+                cls_target[pos_in_valid, pos_labels] = 1.0
 
             # --- FIX #1: Clamp sigmoid inputs to prevent NaN in focal loss ---
             # p_t near 0 causes (1-p_t)^gamma → inf and log(0) → NaN
@@ -579,6 +587,7 @@ class ClassBalancedFocalLoss(nn.Module):
         self.gamma = gamma
         self.label_smoothing = label_smoothing
         self.register_buffer('class_weights', torch.ones(num_classes))
+        self._warned_oob_target = False
 
     def compute_beta_weights(self, frequencies: torch.Tensor) -> None:
         """
@@ -621,10 +630,26 @@ class ClassBalancedFocalLoss(nn.Module):
             log_probs = F.log_softmax(logits, dim=1)
             ce = -(soft_targets * log_probs).sum(dim=1)
         elif self.label_smoothing > 0:
+            # [ROBUSTNESS FIX] — clamp targets to valid range before scatter_
+            # Prevents CUDA ScatterGatherKernel.cu:409 assertion when validation
+            # batch contains activity labels outside the logits width (same root
+            # cause as LDAMLoss guard at line 522).
+            tgt = targets.long()
+            if tgt.numel() > 0:
+                C = logits.shape[1]
+                if tgt.max() >= C or tgt.min() < 0:
+                    if not getattr(self, '_warned_oob_target', False):
+                        logger.warning(
+                            'CBFocalLoss: activity target out of range '
+                            f'(min={tgt.min().item()}, max={tgt.max().item()}, '
+                            f'C={C}). Clamping to [0, {C - 1}].'
+                        )
+                        self._warned_oob_target = True
+                    tgt = tgt.clamp(0, C - 1)
             with torch.no_grad():
                 smooth_targets = torch.zeros_like(logits)
                 smooth_targets.fill_(self.label_smoothing / self.num_classes)
-                smooth_targets.scatter_(1, targets.unsqueeze(1), 1.0 - self.label_smoothing)
+                smooth_targets.scatter_(1, tgt.unsqueeze(1), 1.0 - self.label_smoothing)
 
             p_t = (smooth_targets * probs).sum(dim=1)
             log_probs = F.log_softmax(logits, dim=1)
@@ -1087,7 +1112,7 @@ class MultiTaskLoss(nn.Module):
                 outputs['pose_confidence'],
                 targets['keypoints'],
                 targets['pose_confidence'],
-            ) * 0.001  # Kendall exp(-lv_pose)=exp(1)≈2.7 amplifies
+            ) * float(getattr(C, 'POSE_LOSS_WEIGHT', 0.02))  # [INTERVENTION 2026-06-14] 0.02 = 20x from 0.001
         else:
             loss_pose = zero
 
@@ -1226,8 +1251,10 @@ class MultiTaskLoss(nn.Module):
             # and the model finds a single threshold that fits all frames.
             # Penalty: -log(mean(per-component-std)) keeps std > 1e-3 in log-space.
             # Only fires at T=1 (dim==2); sequence mode (dim==3) handled by temporal smooth.
-            if outputs['psr_logits'].dim() == 2:
-                _per_comp_std = outputs['psr_logits'].std(dim=0).mean()
+            # NOTE: requires batch > 1 — std(dim=0) on a single element has grad = (x-mean)/(n*std)
+            # which divides by zero (std=0) and produces NaN in backward → LogBackward0 crash.
+            if outputs['psr_logits'].dim() == 2 and outputs['psr_logits'].shape[0] > 1:
+                _per_comp_std = outputs['psr_logits'].std(dim=0, correction=0).mean()
                 _sens = -torch.log(_per_comp_std + 1e-3)
                 _sens = torch.where(
                     torch.isfinite(_sens), _sens, torch.tensor(0.0, device=device)
@@ -1346,10 +1373,17 @@ class MultiTaskLoss(nn.Module):
 
         # === Kendall weighting ===
         if self.use_kendall:
+            # [FIX 2026-06-15] Per-task Kendall bounds to prevent multi-task collapse.
+            # Activity log_var FLOOR (min) prevents precision-boosting above exp(0)=1.0.
+            # PSR/pose log_var CEILING (max) prevents suppression below exp(0)=1.0.
+            # Matches _clamp_kendall_log_vars in train.py (parameter-level guard).
+            _act_min = float(getattr(C, 'KENDALL_LOG_VAR_MIN_ACT', -4.0))
+            _psr_max = float(getattr(C, 'KENDALL_LOG_VAR_MAX_PSR', 2.0))
+            _pose_max = float(getattr(C, 'KENDALL_LOG_VAR_MAX_POSE', 2.0))
             lv_det = self.log_var_det.clamp(-4.0, 2.0)
-            lv_hp = self.log_var_pose.clamp(-4.0, 2.0)
-            lv_act = self.log_var_act.clamp(-4.0, 2.0)
-            lv_psr = self.log_var_psr.clamp(-4.0, 2.0)
+            lv_hp = self.log_var_pose.clamp(-4.0, _pose_max)
+            lv_act = self.log_var_act.clamp(_act_min, 2.0)
+            lv_psr = self.log_var_psr.clamp(-4.0, _psr_max)
 
             prec_det = torch.exp(-lv_det)
             prec_hp = torch.exp(-lv_hp)
@@ -1428,10 +1462,26 @@ class MultiTaskLoss(nn.Module):
                     pose_contribution = prec_hp * loss_head_pose + lv_hp
                 total = total + pose_contribution
             if self.train_act:
-                total = total + prec_act * loss_act + lv_act
+                # [FIX 2026-06-15] ACTIVITY_LOSS_WEIGHT prevents activity from dominating
+                # the Kendall total. Activity loss is ~1-5 vs PSR loss ~0.01 — without
+                # this down-weight, activity dominates even when both heads have equal
+                # precision, and Kendall log_vars learn to suppress PSR/pose to compensate.
+                _act_w = float(getattr(C, 'ACTIVITY_LOSS_WEIGHT', 1.0))
+                total = total + prec_act * (loss_act * _act_w) + lv_act
             if self.train_psr:
                 loss_psr = loss_psr.clamp(min=0.0)
-                total = total + prec_psr * loss_psr + lv_psr
+                # [INTERVENTION 2026-06-14] PSR_WEIGHT applied BEFORE Kendall precision
+                # so the learned s_psr (log_var) can still modulate the effective weight.
+                _psr_w = float(getattr(C, 'PSR_WEIGHT', 20.0))
+                # [FIX 2026-06-15] Step-based PSR warmup: extra precision multiplier that
+                # decays from PSR_WARMUP_INIT_MULT → 1.0 over PSR_WARMUP_STEPS.
+                # Gives PSR a gradient head start before activity loss dominates.
+                _psr_warmup_steps = int(getattr(C, 'PSR_WARMUP_STEPS', 0))
+                if _psr_warmup_steps > 0 and self._step_counter < _psr_warmup_steps:
+                    _psr_warmup_init = float(getattr(C, 'PSR_WARMUP_INIT_MULT', 3.0))
+                    _ramp = _psr_warmup_init + (1.0 - _psr_warmup_init) * self._step_counter / _psr_warmup_steps
+                    prec_psr = prec_psr * _ramp
+                total = total + prec_psr * (loss_psr * _psr_w) + lv_psr
             total = total.squeeze()
 
             # NaN guard in Kendall total — fires on inf/NaN only, not on negative
