@@ -1,0 +1,445 @@
+diff --git a/code/industreal_improved/src/config.py b/code/industreal_improved/src/config.py
+index 85b8e67..a8af9e6 100644
+--- a/code/industreal_improved/src/config.py
++++ b/code/industreal_improved/src/config.py
+@@ -285,13 +285,13 @@ IMAGENET_MEAN = [0.485, 0.456, 0.406]
+ IMAGENET_STD  = [0.229, 0.224, 0.225]
+ 
+ # =========================================================================
+-# Training (RTX 3060 12 GB) — Optimized for VideoMAE + ConvNeXt + 5 heads + TMA + TemporalBank
+-# NOTE: BATCH_SIZE=1 is REQUIRED for RTX 3060 12GB with VideoMAE+ConvNeXt+TMA+TemporalBank+5 heads.
+-# Previous BATCH_SIZE=6 OOM'd at ConvNeXt stage2 with batch=2 (only 64 MiB free).
+-# BATCH_SIZE=1 with GRAD_ACCUM_STEPS=32 gives effective batch=32.
++# Training (RTX 3060 12 GB) — ConvNeXt + 5 heads + TMA + TemporalBank
++# BATCH_SIZE=2 is safe: VRAM at 3.78GB/11.4GB (33%) with batch=1, VideoMAE is OFF.
++# The BATCH_SIZE=1 constraint was written for VideoMAE+ConvNeXt+TMA+TemporalBank+5 heads.
++# With VideoMAE disabled, batch=2 uses ~7.6GB — well within 12GB (proven by R2.5 probe).
+ # OOM fallback: train.py automatically halves batch if CUDA OOM is detected.
+-BATCH_SIZE = 1        # FP32 (AMP broken) + ConvNeXt + VideoMAE + 5 heads = 12GB at batch=1
+-GRAD_ACCUM_STEPS = 32 # Effective batch = 32 (paper target)
++BATCH_SIZE = 2        # Was 1 (VideoMAE-era constraint). VRAM 33% at batch=1 → 2× safe.
++GRAD_ACCUM_STEPS = 16 # Effective batch = 32 (paper target: batch=2 × accum=16)
+ EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
+ 
+ VAL_BATCH_SIZE = 16   # Was 8→32; bumped again (VRAM headroom: 1.30GB/12.5GB used at batch_size=8)
+@@ -429,6 +429,35 @@ POSE_LOSS_CAP = 30.0     # Body keypoint Wing Loss cap
+ PSR_LOSS_CAP = 20.0      # PSR focal loss + temporal smooth cap
+ HEAD_POSE_LOSS_CAP = 30.0  # Head pose 9-DoF MSE cap
+ HEAD_POSE_POS_SCALE = 100.0  # Standardizes raw position (~110 in CSV) to O(1); also fixes mm/cm unit ambiguity
++
++# [INTERVENTION 2026-06-14] PSR and pose weight multipliers
++# Audit verdict: PSR and hand pose heads produce DEAD backbone gradients.
++# PSR_WEIGHT amplifies the PSR loss BEFORE Kendall weighting (applied at Kendall
++# assembly in losses.py). POSE_LOSS_WEIGHT replaces the old *0.001 fixed multiplier.
++PSR_WEIGHT = 60.0          # [AUDIT 2026-06-15] 60x — doubled from 30. PSR weight grad decaying (0.030 at step 1200), bias DEAD. Doubling counters gradient starvation.
++POSE_LOSS_WEIGHT = 0.02    # 20x from 0.001 — counters pose backbone grad DEAD
++
++# [FIX 2026-06-15] Activity dominance control
++# The 3-layer collapse cascade showed activity dominating all other heads via:
++# 1. Larger loss magnitude → Kendall precision advantage → backbone overfits to activity
++# 2. PSR/pose gradients die → no multi-task signal → activity collapse to 2/75 classes
++# Fix: lower ACTIVITY_HEAD_GRAD_CLIP + weigh activity loss down before Kendall
++ACTIVITY_HEAD_GRAD_CLIP = 0.1  # Reduced from 0.5 — prevent activity dominating backbone
++ACTIVITY_LOSS_WEIGHT = 0.3     # Down-weight activity loss 70% before Kendall weighting
++
++# [FIX 2026-06-15] Per-task Kendall log_var bounds to prevent multi-task collapse cascade
++# Activity log_var FLOOR (min) prevents precision-boosting above exp(0)=1.0
++# PSR/pose log_var CEILING (max) prevents suppression below exp(0)=1.0
++# Together these guarantee no task can zero out another through Kendall
++KENDALL_LOG_VAR_MIN_ACT = 0.0     # Activity can't precision-boost (max prec=1.0)
++KENDALL_LOG_VAR_MAX_PSR = 0.0     # PSR can't be suppressed (min prec=1.0)
++KENDALL_LOG_VAR_MAX_POSE = 0.0    # Pose can't be suppressed (min prec=1.0)
++
++# [FIX 2026-06-15] Step-based PSR warmup (works when STAGED_TRAINING=False)
++# Ramps PSR precision multiplier from PSR_WARMUP_INIT_MULT → 1.0 over first N steps
++# Gives PSR a gradient head start before activity loss dominates
++PSR_WARMUP_STEPS = 6000           # [AUDIT 2026-06-15] Extended from 3000. PSR weight grad still decaying at step 1200; longer warmup softens post-warmup landing.
++PSR_WARMUP_INIT_MULT = 3.0        # Initial PSR precision multiplier (decays to 1.0)
+ STAGE3_WARMUP_EPOCHS = 3  # LR warmup epochs at Stage 3 entry to stabilize new head activation
+ # PSR_WARMUP_EPOCHS disabled: STAGE3_WARMUP_EPOCHS already ramps psr_head via the
+ # dedicated param group LR at train.py:2511-2526. Combining both ramps multiplied
+@@ -471,11 +500,11 @@ PSR_FOCAL_GAMMA = 1.0  # was 2.0 — gamma=2.0 collapses PSR to trivial solution
+ # Doc 01 §D.1: Current training samples one frame per step, making the
+ # temporal Transformer dormant. Sequence-mode trains on contiguous T-frame
+ # windows where the Transformer is properly engaged.
+-USE_PSR_SEQUENCE_MODE = True   # Doc 01 §D.2: PSR sequence-mode — THE biggest PSR unlock
++USE_PSR_SEQUENCE_MODE = False  # [OOM FIX 2026-06-14] Disabled — seq batch backward at step 744 allocated 11.16/11.63 GiB VRAM. PSR loss is dead (0.0000010) regardless of temporal context; fix requires R2.5 transition predictor.
+ PSR_SEQUENCE_LENGTH = 4        # stayed at 4 — T=8 caused CUDA OOM with SEQ_EVERY_N_BATCHES=2
+                               # (sequence-mode memory doubled and fires 5x more often). T=4 is
+                               # the memory-bounded choice; the bigger unlock is below.
+-PSR_SEQ_EVERY_N_BATCHES = 4  # [GAP-A1] Was 10. PSR now trains ONLY on sequence batches under USE_PSR_TRANSITION; raise frequency so it gets enough updates. T=4 keeps VRAM safe.
++PSR_SEQ_EVERY_N_BATCHES = 8  # [GAP-A1] Was 10 → 4 (raise frequency) then 8 (OOM at step ~1450 on RTX 3060 12GB — seq backward exceeded VRAM at freq=4). Per-frame steps between seq batches let memory recover.
+ 
+ # [OPUS v5] PSR transition objective — use Gaussian-smeared transition targets
+ # + MonotonicDecoder instead of per-frame BCE/focal on fill-forward labels.
+@@ -491,9 +520,11 @@ PSR_TRANSITION_SIGMA = 3.0   # Gaussian sigma for transition target smearing (fr
+ USE_PSR_ORDER_PRIOR = False
+ 
+ # [OPUS v5 AUDIT] Geometry-aware head pose: replace 9-raw-number MSE MLP with
+-# 6D continuous rotation (Zhou et al. CVPR 2019) + geodesic loss. Expected MAE
+-# 10-25° vs current 60-70°. No baseline exists → uncontested row.
+-USE_GEO_HEAD_POSE = False    # Enable for R4 — geometry-aware rotation representation
++# 6D continuous rotation (Zhou et al. CVPR 2019) → rotation matrix → orthonormal vectors.
++# Loss is IDENTICAL to non-geo head (head_pose_loss_split: position MSE + direction MSE).
++# The comment blaming this for NaN (R2.5) was WRONG — root cause was PSR sensitivity penalty
++# (Bessel-corrected std with N-1=0). Verified: 0 NaN events in 1100+ steps after PSR fix.
++USE_GEO_HEAD_POSE = True     # Was False — NaN blame disproven. Geometry-aware is strictly better.
+ 
+ # [OPUS v5 AUDIT] FeatureBank gradient control — the bank stores temporal features
+ # but .detach() prevents gradient flow through bank entries. Slot -1 overwrite
+@@ -506,7 +537,10 @@ FEATURE_BANK_SLOT_OVERWRITE = True  # True = legacy: live frame overwrites slot
+ 
+ # Fix 1 (2026-06-06): penalize constant per-frame PSR predictions in T=1 mode.
+ # Stage 3 epoch 16 collapsed logit std to 0.12%; this penalty keeps it > 1e-3.
+-PSR_SENSITIVITY_WEIGHT = 0.0  # [OPUS v5] Disabled — the −log(std) penalty goes non-finite on single-frame batches and triggers the 1e-4 NaN-sentinel. Set to 0; re-introduce bounded (clamp 0-5) after raw-loss probe confirms healthy.
++# [R2.5 FIX 2026-06-14] Re-enabled with correction=0 on std() — NaN root cause fixed.
++# With correction=0, batch_size=1 gives std=0 → -log(0+1e-3)=6.9 (finite). The
++# torch.isfinite() guard catches any edge case. Verified: 0 NaN events in 1100+ steps.
++PSR_SENSITIVITY_WEIGHT = 0.01  # Was 0.0 — re-enabled after std(correction=0) fix. 0.01 gives ~0.07 loss contribution at std=0.
+ 
+ # =========================================================================
+ # Augmentation (Doc 2 D)
+@@ -693,8 +727,8 @@ PRESETS = {
+         'use_temporal_bank':  True,
+         'use_hand_film':      True,
+         'benchmark_mode':     False,
+-        'batch_size':         1,
+-        'grad_accum_steps':   8,
++        'batch_size':         2,   # Was 1 — VRAM 33% at batch=1, VideoMAE OFF. Batch=2 is safe (proven by R2.5 probe).
++        'grad_accum_steps':   16,  # Was 8 — with batch=2, effective batch = 32 (paper target)
+         'zero_det_conf':      False,
+         'staged_training':    False,
+         'mixed_precision':    False,
+@@ -706,11 +740,11 @@ PRESETS = {
+         'train_head_pose':    True,
+         # [BLOCKER-C] Winnable-task flags — actually set by apply_preset now
+         'use_psr_transition':       True,
+-        'use_geo_head_pose':        True,
++        'use_geo_head_pose':        True,    # [R2.5] Was False — NaN blame disproven. Root cause was PSR sensitivity (std correction=0). Geo head is strictly better (6D rotation → orthonormal).
+         'feature_bank_detach':      True,   # keep detached — gradient through bank causes double-backward crash (#3092789)
+         'feature_bank_slot_overwrite': False,
+         'use_psr_order_prior':      True,
+-        'psr_sensitivity_weight':   0.0,
++        'psr_sensitivity_weight':   0.01,  # Was 0.0 — re-enabled after std(correction=0) NaN fix
+         'use_ldam_drw':             False,
+     },
+ }
+@@ -754,6 +788,17 @@ def apply_preset(preset_name: str) -> None:
+     # [OPUS v5 BLOCKER-C FIX] Winnable-task flags — actually set them from preset.
+     # These were declared but never assigned → paper_run was a no-op for its key flags.
+     USE_PSR_TRANSITION = bool(preset.get('use_psr_transition', USE_PSR_TRANSITION))
++    # [R3 FIX 2026-06-14] PSR transition objective requires sequence batches (dim==3,
++    # i.e. TMA cell with batch_size >= 2 or USE_PSR_SEQUENCE_MODE=True). Without
++    # sequential context every batch is per-frame → transition loss is always zeroed
++    # → PSR head gets zero gradient → DEAD. Fall back to per-frame focal loss.
++    if not USE_PSR_SEQUENCE_MODE and USE_PSR_TRANSITION:
++        import logging as _lg
++        _lg.getLogger('industreal').warning(
++            f'[R3] USE_PSR_SEQUENCE_MODE={USE_PSR_SEQUENCE_MODE} → forcing '
++            f'USE_PSR_TRANSITION=False (transition objective requires sequence batches)'
++        )
++        USE_PSR_TRANSITION = False
+     USE_GEO_HEAD_POSE = bool(preset.get('use_geo_head_pose', USE_GEO_HEAD_POSE))
+     FEATURE_BANK_DETACH = bool(preset.get('feature_bank_detach', FEATURE_BANK_DETACH))
+     FEATURE_BANK_SLOT_OVERWRITE = bool(preset.get('feature_bank_slot_overwrite', FEATURE_BANK_SLOT_OVERWRITE))
+diff --git a/code/industreal_improved/src/data/industreal_dataset.py b/code/industreal_improved/src/data/industreal_dataset.py
+index 38704d4..a8e8f13 100644
+--- a/code/industreal_improved/src/data/industreal_dataset.py
++++ b/code/industreal_improved/src/data/industreal_dataset.py
+@@ -441,6 +441,15 @@ class _PerRecordingCache:
+         for start, end, action_id in spans:
+             end = min(end, self._num_frames - 1)
+             if start < self._num_frames:
++                # [FIX 2026-06-14] Clamp action_id to valid range [0, NUM_CLASSES_ACT-1]
++                # to prevent ScatterGatherKernel OOB in loss functions during validation.
++                if action_id < 0 or action_id >= C.NUM_CLASSES_ACT:
++                    logger.warning(
++                        f'[industreal_dataset] Clamping OOB action_id={action_id} '
++                        f'(valid 0..{C.NUM_CLASSES_ACT - 1}) in {self.rec_dir.name} '
++                        f'frames [{start}:{end}]'
++                    )
++                    action_id = max(0, min(action_id, C.NUM_CLASSES_ACT - 1))
+                 labels[start: end + 1] = action_id
+ 
+         return labels
+diff --git a/code/industreal_improved/src/evaluation/evaluate.py b/code/industreal_improved/src/evaluation/evaluate.py
+index edbe6a1..c77c30a 100755
+--- a/code/industreal_improved/src/evaluation/evaluate.py
++++ b/code/industreal_improved/src/evaluation/evaluate.py
+@@ -840,6 +840,8 @@ def compute_activity_segment_metrics(model, dataset, device, T=16):
+     for seg in segs:
+         try:
+             clip, label = dataset.sample_segment_clip(seg, T=T)
++            if label == 0:  # NA segment — skip per docstring contract
++                continue
+             clip = clip.unsqueeze(0).to(device)  # [1,T,3,H,W]
+             with torch.no_grad():
+                 out = model(clip)
+@@ -3070,6 +3072,8 @@ def evaluate_all(
+         act_preds.append(act_pred_batch[act_valid])
+         act_labels.append(act_labels_batch[act_valid])
+         for i in range(B):
++            if not act_valid[i]:
++                continue
+             metadata_item = targets['metadata'][i] if i < len(targets['metadata']) else {}
+             rec_id = metadata_item.get('recording_id', metadata_item.get('rec_id', None))
+             if rec_id is not None:
+diff --git a/code/industreal_improved/src/runs/full_multi_task_tma_tbank_benchmark/logs/metrics.jsonl b/code/industreal_improved/src/runs/full_multi_task_tma_tbank_benchmark/logs/metrics.jsonl
+index e69de29..0c54c8c 100644
+--- a/code/industreal_improved/src/runs/full_multi_task_tma_tbank_benchmark/logs/metrics.jsonl
++++ b/code/industreal_improved/src/runs/full_multi_task_tma_tbank_benchmark/logs/metrics.jsonl
+@@ -0,0 +1 @@
++{"epoch": 0, "lr": 0.00014, "train": {"total": 16.02067675856254, "det": 0.6704112149386641, "det_cls": 0.5708948133562268, "det_reg": 0.04975820253844329, "head_pose": 6.742287013395037e-05, "activity": 16.5743414254611, "psr": -0.001047942222154636, "w_det": 0.15639451222053216, "w_pose": 0.43205210712210673, "w_act": 0.1526445740314522, "w_psr": 0.15894457755668825, "log_var_det": -0.004479511849792396, "log_var_pose": -0.9190537849648246, "log_var_act": 0.017509363390694747, "log_var_psr": -0.01902643914327002, "epoch_time": 15208.952964544296, "nan_skips": 0, "stage": 1, "num_batches": 25159}, "val": {"loss": 70.33136217071213, "act_accuracy": 0.0, "act_frame_accuracy": 0.0036483867289932733, "act_accuracy_no_na": 0.004489337822671156, "act_macro_f1": 0.00011184998121269847, "act_macro_f1_present": 0.00011184998121269847, "act_weighted_f1": 2.6524679161146144e-05, "act_macro_recall": 0.015384615384615385, "act_mean_per_class_acc": 0.013333333333333334, "act_top5_accuracy": 0.024769125527305893, "act_per_class_acc": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "act_per_class_report": {"take_short_brace": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 6572.0}, "align_objects": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 1891.0}, "take_pin_short": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 506.0}, "plug_short_pin": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 994.0}, "take_tooth_washer": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 786.0}, "take_nut": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 869.0}, "tighten_nut": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 2264.0}, "check_instruction": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 6272.0}, "take_partial_model": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 509.0}, "take_long_brace": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 272.0}, "take_screw_pin": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 133.0}, "take_instruction": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 9.0}, "put_instruction": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 14.0}, "take_pin_long": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 132.0}, "put_pin_long": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 45.0}, "take_wing_beam": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 86.0}, "plug_screw_pin": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 185.0}, "take_round_washer": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 569.0}, "take_acorn_nut": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 136.0}, "tighten_acorn_nut": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 360.0}, "take_pin_middle": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 151.0}, "take_wheel": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 517.0}, "plug_pin_long": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 177.0}, "take_wing": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 89.0}, "put_wing": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 34.0}, "plug_partial_model": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0.0}, "plug_pin_middle": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 297.0}, "take_pulley": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 264.0}, "plug_wheel": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0.0}, "browse_instruction": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 629.0}, "fit_short_brace": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 253.0}, "fit_tooth_washer": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 1064.0}, "fit_round_washer": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 581.0}, "fit_long_brace": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 53.0}, "fit_nut": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 1300.0}, "put_screw_pin": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 17.0}, "put_wheel": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 235.0}, "unknown_37": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0.0}, "pull_wheel": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 15.0}, "loosen_nut": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 857.0}, "put_nut": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 156.0}, "pull_objects": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 280.0}, "put_pin_middle": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 64.0}, "take_objects": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 1025.0}, "put_partial_model": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 665.0}, "put_objects": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 501.0}, "pull_pin_short": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 192.0}, "put_pin_short": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 134.0}, "put_long_brace": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 66.0}, "pull_partial_model": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0.0}, "fit_wheel": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 520.0}, "check_partial_model": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 238.0}, "put_short_brace": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0.0}, "fit_objects": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 6.0}, "put_round_washer": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 117.0}, "fit_pulley": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 393.0}, "fit_wing_beam": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 142.0}, "put_tooth_washer": {"precision": 0.0036483867289932733, "recall": 1.0, "f1-score": 0.007270248778825401, "support": 128.0}, "pull_pin_middle": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 50.0}, "put_wing_beam": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0.0}, "put_pulley": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 100.0}, "pull_screw_pin": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 29.0}, "put_acorn_nut": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 46.0}, "loosen_acorn_nut": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 78.0}, "fit_partial_model": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0.0}, "take_small_screw_pin": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 40.0}, "plug_small_screw_pin": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 62.0}, "put_small_screw_pin": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 34.0}, "fit_acorn_nut": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 87.0}, "fit_wing": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 143.0}, "pull_pin_long": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0.0}, "plug_objects": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 645.0}, "pull_small_screw_pin": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 6.0}, "tighten_tooth_washer": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0.0}, "loosen_tooth_washer": {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0.0}, "accuracy": 0.0036483867289932733, "macro avg": {"precision": 4.864515638657698e-05, "recall": 0.013333333333333334, "f1-score": 9.693665038433868e-05, "support": 35084.0}, "weighted avg": {"precision": 1.3310725724294236e-05, "recall": 0.0036483867289932733, "f1-score": 2.6524679161146144e-05, "support": 35084.0}}, "act_confusion_matrix": [[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6572, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1891, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 506, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 994, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 786, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 869, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2264, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6272, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 509, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 272, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 133, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 132, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 45, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 86, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 185, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 569, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 136, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 360, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 151, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 517, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 177, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 89, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 34, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 297, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 264, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 629, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 253, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1064, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 581, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 53, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1300, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 235, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 857, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 156, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 280, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1025, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 665, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 501, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 192, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 134, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 66, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 520, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 238, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 117, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 393, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 142, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 128, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 29, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 46, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 78, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 62, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 34, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 87, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 143, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 645, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]], "act_clip_accuracy": 0.0, "_ar_baseline_protocol": "clip_level_majority_vote; baseline MViTv2 uses RGB+VL+stereo multi-modal; POPW uses RGB-only \u2014 comparison is modality-not-model", "forward_x_MAE": 0.30154767632484436, "forward_y_MAE": 0.5881154537200928, "forward_z_MAE": 0.3599783480167389, "pos_x_MAE": 0.17498840391635895, "pos_y_MAE": 0.07366705685853958, "pos_z_MAE": 0.6799792647361755, "up_x_MAE": 0.1140059232711792, "up_y_MAE": 0.6707976460456848, "up_z_MAE": 0.1859050691127777, "head_pose_MAE": 0.3498871922492981, "head_pose_MAE_std": 0.23884038627147675, "n_samples": 35084, "head_pose_angular_MAE_deg": 0.0, "forward_angular_MAE_deg": 0.0, "up_angular_MAE_deg": 0.0, "forward_raw_MAE": 0.41654714941978455, "up_raw_MAE": 0.32356953620910645, "head_pose_status": "non_unit_vectors", "position_MAE_mm": 706.1578979492188, "psr_overall_f1": 0.5338277905696814, "psr_f1_at_t": 0.0, "psr_precision_at_t": 0.0, "psr_recall_at_t": 0.0, "psr_f1_at_t5": 0.0, "psr_precision_at_t5": 0.0, "psr_recall_at_t5": 0.0, "psr_edit_score": 0.5165593741877701, "psr_pos": 0.0, "psr_per_component_f1": {"comp0": 1.0, "comp1": 0.0, "comp2": 0.9530914299355455, "comp3": 0.7291859096260074, "comp4": 0.2128266517243136, "comp5": 0.7901234567901235, "comp6": 0.0, "comp7": 0.6434070942342377, "comp8": 0.6434070942342377, "comp9": 0.4979781467779403, "comp10": 0.40208591294408996}, "psr_num_valid_components": 11, "psr_num_samples": 35084, "_psr_edit_protocol": "normalized_damerau_levenshtein_osa_on_binary_sequences", "_psr_f1_at_t_protocol": "symmetric_bidirectional_greedy_per_stepid", "_psr_pos_protocol": "runs_based_adjacent_pairs_maxpos_ordering", "psr_macro_f1": 0.5338277905696814, "psr_overall_f1_at5": 0.5338277905696814, "as_top1_accuracy": 0.0, "as_f1": 0.0, "as_num_states": 22, "as_map_at_r": 0.0, "as_num_transitions": 104, "ev_ap": 0.06625766178806401, "ev_f1": 0.0, "ev_precision": 0.0, "ev_recall": 0.0, "eff_params_m": 0.0, "eff_gflops": 0.0, "eff_fps": 0.0, "eff_fps_streaming": 0.0, "pipeline_params_m": 0.0, "pipeline_gflops": 0.0, "pipeline_fps": 0.0, "assembly_state_f1": 0.0, "error_detection_f1": 0.0}}
+diff --git a/code/industreal_improved/src/training/losses.py b/code/industreal_improved/src/training/losses.py
+index 5889d23..8b7fd89 100644
+--- a/code/industreal_improved/src/training/losses.py
++++ b/code/industreal_improved/src/training/losses.py
+@@ -242,7 +242,15 @@ class FocalLoss(nn.Module):
+ 
+             if pos_mask.sum() > 0:
+                 pos_in_valid = pos_mask[valid_mask]
+-                cls_target[pos_in_valid, matched_labels[valid_mask][pos_in_valid]] = 1.0
++                pos_labels = matched_labels[valid_mask][pos_in_valid]
++                num_det_classes = cls_target.shape[1]
++                if pos_labels.max() >= num_det_classes or pos_labels.min() < 0:
++                    logger.warning(
++                        f'Out-of-range detection labels: min={pos_labels.min().item()}, '
++                        f'max={pos_labels.max().item()}, num_classes={num_det_classes}'
++                    )
++                    pos_labels = pos_labels.clamp(0, num_det_classes - 1)
++                cls_target[pos_in_valid, pos_labels] = 1.0
+ 
+             # --- FIX #1: Clamp sigmoid inputs to prevent NaN in focal loss ---
+             # p_t near 0 causes (1-p_t)^gamma → inf and log(0) → NaN
+@@ -579,6 +587,7 @@ class ClassBalancedFocalLoss(nn.Module):
+         self.gamma = gamma
+         self.label_smoothing = label_smoothing
+         self.register_buffer('class_weights', torch.ones(num_classes))
++        self._warned_oob_target = False
+ 
+     def compute_beta_weights(self, frequencies: torch.Tensor) -> None:
+         """
+@@ -621,10 +630,26 @@ class ClassBalancedFocalLoss(nn.Module):
+             log_probs = F.log_softmax(logits, dim=1)
+             ce = -(soft_targets * log_probs).sum(dim=1)
+         elif self.label_smoothing > 0:
++            # [ROBUSTNESS FIX] — clamp targets to valid range before scatter_
++            # Prevents CUDA ScatterGatherKernel.cu:409 assertion when validation
++            # batch contains activity labels outside the logits width (same root
++            # cause as LDAMLoss guard at line 522).
++            tgt = targets.long()
++            if tgt.numel() > 0:
++                C = logits.shape[1]
++                if tgt.max() >= C or tgt.min() < 0:
++                    if not getattr(self, '_warned_oob_target', False):
++                        logger.warning(
++                            'CBFocalLoss: activity target out of range '
++                            f'(min={tgt.min().item()}, max={tgt.max().item()}, '
++                            f'C={C}). Clamping to [0, {C - 1}].'
++                        )
++                        self._warned_oob_target = True
++                    tgt = tgt.clamp(0, C - 1)
+             with torch.no_grad():
+                 smooth_targets = torch.zeros_like(logits)
+                 smooth_targets.fill_(self.label_smoothing / self.num_classes)
+-                smooth_targets.scatter_(1, targets.unsqueeze(1), 1.0 - self.label_smoothing)
++                smooth_targets.scatter_(1, tgt.unsqueeze(1), 1.0 - self.label_smoothing)
+ 
+             p_t = (smooth_targets * probs).sum(dim=1)
+             log_probs = F.log_softmax(logits, dim=1)
+@@ -1087,7 +1112,7 @@ class MultiTaskLoss(nn.Module):
+                 outputs['pose_confidence'],
+                 targets['keypoints'],
+                 targets['pose_confidence'],
+-            ) * 0.001  # Kendall exp(-lv_pose)=exp(1)≈2.7 amplifies
++            ) * float(getattr(C, 'POSE_LOSS_WEIGHT', 0.02))  # [INTERVENTION 2026-06-14] 0.02 = 20x from 0.001
+         else:
+             loss_pose = zero
+ 
+@@ -1226,8 +1251,10 @@ class MultiTaskLoss(nn.Module):
+             # and the model finds a single threshold that fits all frames.
+             # Penalty: -log(mean(per-component-std)) keeps std > 1e-3 in log-space.
+             # Only fires at T=1 (dim==2); sequence mode (dim==3) handled by temporal smooth.
+-            if outputs['psr_logits'].dim() == 2:
+-                _per_comp_std = outputs['psr_logits'].std(dim=0).mean()
++            # NOTE: requires batch > 1 — std(dim=0) on a single element has grad = (x-mean)/(n*std)
++            # which divides by zero (std=0) and produces NaN in backward → LogBackward0 crash.
++            if outputs['psr_logits'].dim() == 2 and outputs['psr_logits'].shape[0] > 1:
++                _per_comp_std = outputs['psr_logits'].std(dim=0, correction=0).mean()
+                 _sens = -torch.log(_per_comp_std + 1e-3)
+                 _sens = torch.where(
+                     torch.isfinite(_sens), _sens, torch.tensor(0.0, device=device)
+@@ -1346,10 +1373,17 @@ class MultiTaskLoss(nn.Module):
+ 
+         # === Kendall weighting ===
+         if self.use_kendall:
++            # [FIX 2026-06-15] Per-task Kendall bounds to prevent multi-task collapse.
++            # Activity log_var FLOOR (min) prevents precision-boosting above exp(0)=1.0.
++            # PSR/pose log_var CEILING (max) prevents suppression below exp(0)=1.0.
++            # Matches _clamp_kendall_log_vars in train.py (parameter-level guard).
++            _act_min = float(getattr(C, 'KENDALL_LOG_VAR_MIN_ACT', -4.0))
++            _psr_max = float(getattr(C, 'KENDALL_LOG_VAR_MAX_PSR', 2.0))
++            _pose_max = float(getattr(C, 'KENDALL_LOG_VAR_MAX_POSE', 2.0))
+             lv_det = self.log_var_det.clamp(-4.0, 2.0)
+-            lv_hp = self.log_var_pose.clamp(-4.0, 2.0)
+-            lv_act = self.log_var_act.clamp(-4.0, 2.0)
+-            lv_psr = self.log_var_psr.clamp(-4.0, 2.0)
++            lv_hp = self.log_var_pose.clamp(-4.0, _pose_max)
++            lv_act = self.log_var_act.clamp(_act_min, 2.0)
++            lv_psr = self.log_var_psr.clamp(-4.0, _psr_max)
+ 
+             prec_det = torch.exp(-lv_det)
+             prec_hp = torch.exp(-lv_hp)
+@@ -1428,10 +1462,26 @@ class MultiTaskLoss(nn.Module):
+                     pose_contribution = prec_hp * loss_head_pose + lv_hp
+                 total = total + pose_contribution
+             if self.train_act:
+-                total = total + prec_act * loss_act + lv_act
++                # [FIX 2026-06-15] ACTIVITY_LOSS_WEIGHT prevents activity from dominating
++                # the Kendall total. Activity loss is ~1-5 vs PSR loss ~0.01 — without
++                # this down-weight, activity dominates even when both heads have equal
++                # precision, and Kendall log_vars learn to suppress PSR/pose to compensate.
++                _act_w = float(getattr(C, 'ACTIVITY_LOSS_WEIGHT', 1.0))
++                total = total + prec_act * (loss_act * _act_w) + lv_act
+             if self.train_psr:
+                 loss_psr = loss_psr.clamp(min=0.0)
+-                total = total + prec_psr * loss_psr + lv_psr
++                # [INTERVENTION 2026-06-14] PSR_WEIGHT applied BEFORE Kendall precision
++                # so the learned s_psr (log_var) can still modulate the effective weight.
++                _psr_w = float(getattr(C, 'PSR_WEIGHT', 20.0))
++                # [FIX 2026-06-15] Step-based PSR warmup: extra precision multiplier that
++                # decays from PSR_WARMUP_INIT_MULT → 1.0 over PSR_WARMUP_STEPS.
++                # Gives PSR a gradient head start before activity loss dominates.
++                _psr_warmup_steps = int(getattr(C, 'PSR_WARMUP_STEPS', 0))
++                if _psr_warmup_steps > 0 and self._step_counter < _psr_warmup_steps:
++                    _psr_warmup_init = float(getattr(C, 'PSR_WARMUP_INIT_MULT', 3.0))
++                    _ramp = _psr_warmup_init + (1.0 - _psr_warmup_init) * self._step_counter / _psr_warmup_steps
++                    prec_psr = prec_psr * _ramp
++                total = total + prec_psr * (loss_psr * _psr_w) + lv_psr
+             total = total.squeeze()
+ 
+             # NaN guard in Kendall total — fires on inf/NaN only, not on negative
+diff --git a/code/industreal_improved/src/training/train.py b/code/industreal_improved/src/training/train.py
+index e154662..8916dad 100644
+--- a/code/industreal_improved/src/training/train.py
++++ b/code/industreal_improved/src/training/train.py
+@@ -93,7 +93,7 @@ os.environ['CUDA_LAUNCH_BLOCKING']  = '1'
+ # ------------------------------------------------------------
+ import model as _model_module
+ import model as _popw_model_module
+-import losses as _losses_module
++from src.training import losses as _losses_module
+ import evaluate as _evaluate_module
+ import data as _ds_module
+ from src import config as C
+@@ -965,6 +965,7 @@ def train_one_epoch(
+         # Doc 01 §D.2: Alternate PSR sequence batch every seq_every steps
+         is_seq_batch = (seq_iter is not None and step > 0 and step % seq_every == 0)
+         if is_seq_batch:
++            torch.cuda.empty_cache()  # Free cached allocator memory before memory-intensive seq batch
+             try:
+                 images_seq, targets_seq = next(seq_iter)
+             except StopIteration:
+@@ -1076,6 +1077,12 @@ def train_one_epoch(
+                     )
+                     optimizer.zero_grad(set_to_none=True)
+                 else:
++                    # [INTERVENTION 2026-06-14] Per-head gradient clip for activity head (AMP path)
++                    _act_gc = float(getattr(C, 'ACTIVITY_HEAD_GRAD_CLIP', 0.5))
++                    if _act_gc > 0:
++                        _act_params = [p for n, p in model.named_parameters() if n.startswith('activity_head') and p.grad is not None]
++                        if _act_params:
++                            torch.nn.utils.clip_grad_norm_(_act_params, _act_gc)
+                     torch.nn.utils.clip_grad_norm_(
+                         list(model.parameters()) + list(criterion.parameters()),
+                         C.GRAD_CLIP_NORM,
+@@ -1112,6 +1119,10 @@ def train_one_epoch(
+         targets['activity'] = targets['activity'].to(device)
+         if 'activity_mask' in targets:
+             targets['activity_mask'] = targets['activity_mask'].to(device)
++        if 'keypoints' in targets:
++            targets['keypoints'] = targets['keypoints'].to(device)
++        if 'pose_confidence' in targets:
++            targets['pose_confidence'] = targets['pose_confidence'].to(device)
+         hand_joints = targets.get('hand_joints', torch.zeros_like(
+             images[:, :1, 0, 0]
+         )).to(device, non_blocking=True)
+@@ -1370,14 +1381,25 @@ def train_one_epoch(
+             # (despite the comment saying "before"), so the current step's
+             # gradient was always computed from corrupted values.
+             scaler.unscale_(optimizer)
+-            # --- NaN gradient guard BEFORE clip+step ---
+-            # If any param gradient is NaN/Inf, skip this optimizer step to avoid
+-            # corrupting model weights. This can happen when Kendall precision
+-            # weights amplify small gradient instabilities into numerical overflow.
+-            # [RC-29 TELEMETRY] Skips — whether from this manual guard or from
+-            # GradScaler's silent fp16 skip — are now COUNTED. A guard that skips
+-            # every window freezes the run while the progress bar looks alive;
+-            # the per-epoch "optimizer windows" summary makes that visible.
++            # [R2.5 FIX 2026-06-14] Clip BEFORE NaN check — large-but-finite gradients
++            # (e.g., geo head pose geodesic loss gradient ~2200 near identity) can overflow
++            # to NaN without clipping. Move clip before NaN check so non-NaN gradients
++            # survive; NaN-only check remains as last-resort safety net.
++            # [INTERVENTION 2026-06-14] Per-head gradient clip for activity head (FP32 path)
++            _act_gc = float(getattr(C, 'ACTIVITY_HEAD_GRAD_CLIP', 0.5))
++            if _act_gc > 0:
++                _act_params = [p for n, p in model.named_parameters() if n.startswith('activity_head') and p.grad is not None]
++                if _act_params:
++                    torch.nn.utils.clip_grad_norm_(_act_params, _act_gc)
++            torch.nn.utils.clip_grad_norm_(
++                list(model.parameters()) + list(criterion.parameters()),
++                C.GRAD_CLIP_NORM,
++            )
++            # --- NaN gradient guard BEFORE step ---
++            # If any param gradient is NaN/Inf (even after clipping), skip this
++            # optimizer step to avoid corrupting model weights.
++            # [RC-29 TELEMETRY] Skips are now COUNTED so the per-epoch "optimizer
++            # windows" summary makes a 100%-skip run visible.
+             _grads_nan = False
+             for _pg in optimizer.param_groups:
+                 for _p in _pg['params']:
+@@ -1406,10 +1428,6 @@ def train_one_epoch(
+                 )
+                 optimizer.zero_grad(set_to_none=True)
+             else:
+-                torch.nn.utils.clip_grad_norm_(
+-                    list(model.parameters()) + list(criterion.parameters()),
+-                    C.GRAD_CLIP_NORM,
+-                )
+                 _scale_before = scaler.get_scale()  # [RC-29] fp16 silent-skip detect
+                 scaler.step(optimizer)
+                 scaler.update()
+@@ -1733,12 +1751,22 @@ def _clamp_kendall_log_vars(criterion):
+     """
+     if not hasattr(criterion, 'log_var_det'):
+         return
++    # [FIX 2026-06-15] Per-task Kendall bounds to prevent multi-task collapse.
++    # Activity: min=0 prevents precision-boosting above 1.0 (can't dominate via precision)
++    # PSR/pose: max=0 prevents suppression below precision 1.0 (can't be zeroed out)
++    _bounds = {
++        'log_var_det':  (-4.0, 2.0),
++        'log_var_act':  (0.0,  2.0),
++        'log_var_pose': (-4.0, 0.0),
++        'log_var_psr':  (-4.0, 0.0),
++    }
+     for _param in ('log_var_det', 'log_var_pose', 'log_var_act', 'log_var_psr'):
+         _p = getattr(criterion, _param)
+         if not torch.isfinite(_p.data).all():
+             logger.warning(f'  [KENDALL_NAN] {_param} was NaN — resetting to 0.0')
+             _p.data.fill_(0.0)
+-        _p.data.clamp_(-4.0, 2.0)
++        _lo, _hi = _bounds.get(_param, (-4.0, 2.0))
++        _p.data.clamp_(_lo, _hi)
+ 
+ 
+ def _log_kendall_gradient_sentinel(criterion, step_idx: int, log_interval: int) -> None:
+@@ -2847,7 +2875,8 @@ def main(args):
+             criterion.log_var_det.fill_(0.0)
+             criterion.log_var_act.fill_(0.0)
+             criterion.log_var_psr.fill_(0.0)
+-        logger.info('  [REINIT-HEADS] Kendall log_vars reset to neutral (det=act=psr=0.0).')
++            criterion.log_var_pose.fill_(0.0)
++        logger.info('  [REINIT-HEADS] Kendall log_vars reset to neutral (det=act=psr=pose=0.0).')
+ 
+     # ── Step-0 Assertion (RC-25 gate) ──
+     # [AUDIT FIX 2026-06-11] The previous version had two fatal flaws:

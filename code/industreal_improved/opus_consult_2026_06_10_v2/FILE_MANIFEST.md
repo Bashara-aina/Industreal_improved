@@ -1,4 +1,4 @@
-# Consultation Folder File Manifest — Updated 2026-06-13 16:20
+# Consultation Folder File Manifest — Updated 2026-06-15 07:45
 
 ## Core Python Source Files (code/) — WITH RC-28/RC-29 FIXES APPLIED
 
