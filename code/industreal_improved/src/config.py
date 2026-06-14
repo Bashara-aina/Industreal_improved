@@ -254,10 +254,9 @@ NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_la
 #   sqrt(area)=188-436px, k-means centers: 164, 269, 333, 338, 404
 # Paper spec (matches RetinaNet P3-P7): (24, 48, 96, 192, 384)
 # =========================================================================
-# [OPUS v5 AUDIT #13] Anchor sizes calibrated to GT clusters (146-594px, k-means 164-404).
-# Original (24,48,96,192,384) only covered ~1.6% of GT at IoU≥0.5.
-# New: (96,160,256,384,512) spans the full GT range for a ~10× recall improvement.
-# Re-run calibrate_anchors.py after synthetic pretrain for final values.
+# [OPUS v5 AUDIT #13] Anchor sizes. Original (24,48,96,192,384) covered only 1.6% of GT.
+# K-means on 14,122 boxes gave (195,335,375,445,578) but these were too large — missed
+# small GT (h p10=156px). Keep the guess anchors which empirically gave 0.0172 mAP.
 ANCHOR_SIZES = (96, 160, 256, 384, 512)
 DET_POS_IOU_THRESH = 0.5       # RetinaNet anchor matching: positive IoU threshold (standard: 0.5)
 DET_NEG_IOU_THRESH = 0.4       # RetinaNet anchor matching: negative IoU threshold (standard: 0.4)
@@ -476,7 +475,7 @@ USE_PSR_SEQUENCE_MODE = True   # Doc 01 §D.2: PSR sequence-mode — THE biggest
 PSR_SEQUENCE_LENGTH = 4        # stayed at 4 — T=8 caused CUDA OOM with SEQ_EVERY_N_BATCHES=2
                               # (sequence-mode memory doubled and fires 5x more often). T=4 is
                               # the memory-bounded choice; the bigger unlock is below.
-PSR_SEQ_EVERY_N_BATCHES = 10  # Draw one sequence batch every N normal batches
+PSR_SEQ_EVERY_N_BATCHES = 4  # [GAP-A1] Was 10. PSR now trains ONLY on sequence batches under USE_PSR_TRANSITION; raise frequency so it gets enough updates. T=4 keeps VRAM safe.
 
 # [OPUS v5] PSR transition objective — use Gaussian-smeared transition targets
 # + MonotonicDecoder instead of per-frame BCE/focal on fill-forward labels.
@@ -553,8 +552,8 @@ SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP (~87 min/epoch) — s
 
 # [OPUS v5] Eval cadence: compute full detection mAP every N epochs; fast gate-only eval
 # (EVAL_MAX_BATCHES capped) on other epochs. 0 = eval every epoch (no skip).
-DET_METRICS_EVERY_N = 5  # Full mAP eval every 5 epochs; gate-only eval on others
-GATE_EVAL_MAX_BATCHES = 200  # [OPUS v5] Max val batches on non-full-eval epochs (~10 min vs 87 min)
+DET_METRICS_EVERY_N = int(os.environ.get('DET_METRICS_EVERY_N', '5'))  # Full mAP eval every N epochs; 0=every epoch
+GATE_EVAL_MAX_BATCHES = int(os.environ.get('GATE_EVAL_MAX_BATCHES', '200'))  # Max val batches on non-full-eval epochs
 
 # Efficiency metrics: compute_efficiency_metrics does 35 forward passes each epoch.
 # Set to True to skip except when (epoch % LOG_EFFICIENCY_EVERY == 0).
@@ -705,6 +704,14 @@ PRESETS = {
         'train_act':          True,
         'train_psr':          True,
         'train_head_pose':    True,
+        # [BLOCKER-C] Winnable-task flags — actually set by apply_preset now
+        'use_psr_transition':       True,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,   # keep detached — gradient through bank causes double-backward crash (#3092789)
+        'feature_bank_slot_overwrite': False,
+        'use_psr_order_prior':      True,
+        'psr_sensitivity_weight':   0.0,
+        'use_ldam_drw':             False,
     },
 }
 
@@ -717,6 +724,10 @@ def apply_preset(preset_name: str) -> None:
     global ZERO_DET_CONF_FOR_RECOVERY, STAGED_TRAINING, MIXED_PRECISION
     global USE_MIXUP, USE_EMA
     global TRAIN_DET, TRAIN_ACT, TRAIN_PSR, TRAIN_HEAD_POSE
+    # [OPUS v5 BLOCKER-C FIX] Winnable-task flags — must be in global list for preset to set them
+    global USE_PSR_TRANSITION, USE_GEO_HEAD_POSE, FEATURE_BANK_DETACH, FEATURE_BANK_SLOT_OVERWRITE
+    global USE_LDAM_DRW, PSR_SENSITIVITY_WEIGHT, USE_PSR_ORDER_PRIOR
+    global USE_VIDEOMAE
 
     if preset_name not in PRESETS:
         raise ValueError(f'Unknown preset: {preset_name}. Available: {list(PRESETS.keys())}')
@@ -740,6 +751,16 @@ def apply_preset(preset_name: str) -> None:
     TRAIN_ACT = preset.get('train_act', TRAIN_ACT)
     TRAIN_PSR = preset.get('train_psr', TRAIN_PSR)
     TRAIN_HEAD_POSE = preset.get('train_head_pose', TRAIN_HEAD_POSE)
+    # [OPUS v5 BLOCKER-C FIX] Winnable-task flags — actually set them from preset.
+    # These were declared but never assigned → paper_run was a no-op for its key flags.
+    USE_PSR_TRANSITION = bool(preset.get('use_psr_transition', USE_PSR_TRANSITION))
+    USE_GEO_HEAD_POSE = bool(preset.get('use_geo_head_pose', USE_GEO_HEAD_POSE))
+    FEATURE_BANK_DETACH = bool(preset.get('feature_bank_detach', FEATURE_BANK_DETACH))
+    FEATURE_BANK_SLOT_OVERWRITE = bool(preset.get('feature_bank_slot_overwrite', FEATURE_BANK_SLOT_OVERWRITE))
+    USE_LDAM_DRW = bool(preset.get('use_ldam_drw', USE_LDAM_DRW))
+    PSR_SENSITIVITY_WEIGHT = float(preset.get('psr_sensitivity_weight', PSR_SENSITIVITY_WEIGHT))
+    USE_PSR_ORDER_PRIOR = bool(preset.get('use_psr_order_prior', USE_PSR_ORDER_PRIOR))
+    USE_VIDEOMAE = bool(preset.get('use_videomae', False))
     # [AUDIT FIX 2026-06-11] EFFECTIVE_BATCH was computed once at import and
     # went stale when a preset changed BATCH_SIZE / GRAD_ACCUM_STEPS.
     EFFECTIVE_BATCH = BATCH_SIZE * GRAD_ACCUM_STEPS

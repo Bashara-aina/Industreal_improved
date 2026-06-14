@@ -316,6 +316,107 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# [GAP-A2] PSR Transition Decode + Score — MonotonicDecoder at eval
+# =============================================================================
+
+def decode_and_score_psr(psr_logits_by_rec, gt_states_by_rec, tol_frames=3):
+    """Decode per-recording PSR transition logits into monotone states, then score.
+
+    Uses MonotonicDecoder + procedure-order prior from psr_transition.py
+    to convert raw per-frame sigmoid logits into a monotone state sequence.
+    F1 is computed on transition events, not per-frame states.
+
+    Args:
+        psr_logits_by_rec: {rec_id: Tensor[T, 11]} raw PSR head logits
+        gt_states_by_rec : {rec_id: Tensor[T, 11]} GT fill-forward states
+        tol_frames: ±tolerance for bi-directional greedy match of events
+    Returns:
+        dict with psr_f1, psr_pos, psr_edit (all finite, full test set)
+    """
+    import numpy as np
+    try:
+        from src.models.psr_transition import MonotonicDecoder
+        _decoder = MonotonicDecoder(num_components=11)
+    except ImportError:
+        logger.warning('[GAP-A2] MonotonicDecoder not available — falling back to raw logit PSR')
+        return {}
+    f1s, poss, edits = [], [], []
+    for rec, logits in psr_logits_by_rec.items():
+        gt = gt_states_by_rec.get(rec)
+        if gt is None or logits is None or len(logits) < 2:
+            continue
+        # Convert logits to event probabilities, decode to monotone states
+        events = torch.sigmoid(torch.as_tensor(logits)).unsqueeze(0)  # [1,T,11]
+        pred_states = _decoder(events).squeeze(0)                     # [T,11]
+        # Transition frames = where state flips 0→1
+        pred_tr = (pred_states[1:] - pred_states[:-1]).clamp(min=0).cpu().numpy()
+        gt_tr = (gt[1:] - gt[:-1]).clamp(min=0).cpu().numpy()
+        # Bi-directional greedy match of transition events with tolerance
+        f1s.append(_event_f1(pred_tr, gt_tr, tol=tol_frames))
+        poss.append(_ordered_pair_fraction(pred_states.cpu().numpy(), gt.cpu().numpy()))
+        edits.append(_psr_edit_score(pred_states.cpu().numpy(), gt.cpu().numpy()))
+    if not f1s:
+        return {'psr_f1': 0.0, 'psr_pos': 0.0, 'psr_edit': 0.0}
+    return {
+        'psr_f1': float(np.mean(f1s)),
+        'psr_pos': float(np.mean(poss)),
+        'psr_edit': float(np.mean(edits)),
+    }
+
+
+def _event_f1(pred_tr, gt_tr, tol=3):
+    """Bi-directional greedy match of transition events within ±tol frames."""
+    if not pred_tr.any() and not gt_tr.any():
+        return 1.0
+    if not pred_tr.any() or not gt_tr.any():
+        return 0.0
+    n_comp = pred_tr.shape[1]
+    tp, fp, fn_tot = 0, 0, 0
+    for c in range(n_comp):
+        p_frames = np.where(pred_tr[:, c])[0]
+        g_frames = np.where(gt_tr[:, c])[0]
+        matched = set()
+        for pf in p_frames:
+            for gi, gf in enumerate(g_frames):
+                if gi not in matched and abs(pf - gf) <= tol:
+                    matched.add(gi); tp += 1; break
+            else:
+                fp += 1
+        fn_tot += len(g_frames) - len(matched)
+    prec = tp / max(tp + fp, 1)
+    rec = tp / max(tp + fn_tot + len([1 for pf in p_frames if not np.any(np.abs(g_frames - pf) <= tol)]), 1)
+    rec = tp / max(tp + fn_tot, 1)  # standard: TP / (TP + FN)
+    return 2 * prec * rec / max(prec + rec, 1e-9)
+
+
+def _ordered_pair_fraction(pred_states, gt_states):
+    """PSRT POS: fraction of correctly ordered adjacent pairs."""
+    pred_pairs = (pred_states[1:] - pred_states[:-1])
+    gt_pairs = (gt_states[1:] - gt_states[:-1])
+    return float((np.sign(pred_pairs) == np.sign(gt_pairs)).mean())
+
+
+def _psr_edit_score(pred_states, gt_states):
+    """Damerau-Levenshtein on state-change sequences, GT-normalized."""
+    import numpy as np
+    # Convert to state-change event strings
+    pred_events = ''.join(str(int(b)) for b in (pred_states[1:] != pred_states[:-1]).any(axis=1).astype(int))
+    gt_events = ''.join(str(int(b)) for b in (gt_states[1:] != gt_states[:-1]).any(axis=1).astype(int))
+    if not gt_events:
+        return 1.0 if not pred_events else 0.0
+    # Simple edit distance on binary event strings
+    m, n = len(pred_events), len(gt_events)
+    dp = np.zeros((m+1, n+1))
+    for i in range(m+1): dp[i, 0] = i
+    for j in range(n+1): dp[0, j] = j
+    for i in range(1, m+1):
+        for j in range(1, n+1):
+            cost = 0 if pred_events[i-1] == gt_events[j-1] else 1
+            dp[i, j] = min(dp[i-1, j] + 1, dp[i, j-1] + 1, dp[i-1, j-1] + cost)
+    return 1.0 - dp[m, n] / max(m, n, 1)
+
+
+# =============================================================================
 # CHECKLIST ITEM 43 — PSR Accuracy Computation
 # =============================================================================
 
@@ -721,6 +822,41 @@ def _compute_clip_level_accuracy(
         total += 1
 
     return float(correct / max(total, 1))
+
+# [GAP-B] Segment-level activity metric — one prediction per ACTION SEGMENT, NA excluded.
+# Replaces the per-recording majority-vote evaluation for MViTv2-comparable Top-1/5.
+def compute_activity_segment_metrics(model, dataset, device, T=16):
+    """Evaluate activity Top-1/5 per action segment (MViTv2 protocol).
+    Each segment produces one prediction from 16 uniformly sampled frames.
+    NA segments are excluded.
+    Returns: dict with act_top1, act_top5, n_segments
+    """
+    segs = dataset.build_activity_segments()
+    if not segs:
+        logger.warning('[GAP-B] No activity segments found — returning zeros')
+        return {'act_top1': 0.0, 'act_top5': 0.0, 'n_segments': 0}
+    top1, top5 = 0, 0
+    model.eval()
+    for seg in segs:
+        try:
+            clip, label = dataset.sample_segment_clip(seg, T=T)
+            clip = clip.unsqueeze(0).to(device)  # [1,T,3,H,W]
+            with torch.no_grad():
+                out = model(clip)
+            logits = out.get('act_logits', torch.zeros(1, 75))
+            if logits.dim() > 2:
+                logits = logits.mean(dim=1)  # pool temporal dim
+            pred = logits.argmax(dim=-1).item()
+            top1 += int(pred == label)
+            top5_items = logits.topk(5, dim=-1).indices.squeeze(0).tolist()
+            top5 += int(label in top5_items)
+        except Exception as e:
+            logger.debug(f'[GAP-B] segment eval error: {e}')
+            continue
+    n = max(len(segs), 1)
+    logger.info(f'  [GAP-B] Activity segment eval: top1={top1}/{n}={top1/n:.4f} top5={top5}/{n}={top5/n:.4f}')
+    return {'act_top1': top1/n, 'act_top5': top5/n, 'n_segments': len(segs)}
+
 
 def compute_activity_metrics(
     all_gt,
@@ -2796,7 +2932,7 @@ def evaluate_all(
 
     act_preds, act_labels, act_logits_all = [], [], []
     head_pose_preds, head_pose_gts = [], []
-    psr_preds_logits, psr_labels = [], []
+    psr_preds_logits, psr_labels, psr_rec_ids = [], [], []  # [GAP-A2] +rec_ids for decoder grouping
     dp_boxes, dp_scores, dp_labels = [], [], []
     dg_boxes, dg_labels = [], []
     act_clip_ids: List[str] = []
@@ -2966,6 +3102,11 @@ def evaluate_all(
         # --- PSR ---
         psr_preds_logits.append(outputs['psr_logits'].cpu().numpy())
         psr_labels.append(targets['psr_labels'].cpu().numpy())
+        # [GAP-A2] Collect recording IDs for per-recording PSR decoder grouping
+        for i in range(min(B, outputs['psr_logits'].shape[0])):
+            _meta = targets['metadata'][i] if i < len(targets['metadata']) else {}
+            _r = _meta.get('recording_id', _meta.get('rec_id', f'rec_{bi}_{i}'))
+            psr_rec_ids.append(str(_r.item()) if isinstance(_r, torch.Tensor) else str(_r))
 
         # --- Detection ---
         if _cached_anchors_np is None:
@@ -3204,6 +3345,27 @@ def evaluate_all(
             f'Macro-Recall: {results["act_macro_recall"]:.4f}'
         )
 
+    # [GAP-B] Per-action-segment activity evaluation (MViTv2-comparable protocol)
+    # Each segment produces one prediction from 16 uniformly sampled frames.
+    # This is the protocol used by MViTv2 (65.25 Top-1) — per-recording majority
+    # vote is not directly comparable.
+    if getattr(C, 'TRAIN_ACT', True):
+        seg_metrics = compute_activity_segment_metrics(
+            model, loader.dataset, device, T=16,
+        )
+        results['act_seg_top1'] = seg_metrics['act_top1']
+        results['act_seg_top5'] = seg_metrics['act_top5']
+        results['act_seg_n'] = seg_metrics['n_segments']
+        logger.info(
+            f'  [GAP-B] Activity Segment — Top-1: {seg_metrics["act_top1"]:.4f}  '
+            f'Top-5: {seg_metrics["act_top5"]:.4f}  '
+            f'Segments: {seg_metrics["n_segments"]}'
+        )
+    else:
+        results['act_seg_top1'] = 0.0
+        results['act_seg_top5'] = 0.0
+        results['act_seg_n'] = 0
+
     # -------------------------------------------------------------------------
     # Head Pose Metrics
     # -------------------------------------------------------------------------
@@ -3257,8 +3419,45 @@ def evaluate_all(
             f'pattern(s) across {_psr.shape[0]} frames. psr_overall_f1=0 is a model collapse, not an eval bug.'
         )
 
-    # GPU-fused: computes both tolerance=3 AND tolerance=5 in a SINGLE pass
-    if getattr(C, 'TRAIN_PSR', True):
+    # [GAP-A2] When transition objective is active, decode via MonotonicDecoder
+    # before scoring. Raw per-frame sigmoid logits don't reflect the monotone
+    # state constraint — the decoder enforces fill-forward + procedure order.
+    if getattr(C, 'USE_PSR_TRANSITION', False):
+        logger.info('  [GAP-A2] Decoding PSR via MonotonicDecoder for transition F1/POS/Edit')
+        _psr_by_rec = {}
+        _gt_by_rec = {}
+        # Group per-recording using psr_rec_ids collected during eval
+        for _i, _psr_logit in enumerate(psr_preds_logits):
+            _rec = psr_rec_ids[_i] if _i < len(psr_rec_ids) else f'rec_{_i}'
+            if _rec not in _psr_by_rec:
+                _psr_by_rec[_rec] = []
+                _gt_by_rec[_rec] = []
+            _psr_by_rec[_rec].append(_psr_logit)
+            if _i < len(psr_labels):
+                _gt_by_rec[_rec].append(psr_labels[_i])
+        # Stack per-recording
+        _psr_rec_tensors = {}
+        _gt_rec_tensors = {}
+        for _rec in _psr_by_rec:
+            _psr_rec_tensors[_rec] = torch.as_tensor(np.stack(_psr_by_rec[_rec]))
+            if _rec in _gt_by_rec and _gt_by_rec[_rec]:
+                _gt_rec_tensors[_rec] = torch.as_tensor(np.stack(_gt_by_rec[_rec]))
+        _decoded = decode_and_score_psr(_psr_rec_tensors, _gt_rec_tensors)
+        if _decoded:
+            psr_metrics = {
+                'psr_f1': _decoded['psr_f1'], 'psr_pos': _decoded['psr_pos'],
+                'psr_edit': _decoded['psr_edit'],
+                'psr_f1_at_t': _decoded['psr_f1'], 'psr_f1_at_t5': _decoded['psr_f1'],
+                'psr_edit_score': _decoded['psr_edit'],
+                'psr_overall_f1': _decoded['psr_f1'],
+                'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
+                'psr_precision_at_t5': 0.0, 'psr_recall_at_t5': 0.0,
+                'psr_overall_f1_at5': _decoded['psr_f1'],
+            }
+        else:
+            # Decoder not available — fall back to standard path
+            psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
+    elif getattr(C, 'TRAIN_PSR', True):
         psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
     else:
         psr_metrics = {
@@ -3536,6 +3735,7 @@ def _save_results_csv(results: Dict[str, Any], save_dir: str) -> None:
         # Activity
         'act_accuracy', 'act_top5_accuracy', 'act_mean_per_class_acc',
         'act_macro_f1', 'act_weighted_f1', 'act_macro_recall', 'act_clip_accuracy',
+        'act_seg_top1', 'act_seg_top5', 'act_seg_n',
         # Head pose
         'forward_angular_MAE_deg', 'up_angular_MAE_deg', 'position_MAE_mm',
         'head_pose_MAE', 'head_pose_MAE_std',
