@@ -3345,6 +3345,27 @@ def evaluate_all(
             f'Macro-Recall: {results["act_macro_recall"]:.4f}'
         )
 
+    # [GAP-B] Per-action-segment activity evaluation (MViTv2-comparable protocol)
+    # Each segment produces one prediction from 16 uniformly sampled frames.
+    # This is the protocol used by MViTv2 (65.25 Top-1) — per-recording majority
+    # vote is not directly comparable.
+    if getattr(C, 'TRAIN_ACT', True):
+        seg_metrics = compute_activity_segment_metrics(
+            model, loader.dataset, device, T=16,
+        )
+        results['act_seg_top1'] = seg_metrics['act_top1']
+        results['act_seg_top5'] = seg_metrics['act_top5']
+        results['act_seg_n'] = seg_metrics['n_segments']
+        logger.info(
+            f'  [GAP-B] Activity Segment — Top-1: {seg_metrics["act_top1"]:.4f}  '
+            f'Top-5: {seg_metrics["act_top5"]:.4f}  '
+            f'Segments: {seg_metrics["n_segments"]}'
+        )
+    else:
+        results['act_seg_top1'] = 0.0
+        results['act_seg_top5'] = 0.0
+        results['act_seg_n'] = 0
+
     # -------------------------------------------------------------------------
     # Head Pose Metrics
     # -------------------------------------------------------------------------
@@ -3714,6 +3735,7 @@ def _save_results_csv(results: Dict[str, Any], save_dir: str) -> None:
         # Activity
         'act_accuracy', 'act_top5_accuracy', 'act_mean_per_class_acc',
         'act_macro_f1', 'act_weighted_f1', 'act_macro_recall', 'act_clip_accuracy',
+        'act_seg_top1', 'act_seg_top5', 'act_seg_n',
         # Head pose
         'forward_angular_MAE_deg', 'up_angular_MAE_deg', 'position_MAE_mm',
         'head_pose_MAE', 'head_pose_MAE_std',

@@ -63,7 +63,7 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 import psutil
@@ -71,7 +71,6 @@ from tqdm import tqdm
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.optim as optim
 import torch.amp as amp
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import CosineAnnealingLR, CosineAnnealingWarmRestarts, LinearLR, SequentialLR
@@ -1359,6 +1358,12 @@ def train_one_epoch(
         if log_kendall_every > 0:
             _log_kendall_gradient_sentinel(criterion, step, log_kendall_every)
 
+        # [OPUS v5 PART-4-2] Per-head grad-norm liveness probe every LIVENESS_EVERY steps.
+        # Complements the loss-based liveness probe in losses.py — catches detached heads
+        # that produce finite-but-dead loss values.
+        _liveness_grad_every = int(getattr(C, 'LIVENESS_EVERY', 200))
+        _log_per_head_grad_norm(model, step, _liveness_grad_every)
+
         if (step + 1) % accum_steps == 0 or (step + 1) == len(loader):
             # [REMOVED] Kendall log_var clamp moved to _clamp_kendall_log_vars()
             # at the start of each step. The old block here was AFTER backward
@@ -1755,6 +1760,46 @@ def _log_kendall_gradient_sentinel(criterion, step_idx: int, log_interval: int) 
         )
     except Exception:
         pass
+
+
+# [OPUS v5 PART-4-2] Per-head grad-norm liveness probe.
+# After loss.backward(), check each head's first/last parameter grad norm.
+# A head is ALIVE only if grad-norm > 1e-6 (loss-finite alone can hide a detached head).
+def _log_per_head_grad_norm(model, step_idx: int, log_interval: int = 200) -> None:
+    """Log per-head first/last-layer grad.norm() every N steps.
+
+    Head prefixes: detection_head, pose_head, head_pose_head, activity_head, psr_head.
+    A head is ALIVE iff grad-norm > 1e-6.
+    """
+    if step_idx % log_interval != 0:
+        return
+    head_prefixes = ['detection_head', 'pose_head', 'head_pose_head', 'activity_head', 'psr_head']
+    parts = []
+    for prefix in head_prefixes:
+        first_grad, last_grad = None, None
+        first_name, last_name = '', ''
+        for name, param in model.named_parameters():
+            if not name.startswith(prefix):
+                continue
+            if param.grad is None:
+                continue
+            gn = param.grad.norm().item()
+            if first_grad is None:
+                first_grad = gn
+                first_name = name
+            last_grad = gn
+            last_name = name
+        if first_grad is None:
+            parts.append(f'{prefix}:NO_GRAD')
+        else:
+            alive_first = 'ALIVE' if first_grad > 1e-6 else 'DEAD'
+            alive_last = 'ALIVE' if (last_grad is not None and last_grad > 1e-6) else 'DEAD'
+            parts.append(
+                f'{prefix}:{alive_first}[{first_grad:.2e}]/{alive_last}[{last_grad:.2e}]'
+            )
+    msg = f'  [LIVENESS_GRAD step={step_idx}] ' + ' | '.join(parts)
+    logger.warning(msg)
+    print(msg, flush=True)
 
 
 def _on_stage_transition(
@@ -2274,6 +2319,16 @@ def main(args):
     ckpt_dir = C.CHECKPOINT_DIR; ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     _config_hash = _log_config_hash()
+
+    # [OPUS v5 PART-8-13] Save config.py snapshot to run directory
+    try:
+        _cfg_src = getattr(C, '__file__', None)
+        if _cfg_src and Path(_cfg_src).exists():
+            import shutil
+            shutil.copy2(str(_cfg_src), str(ckpt_dir / 'config.py'))
+            logger.info(f'Config snapshot saved to {ckpt_dir / "config.py"}')
+    except Exception as _cfg_exc:
+        logger.warning(f'Config snapshot failed: {_cfg_exc}')
 
     # --- FLUSHING FILE HANDLER FIX (Bashara 2026-05-07) ---
     # Standard FileHandler buffers up to 8KB before flushing.
