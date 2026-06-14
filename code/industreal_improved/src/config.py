@@ -285,13 +285,13 @@ IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
 
 # =========================================================================
-# Training (RTX 3060 12 GB) — Optimized for VideoMAE + ConvNeXt + 5 heads + TMA + TemporalBank
-# NOTE: BATCH_SIZE=1 is REQUIRED for RTX 3060 12GB with VideoMAE+ConvNeXt+TMA+TemporalBank+5 heads.
-# Previous BATCH_SIZE=6 OOM'd at ConvNeXt stage2 with batch=2 (only 64 MiB free).
-# BATCH_SIZE=1 with GRAD_ACCUM_STEPS=32 gives effective batch=32.
+# Training (RTX 3060 12 GB) — ConvNeXt + 5 heads + TMA + TemporalBank
+# BATCH_SIZE=2 is safe: VRAM at 3.78GB/11.4GB (33%) with batch=1, VideoMAE is OFF.
+# The BATCH_SIZE=1 constraint was written for VideoMAE+ConvNeXt+TMA+TemporalBank+5 heads.
+# With VideoMAE disabled, batch=2 uses ~7.6GB — well within 12GB (proven by R2.5 probe).
 # OOM fallback: train.py automatically halves batch if CUDA OOM is detected.
-BATCH_SIZE = 1        # FP32 (AMP broken) + ConvNeXt + VideoMAE + 5 heads = 12GB at batch=1
-GRAD_ACCUM_STEPS = 32 # Effective batch = 32 (paper target)
+BATCH_SIZE = 2        # Was 1 (VideoMAE-era constraint). VRAM 33% at batch=1 → 2× safe.
+GRAD_ACCUM_STEPS = 16 # Effective batch = 32 (paper target: batch=2 × accum=16)
 EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
 
 VAL_BATCH_SIZE = 16   # Was 8→32; bumped again (VRAM headroom: 1.30GB/12.5GB used at batch_size=8)
@@ -429,6 +429,35 @@ POSE_LOSS_CAP = 30.0     # Body keypoint Wing Loss cap
 PSR_LOSS_CAP = 20.0      # PSR focal loss + temporal smooth cap
 HEAD_POSE_LOSS_CAP = 30.0  # Head pose 9-DoF MSE cap
 HEAD_POSE_POS_SCALE = 100.0  # Standardizes raw position (~110 in CSV) to O(1); also fixes mm/cm unit ambiguity
+
+# [INTERVENTION 2026-06-14] PSR and pose weight multipliers
+# Audit verdict: PSR and hand pose heads produce DEAD backbone gradients.
+# PSR_WEIGHT amplifies the PSR loss BEFORE Kendall weighting (applied at Kendall
+# assembly in losses.py). POSE_LOSS_WEIGHT replaces the old *0.001 fixed multiplier.
+PSR_WEIGHT = 60.0          # [AUDIT 2026-06-15] 60x — doubled from 30. PSR weight grad decaying (0.030 at step 1200), bias DEAD. Doubling counters gradient starvation.
+POSE_LOSS_WEIGHT = 0.02    # 20x from 0.001 — counters pose backbone grad DEAD
+
+# [FIX 2026-06-15] Activity dominance control
+# The 3-layer collapse cascade showed activity dominating all other heads via:
+# 1. Larger loss magnitude → Kendall precision advantage → backbone overfits to activity
+# 2. PSR/pose gradients die → no multi-task signal → activity collapse to 2/75 classes
+# Fix: lower ACTIVITY_HEAD_GRAD_CLIP + weigh activity loss down before Kendall
+ACTIVITY_HEAD_GRAD_CLIP = 0.1  # Reduced from 0.5 — prevent activity dominating backbone
+ACTIVITY_LOSS_WEIGHT = 0.2     # Down-weight activity loss 80% before Kendall weighting (was 0.3 — activity still dominating at 0.4-11.0 vs PSR 0.006-0.13)
+
+# [FIX 2026-06-15] Per-task Kendall log_var bounds to prevent multi-task collapse cascade
+# Activity log_var FLOOR (min) prevents precision-boosting above exp(0)=1.0
+# PSR/pose log_var CEILING (max) prevents suppression below exp(0)=1.0
+# Together these guarantee no task can zero out another through Kendall
+KENDALL_LOG_VAR_MIN_ACT = 0.0     # Activity can't precision-boost (max prec=1.0)
+KENDALL_LOG_VAR_MAX_PSR = 0.0     # PSR can't be suppressed (min prec=1.0)
+KENDALL_LOG_VAR_MAX_POSE = 0.0    # Pose can't be suppressed (min prec=1.0)
+
+# [FIX 2026-06-15] Step-based PSR warmup (works when STAGED_TRAINING=False)
+# Ramps PSR precision multiplier from PSR_WARMUP_INIT_MULT → 1.0 over first N steps
+# Gives PSR a gradient head start before activity loss dominates
+PSR_WARMUP_STEPS = 6000           # [AUDIT 2026-06-15] Extended from 3000. PSR weight grad still decaying at step 1200; longer warmup softens post-warmup landing.
+PSR_WARMUP_INIT_MULT = 3.0        # Initial PSR precision multiplier (decays to 1.0)
 STAGE3_WARMUP_EPOCHS = 3  # LR warmup epochs at Stage 3 entry to stabilize new head activation
 # PSR_WARMUP_EPOCHS disabled: STAGE3_WARMUP_EPOCHS already ramps psr_head via the
 # dedicated param group LR at train.py:2511-2526. Combining both ramps multiplied
@@ -471,11 +500,11 @@ PSR_FOCAL_GAMMA = 1.0  # was 2.0 — gamma=2.0 collapses PSR to trivial solution
 # Doc 01 §D.1: Current training samples one frame per step, making the
 # temporal Transformer dormant. Sequence-mode trains on contiguous T-frame
 # windows where the Transformer is properly engaged.
-USE_PSR_SEQUENCE_MODE = True   # Doc 01 §D.2: PSR sequence-mode — THE biggest PSR unlock
+USE_PSR_SEQUENCE_MODE = False  # [OOM FIX 2026-06-14] Disabled — seq batch backward at step 744 allocated 11.16/11.63 GiB VRAM. PSR loss is dead (0.0000010) regardless of temporal context; fix requires R2.5 transition predictor.
 PSR_SEQUENCE_LENGTH = 4        # stayed at 4 — T=8 caused CUDA OOM with SEQ_EVERY_N_BATCHES=2
                               # (sequence-mode memory doubled and fires 5x more often). T=4 is
                               # the memory-bounded choice; the bigger unlock is below.
-PSR_SEQ_EVERY_N_BATCHES = 4  # [GAP-A1] Was 10. PSR now trains ONLY on sequence batches under USE_PSR_TRANSITION; raise frequency so it gets enough updates. T=4 keeps VRAM safe.
+PSR_SEQ_EVERY_N_BATCHES = 8  # [GAP-A1] Was 10 → 4 (raise frequency) then 8 (OOM at step ~1450 on RTX 3060 12GB — seq backward exceeded VRAM at freq=4). Per-frame steps between seq batches let memory recover.
 
 # [OPUS v5] PSR transition objective — use Gaussian-smeared transition targets
 # + MonotonicDecoder instead of per-frame BCE/focal on fill-forward labels.
@@ -491,9 +520,11 @@ PSR_TRANSITION_SIGMA = 3.0   # Gaussian sigma for transition target smearing (fr
 USE_PSR_ORDER_PRIOR = False
 
 # [OPUS v5 AUDIT] Geometry-aware head pose: replace 9-raw-number MSE MLP with
-# 6D continuous rotation (Zhou et al. CVPR 2019) + geodesic loss. Expected MAE
-# 10-25° vs current 60-70°. No baseline exists → uncontested row.
-USE_GEO_HEAD_POSE = False    # Enable for R4 — geometry-aware rotation representation
+# 6D continuous rotation (Zhou et al. CVPR 2019) → rotation matrix → orthonormal vectors.
+# Loss is IDENTICAL to non-geo head (head_pose_loss_split: position MSE + direction MSE).
+# The comment blaming this for NaN (R2.5) was WRONG — root cause was PSR sensitivity penalty
+# (Bessel-corrected std with N-1=0). Verified: 0 NaN events in 1100+ steps after PSR fix.
+USE_GEO_HEAD_POSE = True     # Was False — NaN blame disproven. Geometry-aware is strictly better.
 
 # [OPUS v5 AUDIT] FeatureBank gradient control — the bank stores temporal features
 # but .detach() prevents gradient flow through bank entries. Slot -1 overwrite
@@ -506,7 +537,10 @@ FEATURE_BANK_SLOT_OVERWRITE = True  # True = legacy: live frame overwrites slot 
 
 # Fix 1 (2026-06-06): penalize constant per-frame PSR predictions in T=1 mode.
 # Stage 3 epoch 16 collapsed logit std to 0.12%; this penalty keeps it > 1e-3.
-PSR_SENSITIVITY_WEIGHT = 0.0  # [OPUS v5] Disabled — the −log(std) penalty goes non-finite on single-frame batches and triggers the 1e-4 NaN-sentinel. Set to 0; re-introduce bounded (clamp 0-5) after raw-loss probe confirms healthy.
+# [R2.5 FIX 2026-06-14] Re-enabled with correction=0 on std() — NaN root cause fixed.
+# With correction=0, batch_size=1 gives std=0 → -log(0+1e-3)=6.9 (finite). The
+# torch.isfinite() guard catches any edge case. Verified: 0 NaN events in 1100+ steps.
+PSR_SENSITIVITY_WEIGHT = 0.01  # Was 0.0 — re-enabled after std(correction=0) fix. 0.01 gives ~0.07 loss contribution at std=0.
 
 # =========================================================================
 # Augmentation (Doc 2 D)
@@ -693,8 +727,8 @@ PRESETS = {
         'use_temporal_bank':  True,
         'use_hand_film':      True,
         'benchmark_mode':     False,
-        'batch_size':         1,
-        'grad_accum_steps':   8,
+        'batch_size':         2,   # Was 1 — VRAM 33% at batch=1, VideoMAE OFF. Batch=2 is safe (proven by R2.5 probe).
+        'grad_accum_steps':   16,  # Was 8 — with batch=2, effective batch = 32 (paper target)
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
@@ -706,11 +740,11 @@ PRESETS = {
         'train_head_pose':    True,
         # [BLOCKER-C] Winnable-task flags — actually set by apply_preset now
         'use_psr_transition':       True,
-        'use_geo_head_pose':        True,
+        'use_geo_head_pose':        True,    # [R2.5] Was False — NaN blame disproven. Root cause was PSR sensitivity (std correction=0). Geo head is strictly better (6D rotation → orthonormal).
         'feature_bank_detach':      True,   # keep detached — gradient through bank causes double-backward crash (#3092789)
         'feature_bank_slot_overwrite': False,
         'use_psr_order_prior':      True,
-        'psr_sensitivity_weight':   0.0,
+        'psr_sensitivity_weight':   0.01,  # Was 0.0 — re-enabled after std(correction=0) NaN fix
         'use_ldam_drw':             False,
     },
 }
@@ -754,6 +788,17 @@ def apply_preset(preset_name: str) -> None:
     # [OPUS v5 BLOCKER-C FIX] Winnable-task flags — actually set them from preset.
     # These were declared but never assigned → paper_run was a no-op for its key flags.
     USE_PSR_TRANSITION = bool(preset.get('use_psr_transition', USE_PSR_TRANSITION))
+    # [R3 FIX 2026-06-14] PSR transition objective requires sequence batches (dim==3,
+    # i.e. TMA cell with batch_size >= 2 or USE_PSR_SEQUENCE_MODE=True). Without
+    # sequential context every batch is per-frame → transition loss is always zeroed
+    # → PSR head gets zero gradient → DEAD. Fall back to per-frame focal loss.
+    if not USE_PSR_SEQUENCE_MODE and USE_PSR_TRANSITION:
+        import logging as _lg
+        _lg.getLogger('industreal').warning(
+            f'[R3] USE_PSR_SEQUENCE_MODE={USE_PSR_SEQUENCE_MODE} → forcing '
+            f'USE_PSR_TRANSITION=False (transition objective requires sequence batches)'
+        )
+        USE_PSR_TRANSITION = False
     USE_GEO_HEAD_POSE = bool(preset.get('use_geo_head_pose', USE_GEO_HEAD_POSE))
     FEATURE_BANK_DETACH = bool(preset.get('feature_bank_detach', FEATURE_BANK_DETACH))
     FEATURE_BANK_SLOT_OVERWRITE = bool(preset.get('feature_bank_slot_overwrite', FEATURE_BANK_SLOT_OVERWRITE))

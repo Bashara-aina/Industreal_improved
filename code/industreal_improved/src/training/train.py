@@ -93,7 +93,7 @@ os.environ['CUDA_LAUNCH_BLOCKING']  = '1'
 # ------------------------------------------------------------
 import model as _model_module
 import model as _popw_model_module
-import losses as _losses_module
+from src.training import losses as _losses_module
 import evaluate as _evaluate_module
 import data as _ds_module
 from src import config as C
@@ -965,6 +965,7 @@ def train_one_epoch(
         # Doc 01 §D.2: Alternate PSR sequence batch every seq_every steps
         is_seq_batch = (seq_iter is not None and step > 0 and step % seq_every == 0)
         if is_seq_batch:
+            torch.cuda.empty_cache()  # Free cached allocator memory before memory-intensive seq batch
             try:
                 images_seq, targets_seq = next(seq_iter)
             except StopIteration:
@@ -1076,6 +1077,12 @@ def train_one_epoch(
                     )
                     optimizer.zero_grad(set_to_none=True)
                 else:
+                    # [INTERVENTION 2026-06-14] Per-head gradient clip for activity head (AMP path)
+                    _act_gc = float(getattr(C, 'ACTIVITY_HEAD_GRAD_CLIP', 0.5))
+                    if _act_gc > 0:
+                        _act_params = [p for n, p in model.named_parameters() if n.startswith('activity_head') and p.grad is not None]
+                        if _act_params:
+                            torch.nn.utils.clip_grad_norm_(_act_params, _act_gc)
                     torch.nn.utils.clip_grad_norm_(
                         list(model.parameters()) + list(criterion.parameters()),
                         C.GRAD_CLIP_NORM,
@@ -1112,6 +1119,10 @@ def train_one_epoch(
         targets['activity'] = targets['activity'].to(device)
         if 'activity_mask' in targets:
             targets['activity_mask'] = targets['activity_mask'].to(device)
+        if 'keypoints' in targets:
+            targets['keypoints'] = targets['keypoints'].to(device)
+        if 'pose_confidence' in targets:
+            targets['pose_confidence'] = targets['pose_confidence'].to(device)
         hand_joints = targets.get('hand_joints', torch.zeros_like(
             images[:, :1, 0, 0]
         )).to(device, non_blocking=True)
@@ -1362,7 +1373,7 @@ def train_one_epoch(
         # Complements the loss-based liveness probe in losses.py — catches detached heads
         # that produce finite-but-dead loss values.
         _liveness_grad_every = int(getattr(C, 'LIVENESS_EVERY', 200))
-        _log_per_head_grad_norm(model, step, _liveness_grad_every)
+        _log_per_head_grad_norm(model, step, _liveness_grad_every, is_seq_step=is_seq_batch)
 
         if (step + 1) % accum_steps == 0 or (step + 1) == len(loader):
             # [REMOVED] Kendall log_var clamp moved to _clamp_kendall_log_vars()
@@ -1370,14 +1381,25 @@ def train_one_epoch(
             # (despite the comment saying "before"), so the current step's
             # gradient was always computed from corrupted values.
             scaler.unscale_(optimizer)
-            # --- NaN gradient guard BEFORE clip+step ---
-            # If any param gradient is NaN/Inf, skip this optimizer step to avoid
-            # corrupting model weights. This can happen when Kendall precision
-            # weights amplify small gradient instabilities into numerical overflow.
-            # [RC-29 TELEMETRY] Skips — whether from this manual guard or from
-            # GradScaler's silent fp16 skip — are now COUNTED. A guard that skips
-            # every window freezes the run while the progress bar looks alive;
-            # the per-epoch "optimizer windows" summary makes that visible.
+            # [R2.5 FIX 2026-06-14] Clip BEFORE NaN check — large-but-finite gradients
+            # (e.g., geo head pose geodesic loss gradient ~2200 near identity) can overflow
+            # to NaN without clipping. Move clip before NaN check so non-NaN gradients
+            # survive; NaN-only check remains as last-resort safety net.
+            # [INTERVENTION 2026-06-14] Per-head gradient clip for activity head (FP32 path)
+            _act_gc = float(getattr(C, 'ACTIVITY_HEAD_GRAD_CLIP', 0.5))
+            if _act_gc > 0:
+                _act_params = [p for n, p in model.named_parameters() if n.startswith('activity_head') and p.grad is not None]
+                if _act_params:
+                    torch.nn.utils.clip_grad_norm_(_act_params, _act_gc)
+            torch.nn.utils.clip_grad_norm_(
+                list(model.parameters()) + list(criterion.parameters()),
+                C.GRAD_CLIP_NORM,
+            )
+            # --- NaN gradient guard BEFORE step ---
+            # If any param gradient is NaN/Inf (even after clipping), skip this
+            # optimizer step to avoid corrupting model weights.
+            # [RC-29 TELEMETRY] Skips are now COUNTED so the per-epoch "optimizer
+            # windows" summary makes a 100%-skip run visible.
             _grads_nan = False
             for _pg in optimizer.param_groups:
                 for _p in _pg['params']:
@@ -1406,10 +1428,6 @@ def train_one_epoch(
                 )
                 optimizer.zero_grad(set_to_none=True)
             else:
-                torch.nn.utils.clip_grad_norm_(
-                    list(model.parameters()) + list(criterion.parameters()),
-                    C.GRAD_CLIP_NORM,
-                )
                 _scale_before = scaler.get_scale()  # [RC-29] fp16 silent-skip detect
                 scaler.step(optimizer)
                 scaler.update()
@@ -1733,12 +1751,22 @@ def _clamp_kendall_log_vars(criterion):
     """
     if not hasattr(criterion, 'log_var_det'):
         return
+    # [FIX 2026-06-15] Per-task Kendall bounds to prevent multi-task collapse.
+    # Activity: min=0 prevents precision-boosting above 1.0 (can't dominate via precision)
+    # PSR/pose: max=0 prevents suppression below precision 1.0 (can't be zeroed out)
+    _bounds = {
+        'log_var_det':  (-4.0, 2.0),
+        'log_var_act':  (0.0,  2.0),
+        'log_var_pose': (-4.0, 0.0),
+        'log_var_psr':  (-4.0, 0.0),
+    }
     for _param in ('log_var_det', 'log_var_pose', 'log_var_act', 'log_var_psr'):
         _p = getattr(criterion, _param)
         if not torch.isfinite(_p.data).all():
             logger.warning(f'  [KENDALL_NAN] {_param} was NaN — resetting to 0.0')
             _p.data.fill_(0.0)
-        _p.data.clamp_(-4.0, 2.0)
+        _lo, _hi = _bounds.get(_param, (-4.0, 2.0))
+        _p.data.clamp_(_lo, _hi)
 
 
 def _log_kendall_gradient_sentinel(criterion, step_idx: int, log_interval: int) -> None:
@@ -1765,11 +1793,18 @@ def _log_kendall_gradient_sentinel(criterion, step_idx: int, log_interval: int) 
 # [OPUS v5 PART-4-2] Per-head grad-norm liveness probe.
 # After loss.backward(), check each head's first/last parameter grad norm.
 # A head is ALIVE only if grad-norm > 1e-6 (loss-finite alone can hide a detached head).
-def _log_per_head_grad_norm(model, step_idx: int, log_interval: int = 200) -> None:
+def _log_per_head_grad_norm(model, step_idx: int, log_interval: int = 200,
+                            is_seq_step: bool = False) -> None:
     """Log per-head first/last-layer grad.norm() every N steps.
 
     Head prefixes: detection_head, pose_head, head_pose_head, activity_head, psr_head.
     A head is ALIVE iff grad-norm > 1e-6.
+
+    For PSR head, additionally logs bias-parameter grad norms for
+    output_heads[0..3].last.bias — these are the parameters that go DEAD first
+    (grad ~0.0) when the PSR head collapses, serving as an early warning.
+    Sequence-batch indicator (is_seq_step) is included in the log prefix so
+    the liveness probe shows whether PSR had a transition-target batch.
     """
     if step_idx % log_interval != 0:
         return
@@ -1797,6 +1832,18 @@ def _log_per_head_grad_norm(model, step_idx: int, log_interval: int = 200) -> No
             parts.append(
                 f'{prefix}:{alive_first}[{first_grad:.2e}]/{alive_last}[{last_grad:.2e}]'
             )
+    # --- PSR bias-head specific grad check ---
+    # psr_head.output_heads[N].last.bias are the first params to go DEAD
+    # when PSR collapses. Log each head's bias grad norm individually.
+    psr_bias_parts = []
+    for name, param in model.named_parameters():
+        if 'psr_head.output_heads' in name and 'bias' in name and param.grad is not None:
+            gn = param.grad.norm().item()
+            alive = 'ALIVE' if gn > 1e-6 else 'DEAD'
+            psr_bias_parts.append(f'{name}={gn:.2e}[{alive}]')
+    if psr_bias_parts:
+        seq_tag = ' [SEQ-BATCH]' if is_seq_step else ''
+        parts.append(f'psr_bias:{",".join(psr_bias_parts)}{seq_tag}')
     msg = f'  [LIVENESS_GRAD step={step_idx}] ' + ' | '.join(parts)
     logger.warning(msg)
     print(msg, flush=True)
@@ -2847,7 +2894,8 @@ def main(args):
             criterion.log_var_det.fill_(0.0)
             criterion.log_var_act.fill_(0.0)
             criterion.log_var_psr.fill_(0.0)
-        logger.info('  [REINIT-HEADS] Kendall log_vars reset to neutral (det=act=psr=0.0).')
+            criterion.log_var_pose.fill_(0.0)
+        logger.info('  [REINIT-HEADS] Kendall log_vars reset to neutral (det=act=psr=pose=0.0).')
 
     # ── Step-0 Assertion (RC-25 gate) ──
     # [AUDIT FIX 2026-06-11] The previous version had two fatal flaws:
