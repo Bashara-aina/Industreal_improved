@@ -754,6 +754,28 @@ def _compute_clip_level_accuracy(
     if len(all_gt) == 0 or clip_ids is None:
         return 0.0
 
+    # [FIX 2026-06-15] Defensive length alignment — eval must never crash a multi-hour
+    # run on an array-length mismatch. If gt/pred/clip_ids/frame_nums disagree (e.g. an
+    # upstream masking inconsistency), truncate all to the common minimum and warn rather
+    # than raising IndexError mid-eval. With the act_valid fix upstream this should never
+    # fire; it is pure insurance so the other heads' metrics still get computed + saved.
+    _lens = [len(all_gt), len(all_pred), len(clip_ids)]
+    if clip_frame_nums is not None:
+        _lens.append(len(clip_frame_nums))
+    _n = min(_lens)
+    if max(_lens) != _n:
+        logger.warning(
+            f'  [CLIP_EVAL] activity array length mismatch '
+            f'gt={len(all_gt)} pred={len(all_pred)} clip_ids={len(clip_ids)} '
+            f'fnums={len(clip_frame_nums) if clip_frame_nums is not None else None} '
+            f'— truncating all to {_n} to avoid crash (clip-level number may be approximate)'
+        )
+        all_gt = all_gt[:_n]
+        all_pred = all_pred[:_n]
+        clip_ids = clip_ids[:_n]
+        if clip_frame_nums is not None:
+            clip_frame_nums = clip_frame_nums[:_n]
+
     unique_clips = np.unique(clip_ids)
     correct = 0
     total = 0
@@ -3069,22 +3091,36 @@ def evaluate_all(
             act_valid = (act_labels_batch >= 0)
         act_preds.append(act_pred_batch[act_valid])
         act_labels.append(act_labels_batch[act_valid])
+        # [FIX 2026-06-15] act_clip_ids / act_clip_frame_nums MUST be filtered by the
+        # SAME act_valid mask as act_preds/act_labels (above). Previously they were
+        # appended for all B samples (unfiltered), so they grew longer than all_act_pred
+        # whenever any frame was masked (-1 sentinel / NA-excluded) — the boolean mask
+        # `clip_ids == clip_id` then became longer than all_pred and raised IndexError
+        # in _compute_clip_level_accuracy at epoch-end eval. Build per-sample arrays,
+        # then apply act_valid so all four activity arrays stay length-aligned.
+        _batch_rec_ids, _batch_frame_nums = [], []
         for i in range(B):
             metadata_item = targets['metadata'][i] if i < len(targets['metadata']) else {}
             rec_id = metadata_item.get('recording_id', metadata_item.get('rec_id', None))
             if rec_id is not None:
-                if isinstance(rec_id, torch.Tensor):
-                    rec_id = rec_id.item()
-                else:
-                    rec_id = str(rec_id)
+                rec_id = rec_id.item() if isinstance(rec_id, torch.Tensor) else str(rec_id)
             else:
                 rec_id = f'batch{bi}_i{i}'
-            act_clip_ids.append(rec_id)
+            _batch_rec_ids.append(rec_id)
             # Collect frame_num for 16-uniform-frame evaluation protocol
             frame_num = metadata_item.get('frame_num', 0)
             if isinstance(frame_num, torch.Tensor):
                 frame_num = frame_num.item()
-            act_clip_frame_nums.append(int(frame_num))
+            _batch_frame_nums.append(int(frame_num))
+        _valid_flat = np.asarray(act_valid).reshape(-1)
+        if _valid_flat.shape[0] != len(_batch_rec_ids):
+            # act_valid is not per-sample (unexpected shape) — keep all B to avoid data
+            # loss; the length guard in _compute_clip_level_accuracy will re-align.
+            _valid_flat = np.ones(len(_batch_rec_ids), dtype=bool)
+        for _i in range(len(_batch_rec_ids)):
+            if _valid_flat[_i]:
+                act_clip_ids.append(_batch_rec_ids[_i])
+                act_clip_frame_nums.append(_batch_frame_nums[_i])
 
         # --- Head Pose ---
         # Fix (Bashara 2026-05-18): guard against None if model.train_pose=False during eval
@@ -3320,6 +3356,10 @@ def evaluate_all(
             class_names=C.ACT_CLASS_NAMES,
             save_dir=save_dir,
             clip_ids=np.asarray(act_clip_ids) if act_clip_ids else None,
+            # [FIX 2026-06-15] pass frame indices so the 16-uniform-frame clip protocol
+            # actually engages (was dropped → fell back to plain majority vote). Now
+            # length-aligned with clip_ids via the act_valid filter above.
+            clip_frame_nums=np.asarray(act_clip_frame_nums) if act_clip_frame_nums else None,
         )
     else:
         act_metrics = {
