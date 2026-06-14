@@ -1180,32 +1180,44 @@ class MultiTaskLoss(nn.Module):
             # output near-optimal; transition targets (Gaussian-smeared 0→1 events) force
             # the model to learn changepoints. psr_transition.py implements the conversion.
             _psr_targets = targets['psr_labels']
-            # [OPUS v5 BUGFIX] Transition objective requires a time axis (dim==3).
-            # Single-frame batches (dim==2, [B,11]) cannot be converted — the
-            # transition is temporal by definition. Gate to sequence batches only.
-            if self.use_psr_transition and outputs['psr_logits'].dim() == 3:
-                try:
-                    from src.models.psr_transition import build_transition_targets
-                    _psr_targets = build_transition_targets(
-                        targets['psr_labels'].to(outputs['psr_logits'].device),
-                        sigma=float(getattr(C, 'PSR_TRANSITION_SIGMA', 3.0)),
-                    )
-                except Exception as e:
-                    logger.warning(f'  [PSR_TRANSITION] build_transition_targets failed: {e} — falling back to fill-forward labels')
-
-            if self.use_psr_focal:
+            # [OPUS v5 BLOCKER-A FIX] When transition objective is enabled, skip PSR
+            # loss on per-frame batches (dim==2). Per-frame focal on 95%-static
+            # fill-forward labels produces a constant-output gradient that drowns the
+            # transition signal 9:1 (sequence batches are 1-in-10). This gives the
+            # transition objective 100% of the PSR gradient.
+            if self.use_psr_transition:
+                if outputs['psr_logits'].dim() == 3:
+                    try:
+                        from src.models.psr_transition import build_transition_targets
+                        _psr_targets = build_transition_targets(
+                            targets['psr_labels'].to(outputs['psr_logits'].device),
+                            sigma=float(getattr(C, 'PSR_TRANSITION_SIGMA', 3.0)),
+                        )
+                    except Exception as e:
+                        logger.warning(f'  [PSR_TRANSITION] build_transition_targets failed: {e} — falling back')
+                    if self.use_psr_focal:
+                        loss_psr = binary_focal_loss(
+                            outputs['psr_logits'], _psr_targets,
+                            alpha=self.psr_focal_alpha, gamma=self.psr_focal_gamma,
+                            per_component_alpha=self._psr_per_component_alpha,
+                        )
+                    else:
+                        loss_psr = self.psr_loss_fn(outputs['psr_logits'], _psr_targets)
+                else:
+                    # Per-frame batch (dim==2) under transition objective: skip PSR loss.
+                    # The per-frame static labels teach constant output which drowns the
+                    # transition signal on sequence batches.
+                    loss_psr = zero
+                    # Skip sensitivity penalty + smooth-cap for per-frame batches under transition objective.
+                    # The transition signal only flows on sequence (dim==3) batches.
+            elif self.use_psr_focal:
                 loss_psr = binary_focal_loss(
-                    outputs['psr_logits'],
-                    _psr_targets,
-                    alpha=self.psr_focal_alpha,
-                    gamma=self.psr_focal_gamma,
+                    outputs['psr_logits'], _psr_targets,
+                    alpha=self.psr_focal_alpha, gamma=self.psr_focal_gamma,
                     per_component_alpha=self._psr_per_component_alpha,
                 )
             else:
-                loss_psr = self.psr_loss_fn(
-                    outputs['psr_logits'],
-                    _psr_targets,
-                )
+                loss_psr = self.psr_loss_fn(outputs['psr_logits'], _psr_targets)
 
             # --- FIX 1 (2026-06-06): PSR input-sensitivity penalty ---
             # Stage 3 epoch 16 collapsed: per-frame logit std/mean=0.12% on cap100
