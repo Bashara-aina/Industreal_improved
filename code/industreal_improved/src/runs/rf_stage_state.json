@@ -1,0 +1,468 @@
+{
+  "current_stage": "rf1",
+  "stage_index": 0,
+  "status": "running",
+  "training_pid": 3096257,
+  "epoch": 0,
+  "best_metric": 0.0,
+  "best_metrics": {},
+  "gate_passed": false,
+  "checklist_results": {
+    "gate": {
+      "passed": false,
+      "details": {
+        "det_mAP50": {
+          "status": "UNKNOWN",
+          "reason": "metric not found in validation"
+        },
+        "det_mAP50_95": {
+          "status": "UNKNOWN",
+          "reason": "metric not found in validation"
+        }
+      }
+    },
+    "health": {
+      "passed": true,
+      "details": {
+        "det_liveness": {
+          "status": "PASS",
+          "alive_ratio": 1.0
+        },
+        "loss_spike": {
+          "status": "PASS",
+          "spike_factor": 1.0,
+          "threshold": 10.0
+        },
+        "det_health": {
+          "status": "WARN",
+          "cls_mean": -10.999634,
+          "cls_std": 3.575412,
+          "near_zero": 0.0,
+          "issues": [
+            "cls_mean=-11.00 \u2014 very negative, weak positive signal"
+          ],
+          "trend": "insufficient_data"
+        }
+      }
+    },
+    "convergence": {
+      "passed": true,
+      "details": {
+        "combined": {
+          "status": "UNKNOWN",
+          "reason": "No validation metrics in recent log \u2014 training may have just started or restarted"
+        }
+      }
+    },
+    "validation": {
+      "passed": true,
+      "details": {}
+    },
+    "stability": {
+      "passed": true,
+      "details": {
+        "crash_count": {
+          "value": 0,
+          "status": "OK"
+        }
+      }
+    }
+  },
+  "metric_history": [],
+  "retry_count": 4,
+  "current_strategy": "reduce_lr_20x_warmup_3x",
+  "strategies_tried": [
+    "default",
+    "reduce_lr_5x",
+    "reduce_lr_2x_warmup_2x",
+    "reduce_lr_10x_warmup_2x"
+  ],
+  "det_health_history": [
+    {
+      "step": 501,
+      "cls_mean": -10.999634,
+      "cls_std": 3.575412,
+      "near_zero": 0.0
+    }
+  ],
+  "stage_history": [],
+  "issues_log": [
+    {
+      "action": "kill_and_retry",
+      "stage": "rf1",
+      "epoch": 0,
+      "retry_count": 0,
+      "strategy": "default",
+      "why_analysis": {
+        "findings": [
+          {
+            "title": "No specific pattern \u2014 generic health check",
+            "whys": [
+              "Why 1: No specific failure pattern identified from log tail",
+              "Why 2: Check if training process is still running",
+              "Why 3: Verify train.log has recent entries (not stalled)",
+              "Why 4: Check GPU utilization with nvidia-smi",
+              "Why 5: Loss not decreasing may indicate LR too high or too low",
+              "Why 6: Validation metrics flatlined \u2192 model may be in local optimum",
+              "Why 7: Check if SUBSET_RATIO provides enough data diversity",
+              "Why 8: Verify checkpoint is being saved (checkpoint file timestamp)",
+              "Why 9: Kendall log_vars may have saturated (check log_var values)",
+              "Why 10: No news is good news \u2014 training may be progressing normally"
+            ],
+            "fix": "Continue monitoring. If metrics are improving, no action needed."
+          }
+        ],
+        "timestamp": "2026-06-16T07:49:28.388320+00:00"
+      },
+      "checklist": {
+        "gate": {
+          "passed": false,
+          "details": {
+            "det_mAP50": {
+              "status": "UNKNOWN",
+              "reason": "metric not found in validation"
+            },
+            "det_mAP50_95": {
+              "status": "UNKNOWN",
+              "reason": "metric not found in validation"
+            }
+          }
+        },
+        "health": {
+          "passed": false,
+          "details": {
+            "det_liveness": {
+              "status": "FAIL",
+              "alive_ratio": 0.0
+            },
+            "loss_spike": {
+              "status": "PASS",
+              "spike_factor": 1.0,
+              "threshold": 10.0
+            },
+            "det_health": {
+              "status": "UNKNOWN",
+              "reason": "No DET-HEALTH data found"
+            }
+          }
+        },
+        "convergence": {
+          "passed": true,
+          "details": {
+            "combined": {
+              "status": "UNKNOWN",
+              "reason": "No validation metrics in recent log \u2014 training may have just started or restarted"
+            }
+          }
+        },
+        "validation": {
+          "passed": true,
+          "details": {}
+        },
+        "stability": {
+          "passed": true,
+          "details": {
+            "det_liveness_stability": {
+              "status": "WARN",
+              "alive_ratio": 0.0,
+              "min_required": 0.7
+            },
+            "crash_count": {
+              "value": 0,
+              "status": "OK"
+            }
+          }
+        }
+      },
+      "timestamp": "2026-06-16T07:49:28.388396+00:00"
+    },
+    {
+      "action": "kill_and_retry",
+      "stage": "rf1",
+      "epoch": 0,
+      "retry_count": 1,
+      "strategy": "reduce_lr_5x",
+      "why_analysis": {
+        "findings": [
+          {
+            "title": "All heads DEAD \u2014 catastrophic collapse",
+            "whys": [
+              "Why 1: All task heads show zero gradient \u2192 no learning signal",
+              "Why 2: Backbone or shared layers produce zero/constant gradient",
+              "Why 3: Loss is NaN or zero for all tasks (check total loss line)",
+              "Why 4: Feature extractor (ConvNeXt) may have collapsed to constant output",
+              "Why 5: BatchNorm running stats diverged (check for NaN in norm layers)",
+              "Why 6: Learning rate too high \u2192 optimizer stepped into bad region",
+              "Why 7: Check AMP/non-AMP compatibility \u2014 FP32/AMP mixing may corrupt grads",
+              "Why 8: Residual stream may have dead ReLU/GELU units (saturated activations)",
+              "Why 9: Weight initialization may have collapsed (check conv kernel stats)",
+              "Why 10: Gradient clipping may be masking true gradient norm"
+            ],
+            "fix": "Restore from checkpoint before collapse, reduce LR 10x, enable grad clipping at 1.0"
+          }
+        ],
+        "timestamp": "2026-06-16T08:21:58.393538+00:00"
+      },
+      "checklist": {
+        "gate": {
+          "passed": false,
+          "details": {
+            "det_mAP50": {
+              "status": "UNKNOWN",
+              "reason": "metric not found in validation"
+            },
+            "det_mAP50_95": {
+              "status": "UNKNOWN",
+              "reason": "metric not found in validation"
+            }
+          }
+        },
+        "health": {
+          "passed": false,
+          "details": {
+            "det_liveness": {
+              "status": "FAIL",
+              "alive_ratio": 0.0
+            },
+            "loss_spike": {
+              "status": "PASS",
+              "spike_factor": 1.0,
+              "threshold": 10.0
+            },
+            "det_health": {
+              "status": "WARN",
+              "cls_mean": -10.999634,
+              "cls_std": 3.575412,
+              "near_zero": 0.0,
+              "issues": [
+                "cls_mean=-11.00 \u2014 very negative, weak positive signal"
+              ],
+              "trend": "insufficient_data"
+            }
+          }
+        },
+        "convergence": {
+          "passed": true,
+          "details": {
+            "combined": {
+              "status": "UNKNOWN",
+              "reason": "No validation metrics in recent log \u2014 training may have just started or restarted"
+            }
+          }
+        },
+        "validation": {
+          "passed": true,
+          "details": {}
+        },
+        "stability": {
+          "passed": true,
+          "details": {
+            "det_liveness_stability": {
+              "status": "WARN",
+              "alive_ratio": 0.0,
+              "min_required": 0.7
+            },
+            "crash_count": {
+              "value": 0,
+              "status": "OK"
+            }
+          }
+        }
+      },
+      "timestamp": "2026-06-16T08:21:58.393718+00:00"
+    },
+    {
+      "action": "kill_and_retry",
+      "stage": "rf1",
+      "epoch": 0,
+      "retry_count": 2,
+      "strategy": "reduce_lr_2x_warmup_2x",
+      "why_analysis": {
+        "findings": [
+          {
+            "title": "No specific pattern \u2014 generic health check",
+            "whys": [
+              "Why 1: No specific failure pattern identified from log tail",
+              "Why 2: Check if training process is still running",
+              "Why 3: Verify train.log has recent entries (not stalled)",
+              "Why 4: Check GPU utilization with nvidia-smi",
+              "Why 5: Loss not decreasing may indicate LR too high or too low",
+              "Why 6: Validation metrics flatlined \u2192 model may be in local optimum",
+              "Why 7: Check if SUBSET_RATIO provides enough data diversity",
+              "Why 8: Verify checkpoint is being saved (checkpoint file timestamp)",
+              "Why 9: Kendall log_vars may have saturated (check log_var values)",
+              "Why 10: No news is good news \u2014 training may be progressing normally"
+            ],
+            "fix": "Continue monitoring. If metrics are improving, no action needed."
+          }
+        ],
+        "timestamp": "2026-06-16T08:22:13.741053+00:00"
+      },
+      "checklist": {
+        "gate": {
+          "passed": false,
+          "details": {
+            "det_mAP50": {
+              "status": "UNKNOWN",
+              "reason": "metric not found in validation"
+            },
+            "det_mAP50_95": {
+              "status": "UNKNOWN",
+              "reason": "metric not found in validation"
+            }
+          }
+        },
+        "health": {
+          "passed": false,
+          "details": {
+            "det_liveness": {
+              "status": "FAIL",
+              "alive_ratio": 0.0
+            },
+            "loss_spike": {
+              "status": "PASS",
+              "spike_factor": 1.0,
+              "threshold": 10.0
+            },
+            "det_health": {
+              "status": "WARN",
+              "cls_mean": -10.999634,
+              "cls_std": 3.575412,
+              "near_zero": 0.0,
+              "issues": [
+                "cls_mean=-11.00 \u2014 very negative, weak positive signal"
+              ],
+              "trend": "insufficient_data"
+            }
+          }
+        },
+        "convergence": {
+          "passed": true,
+          "details": {
+            "combined": {
+              "status": "UNKNOWN",
+              "reason": "No validation metrics in recent log \u2014 training may have just started or restarted"
+            }
+          }
+        },
+        "validation": {
+          "passed": true,
+          "details": {}
+        },
+        "stability": {
+          "passed": true,
+          "details": {
+            "det_liveness_stability": {
+              "status": "WARN",
+              "alive_ratio": 0.0,
+              "min_required": 0.7
+            },
+            "crash_count": {
+              "value": 0,
+              "status": "OK"
+            }
+          }
+        }
+      },
+      "timestamp": "2026-06-16T08:22:13.741254+00:00"
+    },
+    {
+      "action": "kill_and_retry",
+      "stage": "rf1",
+      "epoch": 0,
+      "retry_count": 3,
+      "strategy": "reduce_lr_10x_warmup_2x",
+      "why_analysis": {
+        "findings": [
+          {
+            "title": "No specific pattern \u2014 generic health check",
+            "whys": [
+              "Why 1: No specific failure pattern identified from log tail",
+              "Why 2: Check if training process is still running",
+              "Why 3: Verify train.log has recent entries (not stalled)",
+              "Why 4: Check GPU utilization with nvidia-smi",
+              "Why 5: Loss not decreasing may indicate LR too high or too low",
+              "Why 6: Validation metrics flatlined \u2192 model may be in local optimum",
+              "Why 7: Check if SUBSET_RATIO provides enough data diversity",
+              "Why 8: Verify checkpoint is being saved (checkpoint file timestamp)",
+              "Why 9: Kendall log_vars may have saturated (check log_var values)",
+              "Why 10: No news is good news \u2014 training may be progressing normally"
+            ],
+            "fix": "Continue monitoring. If metrics are improving, no action needed."
+          }
+        ],
+        "timestamp": "2026-06-16T08:22:31.478917+00:00"
+      },
+      "checklist": {
+        "gate": {
+          "passed": false,
+          "details": {
+            "det_mAP50": {
+              "status": "UNKNOWN",
+              "reason": "metric not found in validation"
+            },
+            "det_mAP50_95": {
+              "status": "UNKNOWN",
+              "reason": "metric not found in validation"
+            }
+          }
+        },
+        "health": {
+          "passed": false,
+          "details": {
+            "det_liveness": {
+              "status": "FAIL",
+              "alive_ratio": 0.0
+            },
+            "loss_spike": {
+              "status": "PASS",
+              "spike_factor": 1.0,
+              "threshold": 10.0
+            },
+            "det_health": {
+              "status": "WARN",
+              "cls_mean": -10.999634,
+              "cls_std": 3.575412,
+              "near_zero": 0.0,
+              "issues": [
+                "cls_mean=-11.00 \u2014 very negative, weak positive signal"
+              ],
+              "trend": "insufficient_data"
+            }
+          }
+        },
+        "convergence": {
+          "passed": true,
+          "details": {
+            "combined": {
+              "status": "UNKNOWN",
+              "reason": "No validation metrics in recent log \u2014 training may have just started or restarted"
+            }
+          }
+        },
+        "validation": {
+          "passed": true,
+          "details": {}
+        },
+        "stability": {
+          "passed": true,
+          "details": {
+            "det_liveness_stability": {
+              "status": "WARN",
+              "alive_ratio": 0.0,
+              "min_required": 0.7
+            },
+            "crash_count": {
+              "value": 0,
+              "status": "OK"
+            }
+          }
+        }
+      },
+      "timestamp": "2026-06-16T08:22:31.478978+00:00"
+    }
+  ],
+  "last_check_time": "2026-06-16T08:45:02.238806+00:00",
+  "run_start_time": "2026-06-16T08:22:35.079347+00:00",
+  "log_cursor": 591091
+}
