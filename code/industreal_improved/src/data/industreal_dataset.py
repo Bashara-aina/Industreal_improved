@@ -1274,6 +1274,9 @@ class IndustRealMultiTaskDataset(Dataset):
             # Store sorted frame list for clip loading (Doc 2 A.1)
             self._rec_frame_paths[recording_id] = frame_nums
 
+            # Pre-load COCO annotations for task-aware sampling metadata
+            coco_data = _get_coco(self._get_coco_path(recording_id))
+
             # Build per-frame sample records
             stride = (
                 C.TRAIN_FRAME_STRIDE
@@ -1289,11 +1292,18 @@ class IndustRealMultiTaskDataset(Dataset):
                 # use 0 (NA)
                 action_label = int(cache.ar_per_frame[fn]) if fn < len(cache.ar_per_frame) else 0
 
+                # Task-aware sampling metadata
+                psr_row = cache.psr_per_frame[fn] if fn < len(cache.psr_per_frame) else None
+                psr_has_any = bool(psr_row.any()) if psr_row is not None else False
+                num_dets = len(coco_data.get(fn, []))
+
                 all_samples.append({
                     'recording_id': recording_id,
                     'frame_num': fn,
                     'img_path': str(rgb_dir / f'{fn:06d}.jpg'),
                     'action_label': action_label,
+                    'psr_has_any': psr_has_any,
+                    'num_dets': num_dets,
                 })
 
             rec_count += 1
@@ -1331,16 +1341,14 @@ class IndustRealMultiTaskDataset(Dataset):
             psr_boost = float(getattr(C, 'TASK_AWARE_PSR_BOOST', 1.5))
             det_boost = float(getattr(C, 'TASK_AWARE_DET_BOOST', 1.2))
             for i in range(len(sample_weights)):
-                sample_meta = self.frame_metadata[i] if i < len(self.frame_metadata) else None
-                if sample_meta is None:
+                if i >= len(self.samples):
                     continue
+                sample = self.samples[i]
                 # PSR: boost frames where any component has a positive label
-                psr_labels = sample_meta.get('psr_labels') if isinstance(sample_meta, dict) else None
-                if psr_labels is not None and hasattr(psr_labels, '__len__'):
-                    if any(psr_labels):
-                        sample_weights[i] *= psr_boost
+                if sample.get('psr_has_any', False):
+                    sample_weights[i] *= psr_boost
                 # Detection: boost frames with at least one detection target
-                if isinstance(sample_meta, dict) and sample_meta.get('num_dets', 0) > 0:
+                if sample.get('num_dets', 0) > 0:
                     sample_weights[i] *= det_boost
             # Re-normalize so weights still sum to 1
             total_w = sample_weights.sum()

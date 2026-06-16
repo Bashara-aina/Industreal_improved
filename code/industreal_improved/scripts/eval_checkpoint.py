@@ -14,16 +14,26 @@ import sys, os, json, argparse, logging
 from pathlib import Path
 from datetime import datetime
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / 'src'))
+_PROJ = Path(__file__).resolve().parent.parent  # project root
+_SRC = _PROJ / 'src'
+sys.path.insert(0, str(_SRC))
+# model.py does `from src import config as C` — needs project root in path
+if str(_PROJ) not in sys.path:
+    sys.path.insert(0, str(_PROJ))
+# Add src/ subdirectories so `from models.model import ...` resolves
+for _sub in ['models', 'training', 'evaluation', 'data']:
+    _p = str(_SRC / _sub)
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import torch
 import numpy as np
 from torch.utils.data import DataLoader
 
 import config as C
-from model import POPWMultiTaskModel
-from losses import MultiTaskLoss
-from industreal_dataset import IndustRealMultiTaskDataset, collate_fn
+from models.model import POPWMultiTaskModel
+from training.losses import MultiTaskLoss
+from data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
 from evaluation.evaluate import evaluate_all
 
 logging.basicConfig(
@@ -35,7 +45,7 @@ logger = logging.getLogger('eval_checkpoint')
 
 
 def load_checkpoint_compat(path: str, model, device: torch.device):
-    """Load a training checkpoint handling multiple key formats."""
+    """Load a training checkpoint handling multiple key formats and shape mismatches."""
     ckpt = torch.load(path, map_location=device, weights_only=False)
     epoch = ckpt.get('epoch', -1)
     step = ckpt.get('step', -1)
@@ -46,11 +56,26 @@ def load_checkpoint_compat(path: str, model, device: torch.device):
     if 'model' not in ckpt and 'model_state_dict' not in ckpt and 'model_state' not in ckpt:
         # Full state dict directly
         pass
-    missing, unexpected = model.load_state_dict(model_state, strict=False)
+    # Filter size mismatches before loading (strict=False still raises on shape mismatch)
+    model_sd = model.state_dict()
+    filtered = {}
+    skipped = []
+    for k, v in model_state.items():
+        if k in model_sd and v.shape != model_sd[k].shape:
+            skipped.append(f'{k}: ckpt={list(v.shape)} model={list(model_sd[k].shape)}')
+            continue
+        filtered[k] = v
+    missing, unexpected = model.load_state_dict(filtered, strict=False)
     if missing:
         logger.warning(f'  Missing keys: {len(missing)} (expected for partial checkpoint)')
     if unexpected:
         logger.warning(f'  Unexpected keys: {len(unexpected)}')
+    if skipped:
+        logger.warning(f'  Skipped {len(skipped)} keys (shape mismatch, re-initialized):')
+        for s in skipped[:10]:
+            logger.warning(f'    {s}')
+        if len(skipped) > 10:
+            logger.warning(f'    ... and {len(skipped)-10} more')
     return ckpt, epoch, step
 
 
@@ -75,6 +100,7 @@ def main():
         backbone_type=str(getattr(C, 'BACKBONE', 'resnet50')),
         use_headpose_film=bool(getattr(C, 'USE_HEADPOSE_FILM', False)),
         use_videomae=bool(getattr(C, 'USE_VIDEOMAE', False)),
+        use_backbone_checkpoint=bool(getattr(C, 'USE_BACKBONE_CHECKPOINT', False)),
     ).to(device)
     model.eval()
 

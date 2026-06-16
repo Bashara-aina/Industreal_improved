@@ -60,10 +60,11 @@ import logging
 import math
 import random
 import shutil
+import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 import numpy as np
 import psutil
@@ -99,11 +100,10 @@ import data as _ds_module
 from src import config as C
 
 IndustRealMultiTaskDataset = getattr(_ds_module, 'IndustRealMultiTaskDataset')
-# Doc 01 §D.2: When USE_PSR_SEQUENCE_MODE=True, use collate_fn_sequence which
-# groups frames by (recording_id, camera_view) and provides psr_labels_seq,
-# sequence_lengths, and frame_indices for temporal PSR training.
-_collate_fn_name = 'collate_fn_sequences' if C.USE_PSR_SEQUENCE_MODE else 'collate_fn'
-collate_fn = getattr(_ds_module, _collate_fn_name)
+# Main loader ALWAYS uses standard collate_fn (per-frame samples).
+# collate_fn_sequences is imported separately for the PSR seq_loader only.
+collate_fn = getattr(_ds_module, 'collate_fn')
+_collate_fn_sequences = getattr(_ds_module, 'collate_fn_sequences')
 
 MultiTaskIndustReal = getattr(_model_module, 'MultiTaskIndustReal', None)
 count_parameters_old = getattr(_model_module, 'count_parameters', None)
@@ -144,6 +144,10 @@ IN_EVALUATION_PHASE = False
 # RC-25 guard: set True when --reinit-heads is active; gates step-0 assertions.
 _REINIT_HEADS_ACTIVE = False
 _REINIT_EPOCH_OFFSET = 0  # set to (start_epoch - 1) when --reinit-heads is used
+_REINIT_DET_STEP = 0  # step counter since reinit — used for detection head gradient warmup
+_PSR_WARMUP_STEPS_REMAINING = 0  # steps remaining for 2x PSR output head warmup after reinit
+_DET_TALLY_FLOOR = 0  # [FIX4] Detection head floor count (det loss < 1e-5)
+_DET_TALLY_ALIVE = 0  # [FIX4] Detection head alive count (det loss > 0.1)
 
 
 def _refresh_runtime_cfg() -> None:
@@ -227,7 +231,10 @@ def _build_loader(
     num_workers: int,
     prefetch: int = 1,
     persistent: Optional[bool] = None,
+    collate: Optional[Callable] = None,
 ) -> DataLoader:
+    if collate is None:
+        collate = collate_fn
     is_train = split == 'train'
     sampler = ds.get_sampler() if is_train else None
     effective_prefetch = prefetch if num_workers > 0 else None
@@ -239,15 +246,16 @@ def _build_loader(
     # DO NOT use 'spawn' — it triggers Python 3.13 loky semaphore bugs
     # that kill the process at shutdown. Fork is safe here because the
     # thread caps eliminate the convoy.
-    # Cap prefetch to 2 to reduce worker memory pressure.
-    _eff_prefetch = min(effective_prefetch, 2) if effective_prefetch else None
+    # Cap prefetch to 4 (raised from 2 on 2026-06-15) — 64GB RAM + 32GB
+    # /dev/shm provides ample room for 8 workers x 4 prefetch x batch=2.
+    _eff_prefetch = min(effective_prefetch, 4) if effective_prefetch else None
     return DataLoader(
         ds,
         batch_size=batch_size,
         sampler=sampler,
         shuffle=False,
         num_workers=num_workers,
-        collate_fn=collate_fn,
+        collate_fn=collate,
         pin_memory=C.PIN_MEMORY,
         drop_last=is_train,
         persistent_workers=bool(persistent),
@@ -801,9 +809,26 @@ def train_one_epoch(
     seq_loader=None,
     resume_batch: int = 0,   # FIX: skip N batches for mid-epoch resume
     best_metric: float = 0.0,  # FIX: pass best_metric explicitly to avoid closure scoping issue
+    val_ds=None,             # [NEW 2026-06-15] Validation dataset for step-based intra-epoch validation
+    val_every_n_steps: int = 0,  # [NEW 2026-06-15] Validate every N global steps (0 = disabled)
 ):
     model.train()
     optimizer.zero_grad(set_to_none=True)
+
+    # [NEW 2026-06-15] Pre-build val loader for step-based intra-epoch validation
+    _step_val_loader = None
+    _step_val_gate = int(getattr(C, 'GATE_EVAL_MAX_BATCHES', 200))
+    if val_every_n_steps > 0 and val_ds is not None:
+        _step_val_loader = _build_loader(
+            val_ds, 'val', 1, 0, prefetch=1, persistent=False,
+        )
+        logger.info(
+            f'  [STEP VAL] Intra-epoch validation every {val_every_n_steps} steps '
+            f'(gated at {_step_val_gate} batches)'
+        )
+    # [FIX 2026-06-15] global declaration for _PSR_WARMUP_STEPS_REMAINING set in main()
+    # Without this, Python treats it as local due to -= 1 assignment → UnboundLocalError
+    global _PSR_WARMUP_STEPS_REMAINING
 
     # Update module-level crash-recovery state for signal handlers
     _cr_set_state(model, optimizer, scaler, criterion, ema, epoch, ckpt_dir)
@@ -828,6 +853,7 @@ def train_one_epoch(
         'det': 0.0,
         'det_cls': 0.0,
         'det_reg': 0.0,
+        'pose': 0.0,  # body pose (separate from head_pose)
         'head_pose': 0.0,
         'activity': 0.0,
         'psr': 0.0,
@@ -1018,6 +1044,12 @@ def train_one_epoch(
                     # train_act=False, train_pose=False in this branch.
                 }
                 loss_seq, loss_dict_seq = criterion(fake_outputs, fake_targets)
+                # [TUNE 2026-06-15] Scale PSR loss on seq batches for stronger temporal signal
+                _psr_seq_scale = getattr(C, 'PSR_SEQ_LOSS_SCALE', 1.0)
+                if _psr_seq_scale > 1.0:
+                    loss_seq = loss_seq * _psr_seq_scale
+                    if 'psr' in loss_dict_seq:
+                        loss_dict_seq['psr'] = loss_dict_seq['psr'] * _psr_seq_scale
                 loss_dict_seq = {k: 0.0 for k in loss_dict_seq}
                 # [FIX] isfinite check BEFORE assigning .item() to loss_dict_seq
                 # Prevents NaN contamination of loss_dict_seq when loss_seq is NaN
@@ -1028,6 +1060,16 @@ def train_one_epoch(
                     loss_dict_seq['psr'] = loss_seq.item()
                     loss_dict_seq['total'] = loss_seq.item()
 
+                # [DIAGNOSTIC] Log fraction of PSR targets that are -1 (ignored/error states)
+                _psr_labels = targets_seq.get('psr_labels')
+                if _psr_labels is not None:
+                    _neg1_frac = (_psr_labels < 0).float().mean().item()
+                    if _neg1_frac > 0.01:  # only log when non-trivial
+                        logger.info(
+                            f'  [PSR_NEG1 step={step}] neg1_frac={_neg1_frac:.4f} '
+                            f'shape={list(_psr_labels.shape)}'
+                        )
+
                 loss_seq = loss_seq / float(accum_steps)
             if not torch.isfinite(loss_seq) or not loss_seq.requires_grad:
                 nan_skips += 1
@@ -1037,6 +1079,17 @@ def train_one_epoch(
                 torch.cuda.empty_cache()
                 continue
             scaler.scale(loss_seq).backward()
+            # [FIX 2026-06-16] Zero backbone + FPN gradients on seq batches so
+            # PSR backward() doesn't corrupt shared visual features. Only PSR
+            # head + transformer weights update on seq steps.
+            if hasattr(model, 'backbone'):
+                for _p in model.backbone.parameters():
+                    if _p.grad is not None:
+                        _p.grad = None
+            if hasattr(model, 'fpn'):
+                for _p in model.fpn.parameters():
+                    if _p.grad is not None:
+                        _p.grad = None
             for k in running:
                 if k in loss_dict_seq:
                     v = loss_dict_seq[k]
@@ -1087,9 +1140,25 @@ def train_one_epoch(
                         list(model.parameters()) + list(criterion.parameters()),
                         C.GRAD_CLIP_NORM,
                     )
+                    # [REINIT-HEADS] PSR output head warmup: 2x grad multiplier for first 200 steps after reinit
+                    if _REINIT_HEADS_ACTIVE and _PSR_WARMUP_STEPS_REMAINING > 0:
+                        _psr_oh_params = [
+                            p for n, p in model.named_parameters()
+                            if 'psr_head.output_heads' in n and p.grad is not None
+                        ]
+                        if _psr_oh_params:
+                            for _p in _psr_oh_params:
+                                _p.grad.mul_(2.0)
+                        _PSR_WARMUP_STEPS_REMAINING -= 1
                     _scale_before = scaler.get_scale()  # [RC-29] fp16 silent-skip detect
                     scaler.step(optimizer)
-                    scaler.update()
+                    # [FIX 2026-06-16] Skip scaler.update() on seq steps to prevent PSR loss
+                    # spikes (~1077 at step 850) from corrupting the GradScaler. The scaler's
+                    # scale factor and growth tracker should only reflect detection-gradient
+                    # dynamics; seq-step PSR gradients operate at a completely different
+                    # magnitude and cause the scaler to reduce its scale or disrupt growth
+                    # tracking, which underflows detection gradients at the next det step.
+                    # scaler.update()  # intentionally disabled for seq path
                     if scaler.get_scale() < _scale_before:
                         opt_skipped += 1
                         if opt_skipped in (1, 10, 50) or opt_skipped % 200 == 0:
@@ -1153,6 +1222,76 @@ def train_one_epoch(
         criterion.set_epoch(epoch)
         loss, loss_dict = criterion(outputs, targets)
 
+        # [FIX4] Per-step detection head diagnostic (every DET_DEBUG_EVERY steps, --reinit-heads only)
+        _DET_DEBUG_EVERY = int(getattr(C, 'DET_DEBUG_EVERY', 50))
+        # NOTE: is_seq_batch skips the non-seq code path (continue at line 1161) so
+        # diagnostics here only run on non-seq-batch steps.  With seq_every=2 all even
+        # steps are seq batches, but step % 50 == 0 / step % 500 == 0 only match even
+        # numbers — so the original conditions would *never* fire.  We use a period
+        # of seq_every * interval with an odd offset to land on non-seq-batch steps.
+        _DET_DEBUG_PERIOD = seq_every * _DET_DEBUG_EVERY
+        _DET_OFFSET = _DET_DEBUG_PERIOD // 2 + 1  # odd offset to hit non-seq steps
+        if _REINIT_HEADS_ACTIVE and _DET_DEBUG_EVERY > 0 and step % _DET_DEBUG_PERIOD == _DET_OFFSET:
+            _cls_preds = outputs.get('cls_preds')
+            _reg_preds = outputs.get('reg_preds')
+            if _cls_preds is not None:
+                _cs = _cls_preds.detach()
+                _near_zero_frac = (_cs.abs() < 0.01).float().mean().item()
+                logger.info(
+                    f'  [DET-DEBUG step={step}] cls_preds: '
+                    f'sum={_cs.sum().item():.3f} min={_cs.min().item():.3f} '
+                    f'max={_cs.max().item():.3f} mean={_cs.mean():.6f} '
+                    f'std={_cs.std():.6f} med_abs={_cs.abs().median().item():.6f} '
+                    f'near_zero={_near_zero_frac:.4f}'
+                )
+            if _reg_preds is not None:
+                _rs = _reg_preds.detach()
+                logger.info(
+                    f'  [DET-DEBUG step={step}] reg_preds: '
+                    f'sum={_rs.sum().item():.3f} min={_rs.min().item():.3f} '
+                    f'max={_rs.max().item():.3f} mean={_rs.mean():.6f} '
+                    f'std={_rs.std():.6f} med_abs={_rs.abs().median().item():.6f}'
+                )
+            # Log detection loss components
+            _det_cls = loss_dict.get('det_cls', None)
+            _det_reg = loss_dict.get('det_reg', None)
+            _parts = []
+            if _det_cls is not None:
+                _parts.append(f'det_cls={_det_cls:.8f}')
+            if _det_reg is not None:
+                _parts.append(f'det_reg={_det_reg:.8f}')
+            if _parts:
+                logger.info(f'  [DET-DEBUG step={step}] det_loss: {" ".join(_parts)}')
+        # [FIX4] Tally counter: det loss floor vs alive ratio every 500 steps
+        if _REINIT_HEADS_ACTIVE:
+            global _DET_TALLY_FLOOR, _DET_TALLY_ALIVE
+            _det_val = float(loss_dict.get('det', 0.0))
+            if _det_val < 1e-5:
+                _DET_TALLY_FLOOR += 1
+            elif _det_val > 0.1:
+                _DET_TALLY_ALIVE += 1
+            if step > 0 and step % (seq_every * 500) == seq_every * 500 // 2 + 1:
+                _total = _DET_TALLY_FLOOR + _DET_TALLY_ALIVE
+                logger.info(
+                    f'  [DET-DEBUG step={step}] det tally: floor(<1e-5)={_DET_TALLY_FLOOR} '
+                    f'alive(>0.1)={_DET_TALLY_ALIVE} total_window={_total} '
+                    f'floor_frac={_DET_TALLY_FLOOR / max(_total, 1):.4f}'
+                )
+
+        # [FIX 2026-06-15] Always-on detection head health probe (every 500 steps)
+        # Runs regardless of _REINIT_HEADS_ACTIVE to catch degenerate-equilibrium
+        # collapse where cls_preds std → 0 (all logits equal).
+        if step > 0 and step % (seq_every * 500) == seq_every * 500 // 2 + 1:
+            _h_cls = outputs.get('cls_preds')
+            if _h_cls is not None:
+                _hcs = _h_cls.detach()
+                _h_nz = (_hcs.abs() < 0.01).float().mean().item()
+                logger.info(
+                    f'  [DET-HEALTH step={step}] cls_preds: '
+                    f'mean={_hcs.mean():.6f} std={_hcs.std():.6f} '
+                    f'near_zero={_h_nz:.4f}'
+                )
+
         # [DIAGNOSTIC] Verify loss tensor is connected to computation graph
         if step == 0 and not loss.requires_grad and loss.grad_fn is None:
             logger.error(
@@ -1180,7 +1319,10 @@ def train_one_epoch(
                     'Reinit FPN+heads with --reinit-heads (or restart from ImageNet init) '
                     'before retraining. (RC-25 guard)'
                 )
-            if _REINIT_HEADS_ACTIVE:
+            # [FIX 2026-06-15] Gate the logit-magnitude guard by epoch: only fire on the
+            # FIRST epoch after reinit (effective epoch == 1). After one full epoch of training
+            # the logits naturally grow past the 8.0 threshold and the guard becomes a false positive.
+            if _REINIT_HEADS_ACTIVE and epoch == _REINIT_EPOCH_OFFSET + 1:
                 cls_logits = outputs.get('cls_preds')
                 if cls_logits is not None:
                     cls_logits_median = cls_logits.detach().abs().median().item()
@@ -1192,6 +1334,22 @@ def train_one_epoch(
                         )
                 else:
                     logger.warning('[STEP-0 ASSERT] cls_preds not found in outputs — skipping logit check.')
+
+            # [DET-WARMUP] Step-0 detection head output diagnostic
+            if _REINIT_HEADS_ACTIVE:
+                cls_preds = outputs.get('cls_preds')
+                reg_preds = outputs.get('reg_preds')
+                if cls_preds is not None:
+                    _cs = cls_preds.detach()
+                    logger.info(
+                        f'[DET-INIT] cls_preds: sum={_cs.sum().item():.3f} '
+                        f'min={_cs.min().item():.3f} max={_cs.max().item():.3f} '
+                        f'mean={_cs.mean().item():.3f} std={_cs.std().item():.3f} '
+                        f'med_abs={_cs.abs().median().item():.3f} '
+                        f'(pi=0.01 target: sigmoid~0.01 = logit~-4.6, scale < 8.0)'
+                    )
+                    if getattr(C, 'ASSERT_AND_CRASH', False) and _cs.max().item() < 0.01:
+                        logger.warning('[DET-INIT] cls_preds max < 0.01 -- detection head stuck near zero')
 
         # Override losses based on stage — keep `loss` as 0D tensor for NaN/isfinite guard
         if staged_training:
@@ -1362,6 +1520,7 @@ def train_one_epoch(
                 torch.exp(-criterion.log_var_psr) * loss.detach()
             ).squeeze()
             logger.warning(f'  [GRAD_FN_DIAG] Created fallback loss with grad_fn={loss.grad_fn is not None}')
+
         scaler.scale(loss).backward()
 
         # Doc 2 §B.1: Kendall gradient sentinel — log gradient norms of log_var params
@@ -1372,7 +1531,7 @@ def train_one_epoch(
         # [OPUS v5 PART-4-2] Per-head grad-norm liveness probe every LIVENESS_EVERY steps.
         # Complements the loss-based liveness probe in losses.py — catches detached heads
         # that produce finite-but-dead loss values.
-        _liveness_grad_every = int(getattr(C, 'LIVENESS_EVERY', 200))
+        _liveness_grad_every = int(getattr(C, 'LIVENESS_GRAD_EVERY', 200))
         _log_per_head_grad_norm(model, step, _liveness_grad_every, is_seq_step=is_seq_batch)
 
         if (step + 1) % accum_steps == 0 or (step + 1) == len(loader):
@@ -1391,10 +1550,50 @@ def train_one_epoch(
                 _act_params = [p for n, p in model.named_parameters() if n.startswith('activity_head') and p.grad is not None]
                 if _act_params:
                     torch.nn.utils.clip_grad_norm_(_act_params, _act_gc)
+            # [REINIT-HEADS] Detection head gradient warmup after reinit
+            # Proper fix: ZERO detection head gradients on frames with NO GT boxes.
+            # 99.3% of RF1 frames have zero GT boxes, producing exclusively negative
+            # focal loss gradients that collapse cls_mean from -2.2 to -9.7 by step 51.
+            # The old gradient-multiplier approach was ineffective because AdamW
+            # normalizes step size: m/sqrt(v) is invariant to gradient scaling.
+            # Config-driven via C.REINIT_REG_WARMUP_STEPS.
+            if _REINIT_HEADS_ACTIVE:
+                global _REINIT_DET_STEP
+                _reinit_reg_steps = max(1, getattr(C, 'REINIT_REG_WARMUP_STEPS', 1000))
+                if _REINIT_DET_STEP < _reinit_reg_steps:
+                    # Check if ANY frame in the batch has GT boxes
+                    _has_gt = any(t['boxes'].shape[0] > 0 for t in targets['detection'])
+                    if not _has_gt:
+                        # Zero detection head gradients on empty batches to prevent
+                        # focal loss negative drift from 99.3% empty frames
+                        _det_head_prefixes = ('det_head.', 'detection_head.')
+                        _det_head_params = [
+                            p for n, p in model.named_parameters()
+                            if any(n.startswith(pf) for pf in _det_head_prefixes) and p.grad is not None
+                        ]
+                        if _det_head_params:
+                            for _p in _det_head_params:
+                                _p.grad.zero_()
+                _REINIT_DET_STEP += 1
+                # [FIX 2026-06-15] Freeze Kendall log_var_det during det head warmup
+                # Prevents Kendall from learning to suppress detection while det grads
+                # are zeroed/ramping. After warmup, log_var_det learns freely.
+                if criterion.log_var_det.grad is not None:
+                    criterion.log_var_det.grad.zero_()
             torch.nn.utils.clip_grad_norm_(
                 list(model.parameters()) + list(criterion.parameters()),
                 C.GRAD_CLIP_NORM,
             )
+            # [REINIT-HEADS] PSR output head warmup: 2x grad multiplier for first 200 steps after reinit
+            if _REINIT_HEADS_ACTIVE and _PSR_WARMUP_STEPS_REMAINING > 0:
+                _psr_oh_params = [
+                    p for n, p in model.named_parameters()
+                    if 'psr_head.output_heads' in n and p.grad is not None
+                ]
+                if _psr_oh_params:
+                    for _p in _psr_oh_params:
+                        _p.grad.mul_(2.0)
+                _PSR_WARMUP_STEPS_REMAINING -= 1
             # --- NaN gradient guard BEFORE step ---
             # If any param gradient is NaN/Inf (even after clipping), skip this
             # optimizer step to avoid corrupting model weights.
@@ -1441,6 +1640,45 @@ def train_one_epoch(
                         )
                 if ema is not None and (not staged_training or stage >= 3):
                     ema.update()
+                # [FIX4] Per-param detection head weight stats (every 100 steps, --reinit-heads only)
+                if _REINIT_HEADS_ACTIVE and step % 100 == 0:
+                    _det_named_params = {n: p for n, p in model.named_parameters()
+                                         if n.startswith('detection_head') and p.grad is not None}
+                    if _det_named_params:
+                        _det_parts = []
+                        # cls_score.weight grad norm
+                        _cw = _det_named_params.get('detection_head.cls_score.weight')
+                        if _cw is not None:
+                            _cg = _cw.grad.detach()
+                            _det_parts.append(
+                                f'cls_w_grad:norm={_cg.norm():.2e} '
+                                f'mean={_cg.mean():.2e} std={_cg.std():.2e}'
+                            )
+                        # cls_score.bias actual values (prior-determining)
+                        _cb = _det_named_params.get('detection_head.cls_score.bias')
+                        if _cb is not None:
+                            _cb_val = _cb.detach()
+                            _det_parts.append(
+                                f'cls_bias:val_mean={_cb_val.mean():.4f} '
+                                f'val_min={_cb_val.min():.4f} val_max={_cb_val.max():.4f}'
+                            )
+                        # reg_pred.weight grad norm
+                        _rw = _det_named_params.get('detection_head.reg_pred.weight')
+                        if _rw is not None:
+                            _rg = _rw.grad.detach()
+                            _det_parts.append(f'reg_w_grad:norm={_rg.norm():.2e}')
+                        # cls_subnet final layer (index 9) grad norm
+                        _csl = _det_named_params.get('detection_head.cls_subnet.9.weight')
+                        if _csl is not None:
+                            _cslg = _csl.grad.detach()
+                            _det_parts.append(f'cls_subnet_last_grad:norm={_cslg.norm():.2e}')
+                        # reg_subnet final layer (index 9) grad norm
+                        _rsl = _det_named_params.get('detection_head.reg_subnet.9.weight')
+                        if _rsl is not None:
+                            _rslg = _rsl.grad.detach()
+                            _det_parts.append(f'reg_subnet_last_grad:norm={_rslg.norm():.2e}')
+                        if _det_parts:
+                            logger.info(f'  [DET-DEBUG step={step}] ' + ' | '.join(_det_parts))
                 optimizer.zero_grad(set_to_none=True)
 
         # --- NaN/ZERO GUARD: zero per-component losses that are NaN before accumulating.
@@ -1468,6 +1706,30 @@ def train_one_epoch(
             if C._global_step >= C.TRAIN_MAX_STEPS:
                 logger.info(f'  [2pct] batch-level TRAIN_MAX_STEPS limit reached ({C._global_step}). Stopping.')
                 break
+
+        # [NEW 2026-06-15] Step-based intra-epoch validation
+        if val_every_n_steps > 0 and _step_val_loader is not None:
+            _gs = getattr(C, '_global_step', 0)
+            if _gs > 0 and _gs % val_every_n_steps == 0:
+                logger.info(f'  [STEP VAL] global_step={_gs} — running gated validation ({_step_val_gate} batches)')
+                model.eval()
+                try:
+                    _svm = evaluate_all(
+                        model, criterion, _step_val_loader, device,
+                        max_batches=_step_val_gate, epoch=_gs,
+                    )
+                    _det_ap = _svm.get('mAP@0.5', 0.0)
+                    _act_f1 = _svm.get('activity_macro_f1', 0.0)
+                    _psr_f1 = _svm.get('psr_f1_overall', 0.0)
+                    _pose_mae = _svm.get('head_pose_position_mae', 0.0)
+                    logger.info(
+                        f'  [STEP VAL gs={_gs}] det_mAP50={_det_ap:.4f}  '
+                        f'act_F1={_act_f1:.4f}  psr_F1={_psr_f1:.4f}  pose_MAE={_pose_mae:.4f}'
+                    )
+                except Exception as _sv_exc:
+                    logger.warning(f'  [STEP VAL] gs={_gs} failed: {_sv_exc!r} — continuing training')
+                finally:
+                    model.train()
 
         # Doc 2 §B.3: Loss component breakdown (logged every 50 steps)
         if (step + 1) % 50 == 0:
@@ -1751,14 +2013,13 @@ def _clamp_kendall_log_vars(criterion):
     """
     if not hasattr(criterion, 'log_var_det'):
         return
-    # [FIX 2026-06-15] Per-task Kendall bounds to prevent multi-task collapse.
-    # Activity: min=0 prevents precision-boosting above 1.0 (can't dominate via precision)
-    # PSR/pose: max=0 prevents suppression below precision 1.0 (can't be zeroed out)
+    # [FIX 2026-06-15] Per-task Kendall bounds — now reads from config.py so tuning takes effect.
+    # Was hardcoded (act min=0, pose max=0) silently overriding config values.
     _bounds = {
         'log_var_det':  (-4.0, 2.0),
-        'log_var_act':  (0.0,  2.0),
-        'log_var_pose': (-4.0, 0.0),
-        'log_var_psr':  (-4.0, 0.0),
+        'log_var_act':  (float(getattr(C, 'KENDALL_LOG_VAR_MIN_ACT', -4.0)), 2.0),
+        'log_var_pose': (-4.0, float(getattr(C, 'KENDALL_LOG_VAR_MAX_POSE', 2.0))),
+        'log_var_psr':  (-4.0, float(getattr(C, 'KENDALL_LOG_VAR_MAX_PSR', 2.0))),
     }
     for _param in ('log_var_det', 'log_var_pose', 'log_var_act', 'log_var_psr'):
         _p = getattr(criterion, _param)
@@ -1832,18 +2093,23 @@ def _log_per_head_grad_norm(model, step_idx: int, log_interval: int = 200,
             parts.append(
                 f'{prefix}:{alive_first}[{first_grad:.2e}]/{alive_last}[{last_grad:.2e}]'
             )
-    # --- PSR bias-head specific grad check ---
-    # psr_head.output_heads[N].last.bias are the first params to go DEAD
-    # when PSR collapses. Log each head's bias grad norm individually.
-    psr_bias_parts = []
+    # --- PSR per-component output head grad norms ---
+    # Log first-layer grad norm for each of 11 output heads individually.
+    # Pattern: psr_head.output_heads.{N}.0.weight (first Linear in each Sequential)
+    psr_comp_parts = []
     for name, param in model.named_parameters():
-        if 'psr_head.output_heads' in name and 'bias' in name and param.grad is not None:
+        if re.match(r'psr_head\.output_heads\.\d+\.0\.weight', name) and param.grad is not None:
             gn = param.grad.norm().item()
             alive = 'ALIVE' if gn > 1e-6 else 'DEAD'
-            psr_bias_parts.append(f'{name}={gn:.2e}[{alive}]')
-    if psr_bias_parts:
+            psr_comp_parts.append(f'h{name.split(".")[2]}={gn:.2e}[{alive}]')
+    if psr_comp_parts:
         seq_tag = ' [SEQ-BATCH]' if is_seq_step else ''
-        parts.append(f'psr_bias:{",".join(psr_bias_parts)}{seq_tag}')
+        parts.append(f'psr_heads:[{",".join(psr_comp_parts)}]{seq_tag}')
+    # Append GPU memory to LIVENESS_GRAD for full diagnostic context
+    if torch.cuda.is_available():
+        _alloc = torch.cuda.memory_allocated() / 1024**3
+        _resv = torch.cuda.memory_reserved() / 1024**3
+        parts.append(f'gpu_mem={_alloc:.2f}GB/{_resv:.2f}GB')
     msg = f'  [LIVENESS_GRAD step={step_idx}] ' + ' | '.join(parts)
     logger.warning(msg)
     print(msg, flush=True)
@@ -1862,6 +2128,9 @@ def _on_stage_transition(
     Responsibilities:
     1. Call _check_stage_transition for logging/assertions on param counts.
     2. PRESERVE learned Kendall log_var values (do NOT reset to init).
+       REINIT EXCEPTION: when _REINIT_HEADS_ACTIVE + STAGED_TRAINING, reset
+       log_var_act and log_var_psr to 0.0 because Stage 2 freeze (post-reinit)
+       corrupted their values with frozen-head drift.
     3. Activate Stage 3 warmup LR ramp for activity_head + psr_head.
 
     The old implementation reset log_var_act and log_var_psr to 0.0 at Stage 3
@@ -1879,18 +2148,35 @@ def _on_stage_transition(
     if model is not None:
         _check_stage_transition(model, criterion, current_stage, epoch, backbone_type)
 
-    # 2. Preserve Kendall log_var values — do NOT reset.
+    # 2. Preserve Kendall log_var values — do NOT reset (normal case).
     #    In Stage 2, log_var_act and log_var_psr drift because their tasks are
     #    not active. But resetting them to 0.0 at Stage 3 destroys whatever
     #    information Stage 2 accumulated. The per-step clamp in
     #    _clamp_kendall_log_vars keeps all values in [-4, 2].
+    #
+    #    REINIT GUARD: After --reinit-heads with staged training, log_var_act
+    #    and log_var_psr drifted during Stage 2 while their heads were frozen.
+    #    These values are garbage from frozen-head gradients, not learned
+    #    uncertainty estimates. Reset them to neutral 0.0 so the freshly
+    #    unfrozen heads start with equal Kendall weight.
     if current_stage == 3 and criterion is not None:
+        _reinit_logvar_reset = _REINIT_HEADS_ACTIVE and bool(getattr(C, 'STAGED_TRAINING', True))
+        if _reinit_logvar_reset:
+            with torch.no_grad():
+                criterion.log_var_act.fill_(0.0)
+                criterion.log_var_psr.fill_(0.0)
+            logger.info(
+                '[Epoch %d] Stage 3 entry (reinit+staged): reset log_var_act/psr to 0.0 '
+                '(Stage 2 freeze corrupted their values after --reinit-heads)'
+                % epoch
+            )
         logger.info(
             '[Epoch %d] Stage 3 entry: preserving learned Kendall log_vars  '
-            '(act=%.3f psr=%.3f  det=%.3f pose=%.3f)'
+            '(act=%.3f psr=%.3f  det=%.3f pose=%.3f)%s'
             % (epoch,
                criterion.log_var_act.item(), criterion.log_var_psr.item(),
-               criterion.log_var_det.item(), criterion.log_var_pose.item())
+               criterion.log_var_det.item(), criterion.log_var_pose.item(),
+               ' [reset after reinit]' if _reinit_logvar_reset else '')
         )
 
     # 3. Activate Stage 3 warmup LR ramp from config.py
@@ -1940,12 +2226,15 @@ def _reinit_dead_heads(model):
     init_count['fpn'] = fpn_reinit
     logger.info(f'  [REINIT] fpn: {fpn_reinit}/8 Conv2d modules (Kaiming-uniform a=1 + zero bias)')
 
-    # 1) DETECTION HEAD: cls_score (pi=0.05 prior) + reg_pred + cls_subnet + reg_subnet
+    # 1) DETECTION HEAD: cls_score (pi=0.01 prior — standard RetinaNet init) + reg_pred + cls_subnet + reg_subnet
+    # pi=0.01 makes background-anchor focal loss gradient ≈ 2e-6 (vs 7e-4 at pi=0.1),
+    # preventing cls_mean collapse on 99.3% empty frames. At pi=0.1, background gradients
+    # overwhelm the few GT-positive gradients and push ALL logits to -∞ within 50 steps.
     for _det_attr in ('det_head', 'detection_head'):
         if hasattr(model, _det_attr):
             dh = getattr(model, _det_attr)
             if hasattr(dh, 'cls_score'):
-                pi = 0.05
+                pi = 0.01
                 nn.init.normal_(dh.cls_score.weight, std=0.01)
                 nn.init.constant_(dh.cls_score.bias, -math.log((1 - pi) / pi))
                 init_count['det'] += 1
@@ -2027,15 +2316,35 @@ def _reinit_dead_heads(model):
                         nn.init.zeros_(m.bias)
             init_count['psr'] += 1
             logger.info('  [REINIT] psr.per_frame_mlp: std=0.02, bias=0')
-        if hasattr(ph, 'output_heads'):
-            for h in ph.output_heads:
-                for m in h.modules():
-                    if isinstance(m, nn.Linear):
-                        nn.init.normal_(m.weight, std=0.01)
-                        if m.bias is not None:
-                            nn.init.constant_(m.bias, -0.2)
+        # [FIX 2026-06-15] Reinit PSR causal transformer — original checkpoint weights
+        # produce extreme outputs (std~86) with reinit'd per_frame_mlp + FPN, which
+        # saturate sigmoid in output_heads and kill PSR gradient flow.
+        if hasattr(ph, 'transformer'):
+            for _m in ph.transformer.modules():
+                if isinstance(_m, nn.Linear):
+                    nn.init.xavier_uniform_(_m.weight)
+                    if _m.bias is not None:
+                        nn.init.zeros_(_m.bias)
+                elif isinstance(_m, nn.LayerNorm):
+                    nn.init.ones_(_m.weight)
+                    nn.init.zeros_(_m.bias)
             init_count['psr'] += 1
-            logger.info(f'  [REINIT] psr.output_heads ({len(ph.output_heads)} heads): std=0.01, bias=-0.2')
+            logger.info('  [REINIT] psr.transformer (3 layers): xavier_uniform Linear + LayerNorm reset')
+        if hasattr(ph, 'output_heads'):
+            for h_idx, h in enumerate(ph.output_heads):
+                # Each head: nn.Sequential(Linear(gru_hidden, 64), GELU, Dropout, Linear(64, 1))
+                # Both layers: normal(std=0.02), zero bias — prevents sigmoid saturation
+                # from extreme logits that produce zero focal loss via (1-p_t)^gamma ~0.
+                if isinstance(h[0], nn.Linear):
+                    nn.init.normal_(h[0].weight, std=0.02)
+                    if h[0].bias is not None:
+                        nn.init.zeros_(h[0].bias)
+                if len(h) >= 4 and isinstance(h[3], nn.Linear):
+                    nn.init.normal_(h[3].weight, std=0.02)
+                    if h[3].bias is not None:
+                        nn.init.zeros_(h[3].bias)
+            init_count['psr'] += 1
+            logger.info(f'  [REINIT] psr.output_heads ({len(ph.output_heads)} heads): std=0.02, zero bias')
         for gap_attr in ('gap_p3', 'gap_p4', 'gap_p5'):
             g = getattr(ph, gap_attr, None)
             if g is not None and isinstance(g, nn.Conv2d):
@@ -2499,6 +2808,7 @@ def main(args):
             1,
             train_workers,
             prefetch=train_prefetch,
+            collate=_collate_fn_sequences,
         )
         logger.info(
             f'[train] PSR sequence mode: len={len(train_seq_ds):,} '
@@ -2529,6 +2839,7 @@ def main(args):
         use_headpose_film=use_headpose_film,
         use_videomae=use_videomae,
         train_pose=CFG_TRAIN_HEAD_POSE,
+        use_backbone_checkpoint=bool(getattr(C, 'USE_BACKBONE_CHECKPOINT', False)),
     ).to(device)
     # Note: channels_last on model-level caused RuntimeError: required rank 4 tensor
     # (VideoMAE's EncoderDecoder has non-4D params like biases/LayerNorm that can't use CL).
@@ -2576,7 +2887,7 @@ def main(args):
             f'{psr_prev.numpy().round(3).tolist()}'
         )
 
-    backbone_params, head_params, activity_psr_params, bias_params = [], [], [], []
+    backbone_params, det_head_params, head_params, activity_psr_params, bias_params = [], [], [], [], []
     videomae_params = []
     loss_params = list(criterion.parameters())
     for name, param in model.named_parameters():
@@ -2605,6 +2916,9 @@ def main(args):
             # Stage 3 warmup ramp can scale their LR independently from
             # already-warm det / head_pose heads.
             activity_psr_params.append(param)
+        elif name.startswith('detection_head'):
+            # Separate param group with DET_LR_MULTIPLIER to escape near-zero regime
+            det_head_params.append(param)
         else:
             head_params.append(param)
     # [OPUS FIX #3] Pre-register VideoMAE stream params as a separate param group
@@ -2623,8 +2937,13 @@ def main(args):
 
     # Bias LR factor — 0.3× head LR prevents EMA-locked bias from collapsing
     BIAS_LR_FACTOR = 0.3
-    backbone_lr = C.BASE_LR * 0.1
-    head_lr = C.BASE_LR
+    # Stage manager retry: scale all LRs via env var (set by stage_manager for retry strategies)
+    _stage_lr_mult = float(os.environ.get('_STAGE_LR_MULT', 1.0))
+    if _stage_lr_mult != 1.0:
+        logger.info(f'[RETRY STRATEGY] _STAGE_LR_MULT={_stage_lr_mult}× — scaling all LRs')
+    backbone_lr = C.BASE_LR * 0.1 * _stage_lr_mult
+    head_lr = C.BASE_LR * _stage_lr_mult
+    det_head_lr = head_lr * float(getattr(C, 'DET_LR_MULTIPLIER', 5.0))
     bias_lr = head_lr * BIAS_LR_FACTOR
 
     try:
@@ -2639,6 +2958,7 @@ def main(args):
     if use_lion:
         param_groups = [
             {'params': backbone_params,      'lr': backbone_lr * 0.3},
+            {'params': det_head_params,       'lr': det_head_lr},
             {'params': head_params,           'lr': head_lr},
             {'params': activity_psr_params,   'lr': head_lr},
             {'params': bias_params,           'lr': bias_lr},
@@ -2647,10 +2967,11 @@ def main(args):
         if loss_params:
             param_groups.append({'params': loss_params, 'lr': head_lr})
         optimizer = Lion(param_groups, weight_decay=C.WEIGHT_DECAY * 3)
-        logger.info('Optimizer: Lion (backbone=0.1×, heads=1×, act/psr=1×, bias=0.3×)')
+        logger.info('Optimizer: Lion (backbone=0.1×, det_head=%g×, heads=1×, act/psr=1×, bias=0.3×)' % (C.DET_LR_MULTIPLIER,))
     else:
         param_groups = [
             {'params': backbone_params,      'lr': backbone_lr},
+            {'params': det_head_params,       'lr': det_head_lr},
             {'params': head_params,           'lr': head_lr},
             {'params': activity_psr_params,   'lr': head_lr},
             {'params': bias_params,           'lr': bias_lr},
@@ -2659,19 +2980,20 @@ def main(args):
         if loss_params:
             param_groups.append({'params': loss_params, 'lr': head_lr})
         optimizer = torch.optim.AdamW(param_groups, weight_decay=C.WEIGHT_DECAY)
-        logger.info('Optimizer: AdamW with differential LR (backbone=0.1×, heads=1×, act/psr=1×, bias=0.3×)')
+        logger.info('Optimizer: AdamW with differential LR (backbone=0.1×, det_head=%g×, heads=1×, act/psr=1×, bias=0.3×)' % (C.DET_LR_MULTIPLIER,))
 
     # Param-group index map (used by Stage 3 warmup ramp + videomae unfreeze toggle):
-    #   0 = backbone, 1 = head, 2 = activity_psr, 3 = bias, 4 = videomae, [5 = loss if loss_params]
-    ACTIVITY_PSR_PARAM_GROUP_IDX = 2
-    VIDEOMAE_PARAM_GROUP_IDX = 4
+    #   0 = backbone, 1 = det_head, 2 = head, 3 = activity_psr, 4 = bias, 5 = videomae, [6 = loss if loss_params]
+    ACTIVITY_PSR_PARAM_GROUP_IDX = 3
+    VIDEOMAE_PARAM_GROUP_IDX = 5
 
-    warmup = LinearLR(optimizer, start_factor=0.1, total_iters=C.WARMUP_EPOCHS)
+    _stage_warmup_mult = float(os.environ.get('_STAGE_WARMUP_MULT', 1.0))
+    warmup = LinearLR(optimizer, start_factor=0.1, total_iters=int(C.WARMUP_EPOCHS * _stage_warmup_mult))
     if bool(getattr(C, 'ONE_CYCLE_LR', False)):
         # Doc 2 E.2: OneCycleLR with super-convergence
         # High peak LR (5e-4) + aggressive cosine decay
-        backbone_lr_local = C.BASE_LR * 0.1
-        head_lr_local = C.BASE_LR
+        backbone_lr_local = C.BASE_LR * 0.1 * _stage_lr_mult
+        head_lr_local = C.BASE_LR * _stage_lr_mult
         bias_lr_local = head_lr_local * BIAS_LR_FACTOR
         # [OPUS FIX #3] EXPLICIT per-group max_lr. The previous generic formula
         # ([backbone] + [head]*(N-2) + [bias]) implicitly assumed the last non-loss
@@ -2682,13 +3004,14 @@ def main(args):
         # VIDEOMAE_PARAM_GROUP_IDX above.
         max_lr = [
             backbone_lr_local * 0.5,  # idx 0: backbone
-            head_lr_local * 0.5,      # idx 1: head
-            head_lr_local * 0.5,      # idx 2: activity_psr
-            bias_lr_local * 0.5,      # idx 3: bias
-            0.0,                      # idx 4: videomae (frozen at start, toggled at unfreeze)
+            head_lr_local * 0.5 * C.DET_LR_MULTIPLIER,  # idx 1: det_head
+            head_lr_local * 0.5,      # idx 2: head
+            head_lr_local * 0.5,      # idx 3: activity_psr
+            bias_lr_local * 0.5,      # idx 4: bias
+            0.0,                      # idx 5: videomae (frozen at start, toggled at unfreeze)
         ]
         if loss_params:
-            max_lr.append(head_lr_local * 0.5)  # idx 5 (if present): loss
+            max_lr.append(head_lr_local * 0.5)  # idx 6 (if present): loss
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=max_lr,
@@ -2714,7 +3037,7 @@ def main(args):
         scheduler = SequentialLR(optimizer, [warmup, cosine],
                                milestones=[C.WARMUP_EPOCHS])
 
-    scaler = amp.GradScaler('cuda', enabled=C.MIXED_PRECISION)
+    scaler = torch.cuda.amp.GradScaler(enabled=C.MIXED_PRECISION)
 
     start_epoch = 0
     best_metric = 0.0
@@ -2889,6 +3212,29 @@ def main(args):
             logger.warning(
                 f'  [REINIT-HEADS] EMA shadow re-anchored for {_ema_reset} head/fpn tensors.'
             )
+        # [FIX 2026-06-16] Reset AdamW optimizer state for reinitialized head params.
+        # Stored momentum (exp_avg/exp_avg_sq) from old checkpoint is incompatible with
+        # freshly reinitialized weights, causing catastrophic optimizer steps that collapse
+        # detection head within ~1000 steps (cls_mean -2.4 → -14.8).
+        # NOTE: zero tensors in-place rather than popping or deleting entries —
+        #   PyTorch 2.5+ AdamW expects state keys to exist (step as tensor, not int),
+        #   and _init_group only creates them if len(state)==0.
+        _opt_head_prefixes = ('det_head.', 'detection_head.', 'activity_head.',
+                              'psr_head.', 'fpn.')
+        _optim_reset = 0
+        for _n, _p in model.named_parameters():
+            if any(_n.startswith(pf) for pf in _opt_head_prefixes) and _p in optimizer.state:
+                _state = optimizer.state[_p]
+                if 'exp_avg' in _state:
+                    _state['exp_avg'].zero_()
+                if 'exp_avg_sq' in _state:
+                    _state['exp_avg_sq'].zero_()
+                _optim_reset += 1
+        if _optim_reset > 0:
+            logger.warning(
+                f'  [REINIT-HEADS] AdamW optimizer state reset for {_optim_reset} reinit-head params.'
+            )
+
         # Reset Kendall log_vars to neutral for recovery
         with torch.no_grad():
             criterion.log_var_det.fill_(0.0)
@@ -2896,6 +3242,14 @@ def main(args):
             criterion.log_var_psr.fill_(0.0)
             criterion.log_var_pose.fill_(0.0)
         logger.info('  [REINIT-HEADS] Kendall log_vars reset to neutral (det=act=psr=pose=0.0).')
+        # Reset detection head gradient warmup counter
+        global _REINIT_DET_STEP
+        _REINIT_DET_STEP = 0
+        logger.info('  [REINIT-HEADS] Detection head gradient warmup counter reset to 0.')
+        # PSR output head warmup: 2x grad multiplier for first 200 steps after reinit
+        global _PSR_WARMUP_STEPS_REMAINING
+        _PSR_WARMUP_STEPS_REMAINING = 200
+        logger.info('  [REINIT-HEADS] PSR output head warmup: 2x grad multiplier for 200 steps.')
 
     # ── Step-0 Assertion (RC-25 gate) ──
     # [AUDIT FIX 2026-06-11] The previous version had two fatal flaws:
@@ -3138,6 +3492,8 @@ def main(args):
                         seq_loader=seq_train_loader,
                         resume_batch=_resume_batch,
                         best_metric=best_metric,
+                        val_ds=val_ds,
+                        val_every_n_steps=int(getattr(C, 'VAL_EVERY_N_STEPS', 0)),
                     )
                     break
                 except Exception as exc:
@@ -3254,7 +3610,7 @@ def main(args):
                 if C._global_step >= _train_max_steps:
                     logger.info(f'  [2pct] TRAIN_MAX_STEPS limit reached ({C._global_step}). Will exit after val completes.')
 
-            current_lr = optimizer.param_groups[1]['lr']
+            current_lr = optimizer.param_groups[2]['lr']
             ema_decay_str = ''
             if ema is not None:
                 ema_decay_str = f'  ema_decay={ema.decay:.4f}'
@@ -3671,6 +4027,39 @@ def main(args):
                         )
                         break
 
+            # --- Stage Manager: signal early stop if all gate targets met ---
+            if os.environ.get('_STAGE_MANAGER_ACTIVE') == '1':
+                _sg_gate_json = os.environ.get('_STAGE_GATE_JSON', '{}')
+                _sg_met_file = os.environ.get('_STAGE_TARGET_MET_FILE', '')
+                if _sg_gate_json and _sg_met_file:
+                    try:
+                        _sg_targets = json.loads(_sg_gate_json)
+                        _sg_key_map = {'act_top1': 'act_clip_accuracy', 'det_mAP50_95': 'det_mAP_50_95'}
+                        _sg_all_met = True
+                        _sg_details = {}
+                        for _sg_metric, _sg_threshold in _sg_targets.items():
+                            _sg_actual = _sg_key_map.get(_sg_metric, _sg_metric)
+                            _sg_v = val_metrics.get(_sg_actual)
+                            if _sg_v is None or math.isnan(_sg_v):
+                                _sg_all_met = False
+                                _sg_details[_sg_metric] = {'value': _sg_v, 'threshold': _sg_threshold, 'status': 'UNKNOWN'}
+                                continue
+                            if 'MAE' in _sg_metric or 'mae' in _sg_metric:
+                                _sg_passed = _sg_v <= _sg_threshold
+                            else:
+                                _sg_passed = _sg_v >= _sg_threshold
+                            _sg_details[_sg_metric] = {'value': _sg_v, 'threshold': _sg_threshold, 'status': 'PASS' if _sg_passed else 'FAIL'}
+                            if not _sg_passed:
+                                _sg_all_met = False
+                        if _sg_all_met:
+                            Path(_sg_met_file).write_text(
+                                json.dumps({'epoch': epoch, 'metrics': val_metrics, 'gate_details': _sg_details})
+                            )
+                            logger.info('*** STAGE TARGET MET — all gate thresholds reached. Signalling stage_manager. ***')
+                            break
+                    except Exception as _sg_e:
+                        logger.warning(f'Stage gate check error: {_sg_e}')
+
             torch.save({
                 'epoch':            epoch,
                 'model':           model.state_dict(),
@@ -3761,11 +4150,13 @@ def main(args):
                     seq_loader=seq_train_loader,
                     resume_batch=0,
                     best_metric=best_metric,
+                    val_ds=None,
+                    val_every_n_steps=0,
                 )
                 swa_scheduler.step()
                 logger.info(
                     f'SWA train: loss={swa_train_metrics["total"]:.4f}  '
-                    f'lr={optimizer.param_groups[1]["lr"]:.2e}'
+                    f'lr={optimizer.param_groups[2]["lr"]:.2e}'
                 )
 
             logger.info('Updating SWA BatchNorm statistics ...')
@@ -3875,6 +4266,18 @@ if __name__ == '__main__':
              'det.cls_score pi=0.05, act full reinit, psr bias=-0.2. '
              'Use after head collapse (all 3 heads producing constant output).',
     )
+    parser.add_argument(
+        '--detach-reg-fpn',
+        action='store_true',
+        help='[RF1] Detach FPN features for regression subnet to prevent regression gradients '
+             'from corrupting shared FPN features. Fixes detection head collapse after --reinit-heads.',
+    )
+    parser.add_argument(
+        '--detach-psr-fpn',
+        action='store_true',
+        help='[RF1] Detach FPN features for PSR head to prevent PSR loss spikes from corrupting '
+             'shared FPN features. Use with --detach-reg-fpn for full gradient isolation in RF stages.',
+    )
 
     args = parser.parse_args()
 
@@ -3904,6 +4307,14 @@ if __name__ == '__main__':
     if args.num_workers is not None:
         C.NUM_WORKERS = args.num_workers
         logger.info(f'[train] num_workers overridden to {args.num_workers}')
+
+    if getattr(args, 'detach_reg_fpn', False):
+        C.DETACH_REG_FPN = True
+        logger.info('[train] DETACH_REG_FPN=True — regression FPN features detached, preventing gradient shock')
+
+    if getattr(args, 'detach_psr_fpn', False):
+        C.DETACH_PSR_FPN = True
+        logger.info('[train] DETACH_PSR_FPN=True — PSR FPN features detached, preventing PSR gradient backbone corruption')
 
     # TRAIN_MAX_STEPS: limit total optimizer steps for quick runs (env var)
     _env_max_steps = int(os.environ.get('TRAIN_MAX_STEPS', '0'))
