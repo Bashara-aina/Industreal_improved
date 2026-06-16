@@ -1355,6 +1355,51 @@ class IndustRealMultiTaskDataset(Dataset):
             if total_w > 0:
                 sample_weights = sample_weights / total_w
 
+        # [DET GT-FRAME SAMPLING 2026-06-16] Absolute GT-frame fraction targeting.
+        # This is the real fix for the detection class-imbalance death spiral.
+        # Unlike the constant TASK_AWARE_DET_BOOST above (whose effect scales with
+        # the base OD density), this forces the *total* sampling mass on GT-bearing
+        # frames to exactly `det_frac`, so in expectation that fraction of every
+        # batch carries boxes regardless of how sparse the OD labels are. Activity
+        # class-balance is preserved *within* the GT and non-GT sub-populations.
+        det_frac = float(getattr(C, 'DET_GT_FRAME_FRACTION', 0.0))
+        if det_frac > 0.0:
+            gt_mask = np.array(
+                [
+                    (i < len(self.samples)) and (self.samples[i].get('num_dets', 0) > 0)
+                    for i in range(len(sample_weights))
+                ],
+                dtype=bool,
+            )
+            n_gt = int(gt_mask.sum())
+            n_total = len(gt_mask)
+            if n_gt == 0:
+                logger.warning(
+                    '[get_sampler] DET_GT_FRAME_FRACTION=%.2f requested but this '
+                    'subset contains ZERO frames with detection boxes. The detector '
+                    'CANNOT learn from it — the death spiral is upstream of the '
+                    'sampler. Check OD_labels.json coverage, raise SUBSET_RATIO, or '
+                    'select an OD-bearing recording subset (run diag_gt_coverage.py).',
+                    det_frac,
+                )
+            elif 0 < n_gt < n_total:
+                w_gt = sample_weights[gt_mask].sum()
+                w_bg = sample_weights[~gt_mask].sum()
+                if w_gt > 0 and w_bg > 0:
+                    sample_weights[gt_mask] = sample_weights[gt_mask] / w_gt * det_frac
+                    sample_weights[~gt_mask] = sample_weights[~gt_mask] / w_bg * (1.0 - det_frac)
+                # Final renormalize (already sums to 1 by construction, but be safe)
+                total_w = sample_weights.sum()
+                if total_w > 0:
+                    sample_weights = sample_weights / total_w
+                logger.info(
+                    '[get_sampler] DET_GT_FRAME_FRACTION=%.2f: %d/%d (%.2f%%) frames '
+                    'carry GT boxes -> reweighted so ~%.0f%% of every batch is '
+                    'GT-bearing (was ~%.2f%% under base sampler).',
+                    det_frac, n_gt, n_total, 100.0 * n_gt / max(n_total, 1),
+                    100.0 * det_frac, 100.0 * n_gt / max(n_total, 1),
+                )
+
         return WeightedRandomSampler(
             weights=torch.as_tensor(sample_weights, dtype=torch.double),
             num_samples=len(sample_weights),
