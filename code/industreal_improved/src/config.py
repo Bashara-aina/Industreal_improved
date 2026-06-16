@@ -509,6 +509,27 @@ USE_TASK_AWARE_SAMPLING = True
 TASK_AWARE_DET_BOOST = 2.0      # 2x weight for frames with GT boxes
 TASK_AWARE_PSR_BOOST = 1.5      # 1.5x weight for frames with PSR labels
 
+# [DET GT-FRAME SAMPLING 2026-06-16] Root fix for the detection class-imbalance
+# "death spiral". IndustReal OD labels are SPARSE (only a small fraction of RGB
+# frames carry boxes), but the sample index includes every stride-th frame for
+# the dense tasks (activity/pose/PSR). The activity-balanced sampler therefore
+# draws GT-bearing frames only rarely, so the detector sees a positive box in
+# <1% of steps and its positive logits decay (death spiral). The legacy
+# TASK_AWARE_DET_BOOST (a *constant* 2x multiplier) cannot fix this because the
+# resulting GT density still scales with the base OD density: 2x of 0.7% is
+# still ~1.4%.
+#
+# DET_GT_FRAME_FRACTION instead targets an ABSOLUTE per-batch GT fraction. When
+# > 0, get_sampler() redistributes the sampling mass so that — in expectation —
+# this fraction of every batch is GT-bearing, INDEPENDENT of the base OD density.
+# This guarantees the detector positive gradient on (nearly) every step.
+#   0.0  = disabled (legacy behaviour — constant-boost only)
+#   0.9  = detection-dominant stages (RF1/RF2, recovery_det_only)
+#   0.4  = detection + other heads (RF3-RF10): leave room for activity balance
+# The actual value is derived per-stage in apply_preset() from the active heads,
+# and can be overridden by adding 'det_gt_frame_fraction' to a preset.
+DET_GT_FRAME_FRACTION = float(os.environ.get('DET_GT_FRAME_FRACTION', '0.0'))
+
 # [FIX 2026-06-15] Activity dominance control
 # The 3-layer collapse cascade showed activity dominating all other heads via:
 # 1. Larger loss magnitude → Kendall precision advantage → backbone overfits to activity
@@ -1177,6 +1198,7 @@ def apply_preset(preset_name: str) -> None:
     global USE_LDAM_DRW, PSR_SENSITIVITY_WEIGHT, USE_PSR_ORDER_PRIOR
     global USE_VIDEOMAE
     global SUBSET_RATIO
+    global DET_GT_FRAME_FRACTION
     global IMG_WIDTH, IMG_HEIGHT, IMG_SIZE
 
     if preset_name not in PRESETS:
@@ -1207,6 +1229,25 @@ def apply_preset(preset_name: str) -> None:
     TRAIN_PSR = preset.get('train_psr', TRAIN_PSR)
     TRAIN_HEAD_POSE = preset.get('train_head_pose', TRAIN_HEAD_POSE)
     SUBSET_RATIO = preset.get('subset_ratio', SUBSET_RATIO)
+    # [DET GT-FRAME SAMPLING 2026-06-16] Derive the absolute per-batch GT-frame
+    # target from the active heads (unless the preset overrides it explicitly).
+    # Detection-dominant stages (det on, activity/PSR off) need aggressive GT
+    # oversampling because OD labels are sparse; once activity/PSR are active we
+    # relax toward the activity-balanced sampler so those dense tasks still see a
+    # representative frame distribution. See DET_GT_FRAME_FRACTION docs above.
+    if 'det_gt_frame_fraction' in preset:
+        DET_GT_FRAME_FRACTION = float(preset['det_gt_frame_fraction'])
+    elif TRAIN_DET and not (TRAIN_ACT or TRAIN_PSR):
+        DET_GT_FRAME_FRACTION = 0.9   # RF1, RF2, recovery_det_only
+    elif TRAIN_DET:
+        DET_GT_FRAME_FRACTION = 0.4   # RF3-RF10 (detection + activity/PSR)
+    else:
+        DET_GT_FRAME_FRACTION = 0.0   # no detection head active
+    # Non-silent: this fix is the whole point of the run — log it every time.
+    _cfg_logger.info(
+        f'[config] DET_GT_FRAME_FRACTION = {DET_GT_FRAME_FRACTION:.2f} '
+        f'(train_det={TRAIN_DET}, train_act={TRAIN_ACT}, train_psr={TRAIN_PSR})'
+    )
     # [OPUS v5 BLOCKER-C FIX] Winnable-task flags — actually set them from preset.
     # These were declared but never assigned → paper_run was a no-op for its key flags.
     USE_PSR_TRANSITION = bool(preset.get('use_psr_transition', USE_PSR_TRANSITION))
