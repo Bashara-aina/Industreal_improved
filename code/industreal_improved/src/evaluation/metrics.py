@@ -42,12 +42,27 @@ def _heatmaps_to_detection(
     nms_thresh: float = 0.5,
 ) -> tuple:
     """
-    Rough detection boxes + scores + labels from predicted heatmaps.
-    This is a placeholder — detection in evaluate_all uses cls_preds + reg_preds
-    from the model. Here we fall back to peak detection on heatmaps.
+    [FIX D8] GUARDED PLACEHOLDER — DO NOT USE FOR REAL EVALUATION.
+
+    This is a legacy placeholder that produces fake 64x64 boxes centered on
+    heatmap peaks. If called with cls_preds (24-channel classification scores)
+    instead of actual heatmaps, it silently reports mAP values that are MEANINGLESS.
+    Use compute_det_metrics_extended with real cls_preds + reg_preds from the model.
 
     Returns: (dp_boxes, dp_scores, dp_labels, dg_boxes, dg_labels)
+
+    Raises:
+        RuntimeError: always — this placeholder must never be silently called.
     """
+    import logging as _lg
+    _lg.getLogger(__name__).warning(
+        '[FIX D8] _heatmaps_to_detection placeholder called — producing FAKE 64x64 boxes! '
+        'This will result in meaningless mAP values. Fix caller to use real cls_preds/reg_preds.'
+    )
+    raise RuntimeError(
+        '_heatmaps_to_detection is a placeholder and must not be silently called. '
+        'Use compute_det_metrics_extended with real cls_preds + reg_preds from the model.'
+    )
     # Placeholder: treat each spatial location as a detection candidate
     B, C, H, W = pred_heatmaps.shape
     device = pred_heatmaps.device

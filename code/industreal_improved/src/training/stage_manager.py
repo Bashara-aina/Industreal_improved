@@ -105,6 +105,20 @@ RF_STAGES = [
             'min_liveness_ratio': 0.7,         # fraction of steps with ALL heads alive
         },
         'reinit_heads': True,  # reinit detection head for fresh start
+        # [RF1 FIX 2026-06-17] Do NOT detach the regression gradient for the
+        # detection-bootstrap stage. Without this override, launch_training()
+        # defaults detach_reg_fpn to reinit_heads (True) and passes
+        # --detach-reg-fpn, which stops the GIoU/box-regression gradient from
+        # reaching the shared FPN/backbone. With a freshly reinit head and all
+        # other heads off, that leaves the backbone with ONLY the sparse
+        # classification path — features never become object-discriminative, so
+        # the cls conv cannot separate fg from bg and the head sticks at the
+        # pi=0.01 "predict-background-everywhere" equilibrium (localizes but won't
+        # fire). The reg-loss warmup (REINIT_REG_WARMUP_STEPS) is the correct,
+        # sufficient guard against reinit gradient shock; the detach was redundant
+        # overkill that starved the trunk. This matches recovery_det_only, which
+        # trains detection from reinit WITHOUT detaching regression.
+        'detach_reg_fpn': False,
         'resume_source': 'latest',  # resume from previous stage's latest.pth
     },
     {
@@ -487,6 +501,11 @@ class StageState:
     run_start_time: Optional[str] = None
     # Log cursor for incremental reading — tracks bytes consumed in train.log
     log_cursor: int = 0
+    # Cross-stage learning: what strategies worked per stage
+    cross_stage_memory: Dict[str, Any] = field(default_factory=dict)
+    # Actual --max-epochs value passed to the training subprocess (may be extended
+    # by resume epoch offset; used by estimate_progress for accurate progress %)
+    max_epochs: int = 0
 
 
 @dataclass
@@ -502,6 +521,7 @@ class LogSnapshot:
     det_debug_lines: List[Dict[str, Any]] = field(default_factory=list)
     loss_trend: Dict[str, float] = field(default_factory=dict)
     crash_count: int = 0
+    stale_crash_window: bool = False  # True when tail read includes entries from prior retries
 
 
 def load_state() -> StageState:
@@ -571,21 +591,22 @@ def read_train_log_incr(cursor: int) -> Tuple[List[str], int]:
 
 
 _PARSE_LOSS_RE = re.compile(
-    r'det=([\d.e+-]+)\(c=([\d.e+-]+)\s+g=([\d.e+-]+)\)\s+'
+    r'det=([\d.e+-]+)\(c=([\d.e+-]+),g=([\d.e+-]+)\)\s+'
     r'pose=([\d.e+-]+)\s+'
     r'act=([\d.e+-]+)\s+'
     r'psr=([\d.e+-]+)\s+'
     r'wd=([\d.e+-]+)'
 )
 
-# RF1-RF10 5-head liveness format:
-#   det=6.25e+00 ALIVE | act=0.00e+00 DEAD | psr=0.00e+00 DEAD | head_pose=1.00e-06 DEAD | pose=1.00e-06 DEAD
+# RF1-RF10 5-head liveness format (from train.py _log_per_head_grad_norm):
+#   detection_head:ALIVE[6.25e+00]/DEAD[0.00e+00] | pose_head:ALIVE[...]/DEAD[...] | head_pose_head:ALIVE[...]/DEAD[...] | activity_head:ALIVE[...]/DEAD[...] | psr_head:ALIVE[...]/DEAD[...]
+# Note: the order matches train.py head_prefixes: detection_head, pose_head, head_pose_head, activity_head, psr_head.
 _PARSE_LIVENESS_RE = re.compile(
-    r'det=([\d.e+-]+)\s+(DEAD|ALIVE)\s*\|\s*'
-    r'act=([\d.e+-]+)\s+(DEAD|ALIVE)\s*\|\s*'
-    r'psr=([\d.e+-]+)\s+(DEAD|ALIVE)\s*\|\s*'
-    r'head_pose=([\d.e+-]+)\s+(DEAD|ALIVE)\s*\|\s*'
-    r'pose=([\d.e+-]+)\s+(DEAD|ALIVE)'
+    r'detection_head:(ALIVE|DEAD)\[([-\de.+]+)\]/[A-Z]+\[[-\de.+]+\]\s*\|\s*'
+    r'pose_head:(ALIVE|DEAD)\[([-\de.+]+)\]/[A-Z]+\[[-\de.+]+\]\s*\|\s*'
+    r'head_pose_head:(ALIVE|DEAD)\[([-\de.+]+)\]/[A-Z]+\[[-\de.+]+\]\s*\|\s*'
+    r'activity_head:(ALIVE|DEAD)\[([-\de.+]+)\]/[A-Z]+\[[-\de.+]+\]\s*\|\s*'
+    r'psr_head:(ALIVE|DEAD)\[([-\de.+]+)\]/[A-Z]+\[[-\de.+]+\]'
 )
 
 
@@ -609,16 +630,16 @@ def parse_liveness_line(line: str) -> Optional[Dict[str, Any]]:
     m = _PARSE_LIVENESS_RE.search(line)
     if m:
         return {
-            'det_grad': float(m.group(1)),
-            'det_status': m.group(2),
-            'act_grad': float(m.group(3)),
-            'act_status': m.group(4),
-            'psr_grad': float(m.group(5)),
-            'psr_status': m.group(6),
-            'head_pose_grad': float(m.group(7)),
-            'head_pose_status': m.group(8),
-            'pose_grad': float(m.group(9)),
-            'pose_status': m.group(10),
+            'det_grad': float(m.group(2)),
+            'det_status': m.group(1),
+            'pose_grad': float(m.group(4)),
+            'pose_status': m.group(3),
+            'head_pose_grad': float(m.group(6)),
+            'head_pose_status': m.group(5),
+            'act_grad': float(m.group(8)),
+            'act_status': m.group(7),
+            'psr_grad': float(m.group(10)),
+            'psr_status': m.group(9),
         }
     return None
 
@@ -643,16 +664,30 @@ def parse_val_metrics(lines: List[str]) -> Optional[Dict[str, float]]:
 
 
 def parse_current_epoch(lines: List[str]) -> int:
-    """Extract the most recent epoch number from log lines."""
+    """Extract the most recent epoch number from log lines.
+
+    Tries two formats in order:
+      1. ``--- Epoch N/M ---``  (once per epoch)
+      2. ``[Epoch N batch ...]`` (every 10 steps — reliable fallback)
+    """
     for line in reversed(lines):
         m = re.search(r'--- Epoch (\d+)/(\d+) ---', line)
+        if m:
+            return int(m.group(1))
+    for line in reversed(lines):
+        m = re.search(r'\[Epoch (\d+) batch', line)
         if m:
             return int(m.group(1))
     return 0
 
 
 def parse_liveness_summary(lines: List[str]) -> Dict[str, Any]:
-    """Aggregate liveness info from all LIVENESS lines in the log tail."""
+    """Aggregate liveness info from all LIVENESS lines in the log tail.
+
+    Returns 1.0 for all ratios when no LIVENESS data exists yet (bootstrap
+    grace period) — the stage_manager must not kill training before the
+    first LIVENESS line is printed at step 100.
+    """
     det_statuses: List[str] = []
     act_statuses: List[str] = []
     psr_statuses: List[str] = []
@@ -669,7 +704,16 @@ def parse_liveness_summary(lines: List[str]) -> Dict[str, Any]:
                 head_pose_statuses.append(l['head_pose_status'])
                 pose_statuses.append(l['pose_status'])
 
-    total = len(det_statuses) or 1
+    total = len(det_statuses)
+    if total == 0:
+        return {
+            'det_alive_ratio': 1.0,     # no data yet → assume healthy
+            'act_alive_ratio': 1.0,
+            'psr_alive_ratio': 1.0,
+            'head_pose_alive_ratio': 1.0,
+            'pose_alive_ratio': 1.0,
+            'total_checks': 0,
+        }
     return {
         'det_alive_ratio': sum(1 for s in det_statuses if s == 'ALIVE') / total,
         'act_alive_ratio': sum(1 for s in act_statuses if s == 'ALIVE') / total,
@@ -759,12 +803,15 @@ def parse_log_snapshot(lines: List[str]) -> LogSnapshot:
         return snap
 
     epoch_pat = re.compile(r'--- Epoch (\d+)/(\d+) ---')
+    batch_epoch_pat = re.compile(r'\[Epoch (\d+) batch')
     det_health_pat = re.compile(
         r'\[DET-HEALTH step=(\d+)\]\s+cls_preds:\s+'
         r'mean=([\d.-]+)\s+std=([\d.-]+)\s+'
         r'near_zero=([\d.]+)'
     )
-    crash_pats = ['CUDA out of memory', 'RuntimeError', 'Traceback', 'Killed']
+    crash_pats = ['CUDA out of memory', 'RuntimeError', 'Traceback', 'Killed',
+                  'Segfault', 'signal 9', 'Signal 9', 'Aborted', 'OutOfMemory',
+                  'CUDA error', 'device-side assert', 'out of memory']
 
     det_losses: List[float] = []
     det_statuses: List[str] = []
@@ -778,6 +825,10 @@ def parse_log_snapshot(lines: List[str]) -> LogSnapshot:
         m = epoch_pat.search(line)
         if m:
             snap.epoch = int(m.group(1))
+        else:
+            m = batch_epoch_pat.search(line)
+            if m:
+                snap.epoch = int(m.group(1))
 
         # ── Validation metrics (last occurrence = most recent) ──
         if 'Val:' in line and 'det_mAP50' in line:
@@ -839,15 +890,25 @@ def parse_log_snapshot(lines: List[str]) -> LogSnapshot:
                 break
 
     # ── Compute aggregate stats after loop ──
-    total = len(det_statuses) or 1
-    snap.liveness = {
-        'det_alive_ratio': sum(1 for s in det_statuses if s == 'ALIVE') / total,
-        'act_alive_ratio': sum(1 for s in act_statuses if s == 'ALIVE') / total,
-        'psr_alive_ratio': sum(1 for s in psr_statuses if s == 'ALIVE') / total,
-        'head_pose_alive_ratio': sum(1 for s in head_pose_statuses if s == 'ALIVE') / total,
-        'pose_alive_ratio': sum(1 for s in pose_statuses if s == 'ALIVE') / total,
-        'total_checks': len(det_statuses),
-    }
+    total = len(det_statuses)
+    if total == 0:
+        snap.liveness = {
+            'det_alive_ratio': 1.0,
+            'act_alive_ratio': 1.0,
+            'psr_alive_ratio': 1.0,
+            'head_pose_alive_ratio': 1.0,
+            'pose_alive_ratio': 1.0,
+            'total_checks': 0,
+        }
+    else:
+        snap.liveness = {
+            'det_alive_ratio': sum(1 for s in det_statuses if s == 'ALIVE') / total,
+            'act_alive_ratio': sum(1 for s in act_statuses if s == 'ALIVE') / total,
+            'psr_alive_ratio': sum(1 for s in psr_statuses if s == 'ALIVE') / total,
+            'head_pose_alive_ratio': sum(1 for s in head_pose_statuses if s == 'ALIVE') / total,
+            'pose_alive_ratio': sum(1 for s in pose_statuses if s == 'ALIVE') / total,
+            'total_checks': len(det_statuses),
+        }
 
     if det_losses:
         recent = det_losses[-50:]
@@ -935,28 +996,12 @@ RETRY_STRATEGIES = [
         'seed_offset': 0,
     },
     {
-        'name': 'reduce_lr_5x',
-        'description': 'Reduce learning rate 5×, reinit heads',
-        'lr_mult': 0.2,
-        'warmup_mult': 1.0,
-        'reinit_heads': True,
-        'seed_offset': 1,
-    },
-    {
-        'name': 'reduce_lr_2x_warmup_2x',
-        'description': 'Reduce LR 2×, double warmup, reinit heads',
-        'lr_mult': 0.5,
-        'warmup_mult': 2.0,
-        'reinit_heads': True,
-        'seed_offset': 2,
-    },
-    {
         'name': 'reduce_lr_10x_warmup_2x',
         'description': 'Reduce LR 10×, double warmup, reinit heads',
         'lr_mult': 0.1,
         'warmup_mult': 2.0,
         'reinit_heads': True,
-        'seed_offset': 3,
+        'seed_offset': 1,
     },
     {
         'name': 'reduce_lr_20x_warmup_3x',
@@ -964,7 +1009,23 @@ RETRY_STRATEGIES = [
         'lr_mult': 0.05,
         'warmup_mult': 3.0,
         'reinit_heads': True,
-        'seed_offset': 5,
+        'seed_offset': 2,
+    },
+    {
+        'name': 'reduce_lr_5x',
+        'description': 'Reduce learning rate 5×, reinit heads',
+        'lr_mult': 0.2,
+        'warmup_mult': 1.0,
+        'reinit_heads': True,
+        'seed_offset': 3,
+    },
+    {
+        'name': 'reduce_lr_2x_warmup_2x',
+        'description': 'Reduce LR 2×, double warmup, reinit heads',
+        'lr_mult': 0.5,
+        'warmup_mult': 2.0,
+        'reinit_heads': True,
+        'seed_offset': 4,
     },
 ]
 
@@ -981,10 +1042,409 @@ def get_active_heads(stage_cfg: Dict[str, Any]) -> List[str]:
     return sorted(heads)
 
 
-def select_retry_strategy(state: StageState) -> Dict[str, Any]:
-    """Select the next retry strategy based on retry_count."""
+def select_retry_strategy(state: StageState, stage_cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Select the next retry strategy based on retry_count AND stage context.
+
+    Stage-aware selection:
+      - RF1 (detection-only): prefers LR reduction (faster convergence fix)
+      - RF2-RF3 (pose/act introduction): prefers warmup extension (new head adaptation)
+      - RF4-RF7 (all-heads including PSR): prefers moderate LR reduction + warmup
+      - RF8-RF10 (final tuning): prefers gentle LR adjustment (avoid disrupting learned features)
+    """
     idx = min(state.retry_count, len(RETRY_STRATEGIES) - 1)
-    return RETRY_STRATEGIES[idx]
+    strategy = dict(RETRY_STRATEGIES[idx])
+
+    # Stage-aware overrides when stage_cfg is provided
+    if stage_cfg and state.retry_count >= 1:
+        active = stage_cfg.get('active_heads', 'det')
+        stage_name = stage_cfg.get('name', '')
+
+        # RF1: detection-only → hold LR at 1.0×, never reduce into attractor basin
+        # The background-equilibrium attractor pins det at π=0.01 even with strong
+        # gradient — cutting LR slows escape, don't do it. Instead use progressive
+        # warmup (longer cooldown between retries) and vary seed to break symmetry.
+        if active == 'det':
+            strategy['lr_mult'] = 1.0  # never reduce — LR cut deepens attractor
+            strategy['warmup_mult'] = 1.0 + 0.5 * state.retry_count  # longer warmup
+            strategy['reinit_heads'] = True
+
+        # RF4+: all heads including PSR → PSR needs more warmup to stabilize
+        elif 'psr' in active and state.retry_count <= 2:
+            strategy['lr_mult'] = max(0.2, 0.5 ** state.retry_count)
+            strategy['warmup_mult'] = 1.0 + state.retry_count  # more warmup for PSR
+            strategy['reinit_heads'] = True
+
+        # RF2-RF3: pose/act introduction → monotonically decreasing LR like RF1
+        # Without this override, the default strategy table recycles LR UP to 0.5x
+        # at retry 4+ after proving 0.05x worked at retry 2 — causing gradient shock
+        # for newly-introduced heads.
+        elif stage_name in ('rf2', 'rf3'):
+            if state.retry_count <= 2:
+                strategy['lr_mult'] = 0.5 ** state.retry_count  # 0.5x, 0.25x, 0.125x
+                strategy['warmup_mult'] = 1.0 + 0.5 * state.retry_count
+            else:
+                strategy['lr_mult'] = min(strategy['lr_mult'], 0.05)
+                strategy['warmup_mult'] = max(strategy['warmup_mult'], 3.0)
+            strategy['reinit_heads'] = True
+
+        # RF8-RF10: final tuning → gentle, avoid over-correcting
+        elif stage_name in ('rf8', 'rf9', 'rf10'):
+            strategy['lr_mult'] = max(0.5, 0.8 ** state.retry_count)
+            strategy['warmup_mult'] = 1.0
+            strategy['reinit_heads'] = False  # don't reinit at final stages
+
+        logger.info(f'  Stage-aware strategy for {stage_name}: '
+                    f'lr_mult={strategy["lr_mult"]}×, warmup_mult={strategy["warmup_mult"]}×')
+
+    return strategy
+
+
+# =========================================================================
+# Pre-Flight Checks
+# =========================================================================
+
+def run_pre_flight_checks(stage_cfg: Dict[str, Any]) -> List[str]:
+    """Run pre-flight checks before launching training.
+
+    Returns list of warnings (empty = all clear).
+    """
+    warnings = []
+
+    # GPU check
+    if not torch.cuda.is_available():
+        warnings.append('CUDA not available — training will be extremely slow on CPU')
+    else:
+        free_mem, total_mem = _get_gpu_memory()
+        logger.info(f'GPU: {free_mem:.0f}MB free / {total_mem:.0f}MB total (stage={stage_cfg.get("name", "?")})')
+        if free_mem < 2000:
+            warnings.append(f'Low GPU memory: {free_mem:.0f}MB free (< 2GB recommended)')
+
+    # Dataset path check
+    try:
+        from src import config as cfg
+        cfg.apply_preset(stage_cfg.get('preset', 'stage_rf1'))
+        cfg.update_dynamic_paths()
+        val_csv = getattr(cfg, 'VAL_CSV', None)
+        recordings_root = getattr(cfg, 'RECORDINGS_ROOT', None)
+        if val_csv and not Path(val_csv).exists():
+            warnings.append(f'VAL_CSV not found: {val_csv}')
+        if recordings_root and not Path(recordings_root).exists():
+            warnings.append(f'RECORDINGS_ROOT not found: {recordings_root}')
+    except Exception as e:
+        warnings.append(f'Config load failed: {e}')
+
+    # Disk space check
+    try:
+        ckpt_dir = CKPT_DIR / stage_cfg.get('name', 'rf1')
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        stat = os.statvfs(str(ckpt_dir))
+        free_gb = (stat.f_frsize * stat.f_bavail) / (1024 ** 3)
+        if free_gb < 5:
+            warnings.append(f'Low disk space: {free_gb:.1f}GB free (< 5GB for checkpoints)')
+        else:
+            logger.info(f'Disk: {free_gb:.1f}GB free')
+    except Exception as e:
+        warnings.append(f'Disk check failed: {e}')
+
+    # Checkpoint directory writable
+    try:
+        test_file = CKPT_DIR / '.write_test'
+        test_file.write_text('')
+        test_file.unlink()
+    except OSError as e:
+        warnings.append(f'Checkpoint directory not writable: {e}')
+
+    return warnings
+
+
+def _get_gpu_memory() -> Tuple[float, float]:
+    """Return (free_mb, total_mb) for GPU 0."""
+    try:
+        result = subprocess.run(
+            ['nvidia-smi', '--query-gpu=memory.free,memory.total',
+             '--format=csv,nounits,noheader'],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            parts = result.stdout.strip().split(',')
+            return float(parts[0].strip()), float(parts[1].strip())
+    except Exception:
+        pass
+    try:
+        free = torch.cuda.mem_get_info()
+        return free[0] / (1024 ** 2), free[1] / (1024 ** 2)
+    except Exception:
+        return 0.0, 0.0
+
+
+def validate_checkpoint(path: Path) -> Tuple[bool, str]:
+    """Validate checkpoint file: loadable, contains model weights, no NaN.
+
+    Returns (is_valid, message).
+    """
+    if not path.exists():
+        return False, f'Checkpoint not found: {path}'
+    if path.stat().st_size < 1024:
+        return False, f'Checkpoint too small ({path.stat().st_size} bytes) — probably corrupt'
+
+    try:
+        ckpt = torch.load(path, map_location='cpu', weights_only=False)
+    except Exception as e:
+        return False, f'Failed to load checkpoint: {e}'
+
+    # Find state dict
+    state_dict = None
+    for key in ('model_state_dict', 'model'):
+        if key in ckpt and isinstance(ckpt[key], dict):
+            state_dict = ckpt[key]
+            break
+    if state_dict is None:
+        state_dict = {k: v for k, v in ckpt.items() if isinstance(v, torch.Tensor)}
+        if not state_dict:
+            return False, 'No tensor state dict found in checkpoint'
+
+    # Check for NaN weights
+    nan_count = 0
+    for _v in state_dict.values():
+        if torch.isnan(_v).any():
+            nan_count += 1
+    if nan_count > 0:
+        return False, f'{nan_count} parameter tensors contain NaN values'
+
+    # Value range sanity
+    extreme_count = 0
+    for _v in state_dict.values():
+        if _v.numel() > 0 and (_v.abs() > 1e4).any():
+            extreme_count += 1
+    if extreme_count > len(state_dict) // 2:
+        return False, f'{extreme_count}/{len(state_dict)} tensors have extreme values (>1e4)'
+
+    # Epoch info
+    epoch = ckpt.get('epoch', '?')
+    return True, f'Valid (epoch={epoch}, {len(state_dict)} tensors, {path.stat().st_size / 1e6:.0f}MB)'
+
+
+def estimate_progress(stage_cfg: Dict[str, Any], state: StageState,
+                      snapshot: LogSnapshot) -> Dict[str, Any]:
+    """Estimate training progress and remaining time.
+
+    [FIX C7 2026-06-17] Uses the actual --max-epochs passed to the training
+    subprocess (stored in state.max_epochs at launch time) instead of the
+    static config value. Clamps progress at 100% to prevent the "44/20 (220%)"
+    bug caused by reading the unextended config value.
+    """
+    # Use the dynamically-computed max_epochs that was actually passed to
+    # the subprocess (includes resume_epoch offset from launch_training).
+    # Fall back to stage config for backward compat.
+    max_epochs = state.max_epochs if state.max_epochs > 0 else stage_cfg.get('max_epochs', 20)
+    current_epoch = max(snapshot.epoch, state.epoch)
+    elapsed = None
+    if state.run_start_time:
+        try:
+            start = datetime.fromisoformat(state.run_start_time)
+            elapsed = (datetime.now(timezone.utc) - start.replace(tzinfo=timezone.utc)).total_seconds()
+        except Exception:
+            pass
+
+    if elapsed and current_epoch > 0:
+        sec_per_epoch = elapsed / current_epoch
+        remaining_epochs = max_epochs - current_epoch
+        eta_seconds = sec_per_epoch * remaining_epochs
+        eta_str = f'{eta_seconds / 3600:.1f}h' if eta_seconds > 3600 else f'{eta_seconds / 60:.0f}m'
+    else:
+        eta_str = 'N/A'
+        sec_per_epoch = 0.0
+
+    # Clamp progress at 100% — the training will end when max_epochs is reached
+    progress_pct = min((current_epoch / max_epochs * 100) if max_epochs > 0 else 0.0, 100.0)
+
+    return {
+        'stage': stage_cfg.get('name', '?'),
+        'epoch': f'{current_epoch}/{max_epochs}',
+        'progress_pct': progress_pct,
+        'elapsed_sec': int(elapsed) if elapsed else 0,
+        'eta': eta_str,
+        'sec_per_epoch': f'{sec_per_epoch:.0f}s' if sec_per_epoch > 0 else 'N/A',
+    }
+
+
+# =========================================================================
+# Self-Adaptive Functions — dynamic gates, epochs, cross-stage learning
+# =========================================================================
+
+def _check_near_gate_advance(stage_cfg: Dict[str, Any], state: StageState,
+                              checklist: Dict[str, Any],
+                              metrics: Dict[str, float]) -> Tuple[bool, str]:
+    """Check if gate is close enough to advance despite not being fully met.
+
+    Near-gate advancement lets the manager advance when the model is
+    close to the gate threshold but progress has stalled, avoiding
+    wasted retry cycles on near-misses.
+
+    - RF1-RF3 (early): advance if >= 85% of gate thresholds met AND stalled
+    - RF4-RF7 (mid):   advance if >= 90% met AND stalled
+    - RF8-RF10 (final): strict — no near-gate advancement
+    """
+    gate = stage_cfg.get('gate', {})
+    if not gate:
+        return False, 'no gate criteria'
+
+    stage_name = stage_cfg.get('name', '')
+    gate_details = checklist.get('gate', {}).get('details', {})
+
+    total = len(gate)
+    if total == 0:
+        return False, 'no gate criteria'
+
+    # Count met thresholds
+    met = 0
+    gaps = []
+    for metric, threshold in gate.items():
+        val = metrics.get(metric)
+        if val is None:
+            continue
+        if 'MAE' in metric or 'mae' in metric:
+            passed = val <= threshold
+        else:
+            passed = val >= threshold
+        if passed:
+            met += 1
+        else:
+            gap = (threshold - val) / max(threshold, 1e-10)
+            gaps.append((metric, gap))
+
+    ratio = met / total
+
+    # Stage-dependent threshold
+    if stage_name in ('rf1', 'rf2', 'rf3'):
+        min_ratio = 0.85
+    elif stage_name in ('rf4', 'rf5', 'rf6', 'rf7'):
+        min_ratio = 0.90
+    else:
+        min_ratio = 1.0  # rf8-rf10: strict
+
+    if ratio < min_ratio:
+        return False, f'{ratio:.0%} gate met (need {min_ratio:.0%})'
+
+    # Check stalled: require no significant improvement over last 3 epochs
+    history = state.metric_history
+    if len(history) >= 3:
+        primary = next(iter(gate.keys()))
+        vals = [h.get(primary, 0) for h in history[-3:]]
+        improving = vals[-1] > vals[0] * 1.01  # >1% improvement
+        if not improving:
+            gap_str = ', '.join(f'{m}={g*100:.0f}%' for m, g in gaps[:3])
+            return True, f'{ratio:.0%} gates met, stalled — advancing (gaps: {gap_str})'
+
+    return False, f'{ratio:.0%} gates met, still improving — continuing'
+
+
+def _compute_dynamic_max_epochs(stage_cfg: Dict[str, Any], state: StageState) -> int:
+    """Dynamically adjust max_epochs based on convergence trajectory.
+
+    - Extends by 50% if still improving significantly at 80% of max_epochs
+    - Cuts short after patience_epochs of plateau beyond min_epochs
+    """
+    base = stage_cfg.get('max_epochs', 20)
+    patience = stage_cfg.get('convergence', {}).get('patience_epochs', 8)
+    min_epochs = max(base // 3, 5)
+
+    history = state.metric_history
+    if len(history) < 2:
+        return base
+
+    primary = 'det_mAP50'
+    vals = [m.get(primary, 0) for m in history if primary in m]
+    if len(vals) < 2:
+        return base
+
+    current = state.epoch
+
+    # ── Plateau detection: cut short ──
+    if current >= min_epochs and len(vals) >= patience:
+        recent_vals = vals[-patience:]
+        best_recent = max(recent_vals)
+        best_before = max(vals[:-patience], default=0)
+        if best_recent <= best_before * 1.005:  # <0.5% improvement
+            grace = min(2, base - current)
+            logger.info(f'  [DYNAMIC] Plateau detected — cutting epochs {base}→{current + grace}')
+            return current + grace
+
+    # ── Extension: still improving at 80% of max_epochs ──
+    if current >= base * 0.8 and len(vals) >= 5:
+        recent_improvement = vals[-1] - vals[-5]
+        min_improvement = stage_cfg.get('convergence', {}).get('min_improvement', 0.005)
+        if recent_improvement > min_improvement * 3:
+            extended = int(base * 1.5)
+            logger.info(f'  [DYNAMIC] Extending max_epochs {base}→{extended} (still improving)')
+            return extended
+
+    return base
+
+
+def _record_cross_stage_learning(state: StageState, outcome: str) -> None:
+    """Record retry strategy outcome for cross-stage knowledge transfer.
+
+    Each stage logs what strategies were tried and which one worked,
+    so later stages with similar head profiles can skip failures.
+    """
+    stage = state.current_stage
+    if stage not in state.cross_stage_memory:
+        state.cross_stage_memory[stage] = {
+            'strategies_tried': [],
+            'best_strategy': None,
+            'outcome': outcome,
+        }
+    else:
+        state.cross_stage_memory[stage]['outcome'] = outcome
+
+    if state.strategies_tried:
+        state.cross_stage_memory[stage]['strategies_tried'] = list(state.strategies_tried)
+        if outcome == 'passed':
+            state.cross_stage_memory[stage]['best_strategy'] = state.strategies_tried[-1]
+
+
+def _select_cross_stage_strategy(state: StageState, stage_cfg: Dict[str, Any]) -> Optional[str]:
+    """Reuse a successful strategy from a similar previous stage.
+
+    Matching logic:
+      - Same active_heads profile (e.g., 'det+pose+act+psr')
+      - Same stage family (rf1-rf3 early, rf4-rf7 mid, rf8-rf10 final)
+    """
+    memory = state.cross_stage_memory or {}
+    if not memory:
+        return None
+
+    stage_name = stage_cfg.get('name', '')
+    active_heads = stage_cfg.get('active_heads', 'det')
+
+    def _family(name: str) -> str:
+        if name in ('rf1', 'rf2', 'rf3'):
+            return 'early'
+        elif name in ('rf4', 'rf5', 'rf6', 'rf7'):
+            return 'mid'
+        return 'final'
+
+    target_family = _family(stage_name)
+
+    candidates = []
+    for s_name, s_data in memory.items():
+        if s_data.get('outcome') == 'passed' and s_data.get('best_strategy'):
+            if s_name == stage_name:
+                continue  # skip self
+            s_cfg = _STAGE_BY_NAME.get(s_name, {})
+            s_heads = s_cfg.get('active_heads', 'det')
+            s_family = _family(s_name)
+            # Match on heads OR family
+            if s_heads == active_heads or s_family == target_family:
+                candidates.append((get_stage_index(s_name), s_data['best_strategy']))
+
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        logger.info(f'  [CROSS-STAGE] Using strategy "{candidates[0][1]}" from stage {candidates[0][0]}')
+        return candidates[0][1]
+
+    return None
 
 
 # =========================================================================
@@ -1116,7 +1576,8 @@ def kill_training(state: StageState, force: bool = False) -> bool:
 
 
 def launch_training(stage_cfg: Dict[str, Any], resume_from: Optional[Path],
-                   strategy: Optional[Dict[str, Any]] = None) -> Optional[int]:
+                   strategy: Optional[Dict[str, Any]] = None,
+                   retry: bool = False) -> Tuple[Optional[int], int]:
     """Launch a training subprocess. Returns PID or None."""
     RF_RUN_DIR.mkdir(parents=True, exist_ok=True)
     CKPT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1144,16 +1605,24 @@ def launch_training(stage_cfg: Dict[str, Any], resume_from: Optional[Path],
     ]
     if stage_cfg.get('reinit_heads'):
         cmd += ['--reinit-heads']
-    if stage_cfg.get('detach_reg_fpn', stage_cfg.get('reinit_heads')):
+    if stage_cfg.get('detach_reg_fpn', False):
         cmd += ['--detach-reg-fpn']
-    if stage_cfg.get('detach_psr_fpn', stage_cfg.get('reinit_heads')):
+    if stage_cfg.get('detach_psr_fpn', False):
         cmd += ['--detach-psr-fpn']
     if resume_from and resume_from.exists():
         cmd += ['--resume', str(resume_from)]
+        # When reinit_heads is used during retry, the checkpoint's epoch counter
+        # points to a partially-trained model whose scheduler state is for later
+        # epochs. The fresh heads need full warmup from epoch 0. We use
+        # --start-epoch 0 to override the epoch loop, and the scheduler reset
+        # (handled in train.py) rebuilds the scheduler state at epoch 0.
+        if stage_cfg.get('reinit_heads') and retry:
+            cmd += ['--start-epoch', '0', '--reset-scheduler']
 
     env = os.environ.copy()
     env['OUTPUT_ROOT_OVERRIDE'] = str(RF_RUN_DIR)
     env['_STAGE_MANAGER_ACTIVE'] = '1'
+    env['_STAGE_NAME'] = stage_cfg['name']  # e.g. 'rf1', 'rf2' -- used by train.py for per-stage ckpt subdirs
     env['_STAGE_GATE_JSON'] = json.dumps(stage_cfg.get('gate', {}))
     env['_STAGE_TARGET_MET_FILE'] = str(TARGET_MET_FILE)
 
@@ -1188,10 +1657,10 @@ def launch_training(stage_cfg: Dict[str, Any], resume_from: Optional[Path],
         # Detach — we don't call proc.wait() here
         # The training runs independently; we check on it via --check
         logger.info(f'  PID={proc.pid} (stdout → {log_file})')
-        return proc.pid
+        return (proc.pid, max_epochs)
     except Exception as e:
         logger.error(f'Failed to launch training: {e}')
-        return None
+        return (None, max_epochs)
 
 
 # =========================================================================
@@ -1246,15 +1715,25 @@ def evaluate_health(stage_cfg: Dict[str, Any], snapshot: LogSnapshot,
 
     # Check per-head liveness ratios — only for heads active in this stage
     active = get_active_heads(stage_cfg)
+    total_liveness = liveness_summary.get('total_checks', 0)
+    # Require at least 2 LIVENESS samples before trusting the ratio.
+    # During evaluation or just after restart, the window may contain 0-1
+    # LIVENESS lines, and a FAIL here would be a false positive.
+    min_samples = 2
     for head in active:
         key = f'{head}_alive_ratio'
         ratio = liveness_summary.get(key, 1.0)
-        passing = ratio >= 0.5  # at least 50% of steps alive
+        if total_liveness >= min_samples:
+            passing = ratio >= 0.5  # at least 50% of steps alive
+        else:
+            passing = True  # insufficient data — assume healthy
+            ratio = 1.0
         if not passing:
             all_passed = False
         details[f'{head}_liveness'] = {
             'status': 'PASS' if passing else 'FAIL',
             'alive_ratio': ratio,
+            'samples': total_liveness,
         }
 
     # Check loss spike factor (uses snapshot instead of re-parsing lines)
@@ -1297,7 +1776,8 @@ def evaluate_health(stage_cfg: Dict[str, Any], snapshot: LogSnapshot,
 
 
 def evaluate_convergence(stage_cfg: Dict[str, Any], state: StageState,
-                         metrics: Dict[str, float]) -> Tuple[bool, Dict[str, Any]]:
+                         metrics: Dict[str, float],
+                         snapshot: Optional[LogSnapshot] = None) -> Tuple[bool, Dict[str, Any]]:
     """CONVERGENCE: Rate of metric improvement with trend analysis.
 
     Uses metric_history for rolling-window improvement detection.
@@ -1360,8 +1840,33 @@ def evaluate_convergence(stage_cfg: Dict[str, Any], state: StageState,
     plt = per_epoch_improvement < min_improvement / 2 and epoch > 3
     stalled = epochs_no_improve >= patience
 
-    # Determine status
-    if current_val > state.best_metric and per_epoch_improvement >= min_improvement:
+    # ── Divergence detection: metrics actively getting worse ──
+    diverging = False
+    if len(window_3) == 3:
+        # Check if primary metric is decreasing over last 3 epochs
+        if window_3[-1] < window_3[0] - min_improvement * 2:
+            diverging = True
+            details['divergence'] = {
+                'status': 'FAIL',
+                'detail': f'{primary_metric} dropped from {window_3[0]:.4f} to {window_3[-1]:.4f} '
+                          f'over last 3 epochs ({window_3[0] - window_3[-1]:.4f} delta)',
+            }
+
+    # ── Loss-based divergence (loss increasing while metric stable/falling) ──
+    if snapshot and snapshot.loss_trend and len(history) >= 3:
+        loss_history = [h.get('det_loss', float('inf')) for h in history[-3:] if h.get('det_loss')]
+        if len(loss_history) == 3 and loss_history[-1] > loss_history[0] * 1.5:
+            diverging = True  # loss divergence amplifies metric divergence
+            details['loss_divergence'] = {
+                'status': 'FAIL',
+                'detail': f'Loss increased {loss_history[0]:.3f} → {loss_history[-1]:.3f} '
+                          f'({(loss_history[-1]/loss_history[0] - 1)*100:.0f}% increase)',
+            }
+
+    # Determine status (divergence takes priority over plateau/stall)
+    if diverging:
+        all_pass = False
+    elif current_val > state.best_metric and per_epoch_improvement >= min_improvement:
         details[primary_metric] = {
             'status': 'IMPROVING',
             'current': current_val,
@@ -1447,31 +1952,52 @@ def evaluate_validation(stage_cfg: Dict[str, Any], metrics: Dict[str, float]) ->
 
 def evaluate_stability(stage_cfg: Dict[str, Any], snapshot: LogSnapshot,
                        liveness_summary: Dict[str, Any]) -> Tuple[bool, Dict[str, Any]]:
-    """STABILITY: Training dynamics health."""
+    """STABILITY: Training dynamics health.
+
+    Rules:
+      - Liveness ratios: checked against per-head active thresholds.
+      - Crash count: only counts from the current training process.
+        If we have recent liveness data (>0 checks) the training is actively
+        producing gradients — crash patterns in the log window belong to
+        PREVIOUS retries, not the current one. Zero them out to avoid killing
+        a healthy training based on stale log entries.
+    """
     stab_cfg = stage_cfg.get('stability', {})
     details = {}
     all_passed = True
 
     min_liveness = stab_cfg.get('min_liveness_ratio', 0.7)
+    total_liveness = liveness_summary.get('total_checks', 0)
+    min_samples = 2
 
     # Overall liveness ratio — only for heads active in this stage
     active = get_active_heads(stage_cfg)
     for head in active:
         key = f'{head}_alive_ratio'
         ratio = liveness_summary.get(key, 1.0)
-        if ratio < min_liveness:
+        if total_liveness >= min_samples and ratio < min_liveness:
             details[f'{head}_liveness_stability'] = {
                 'status': 'WARN',
                 'alive_ratio': ratio,
                 'min_required': min_liveness,
+                'samples': total_liveness,
             }
 
-    # Crash count from snapshot (parsed in single pass instead of re-iterating lines)
+    # Crash count from snapshot
+    # KEY FIX: Crash patterns in the log may be from PREVIOUS retries, not the
+    # current training run. Zero them out when:
+    #   1. PID just changed → tail read mixed old+new entries (stale_crash_window)
+    #   2. Current process IS producing liveness samples (total_checks > 0)
+    # Only count crashes when we have NO live training data AND the window
+    # isn't known-stale — meaning the process genuinely died.
+    effective_crash_count = snapshot.crash_count
+    if snapshot.stale_crash_window or total_liveness > 0:
+        effective_crash_count = 0
     details['crash_count'] = {
-        'value': snapshot.crash_count,
-        'status': 'OK' if snapshot.crash_count == 0 else 'WARN',
+        'value': effective_crash_count,
+        'status': 'OK' if effective_crash_count == 0 else 'WARN',
     }
-    if snapshot.crash_count > 0:
+    if effective_crash_count > 0:
         all_passed = False
 
     return all_passed, details
@@ -1488,7 +2014,7 @@ def evaluate_all_checklists(stage_cfg: Dict[str, Any], state: StageState,
     """
     gate_pass, gate_details = evaluate_gate(stage_cfg, metrics)
     health_pass, health_details = evaluate_health(stage_cfg, snapshot, liveness_summary, det_health_history)
-    conv_pass, conv_details = evaluate_convergence(stage_cfg, state, metrics)
+    conv_pass, conv_details = evaluate_convergence(stage_cfg, state, metrics, snapshot)
     val_pass, val_details = evaluate_validation(stage_cfg, metrics)
     stab_pass, stab_details = evaluate_stability(stage_cfg, snapshot, liveness_summary)
 
@@ -1691,10 +2217,12 @@ def run_20_why_analysis(log_lines: List[str]) -> Dict[str, Any]:
 # Decision Engine
 # =========================================================================
 
-def decide_action(state: StageState, checklist: Dict[str, Any]) -> str:
+def decide_action(state: StageState, checklist: Dict[str, Any],
+                  stage_cfg: Optional[Dict[str, Any]] = None,
+                  metrics: Optional[Dict[str, float]] = None) -> str:
     """Core decision: what to do next based on checklists.
 
-    Returns: 'continue' | 'kill_and_retry' | 'advance_stage' | 'wait' | 'escalate'
+    Returns: 'continue' | 'kill_and_retry' | 'advance_stage' | 'near_gate_advance' | 'wait' | 'escalate'
     """
     gate = checklist.get('gate', {}).get('passed', False)
     health = checklist.get('health', {}).get('passed', True)
@@ -1708,12 +2236,16 @@ def decide_action(state: StageState, checklist: Dict[str, Any]) -> str:
         else:
             return 'continue'  # will launch it
 
-    # If stability failed (crashes, OOM)
-    if not stability:
+    # If health check failed (DEAD heads) — checked BEFORE stability so that
+    # a training with active, healthy gradients is not killed for stale crash
+    # patterns in the log that belong to previous retries.
+    if not health:
         return 'kill_and_retry'
 
-    # If health check failed (DEAD heads)
-    if not health:
+    # If stability failed (crashes, OOM) — after health check to avoid killing
+    # a training that IS producing healthy gradients but has crash patterns
+    # from previous retries in the log window.
+    if not stability:
         return 'kill_and_retry'
 
     # If convergence stalled (no improvement)
@@ -1723,6 +2255,15 @@ def decide_action(state: StageState, checklist: Dict[str, Any]) -> str:
     # If all passes and gate is met → advance
     if gate:
         return 'advance_stage'
+
+    # ── Near-gate advancement ──
+    # Gate not fully met, but if close enough and stalled, advance anyway.
+    # This avoids wasted retry cycles on near-misses.
+    if stage_cfg and metrics and state.epoch >= 3:
+        near_advance, reason = _check_near_gate_advance(stage_cfg, state, checklist, metrics)
+        if near_advance:
+            logger.info(f'  [NEAR-GATE] {reason}')
+            return 'near_gate_advance'
 
     # Gate not met but training healthy → continue
     return 'continue'
@@ -1765,15 +2306,23 @@ def cmd_check() -> None:
 
     # ── Reconcile state PID with lock file PID ──
     lock_pid = read_lock_pid()
+    pid_changed = False
     if lock_pid is not None and is_pid_alive(lock_pid):
         if state.training_pid != lock_pid:
             logger.warning(f'State PID={state.training_pid} != lock PID={lock_pid} — reconciling')
             state.training_pid = lock_pid
-            save_state(state)
+            pid_changed = True
     elif lock_pid is None and state.training_pid is not None and is_pid_alive(state.training_pid):
         # Lock file missing but training alive: re-create lock
         write_lock_pid(state.training_pid)
         logger.info(f'Re-created PID lock file for PID={state.training_pid}')
+
+    # PID changed → training restarted since last check. Reset log cursor to
+    # avoid mixing stale DEAD entries from the old run with fresh ALIVE data.
+    if pid_changed:
+        old_cursor = state.log_cursor
+        state.log_cursor = 0
+        logger.info(f'PID changed: reset log_cursor from {old_cursor} to 0 (fresh window)')
 
     logger.info('=' * 60)
     logger.info(f'Stage Manager Check @ {datetime.now().isoformat()}')
@@ -1797,6 +2346,18 @@ def cmd_check() -> None:
     # ── Single-pass log parsing (replaces 7 redundant line iterations) ──
     snapshot = parse_log_snapshot(log_lines)
 
+    # When PID changed, the log cursor was reset to 0, forcing a tail read
+    # that mixes entries from both previous AND current retries. Crash patterns
+    # in this window are KNOWN-STALE — they belong to the old process.
+    if pid_changed:
+        snapshot.stale_crash_window = True
+        logger.info('  PID changed: stale_crash_window=True (crash patterns from prior retries)')
+
+    # Always update state.epoch from log (if available) so the state file
+    # reflects actual training progress even between cron checks.
+    if snapshot.epoch > 0:
+        state.epoch = snapshot.epoch
+
     # Merge DET-HEALTH into state history (deduplicated by step)
     if snapshot.det_health_lines:
         existing_steps = {h['step'] for h in state.det_health_history}
@@ -1818,7 +2379,8 @@ def cmd_check() -> None:
         logger.info(f'Target-met signal found — advancing from {state.current_stage}')
         try:
             signal_data = json.loads(TARGET_MET_FILE.read_text())
-            logger.info(f'  Epoch: {signal_data.get("epoch", "?")}  Metrics: {signal_data.get("gate_details", {})}')
+            gate_info = signal_data.get('gate_details', {})
+            logger.info(f'  Epoch: {signal_data.get("epoch", "?")}  Gate: {gate_info}')
         except Exception:
             signal_data = {}
         TARGET_MET_FILE.unlink(missing_ok=True)
@@ -1841,6 +2403,20 @@ def cmd_check() -> None:
 
         next_stage = RF_STAGES[next_idx]
         logger.info(f'Advancing to {next_stage["name"]}: {next_stage["description"]}')
+
+        # Pre-advance checkpoint verification: ensure next stage can resume
+        if not _verify_next_stage_has_resume_source(next_stage):
+            logger.warning('  Next stage resume source missing — creating symlink to current best.pth')
+            if BEST_CKPT.exists():
+                next_ckpt_dir = CKPT_DIR / next_stage['name']
+                next_ckpt_dir.mkdir(parents=True, exist_ok=True)
+                fallback = next_ckpt_dir / 'best.pth'
+                if not fallback.exists():
+                    try:
+                        fallback.symlink_to(BEST_CKPT)
+                        logger.info(f'  Symlinked {BEST_CKPT} → {fallback}')
+                    except OSError:
+                        logger.warning('  Could not create symlink — will start fresh')
 
         kill_training(state)
         # Reset retry state for new stage
@@ -1901,8 +2477,40 @@ def cmd_check() -> None:
                     if isinstance(detail_val, dict) and detail_val.get('status') in ('FAIL', 'WARN'):
                         logger.info(f'    ⚠ {detail_key}: {detail_val}')
 
-        # Decision
-        decision = decide_action(state, checklist)
+        # ── Dynamic max_epochs adjustment ──
+        dynamic_max_epochs = _compute_dynamic_max_epochs(stage_cfg, state)
+        base_max_epochs = stage_cfg.get('max_epochs', 20)
+        if dynamic_max_epochs != base_max_epochs:
+            logger.info(f'  [DYNAMIC] max_epochs adjusted: {dynamic_max_epochs} (base: {base_max_epochs})')
+
+        # ── Decision from checklists ──
+        decision = decide_action(state, checklist, stage_cfg, metrics)
+
+        # ── Progress estimate ──
+        progress = estimate_progress(stage_cfg, state, snapshot)
+        if progress['eta'] != 'N/A':
+            logger.info(f'  Progress: {progress["epoch"]} ({progress["progress_pct"]:.0f}%) '
+                        f'ETA: {progress["eta"]} ({progress["sec_per_epoch"]}/ep)')
+        else:
+            logger.info(f'  Progress: {progress["epoch"]} ({progress["progress_pct"]:.0f}%)')
+
+        # ── Early collapse detection (sub-epoch) ──
+        # If DET-HEALTH shows severe collapse before epoch 0 completes, kill early
+        # instead of wasting epochs waiting for gate failure
+        if training_alive and state.epoch <= 1 and snapshot.det_health_lines:
+            latest_dh = snapshot.det_health_lines[-1]
+            dh_cls_mean = latest_dh['cls_mean']
+            dh_near_zero = latest_dh['near_zero']
+            # Severe collapse signals:
+            #   cls_mean < -10  → logits deeply negative, sigmoid ~0
+            #   near_zero > 0.8 → 80%+ of logits stuck near zero
+            #   cls_std < 0.05  → all logits nearly identical
+            collapsed = dh_cls_mean < -10 or dh_near_zero > 0.8 or latest_dh.get('cls_std', 1) < 0.05
+            if collapsed:
+                logger.warning(f'⚠ EARLY COLLAPSE DETECTED (epoch {snapshot.epoch}): '
+                               f'cls_mean={dh_cls_mean:.2f} near_zero={dh_near_zero:.2%}')
+                decision = 'kill_and_retry'  # override continue decision
+
         logger.info(f'Decision: {decision}')
 
         if decision == 'continue':
@@ -1932,11 +2540,22 @@ def cmd_check() -> None:
                 logger.warning(f'  Root cause: {f["title"]}')
                 logger.warning(f'  Fix: {f["fix"]}')
 
+            # Record cross-stage learning before retry
+            _record_cross_stage_learning(state, 'failed')
+
             # Track strategy and increment retry count
-            current_strategy = select_retry_strategy(state)
-            state.strategies_tried.append(current_strategy['name'])
+            # Check for cross-stage strategy transfer first (tried before normal rotation)
+            cross_strategy = _select_cross_stage_strategy(state, stage_cfg)
+            if cross_strategy and state.retry_count == 0:
+                # First retry: use the transferred strategy instead of default
+                state.current_strategy = cross_strategy
+                state.strategies_tried.append(cross_strategy)
+                logger.info(f'  [CROSS-STAGE] Using strategy "{cross_strategy}" from similar prior stage')
+            else:
+                current_strategy = select_retry_strategy(state)
+                state.strategies_tried.append(current_strategy['name'])
             state.retry_count += 1
-            # current_strategy must reflect the ACTIVE strategy (post-increment) for state file accuracy
+            # Post-increment: set the NEXT strategy for state file (always normal rotation)
             state.current_strategy = select_retry_strategy(state)['name']
 
             kill_training(state)
@@ -1953,8 +2572,60 @@ def cmd_check() -> None:
 
             _launch_current_stage(state, stage_cfg, retry=True)
 
+        elif decision == 'near_gate_advance':
+            logger.info(f'≈ Near-gate advancement for {state.current_stage}!')
+            # Record cross-stage learning
+            _record_cross_stage_learning(state, 'near_gate_advance')
+            # Same stage-transition logic as advance_stage
+            state.stage_history.append({
+                'stage': state.current_stage,
+                'epochs_completed': snapshot.epoch,
+                'best_metric': state.best_metric,
+                'best_metrics': snapshot.metrics,
+                'checklist': checklist,
+                'retries': state.retry_count,
+                'strategies_used': list(state.strategies_tried),
+                'advancement_type': 'near_gate',
+                'timestamp': datetime.now(timezone.utc).isoformat(),
+            })
+            next_idx = stage_idx + 1
+            if next_idx >= len(RF_STAGES):
+                logger.info('ALL STAGES COMPLETE! Final model ready for paper.')
+                state.status = 'completed'
+                save_state(state)
+                _print_paper_results(state)
+                return
+            next_stage = RF_STAGES[next_idx]
+            logger.info(f'(Near-gate) advancing to {next_stage["name"]}: {next_stage["description"]}')
+            if not _verify_next_stage_has_resume_source(next_stage):
+                logger.warning('  Next stage resume source missing — creating fallback')
+                if BEST_CKPT.exists():
+                    next_ckpt_dir = CKPT_DIR / next_stage['name']
+                    next_ckpt_dir.mkdir(parents=True, exist_ok=True)
+                    fallback = next_ckpt_dir / 'best.pth'
+                    if not fallback.exists():
+                        try:
+                            fallback.symlink_to(BEST_CKPT)
+                        except OSError:
+                            pass
+            kill_training(state)
+            state.retry_count = 0
+            state.current_strategy = 'default'
+            state.strategies_tried = []
+            state.metric_history = []
+            state.det_health_history = []
+            state.current_stage = next_stage['name']
+            state.stage_index = next_idx
+            state.status = 'idle'
+            state.gate_passed = False
+            state.epoch = 0
+            save_state(state)
+            _launch_current_stage(state, next_stage, retry=False)
+
         elif decision == 'advance_stage':
             logger.info(f'Gate PASSED for {state.current_stage}!')
+            # Record cross-stage learning
+            _record_cross_stage_learning(state, 'passed')
             # Record stage completion
             state.stage_history.append({
                 'stage': state.current_stage,
@@ -1978,6 +2649,19 @@ def cmd_check() -> None:
 
             next_stage = RF_STAGES[next_idx]
             logger.info(f'Advancing to {next_stage["name"]}: {next_stage["description"]}')
+
+            # Pre-advance checkpoint verification
+            if not _verify_next_stage_has_resume_source(next_stage):
+                logger.warning('  Next stage resume source missing — creating fallback')
+                if BEST_CKPT.exists():
+                    next_ckpt_dir = CKPT_DIR / next_stage['name']
+                    next_ckpt_dir.mkdir(parents=True, exist_ok=True)
+                    fallback = next_ckpt_dir / 'best.pth'
+                    if not fallback.exists():
+                        try:
+                            fallback.symlink_to(BEST_CKPT)
+                        except OSError:
+                            pass
 
             kill_training(state)
             # Reset retry state for new stage
@@ -2042,6 +2726,14 @@ def cmd_check() -> None:
                 _launch_current_stage(state, next_stage, retry=False)
                 return
 
+        # [FIX 2026-06-17] If stage is in failed/aborted state, don't retry — wait
+        # for human intervention or explicit --launch. Prevents unbounded retry_count
+        # growth when cron keeps firing post-escalation.
+        if state.status in ('failed', 'aborted'):
+            logger.info(f'Stage is {state.status} — waiting for human intervention or --reset to restart.')
+            save_state(state)
+            return
+
         # Launch or re-launch current stage — escalate on repeated failure
         state.metric_history = []
         state.det_health_history = []
@@ -2063,6 +2755,138 @@ def cmd_check() -> None:
             _launch_current_stage(state, stage_cfg, retry=True)
         else:
             _launch_current_stage(state, stage_cfg, retry=False)
+
+
+def _determine_resume_source(state: StageState, stage_cfg: Dict[str, Any],
+                              retry: bool = False) -> Optional[Path]:
+    """Determine which checkpoint to resume from based on stage config and retry state.
+
+    Respects the `resume_source` field from every stage config:
+      - 'best':  use best.pth (preferred), fall back to latest.pth
+      - 'latest': use latest.pth (preferred), fall back to best.pth
+
+    Resolution order:
+      1. Stage transition (non-retry, index > 0):
+         prev stage's per-subdir resume_source.pth → shared resume_source.pth
+         → fallback to opposite type
+      2. RF1 (stage_index == 0), not retry: shared latest.pth
+      3. Retry: per-subdir resume_source.pth → shared resume_source.pth
+         → fallback to opposite type (C2 fix: never lose progress to corrupt latest)
+    """
+    stage_name = stage_cfg['name']
+    resume_source = stage_cfg.get('resume_source', 'best')
+    fallback_source = 'latest' if resume_source == 'best' else 'best'
+
+    def _find_type(ckpt_type: str, subdir: Optional[str] = None) -> Optional[Path]:
+        """Look up a specific checkpoint type in a (possibly per-stage) directory."""
+        prefix = CKPT_DIR / subdir if subdir else CKPT_DIR
+        p = prefix / f'{ckpt_type}.pth'
+        return p if p.exists() else None
+
+    # ── Retry path (C2: fall back to best.pth if latest.pth is missing/corrupt) ──
+    if retry:
+        # 1) Per-stage subdir, configured source type
+        ckpt = _find_type(resume_source, subdir=stage_name)
+        if ckpt:
+            logger.info(f'Resume source: retry {stage_name}/{resume_source}.pth → {ckpt}')
+            return ckpt
+        # 2) Shared, configured source type
+        ckpt = _find_type(resume_source)
+        if ckpt:
+            logger.info(f'Resume source: retry shared {resume_source}.pth → {ckpt}')
+            return ckpt
+        # 3) Per-stage subdir, fallback type
+        ckpt = _find_type(fallback_source, subdir=stage_name)
+        if ckpt:
+            logger.warning(f'Resume source: retry — {stage_name}/{resume_source}.pth not found,'
+                           f' falling back to {fallback_source}.pth in subdir → {ckpt}')
+            return ckpt
+        # 4) Shared, fallback type
+        ckpt = _find_type(fallback_source)
+        if ckpt:
+            logger.warning(f'Resume source: retry — {resume_source}.pth not found anywhere,'
+                           f' falling back to shared {fallback_source}.pth → {ckpt}')
+            return ckpt
+
+        logger.info('Resume source: None — retrying from fresh start')
+        return None
+
+    # ── Stage transition (non-retry, previous stage's checkpoint) ──
+    if state.stage_index > 0 and stage_name != RF_STAGES[0]['name']:
+        prev_stage = RF_STAGES[state.stage_index - 1]
+        prev_name = prev_stage['name']
+        prev_source = prev_stage.get('resume_source', 'best')
+        prev_fallback = 'latest' if prev_source == 'best' else 'best'
+
+        # Per-subdir preferred type
+        ckpt = _find_type(prev_source, subdir=prev_name)
+        if ckpt:
+            logger.info(f'Resume source: {prev_name}/{prev_source}.pth → {ckpt}')
+            return ckpt
+        # Shared preferred type
+        ckpt = _find_type(prev_source)
+        if ckpt:
+            logger.info(f'Resume source: shared {prev_source}.pth → {ckpt}')
+            return ckpt
+        # Per-subdir fallback
+        ckpt = _find_type(prev_fallback, subdir=prev_name)
+        if ckpt:
+            logger.warning(f'Resume source: {prev_name}/{prev_source}.pth not found,'
+                           f' falling back to {prev_fallback}.pth in subdir → {ckpt}')
+            return ckpt
+        # Shared fallback
+        ckpt = _find_type(prev_fallback)
+        if ckpt:
+            logger.warning(f'Resume source: {prev_source}.pth not found anywhere,'
+                           f' falling back to shared {prev_fallback}.pth → {ckpt}')
+            return ckpt
+
+        logger.warning(f'No checkpoint found for resume from {prev_name}'
+                       f' (tried {prev_source}.pth, {prev_fallback}.pth)')
+        return None
+
+    # ── RF1 fresh start or first-launch ──
+    if state.stage_index == 0 and not retry:
+        if LATEST_CKPT.exists():
+            logger.info(f'Resume source: RF1 latest → {LATEST_CKPT}')
+            return LATEST_CKPT
+        logger.info('Resume source: None — fresh start from ImageNet')
+        return None
+
+    return None
+
+
+def _verify_next_stage_has_resume_source(next_stage: Dict[str, Any]) -> bool:
+    """Verify the next stage has a valid checkpoint to resume from.
+
+    Returns True if resume source exists or isn't needed, False if missing.
+    With Fix C6, per-stage checkpoint subdirs are populated by train.py,
+    so we check per-stage first, then shared flat paths.
+    """
+    resume_src = next_stage.get('resume_source', 'best')
+    fallback_src = 'latest' if resume_src == 'best' else 'best'
+
+    prev_idx = get_stage_index(next_stage['name']) - 1
+    if prev_idx >= 0:
+        prev_stage = RF_STAGES[prev_idx]
+        prev_name = prev_stage['name']
+
+        # Check per-stage subdir first (Fix C6: train.py now saves here)
+        for src_type in (resume_src, fallback_src):
+            p = CKPT_DIR / prev_name / f'{src_type}.pth'
+            if p.exists():
+                return True
+
+        # Check shared flat paths
+        for src_type in (resume_src, fallback_src):
+            p = CKPT_DIR / f'{src_type}.pth'
+            if p.exists():
+                return True
+
+        logger.warning(f'Pre-advance check: no checkpoint for {next_stage["name"]} '
+                       f'(prev={prev_name}, tried {resume_src}.pth + {fallback_src}.pth)')
+        return False
+    return True  # fresh start stages (like initial RF1) don't need resume
 
 
 def _launch_current_stage(state: StageState, stage_cfg: Dict[str, Any],
@@ -2094,6 +2918,25 @@ def _launch_current_stage(state: StageState, stage_cfg: Dict[str, Any],
         except Exception:
             pass
 
+    # ── Pre-flight checks (warnings only — non-blocking) ──
+    pre_flight_warnings = run_pre_flight_checks(stage_cfg)
+    for w in pre_flight_warnings:
+        logger.warning(f'  ⚠ Pre-flight: {w}')
+
+    # ── Checkpoint validation (blocking if invalid) ──
+    # Determine resume source first to validate it
+    resume_from = _determine_resume_source(state, stage_cfg, retry)
+    if resume_from:
+        valid, msg = validate_checkpoint(resume_from)
+        if not valid:
+            logger.error(f'Resume checkpoint invalid: {msg}')
+            logger.warning('  Falling back to fresh start (no resume)')
+            resume_from = None
+        else:
+            logger.info(f'Resume checkpoint: {msg}')
+    else:
+        logger.info('Fresh start — no checkpoint to resume from')
+
     # ── Duplicate prevention: kill any existing training processes ──
     preset = stage_cfg.get('preset', 'stage_rf1')
     existing = get_existing_train_pids(preset)
@@ -2104,53 +2947,25 @@ def _launch_current_stage(state: StageState, stage_cfg: Dict[str, Any],
             logger.info(f'Killed {killed} stale training process(es).')
         time.sleep(2)  # Wait for cleanup
 
-    # Select retry strategy
-    strategy = select_retry_strategy(state) if retry else RETRY_STRATEGIES[0]
+    # Select retry strategy (stage-aware when stage_cfg is provided)
+    strategy = select_retry_strategy(state, stage_cfg) if retry else RETRY_STRATEGIES[0]
     if retry:
         logger.info(f'Retry #{state.retry_count + 1} — strategy: {strategy["name"]} ({strategy["description"]})')
-
-    # Determine resume source
-    resume_from = None
-
-    if state.stage_index > 0 and state.current_stage != RF_STAGES[0]['name']:
-        # Resume from previous stage's best checkpoint
-        prev_stage = RF_STAGES[state.stage_index - 1]
-        prev_ckpt = CKPT_DIR / prev_stage['name'] / 'best.pth'
-        if prev_ckpt.exists():
-            resume_from = prev_ckpt
-            logger.info(f'Resuming from {prev_stage["name"]} best: {prev_ckpt}')
-        elif BEST_CKPT.exists():
-            resume_from = BEST_CKPT
-            logger.info(f'Resuming from shared best: {BEST_CKPT}')
-    elif state.stage_index == 0 and not retry:
-        # RF1: prefer run-specific latest (crash recovery or resumed training)
-        if LATEST_CKPT.exists():
-            resume_from = LATEST_CKPT
-            logger.info(f'RF1 resuming from run checkpoint: {LATEST_CKPT}')
-        else:
-            orig_latest = RUNS_DIR / 'full_multi_task_tma_tbank' / 'checkpoints' / 'latest.pth'
-            if orig_latest.exists():
-                resume_from = orig_latest
-                logger.info(f'RF1 resuming from original checkpoint: {orig_latest}')
-    elif retry:
-        # Retry: resume from latest within current stage
-        stage_ckpt = CKPT_DIR / stage_cfg['name'] / 'latest.pth'
-        if stage_ckpt.exists():
-            resume_from = stage_ckpt
-            logger.info(f'Retry resuming from stage checkpoint: {stage_ckpt}')
-        elif LATEST_CKPT.exists():
-            resume_from = LATEST_CKPT
 
     # Apply strategy to stage_cfg (override reinit_heads from strategy)
     launch_cfg = dict(stage_cfg)
     if strategy.get('reinit_heads'):
         launch_cfg['reinit_heads'] = True
 
-    pid = launch_training(launch_cfg, resume_from, strategy=strategy)
+    pid, run_max_epochs = launch_training(launch_cfg, resume_from, strategy=strategy, retry=retry)
     if pid:
         state.training_pid = pid
         state.status = 'running'
         state.run_start_time = datetime.now(timezone.utc).isoformat()
+        # [FIX C7 2026-06-17] Store the actual max_epochs passed to the subprocess
+        # so estimate_progress can compute progress accurately (the static config
+        # value is extended by resume epoch in launch_training).
+        state.max_epochs = run_max_epochs
         write_lock_pid(pid)  # Write PID lock file to prevent duplicates
         save_state(state)
         logger.info(f'Launched {stage_cfg["name"]} (PID={pid}) [lock={PID_LOCK_FILE}]')
@@ -2216,30 +3031,91 @@ def _print_paper_results(state: StageState) -> None:
 # =========================================================================
 
 def cmd_status() -> None:
-    """Print current state."""
+    """Print current state with checklist results, DET-HEALTH trend, and progress."""
     state = load_state()
     logger.info(f'Current stage  : {state.current_stage} [{state.status}]')
     logger.info(f'Stage index    : {state.stage_index + 1}/{len(RF_STAGES)}')
     logger.info(f'Training PID   : {state.training_pid} {"(alive)" if is_pid_alive(state.training_pid) else "(dead)"}')
     logger.info(f'Epoch          : {state.epoch}')
-    logger.info(f'Best combined  : {state.best_metric:.4f}')
+    logger.info(f'Best metric    : {state.best_metric:.4f}')
     logger.info(f'Gate passed    : {state.gate_passed}')
     logger.info(f'History        : {len(state.stage_history)} stages completed')
     logger.info(f'Issues         : {len(state.issues_log)} logged')
     if state.retry_count > 0:
         logger.info(f'Retries        : {state.retry_count} (strategy: {state.current_strategy})')
         logger.info(f'Strategies tried: {", ".join(state.strategies_tried)}')
+
+    # ── Checklist results ──
+    cr = state.checklist_results
+    if cr and any(cr.get(c, {}).get('details') for c in ['gate', 'health', 'convergence', 'validation', 'stability']):
+        logger.info('\nChecklist results:')
+        for cat in ['gate', 'health', 'convergence', 'validation', 'stability']:
+            c = cr.get(cat, {})
+            status = 'PASS' if c.get('passed') else 'FAIL' if c.get('details') else '—'
+            details = c.get('details', {})
+            # Collect one-line summary
+            parts = []
+            for k, v in details.items():
+                if isinstance(v, dict):
+                    s = v.get('status', '')
+                    if s == 'PASS':
+                        parts.append(f'{k}=✓')
+                    elif s in ('FAIL', 'WARN'):
+                        parts.append(f'{k}=✗({s})')
+                    elif s == 'UNKNOWN':
+                        parts.append(f'{k}=?')
+                    elif s in ('HEALTHY', 'IMPROVING', 'WARMING_UP'):
+                        parts.append(f'{k}=✓')
+                    else:
+                        parts.append(f'{k}={s}')
+                else:
+                    parts.append(f'{k}={v}')
+            summary = ' '.join(parts[:3])  # keep compact
+            logger.info(f'  [{cat:12s}] {status:4s}  {summary}')
+
+    # ── DET-HEALTH assessment ──
     if state.det_health_history:
+        logger.info('\nDET-HEALTH:')
         latest_dh = state.det_health_history[-1]
-        logger.info(f'DET-HEALTH     : cls_mean={latest_dh["cls_mean"]:.4f} near_zero={latest_dh["near_zero"]:.2%}')
+        dh_assessment = assess_det_health(state.det_health_history)
+        logger.info(f'  cls_mean={latest_dh["cls_mean"]:.4f}  cls_std={latest_dh["cls_std"]:.4f}  '
+                    f'near_zero={latest_dh["near_zero"]:.2%}')
+        logger.info(f'  Status: {dh_assessment["status"]}  Trend: {dh_assessment["trend"]}')
+        if dh_assessment.get('issues'):
+            for iss in dh_assessment['issues']:
+                logger.info(f'  ⚠ {iss}')
+    else:
+        logger.info('\nDET-HEALTH: no data yet (heating up)')
+
+    # ── Convergence trend from metric_history ──
     if state.metric_history:
-        logger.info(f'Metric history  : {len(state.metric_history)} epochs tracked')
+        logger.info(f'\nConvergence ({len(state.metric_history)} epochs tracked):')
+        primary = 'det_mAP50'
+        vals = [m.get(primary, 0) for m in state.metric_history[-10:]]
+        if vals:
+            logger.info(f'  {primary}: {vals[0]:.4f} → {vals[-1]:.4f} '
+                        f'({"+" if vals[-1] >= vals[0] else ""}{vals[-1] - vals[0]:.4f})')
+            if len(vals) >= 3:
+                recent_3 = [m.get(primary, 0) for m in state.metric_history[-3:]]
+                delta = recent_3[-1] - recent_3[0]
+                logger.info(f'  Last 3-epoch delta: {"+" if delta >= 0 else ""}{delta:.4f}')
+        # Best values per metric
+        best_str = []
+        for m in ['det_mAP50', 'det_mAP50_95', 'act_top1', 'act_clip_accuracy', 'psr_f1_at_t']:
+            vals_list = [h[m] for h in state.metric_history if m in h]
+            if vals_list:
+                best_str.append(f'{m}={max(vals_list):.4f}')
+        if best_str:
+            logger.info(f'  Best: {", ".join(best_str)}')
+    else:
+        logger.info('\nMetric history: empty (no validation yet)')
 
     if state.stage_history:
         logger.info('\nStage history:')
         for h in state.stage_history:
             logger.info(f'  {h["stage"]}: {h.get("epochs_completed", "?")} epochs, '
-                        f'best={h.get("best_metric", 0):.4f}')
+                        f'best={h.get("best_metric", 0):.4f} '
+                        f'retries={h.get("retries", 0)}')
 
     # Print current stage info
     stage_cfg = _STAGE_BY_NAME.get(state.current_stage)
@@ -2250,6 +3126,25 @@ def cmd_status() -> None:
         logger.info(f'  Max epochs  : {stage_cfg["max_epochs"]}')
         logger.info(f'  Active heads: {stage_cfg["active_heads"]}')
         logger.info(f'  Preset      : {stage_cfg["preset"]}')
+        gate = stage_cfg.get('gate', {})
+        if gate:
+            logger.info(f'  Gate targets: {", ".join(f"{k}={v}" for k, v in gate.items())}')
+
+        # Progress estimate ([FIX C7] use state.max_epochs, clamp at 100%)
+        log_lines = read_train_log(500)
+        epoch = parse_current_epoch(log_lines)
+        if epoch > 0:
+            max_ep = state.max_epochs if state.max_epochs > 0 else stage_cfg.get('max_epochs', 20)
+            pct = min(epoch / max_ep * 100, 100.0)
+            logger.info(f'  Log epoch   : {epoch}/{max_ep} ({pct:.0f}%)')
+        if state.run_start_time:
+            try:
+                start = datetime.fromisoformat(state.run_start_time)
+                elapsed = (datetime.now(timezone.utc) - start.replace(tzinfo=timezone.utc)).total_seconds()
+                elapsed_str = f'{elapsed / 3600:.1f}h' if elapsed > 3600 else f'{elapsed / 60:.0f}m'
+                logger.info(f'  Elapsed     : {elapsed_str}')
+            except Exception:
+                pass
 
 
 def cmd_abort() -> None:
@@ -2286,6 +3181,12 @@ def cmd_launch(stage_name: str) -> None:
     state.status = 'idle'
     state.epoch = 0
     state.gate_passed = False
+    state.retry_count = 0
+    state.current_strategy = 'default'
+    state.strategies_tried = []
+    state.metric_history = []
+    state.det_health_history = []
+    state.issues_log = []
     save_state(state)
     _launch_current_stage(state, stage_cfg, retry=False)
 
