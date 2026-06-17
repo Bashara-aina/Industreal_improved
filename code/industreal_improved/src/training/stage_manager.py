@@ -105,6 +105,20 @@ RF_STAGES = [
             'min_liveness_ratio': 0.7,         # fraction of steps with ALL heads alive
         },
         'reinit_heads': True,  # reinit detection head for fresh start
+        # [RF1 FIX 2026-06-17] Do NOT detach the regression gradient for the
+        # detection-bootstrap stage. Without this override, launch_training()
+        # defaults detach_reg_fpn to reinit_heads (True) and passes
+        # --detach-reg-fpn, which stops the GIoU/box-regression gradient from
+        # reaching the shared FPN/backbone. With a freshly reinit head and all
+        # other heads off, that leaves the backbone with ONLY the sparse
+        # classification path — features never become object-discriminative, so
+        # the cls conv cannot separate fg from bg and the head sticks at the
+        # pi=0.01 "predict-background-everywhere" equilibrium (localizes but won't
+        # fire). The reg-loss warmup (REINIT_REG_WARMUP_STEPS) is the correct,
+        # sufficient guard against reinit gradient shock; the detach was redundant
+        # overkill that starved the trunk. This matches recovery_det_only, which
+        # trains detection from reinit WITHOUT detaching regression.
+        'detach_reg_fpn': False,
         'resume_source': 'latest',  # resume from previous stage's latest.pth
     },
     {

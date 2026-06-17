@@ -898,7 +898,14 @@ PRESETS = {
         'train_det':          True,
         'train_act':          False,
         'train_psr':          False,
-        'train_head_pose':    False,
+        # [RF1 FIX 2026-06-17] Was False. Restored to True to match the
+        # Opus-prescribed recovery_det_only recipe. Head pose is cheap and gives
+        # the backbone a dense, feature-diverse per-frame signal alongside
+        # detection, so the shared trunk keeps learning even when detection's
+        # positive anchors are sparse. This is insurance on top of the primary
+        # fix (detach_reg_fpn=False in stage_manager); to ablate and confirm the
+        # regression-gradient fix alone is sufficient, set this back to False.
+        'train_head_pose':    True,
         'use_psr_transition':       False,
         'use_geo_head_pose':        True,
         'feature_bank_detach':      True,

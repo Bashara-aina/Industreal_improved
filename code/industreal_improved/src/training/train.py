@@ -2105,6 +2105,28 @@ def _log_per_head_grad_norm(model, step_idx: int, log_interval: int = 200,
     if psr_comp_parts:
         seq_tag = ' [SEQ-BATCH]' if is_seq_step else ''
         parts.append(f'psr_heads:[{",".join(psr_comp_parts)}]{seq_tag}')
+    # --- [BACKBONE/FPN GRAD DENSITY] shared-trunk gradient norm ---
+    # The RF1 "death spiral" analysis (opus_consult file 29) is entirely about
+    # whether detection's gradient reaches the SHARED backbone/FPN — yet this was
+    # never measured (only per-HEAD norms were). A head can be ALIVE (its own
+    # weights get gradient) while the backbone is STARVED (features never change),
+    # which is exactly the "localizes but won't fire" / background-equilibrium
+    # failure. Measure it directly: if detection_head is ALIVE but backbone is
+    # STARVED, the bottleneck is feature learning (e.g. --detach-reg-fpn), NOT
+    # head gradient. Healthy joint/detection training: backbone >> 1e-3.
+    for _mod_name in ('backbone', 'fpn'):
+        _mod = getattr(model, _mod_name, None)
+        if _mod is None:
+            continue
+        _sq, _n = 0.0, 0
+        for _p in _mod.parameters():
+            if _p.grad is not None:
+                _g = _p.grad.norm().item()
+                _sq += _g * _g
+                _n += 1
+        _gn = _sq ** 0.5
+        _alive = 'ALIVE' if _gn > 1e-4 else 'STARVED'
+        parts.append(f'{_mod_name}:{_alive}[{_gn:.3e}|n={_n}]')
     # Append GPU memory to LIVENESS_GRAD for full diagnostic context
     if torch.cuda.is_available():
         _alloc = torch.cuda.memory_allocated() / 1024**3
