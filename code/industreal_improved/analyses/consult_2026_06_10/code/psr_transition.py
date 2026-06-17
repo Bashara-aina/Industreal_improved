@@ -25,9 +25,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple
 
-from src import config as C
-
-
 # ============================================================================
 # Gaussian Transition Target
 # ============================================================================
@@ -134,12 +131,18 @@ class MonotonicDecoder(nn.Module):
             # Apply procedure-order constraint: a component can only transition
             # if ALL components that must come before it are already placed
             order_constraint = self._order_matrix.to(device)  # [C, C]
-            predecessors_placed = (current_state.unsqueeze(1) >= order_constraint.unsqueeze(0)).all(dim=2)
+            # [GAP-A2 FIX] Check predecessor states (rows), not successor states (cols).
+            # current_state.unsqueeze(2) → [B, C, 1] broadcasts with [C, C] → [B, C, C]
+            # At [b, i, j]: state[i] >= M[i,j] — predecessor i is placed.
+            # .all(dim=1) over i: for successor j, ALL predecessors i are placed.
+            predecessors_placed = (current_state.unsqueeze(2) >= order_constraint).all(dim=1)
             can_transition = can_transition & predecessors_placed
 
             # Decide transitions
-            transition = (trans_prob > threshold) & can_transition
-            current_state = current_state | transition  # Once placed, stays placed
+            transition = (trans_prob > threshold) & can_transition  # [B, C] bool
+            # Once placed, stays placed — use addition+clamp instead of bitwise OR
+            # to avoid NotImplementedError: 'bitwise_or' not implemented for Float on CPU
+            current_state = (current_state + transition.float()).clamp(max=1.0)
 
             states[:, t, :] = current_state
 
@@ -228,7 +231,7 @@ class PSRTransitionPredictor(nn.Module):
 
         # Per-component transition logits
         transition_logits = torch.cat([
-            head(encoded).unsqueeze(-1) for head in self.transition_heads
+            head(encoded) for head in self.transition_heads
         ], dim=-1)  # [B, T, C]
 
         result = {'transition_logits': transition_logits}

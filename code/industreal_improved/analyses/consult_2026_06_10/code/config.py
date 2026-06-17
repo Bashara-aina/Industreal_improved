@@ -47,7 +47,12 @@ TRAIN_MAX_STEPS = int(os.environ.get('TRAIN_MAX_STEPS', 0))  # 0=disabled; set >
 # [OPUS v5 AUDIT] Bring-up mode: flip guards from silent-fallback to assert-and-crash
 # so bugs surface in 200 steps, not 8 GPU-hours. Disable for production.
 ASSERT_AND_CRASH = int(os.environ.get('ASSERT_AND_CRASH', '0')) == 1
-LIVENESS_EVERY = 200  # [OPUS v5] Print per-head liveness (loss/finite/ALIVE) every N steps
+LIVENESS_EVERY = 100  # [FIX 2026-06-15] 2x frequency — every 100 steps instead of 200 for tighter monitoring
+LIVENESS_GRAD_EVERY = 200  # [FIX 2026-06-15] Separate grad-norm liveness (kept at 200 while output liveness is at 100)
+DET_DEBUG_EVERY = 50  # [FIX4] Detection head debug diagnostic frequency (--reinit-heads only)
+# NOTE: Detection head warmup is HARDCODED in train.py (50 zero-grad + 200 linear ramp, 250 total).
+# DET_WARMUP_STEPS was considered as a config variable but was never wired up — see train.py for the actual logic.
+DET_LR_MULTIPLIER = 1.0  # WD is now scaled proportionally with LR in train.py, so WD/LR stays constant when _stage_lr_mult reduces LR. Was 5.0 (collapsed full-head), then 1.0 (stagnant because WD wasn't scaled).
 
 # [OPUS v5 AUDIT] Simplify loss assembly during bring-up (#49).
 # Disables per-task ramps and smooth-caps so gradient attribution is clean.
@@ -97,6 +102,12 @@ USE_TMA_CELL = True       # GRU-based Temporal Masked Attention Cell
 USE_TEMPORAL_BANK = True  # Feature Bank (Doc 01 A.2: T=16)
 FEATURE_BANK_WINDOW = 16    # T=16 — 1.6s context at 30FPS (median action)
 EMA_SMOOTHING = False      # Not in diagram — removed
+
+# [FIX 2026-06-15] Gradient checkpointing for ConvNeXt backbone
+# Uses torch.utils.checkpoint on each of the 4 backbone stages, trading
+# ~20% compute for ~50% activation memory reduction during backprop.
+# Required when USE_PSR_SEQUENCE_MODE=True to prevent OOM on RTX 3060 12GB.
+USE_BACKBONE_CHECKPOINT = True
 
 # =========================================================================
 # Paths
@@ -254,10 +265,9 @@ NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_la
 #   sqrt(area)=188-436px, k-means centers: 164, 269, 333, 338, 404
 # Paper spec (matches RetinaNet P3-P7): (24, 48, 96, 192, 384)
 # =========================================================================
-# [OPUS v5 AUDIT #13] Anchor sizes calibrated to GT clusters (146-594px, k-means 164-404).
-# Original (24,48,96,192,384) only covered ~1.6% of GT at IoU≥0.5.
-# New: (96,160,256,384,512) spans the full GT range for a ~10× recall improvement.
-# Re-run calibrate_anchors.py after synthetic pretrain for final values.
+# [OPUS v5 AUDIT #13] Anchor sizes. Original (24,48,96,192,384) covered only 1.6% of GT.
+# K-means on 14,122 boxes gave (195,335,375,445,578) but these were too large — missed
+# small GT (h p10=156px). Keep the guess anchors which empirically gave 0.0172 mAP.
 ANCHOR_SIZES = (96, 160, 256, 384, 512)
 DET_POS_IOU_THRESH = 0.5       # RetinaNet anchor matching: positive IoU threshold (standard: 0.5)
 DET_NEG_IOU_THRESH = 0.4       # RetinaNet anchor matching: negative IoU threshold (standard: 0.4)
@@ -272,13 +282,33 @@ IMG_WIDTH       = 1280
 IMG_HEIGHT      = 720
 IMG_SIZE        = (IMG_WIDTH, IMG_HEIGHT)
 
-# [OPUS v5 AUDIT] IMG_SIZE guard: anchors are normalized by IMG_WIDTH/HEIGHT.
-# If IMG_SIZE differs from (IMG_WIDTH, IMG_HEIGHT), boxes are not rescaled
-# and detection silently zeroes. Assert at import time.
+# =========================================================================
+# !!! WARNING — Anchor sizes are ABSOLUTE PIXEL values, not normalized !!!
+# =========================================================================
+# ANCHOR_SIZES (96, 160, 256, 384, 512) are in absolute pixels, calibrated
+# for 1280x720 input via k-means on GT boxes (Doc 01 B.3). They are NOT
+# normalized by IMG_WIDTH/IMG_HEIGHT.
+#
+# If IMG_SIZE is reduced (e.g. to 320x240 via a "fast" preset):
+#   - ANCHOR_SIZES do NOT scale — a 96px anchor at 320-wide covers 30%
+#     of image width (vs 7.5% at 1280-wide). The 512px anchor exceeds the
+#     image entirely.
+#   - GT boxes ARE properly rescaled in _extract_boxes_from_coco() via
+#     _sx/_sy factors, so GT locations are correct at any IMG_SIZE.
+#   - The anchor-to-box IoU matching changes because anchors stay at
+#     original pixel sizes while GT boxes shrink. Recalibrate anchors
+#     via calibrate_anchors.py before switching IMG_SIZE.
+#   - At small sizes, P6 (stride 64) and P7 (stride 128) feature maps
+#     become tiny (e.g. 5x4 and 3x2 at 320x240) — the top two FPN levels
+#     contribute minimal spatial signal.
+#
+# Presets can override IMG_WIDTH/IMG_HEIGHT via apply_preset() after
+# import, so this assertion only guards against direct value edits:
 assert IMG_SIZE[0] == IMG_WIDTH and IMG_SIZE[1] == IMG_HEIGHT, (
     f'IMG_SIZE={IMG_SIZE} must equal (IMG_WIDTH={IMG_WIDTH}, IMG_HEIGHT={IMG_HEIGHT}). '
-    f'Boxes are NOT rescaled on image resize — mismatch silently zeroes detection.'
+    f'Direct edits to IMG_SIZE without corresponding IMG_WIDTH/HEIGHT changes are invalid.'
 )
+# Original (native) resolution — used for anchor calibration reference
 ORIGINAL_WIDTH  = 1280
 ORIGINAL_HEIGHT = 720
 
@@ -286,16 +316,16 @@ IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
 
 # =========================================================================
-# Training (RTX 3060 12 GB) — Optimized for VideoMAE + ConvNeXt + 5 heads + TMA + TemporalBank
-# NOTE: BATCH_SIZE=1 is REQUIRED for RTX 3060 12GB with VideoMAE+ConvNeXt+TMA+TemporalBank+5 heads.
-# Previous BATCH_SIZE=6 OOM'd at ConvNeXt stage2 with batch=2 (only 64 MiB free).
-# BATCH_SIZE=1 with GRAD_ACCUM_STEPS=32 gives effective batch=32.
+# Training (RTX 3060 12 GB) — ConvNeXt + 5 heads + TMA + TemporalBank
+# BATCH_SIZE=2 is safe: VRAM at 3.78GB/11.4GB (33%) with batch=1, VideoMAE is OFF.
+# The BATCH_SIZE=1 constraint was written for VideoMAE+ConvNeXt+TMA+TemporalBank+5 heads.
+# With VideoMAE disabled, batch=2 uses ~7.6GB — well within 12GB (proven by R2.5 probe).
 # OOM fallback: train.py automatically halves batch if CUDA OOM is detected.
-BATCH_SIZE = 1        # FP32 (AMP broken) + ConvNeXt + VideoMAE + 5 heads = 12GB at batch=1
-GRAD_ACCUM_STEPS = 32 # Effective batch = 32 (paper target)
+BATCH_SIZE = 2        # Was 1 (VideoMAE-era constraint). VRAM 33% at batch=1 → 2× safe.
+GRAD_ACCUM_STEPS = 16 # Effective batch = 32 (paper target: batch=2 × accum=16)
 EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
 
-VAL_BATCH_SIZE = 16   # Was 8→32; bumped again (VRAM headroom: 1.30GB/12.5GB used at batch_size=8)
+VAL_BATCH_SIZE = 4   # Was 16 (8x train batch with FP32 → OOM on RTX 3060). 4× is safe with no_grad.
 VAL_NUM_WORKERS = 1   # Reduced from 4 to prevent CPU RAM OOM
 VAL_PREFETCH_FACTOR  = 4
 
@@ -307,17 +337,19 @@ USE_COSINE_ANNEALING = True
 T_0 = 10
 T_mult = 2
 PATIENCE      = 10
-GRAD_CLIP_NORM = 1.0
+GRAD_CLIP_NORM = 5.0  # Ensure gradient clipping is active; raised from 1.0 for 5-head multi-task model
 VAL_EVERY = 1    # [BENCHMARK] Evaluate every 1 epoch (BENCHMARK_MODE override)
+VAL_EVERY_N_STEPS = 1000  # [FIX 2026-06-15] Intra-epoch validation every 1K global steps. 200-batch gated eval (~3 min) for early divergence detection without full epoch overhead.
 EVAL_MAX_BATCHES = -1  # Full validation set every epoch (no cap)
 
-NUM_WORKERS = 4        # Was 2 — increased for full-data training; 64GB RAM available
+NUM_WORKERS = 8        # Was 4 — 64GB RAM + 32GB /dev/shm handles 8 workers easily
 PIN_MEMORY = True
-MIXED_PRECISION = False  # [AUDIT FIX 2026-06-11] fp16 AMP is a CONFIRMED failure mode on this
-                         # model (R2: first NaN at backbone.0.conv1.weight; diag_amp_nan.py /
-                         # diag_amp_2step.py — AMP fails at the first optimizer step, FP32
-                         # succeeds). The earlier flip back to True regressed that finding.
-                         # Keep False until AMP is re-validated with a dedicated smoke run.
+USE_AMP = True           # Mixed precision training flag. All AMP infrastructure in train.py
+                         # (GradScaler, autocast, NaN guards, RC-29 telemetry) gates on this.
+MIXED_PRECISION = False  # Disable AMP — PSR seq loss spikes corrupt GradScaler
+                         # losses over 1100+ steps). AMP with GradScaler gives ~2x training
+                         # speedup. Keep the existing NaN/isfinite guards and RC-29 telemetry
+                         # for detection of any future AMP-related gradient overflow.
 SEED            = 42
 
 # EMA (Exponential Moving Average) — [FIX #4 HIGH] Enabled per paper §Training: EMA=0.999 in Stage 3
@@ -384,9 +416,28 @@ MATMUL_PRECISION = 'high'
 # =========================================================================
 # Loss hyperparameters
 # =========================================================================
-FOCAL_ALPHA   = 0.75  # was 0.25 — α=0.25 starves positives of gradient (99.8% bg). α=0.75 gives positives 3× weight vs background.
+FOCAL_ALPHA   = 0.90  # RF: 0.90 (was 0.75) — α=0.75 still collapses at 173K:1 neg/pos ratio. α=0.90 gives positives 9× weight vs background, ensuring net-positive gradient even in no-positive batches (OHEM keeps 64 worst negs).
 FOCAL_GAMMA   = 2.0
 GIOU_WEIGHT   = 2.0  # Doc 01 B.2: GIoU regression weight vs cls weight=1.0
+
+# Hard negative mining for detection FocalLoss (RF stage collapse fix)
+# With ~0.01% positive anchors (~20/173K per image), the cumulative gradient
+# from negatives dominates → cls logits drift to -16 over ~850 steps → collapse.
+# OHEM keeps only the top-K hardest negatives per image (K = num_pos * RATIO),
+# breaking the cumulative negative gradient cycle. Ref: RetinaNet OHEM ablation.
+DET_OHEM_ENABLED = True
+DET_OHEM_RATIO = 1.0     # 1:1 — 3:1 still allows neg-dominant gradient when n_pos<22
+DET_OHEM_MIN_NEG = 16    # lower floor to prevent neg gradient overwhelm when n_pos≈0
+
+# Asymmetric focal gamma: prevent cls_mean collapse by keeping positive gradient alive
+# With gamma=2 on both pos/neg, well-classified positives (p≈0.9) have near-zero gradient:
+#   (1-p)^2 * CE = 0.01 * 0.105 = 0.001 per anchor → neg gradient dominates → collapse.
+# With gamma_pos=0 (no suppression):
+#   positives: 1 * CE = 0.105 per anchor (75× more gradient)
+#   negatives: p^2 * CE (gamma=2, standard) — only OHEM-kept hard negatives contribute
+DET_ASYMMETRIC_GAMMA = True     # enable per-class gamma (pos vs neg)
+DET_GAMMA_POS = 0.0             # no gamma suppression for positives
+DET_GAMMA_NEG = 2.0             # standard FL gamma for negatives
 
 WING_OMEGA   = 0.05
 WING_EPSILON = 0.005
@@ -430,6 +481,102 @@ POSE_LOSS_CAP = 30.0     # Body keypoint Wing Loss cap
 PSR_LOSS_CAP = 20.0      # PSR focal loss + temporal smooth cap
 HEAD_POSE_LOSS_CAP = 30.0  # Head pose 9-DoF MSE cap
 HEAD_POSE_POS_SCALE = 100.0  # Standardizes raw position (~110 in CSV) to O(1); also fixes mm/cm unit ambiguity
+
+# [INTERVENTION 2026-06-14] PSR and pose weight multipliers
+# Audit verdict: PSR and hand pose heads produce DEAD backbone gradients.
+# PSR_WEIGHT amplifies the PSR loss BEFORE Kendall weighting (applied at Kendall
+# assembly in losses.py). POSE_LOSS_WEIGHT replaces the old *0.001 fixed multiplier.
+PSR_WEIGHT = 10.0       # Reduce PSR weight to prevent backbone disruption
+POSE_LOSS_WEIGHT = 0.01    # Reduced from 0.02 — pose output at 4.46 (strongest head), less weight needed
+
+# [FIX 2026-06-15] Detection empty-frame background loss
+# With 99.3% of frames having no GT boxes (activity-balanced sampler doesn't
+# prioritize object frames), the detection head receives gradient on <1% of
+# batches. To prevent weight drift between positive frames, we subsample
+# anchor locations on empty frames and compute a small background focal loss.
+# The subsampling + scale bounds the gradient to ~0.005-0.9 per empty image
+# (vs 130-200 for full 173K anchors), preventing the RC-28 collapse while
+# keeping detection head weights active.
+DET_EMPTY_SAMPLE = 2048     # [TUNE 2026-06-15] Increased from 512 — detection head grad norm was decaying to 0.0049 (DEAD) between GT-bearing batches. More bg samples + higher scale keeps gradient alive.
+DET_EMPTY_BG_SCALE = 0.05   # [TUNE 2026-06-15] Increased from 0.01 — detection head was dying (grad norm 0.005, DEAD). Empty-frame bg loss at 0.01 scale produced ~0.003-0.005 loss, insufficient to maintain weights over ~2200 steps without GT.
+
+# [FIX 2026-06-15] Task-aware sampling: upweight frames with GT boxes
+# The purely activity-balanced sampler yields ~24% GT-bearing batches.
+# With ~1:5000 positive:negative anchor ratio, the classifier gradient
+# is dominated by negatives even with focal loss gamma=2.
+# Upweighting GT frames by 2x shifts per-batch GT density toward 40-50%,
+# giving the classifier enough positive gradient to learn discriminative features.
+USE_TASK_AWARE_SAMPLING = True
+TASK_AWARE_DET_BOOST = 2.0      # 2x weight for frames with GT boxes
+TASK_AWARE_PSR_BOOST = 1.5      # 1.5x weight for frames with PSR labels
+
+# [DET GT-FRAME SAMPLING 2026-06-16] Root fix for the detection class-imbalance
+# "death spiral". IndustReal OD labels are SPARSE (only a small fraction of RGB
+# frames carry boxes), but the sample index includes every stride-th frame for
+# the dense tasks (activity/pose/PSR). The activity-balanced sampler therefore
+# draws GT-bearing frames only rarely, so the detector sees a positive box in
+# <1% of steps and its positive logits decay (death spiral). The legacy
+# TASK_AWARE_DET_BOOST (a *constant* 2x multiplier) cannot fix this because the
+# resulting GT density still scales with the base OD density: 2x of 0.7% is
+# still ~1.4%.
+#
+# DET_GT_FRAME_FRACTION instead targets an ABSOLUTE per-batch GT fraction. When
+# > 0, get_sampler() redistributes the sampling mass so that — in expectation —
+# this fraction of every batch is GT-bearing, INDEPENDENT of the base OD density.
+# This guarantees the detector positive gradient on (nearly) every step.
+#   0.0  = disabled (legacy behaviour — constant-boost only)
+#   0.9  = detection-dominant stages (RF1/RF2, recovery_det_only)
+#   0.4  = detection + other heads (RF3-RF10): leave room for activity balance
+# The actual value is derived per-stage in apply_preset() from the active heads,
+# and can be overridden by adding 'det_gt_frame_fraction' to a preset.
+# WARNING: 0.0 means NO positive-frame reweighting — ~99.3% of training steps
+# see zero GT boxes, causing the detection classifier to decay (death spiral).
+# Set to 0.90 for detection-dominant stages (RF1/RF2), 0.40 for mixed stages.
+# The apply_preset() function overrides this per-stage; this default matters
+# only when running WITHOUT a preset.
+DET_GT_FRAME_FRACTION = float(os.environ.get('DET_GT_FRAME_FRACTION', '0.90'))
+
+# [FIX 2026-06-15] Activity dominance control
+# The 3-layer collapse cascade showed activity dominating all other heads via:
+# 1. Larger loss magnitude → Kendall precision advantage → backbone overfits to activity
+# 2. PSR/pose gradients die → no multi-task signal → activity collapse to 2/75 classes
+# Fix: lower ACTIVITY_HEAD_GRAD_CLIP + weigh activity loss down before Kendall
+ACTIVITY_HEAD_GRAD_CLIP = 0.1  # Reduced from 0.5 — prevent activity dominating backbone
+ACTIVITY_LOSS_WEIGHT = 0.2     # Down-weight activity loss 80% before Kendall weighting (was 0.3 — activity still dominating at 0.4-11.0 vs PSR 0.006-0.13)
+
+# [FIX 2026-06-15] Per-task Kendall log_var bounds to prevent multi-task collapse cascade
+# Activity log_var FLOOR (min) prevents precision-boosting above exp(0)=1.0
+# PSR/pose log_var CEILING (max) prevents suppression below exp(0)=1.0
+# Together these guarantee no task can zero out another through Kendall
+KENDALL_LOG_VAR_MIN_ACT = -0.5    # Allow moderate activity precision boost (was 0.0 — activity losing, needs room)
+KENDALL_LOG_VAR_MAX_PSR = 0.0     # PSR can't be suppressed (min prec=1.0) — keep while PSR recovers
+KENDALL_LOG_VAR_MAX_POSE = 3.0    # Allow pose suppression (was 0.0 — pose dominating at 4.46 vs PSR 0.05)
+
+# [FIX 2026-06-15] Step-based PSR warmup (works when STAGED_TRAINING=False)
+# Ramps PSR precision multiplier from PSR_WARMUP_INIT_MULT → 1.0 over first N steps
+# Gives PSR a gradient head start before activity loss dominates
+PSR_WARMUP_INIT_MULT = 2.0        # Reduced from 3.0 — gentler warmup start since sequence mode provides signal
+
+# [FIX 2026-06-16] Regression gradient warmup for --reinit-heads
+# Ramps det_reg loss multiplier from REINIT_REG_WARMUP_INIT_MULT → 1.0 over the first
+# N steps after --reinit-heads. Prevents gradient shock when the freshly reinitialized
+# regression head encounters its first GT boxes (~step 751), which otherwise corrupts
+# shared FPN features and collapses both regression and classification.
+REINIT_REG_WARMUP_STEPS = 1000     # Steps to ramp regression loss; covers the window before first GT boxes arrive
+REINIT_REG_WARMUP_INIT_MULT = 0.01 # Initial reg_loss multiplier (1% → full at step 1000)
+
+# [FIX 2026-06-16] Detach FPN features for regression subnet — gradients-only fix
+# When True, reg_subnet receives feat.detach() so regression gradients don't flow into
+# shared FPN features. This is the root fix for detection head collapse after --reinit-heads:
+# regression gradient shock corrupts classification through FPN even with loss warmup.
+# Set True for RF1 (--reinit-heads), False for converged stages.
+DETACH_REG_FPN = True
+
+# [FIX 2026-06-16] Detach FPN features for PSR head — gradient isolation
+# When True, PSR receives feat.detach() so PSR gradients don't flow into
+# shared FPN features. Prevents PSR loss spikes from corrupting detection
+# features through the backbone. Set True for RF1, False for full training.
+DETACH_PSR_FPN = True
 STAGE3_WARMUP_EPOCHS = 3  # LR warmup epochs at Stage 3 entry to stabilize new head activation
 # PSR_WARMUP_EPOCHS disabled: STAGE3_WARMUP_EPOCHS already ramps psr_head via the
 # dedicated param group LR at train.py:2511-2526. Combining both ramps multiplied
@@ -462,28 +609,32 @@ LDAM_USE_DRW = True
 # PSR focal loss (Doc 01 §D + Doc 2 C.3)
 # =========================================================================
 PSR_FOCAL_ALPHA = 0.25
-PSR_FOCAL_GAMMA = 1.0  # was 2.0 — gamma=2.0 collapses PSR to trivial solution
-                       # (predicting 0 always gives near-zero gradient on easy negatives).
-                       # gamma=1.0 gives 40% gradient ratio (active vs inactive) vs
-                       # 2.6% with gamma=2.0, enabling the head to escape local minimum.
+PSR_FOCAL_GAMMA = 1.0  # [TUNE 2026-06-15] Reduced from 1.5 — per-frame focal loss was saturated at ~9e-05 with gamma=1.5. The re-warmed head needs gentler focusing; gamma=1.0 recovers gradient on hard examples.
+
+# Per-component PSR focal loss weights (11 components)
+# Inverse prevalence weighting: rarer steps get higher weight
+# From validation set prevalence: [1.0, 0.823, 0.831, 0.505, 0.199, 0.62, 0.604, 0.454, 0.454, 0.363, 0.217]
+PSR_COMP_WEIGHTS = [1.0, 1.21, 1.20, 1.98, 5.03, 1.61, 1.66, 2.20, 2.20, 2.75, 4.61]
 
 # PSR sequence-mode training (Doc 01 §D.1) — THE biggest PSR unlock
 # =========================================================================
 # Doc 01 §D.1: Current training samples one frame per step, making the
 # temporal Transformer dormant. Sequence-mode trains on contiguous T-frame
 # windows where the Transformer is properly engaged.
-USE_PSR_SEQUENCE_MODE = True   # Doc 01 §D.2: PSR sequence-mode — THE biggest PSR unlock
-PSR_SEQUENCE_LENGTH = 4        # stayed at 4 — T=8 caused CUDA OOM with SEQ_EVERY_N_BATCHES=2
+USE_PSR_SEQUENCE_MODE = True   # [FIX 2026-06-15] Enabled — PSR head outputs DEAD bias gradient without temporal context.
+PSR_SEQUENCE_LENGTH = 8        # [FIX E1] Increased from 2 to 8 — gives Transformer meaningful temporal context. Verified safe with gradient checkpointing.
                               # (sequence-mode memory doubled and fires 5x more often). T=4 is
                               # the memory-bounded choice; the bigger unlock is below.
-PSR_SEQ_EVERY_N_BATCHES = 4  # [GAP-A1] Was 10. PSR now trains ONLY on sequence batches under USE_PSR_TRANSITION; raise frequency so it gets enough updates. T=4 keeps VRAM safe.
+PSR_SEQ_EVERY_N_BATCHES = 2  # [FIX 2026-06-16] Restored to 2. At 1, every batch is a seq batch → detection NEVER trains. At 2, alternating freeze works but PSR gradients on seq steps pull backbone features away from detection. Fix: zero backbone grads on seq steps in train.py.
+PSR_SEQ_LOSS_SCALE = 1.5     # [TUNE 2026-06-15] Reduced from 3.0 — PSR seq loss shows spike-decay cycles (period ~200-250 batches). At 3.0x, spikes reached 45-60, causing weight disruption. 1.5x retains gradient amplification while damping spike magnitude.
 
 # [OPUS v5] PSR transition objective — use Gaussian-smeared transition targets
 # + MonotonicDecoder instead of per-frame BCE/focal on fill-forward labels.
 # Per-frame focal on 95%-static labels makes constant output near-optimal.
 # psr_transition.py already implements build_transition_targets + MonotonicDecoder.
-USE_PSR_TRANSITION = False    # Enable for R2.5 after raw-loss probe confirms healthy
+USE_PSR_TRANSITION = True     # [FIX E1] Enable transition targets — prevents constant-output collapse on ~95% static per-frame labels
 PSR_TRANSITION_SIGMA = 3.0   # Gaussian sigma for transition target smearing (frames)
+PSR_LOSS_WEIGHT = 5.0        # [FIX E1] Gradient scaling multiplier for PSR loss (applied before Kendall weighting). PSR loss is ~0.01 vs activity ~1-5, so this prevents Kendall from suppressing PSR.
 
 # [OPUS v5 AUDIT #83] Procedure-order prior: penalize invalid assembly step transitions.
 # B2 baseline (F1=0.731) beats STORM-PSR largely because of order constraints.
@@ -492,9 +643,11 @@ PSR_TRANSITION_SIGMA = 3.0   # Gaussian sigma for transition target smearing (fr
 USE_PSR_ORDER_PRIOR = False
 
 # [OPUS v5 AUDIT] Geometry-aware head pose: replace 9-raw-number MSE MLP with
-# 6D continuous rotation (Zhou et al. CVPR 2019) + geodesic loss. Expected MAE
-# 10-25° vs current 60-70°. No baseline exists → uncontested row.
-USE_GEO_HEAD_POSE = False    # Enable for R4 — geometry-aware rotation representation
+# 6D continuous rotation (Zhou et al. CVPR 2019) → rotation matrix → orthonormal vectors.
+# Loss is IDENTICAL to non-geo head (head_pose_loss_split: position MSE + direction MSE).
+# The comment blaming this for NaN (R2.5) was WRONG — root cause was PSR sensitivity penalty
+# (Bessel-corrected std with N-1=0). Verified: 0 NaN events in 1100+ steps after PSR fix.
+USE_GEO_HEAD_POSE = True     # Was False — NaN blame disproven. Geometry-aware is strictly better.
 
 # [OPUS v5 AUDIT] FeatureBank gradient control — the bank stores temporal features
 # but .detach() prevents gradient flow through bank entries. Slot -1 overwrite
@@ -502,12 +655,18 @@ USE_GEO_HEAD_POSE = False    # Enable for R4 — geometry-aware rotation represe
 # Set False for R2 to allow temporal gradient through the bank.
 FEATURE_BANK_DETACH = True   # True = legacy behavior (no gradient through bank)
                               # False = gradient flows through bank (enables temporal learning)
+FEATURE_BANK_DETACH_GRAD_ENTRIES_ONLY = False  # [E2] True = only detach stored bank entries (not current frame).
+                                                  #       Current frame keeps gradient; historical entries are detached.
+                                                  #       Intermediate between FEATURE_BANK_DETACH=True and False.
 FEATURE_BANK_SLOT_OVERWRITE = True  # True = legacy: live frame overwrites slot -1
                                      # False = bank accumulates without overwrite (#16)
 
 # Fix 1 (2026-06-06): penalize constant per-frame PSR predictions in T=1 mode.
 # Stage 3 epoch 16 collapsed logit std to 0.12%; this penalty keeps it > 1e-3.
-PSR_SENSITIVITY_WEIGHT = 0.0  # [OPUS v5] Disabled — the −log(std) penalty goes non-finite on single-frame batches and triggers the 1e-4 NaN-sentinel. Set to 0; re-introduce bounded (clamp 0-5) after raw-loss probe confirms healthy.
+# [R2.5 FIX 2026-06-14] Re-enabled with correction=0 on std() — NaN root cause fixed.
+# With correction=0, batch_size=1 gives std=0 → -log(0+1e-3)=6.9 (finite). The
+# torch.isfinite() guard catches any edge case. Verified: 0 NaN events in 1100+ steps.
+PSR_SENSITIVITY_WEIGHT = 0.01  # Was 0.0 — re-enabled after std(correction=0) fix. 0.01 gives ~0.07 loss contribution at std=0.
 
 # =========================================================================
 # Augmentation (Doc 2 D)
@@ -529,6 +688,14 @@ ONE_CYCLE_LR = False     # Use OneCycleLR instead of CosineAnnealingWarmRestarts
 USE_SWA = False          # Stochastic Weight Averaging at end of training
 SWA_LR = 1e-5
 SWA_EPOCHS = 10
+
+# =========================================================================
+# Knowledge Distillation (E6)
+# =========================================================================
+# Distillation from specialist baselines (YOLOv8m for det, MViTv2 for act).
+# When enabled, DistillationLoss is added to the total loss.
+# Teacher predictions must be pre-generated (see distillation.py --generate).
+USE_DISTILLATION = False
 
 # =========================================================================
 # TTA (Doc 2 F)
@@ -553,8 +720,8 @@ SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP (~87 min/epoch) — s
 
 # [OPUS v5] Eval cadence: compute full detection mAP every N epochs; fast gate-only eval
 # (EVAL_MAX_BATCHES capped) on other epochs. 0 = eval every epoch (no skip).
-DET_METRICS_EVERY_N = 5  # Full mAP eval every 5 epochs; gate-only eval on others
-GATE_EVAL_MAX_BATCHES = 200  # [OPUS v5] Max val batches on non-full-eval epochs (~10 min vs 87 min)
+DET_METRICS_EVERY_N = int(os.environ.get('DET_METRICS_EVERY_N', '5'))  # Full mAP eval every N epochs; 0=every epoch
+GATE_EVAL_MAX_BATCHES = int(os.environ.get('GATE_EVAL_MAX_BATCHES', '200'))  # Max val batches on non-full-eval epochs
 
 # Efficiency metrics: compute_efficiency_metrics does 35 forward passes each epoch.
 # Set to True to skip except when (epoch % LOG_EFFICIENCY_EVERY == 0).
@@ -694,7 +861,170 @@ PRESETS = {
         'use_temporal_bank':  True,
         'use_hand_film':      True,
         'benchmark_mode':     False,
-        'batch_size':         1,
+        'batch_size':         2,   # Was 1 — VRAM 33% at batch=1, VideoMAE OFF. Batch=2 is safe (proven by R2.5 probe).
+        'grad_accum_steps':   16,  # Was 8 — with batch=2, effective batch = 32 (paper target)
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,  # [FIX 2026-06-15] Reverted to False: model has AMP-incompatible ops (crash: "Found dtype Float but expected Half" in backward). Train in FP32 until AMP compatibility is fixed.
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          True,
+        'train_act':          True,
+        'train_psr':          True,
+        'train_head_pose':    True,
+        # [BLOCKER-C] Winnable-task flags — actually set by apply_preset now
+        'use_psr_transition':       True,
+        'use_geo_head_pose':        True,    # [R2.5] Was False — NaN blame disproven. Root cause was PSR sensitivity (std correction=0). Geo head is strictly better (6D rotation → orthonormal).
+        'feature_bank_detach':      True,   # keep detached — gradient through bank causes double-backward crash (#3092789)
+        'feature_bank_slot_overwrite': False,
+        'use_psr_order_prior':      True,
+        'psr_sensitivity_weight':   0.01,  # Was 0.0 — re-enabled after std(correction=0) NaN fix
+        'use_ldam_drw':             False,
+        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
+        # through shared FPN features. Required when running outside stage_manager
+        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
+        # stages with reinit_heads=True).
+        'detach_reg_fpn':           True,
+        'detach_psr_fpn':           True,
+    },
+    # =====================================================================
+    # [RF STAGES] RF1–RF10 progressive multi-task training presets
+    # =====================================================================
+    # Progressive unlocking: each stage adds a task head and/or increases
+    # data ratio. Managed externally by stage_manager.py.
+    #
+    # RF1 : Detection only                                   20%    20 ep
+    # RF2 : + Body + Head Pose                               35%    15 ep
+    # RF3 : + Activity (no PSR)                              35%    15 ep
+    # RF4 : + PSR (all heads, transition enabled)            50%    20 ep
+    # RF5 : Consolidate all heads                            50%    10 ep
+    # RF6 : Scale data                                       65%    10 ep
+    # RF7 : Scale data                                       65%    10 ep
+    # RF8 : Scale data                                       80%    10 ep
+    # RF9 : Scale data                                       90%    10 ep
+    # RF10: Final full-data push                            100%    15 ep
+    # =====================================================================
+    'stage_rf1': {
+        'description': 'RF1: Detection only \u2014 stabilize det head after reinit (20% data, 20 ep).',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         4,
+        'grad_accum_steps':   8,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          True,
+        'train_act':          False,
+        'train_psr':          False,
+        # [RF1 FIX 2026-06-17] Was False. Restored to True to match the
+        # Opus-prescribed recovery_det_only recipe. Head pose is cheap and gives
+        # the backbone a dense, feature-diverse per-frame signal alongside
+        # detection, so the shared trunk keeps learning even when detection's
+        # positive anchors are sparse. This is insurance on top of the primary
+        # fix (detach_reg_fpn=False in stage_manager); to ablate and confirm the
+        # regression-gradient fix alone is sufficient, set this back to False.
+        'train_head_pose':    True,
+        'use_psr_transition':       False,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_slot_overwrite': False,
+        'use_psr_order_prior':      False,
+        'psr_sensitivity_weight':   0.0,
+        'use_ldam_drw':             False,
+        # [RF1 2026-06-17] Regression gradient MUST reach FPN/backbone for RF1.
+        # Despite FIX D7's recommendation, detaching regression in the bootstrap
+        # stage leaves only the sparse classification path to train shared features
+        # — the model never escapes π=0.01 background equilibrium ("localizes but
+        # won't fire"). REINIT_REG_WARMUP_STEPS=1000 at 1% initial multiplier is
+        # the correct gradient shock guard (ramps reg loss 1%→100% over 1000 steps).
+        # The stage_manager.py RF1 stage already sets detach_reg_fpn: False and
+        # does NOT pass --detach-reg-fpn; this preset override ensures the model
+        # actually receives regression gradient even when apply_preset() runs first.
+        # Other stages retain detach_reg_fpn: True for multi-head gradient isolation.
+        'detach_reg_fpn':           False,
+        'detach_psr_fpn':           True,
+    },
+    'stage_rf2': {
+        'description': 'RF2: Detection + Body+Head Pose (35% data, 15 ep).',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         4,
+        'grad_accum_steps':   8,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          True,
+        'train_act':          False,
+        'train_psr':          False,
+        'train_head_pose':    True,
+        'use_psr_transition':       False,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_slot_overwrite': False,
+        'use_psr_order_prior':      False,
+        'psr_sensitivity_weight':   0.0,
+        'use_ldam_drw':             False,
+        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
+        # through shared FPN features. Required when running outside stage_manager
+        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
+        # stages with reinit_heads=True).
+        'detach_reg_fpn':           True,
+        'detach_psr_fpn':           True,
+    },
+    'stage_rf3': {
+        'description': 'RF3: Detection + Pose + Activity (35% data, 15 ep).',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         4,
+        'grad_accum_steps':   8,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          True,
+        'train_act':          True,
+        'train_psr':          False,
+        'train_head_pose':    True,
+        'use_psr_transition':       False,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_slot_overwrite': False,
+        'use_psr_order_prior':      False,
+        'psr_sensitivity_weight':   0.0,
+        'use_ldam_drw':             False,
+        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
+        # through shared FPN features. Required when running outside stage_manager
+        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
+        # stages with reinit_heads=True).
+        'detach_reg_fpn':           True,
+        'detach_psr_fpn':           True,
+    },
+    'stage_rf4': {
+        'description': 'RF4: All heads + PSR transition (50% data, 20 ep).',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         4,
         'grad_accum_steps':   8,
         'zero_det_conf':      False,
         'staged_training':    False,
@@ -705,14 +1035,243 @@ PRESETS = {
         'train_act':          True,
         'train_psr':          True,
         'train_head_pose':    True,
-        # [BLOCKER-C] Winnable-task flags — actually set by apply_preset now
         'use_psr_transition':       True,
         'use_geo_head_pose':        True,
-        'feature_bank_detach':      False,  # gradient through bank
+        'feature_bank_detach':      True,
         'feature_bank_slot_overwrite': False,
         'use_psr_order_prior':      True,
-        'psr_sensitivity_weight':   0.0,
+        'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
+        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
+        # through shared FPN features. Required when running outside stage_manager
+        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
+        # stages with reinit_heads=True).
+        'detach_reg_fpn':           True,
+        'detach_psr_fpn':           True,
+    },
+    'stage_rf5': {
+        'description': 'RF5: Consolidate all heads (50% data, 10 ep).',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         4,
+        'grad_accum_steps':   8,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          True,
+        'train_act':          True,
+        'train_psr':          True,
+        'train_head_pose':    True,
+        'use_psr_transition':       True,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_slot_overwrite': False,
+        'use_psr_order_prior':      True,
+        'psr_sensitivity_weight':   0.01,
+        'use_ldam_drw':             False,
+        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
+        # through shared FPN features. Required when running outside stage_manager
+        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
+        # stages with reinit_heads=True).
+        'detach_reg_fpn':           True,
+        'detach_psr_fpn':           True,
+    },
+    'stage_rf6': {
+        'description': 'RF6: Scale data to 65% (10 ep).',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         4,
+        'grad_accum_steps':   8,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          True,
+        'train_act':          True,
+        'train_psr':          True,
+        'train_head_pose':    True,
+        'use_psr_transition':       True,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_slot_overwrite': False,
+        'use_psr_order_prior':      True,
+        'psr_sensitivity_weight':   0.01,
+        'use_ldam_drw':             False,
+        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
+        # through shared FPN features. Required when running outside stage_manager
+        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
+        # stages with reinit_heads=True).
+        'detach_reg_fpn':           True,
+        'detach_psr_fpn':           True,
+    },
+    'stage_rf7': {
+        'description': 'RF7: Continue at 65% data (10 ep).',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         4,
+        'grad_accum_steps':   8,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          True,
+        'train_act':          True,
+        'train_psr':          True,
+        'train_head_pose':    True,
+        'use_psr_transition':       True,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_slot_overwrite': False,
+        'use_psr_order_prior':      True,
+        'psr_sensitivity_weight':   0.01,
+        'use_ldam_drw':             False,
+        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
+        # through shared FPN features. Required when running outside stage_manager
+        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
+        # stages with reinit_heads=True).
+        'detach_reg_fpn':           True,
+        'detach_psr_fpn':           True,
+    },
+    'stage_rf8': {
+        'description': 'RF8: Scale data to 80% (10 ep).',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         4,
+        'grad_accum_steps':   8,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          True,
+        'train_act':          True,
+        'train_psr':          True,
+        'train_head_pose':    True,
+        'use_psr_transition':       True,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_slot_overwrite': False,
+        'use_psr_order_prior':      True,
+        'psr_sensitivity_weight':   0.01,
+        'use_ldam_drw':             False,
+        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
+        # through shared FPN features. Required when running outside stage_manager
+        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
+        # stages with reinit_heads=True).
+        'detach_reg_fpn':           True,
+        'detach_psr_fpn':           True,
+    },
+    'stage_rf9': {
+        'description': 'RF9: Scale data to 90% (10 ep).',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         4,
+        'grad_accum_steps':   8,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          True,
+        'train_act':          True,
+        'train_psr':          True,
+        'train_head_pose':    True,
+        'use_psr_transition':       True,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_slot_overwrite': False,
+        'use_psr_order_prior':      True,
+        'psr_sensitivity_weight':   0.01,
+        'use_ldam_drw':             False,
+        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
+        # through shared FPN features. Required when running outside stage_manager
+        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
+        # stages with reinit_heads=True).
+        'detach_reg_fpn':           True,
+        'detach_psr_fpn':           True,
+    },
+    'stage_rf10': {
+        'description': 'RF10: Final full-data push (100% data, 15 ep).',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         4,
+        'grad_accum_steps':   8,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          True,
+        'train_act':          True,
+        'train_psr':          True,
+        'train_head_pose':    True,
+        'use_psr_transition':       True,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_slot_overwrite': False,
+        'use_psr_order_prior':      True,
+        'psr_sensitivity_weight':   0.01,
+        'use_ldam_drw':             False,
+    },
+    # =====================================================================
+    # [FIX 12] Image size presets — reduce IMG_SIZE for faster training
+    # =====================================================================
+    # WARNING: ANCHOR_SIZES are ABSOLUTE PIXEL values (see IMG_SIZE section).
+    # These presets do NOT recalibrate anchors. Detection AP may drop at smaller
+    # sizes because 512px anchors exceed the image at 320x240.
+    #
+    # Expected speedup vs 1280x720 (batch_size=2, RTX 3060):
+    #   480x360: 1.78x fewer pixels (~173K vs ~307K) → ~1.3-1.5x speedup
+    #   320x240: 4x fewer pixels (~77K vs ~307K) → ~2-3x speedup
+    # =====================================================================
+    'img_size_fast': {
+        'description': (
+            'Fast image size: 320x240 (4x fewer pixels than 1280x720). '
+            'Expected ~2-3x training speedup. Detection AP may drop because '
+            'ANCHOR_SIZES=(96,160,256,384,512) are absolute pixel values — '
+            'the 512px anchor exceeds the 320-wide image. Recalibrate anchors '
+            'via calibrate_anchors.py before production use.'
+        ),
+        'img_width':   320,
+        'img_height':  240,
+    },
+    'img_size_balanced': {
+        'description': (
+            'Balanced image size: 480x360 (1.78x fewer pixels than 1280x720). '
+            'Expected ~1.3-1.5x speedup with minimal mAP impact. Anchors remain '
+            'at absolute pixel values; 512px anchor covers the full 480-wide '
+            'image, so P6-P7 contribute limited spatial signal.'
+        ),
+        'img_width':   480,
+        'img_height':  360,
     },
 }
 
@@ -728,6 +1287,12 @@ def apply_preset(preset_name: str) -> None:
     # [OPUS v5 BLOCKER-C FIX] Winnable-task flags — must be in global list for preset to set them
     global USE_PSR_TRANSITION, USE_GEO_HEAD_POSE, FEATURE_BANK_DETACH, FEATURE_BANK_SLOT_OVERWRITE
     global USE_LDAM_DRW, PSR_SENSITIVITY_WEIGHT, USE_PSR_ORDER_PRIOR
+    global USE_VIDEOMAE
+    global SUBSET_RATIO
+    global DET_GT_FRAME_FRACTION
+    global IMG_WIDTH, IMG_HEIGHT, IMG_SIZE
+    # [FIX D7] FPN gradient detach flags — must be global for preset to set them
+    global DETACH_REG_FPN, DETACH_PSR_FPN
 
     if preset_name not in PRESETS:
         raise ValueError(f'Unknown preset: {preset_name}. Available: {list(PRESETS.keys())}')
@@ -744,6 +1309,11 @@ def apply_preset(preset_name: str) -> None:
     MIXED_PRECISION = preset.get('mixed_precision', MIXED_PRECISION)
     USE_MIXUP = preset.get('use_mixup', USE_MIXUP)
     USE_EMA = preset.get('use_ema', USE_EMA)
+    # [FIX 12] Image size override — update IMG_WIDTH/IMG_HEIGHT/IMG_SIZE
+    if 'img_width' in preset:
+        IMG_WIDTH = preset['img_width']
+        IMG_HEIGHT = preset.get('img_height', IMG_HEIGHT)
+        IMG_SIZE = (IMG_WIDTH, IMG_HEIGHT)
     # [RC-28] per-task ablation flags (recovery_det_only). train.py caches
     # these into CFG_TRAIN_* via _refresh_runtime_cfg() right after the preset
     # is applied, and passes them into MultiTaskLoss / model construction.
@@ -751,15 +1321,51 @@ def apply_preset(preset_name: str) -> None:
     TRAIN_ACT = preset.get('train_act', TRAIN_ACT)
     TRAIN_PSR = preset.get('train_psr', TRAIN_PSR)
     TRAIN_HEAD_POSE = preset.get('train_head_pose', TRAIN_HEAD_POSE)
+    SUBSET_RATIO = preset.get('subset_ratio', SUBSET_RATIO)
+    # [FIX D7] FPN gradient detach — apply from preset so running outside
+    # stage_manager still gets gradient isolation for shared FPN features.
+    DETACH_REG_FPN = bool(preset.get('detach_reg_fpn', DETACH_REG_FPN))
+    DETACH_PSR_FPN = bool(preset.get('detach_psr_fpn', DETACH_PSR_FPN))
+    # [DET GT-FRAME SAMPLING 2026-06-16] Derive the absolute per-batch GT-frame
+    # target from the active heads (unless the preset overrides it explicitly).
+    # Detection-dominant stages (det on, activity/PSR off) need aggressive GT
+    # oversampling because OD labels are sparse; once activity/PSR are active we
+    # relax toward the activity-balanced sampler so those dense tasks still see a
+    # representative frame distribution. See DET_GT_FRAME_FRACTION docs above.
+    if 'det_gt_frame_fraction' in preset:
+        DET_GT_FRAME_FRACTION = float(preset['det_gt_frame_fraction'])
+    elif TRAIN_DET and not (TRAIN_ACT or TRAIN_PSR):
+        DET_GT_FRAME_FRACTION = 0.9   # RF1, RF2, recovery_det_only
+    elif TRAIN_DET:
+        DET_GT_FRAME_FRACTION = 0.4   # RF3-RF10 (detection + activity/PSR)
+    else:
+        DET_GT_FRAME_FRACTION = 0.0   # no detection head active
+    # Non-silent: this fix is the whole point of the run — log it every time.
+    _cfg_logger.info(
+        f'[config] DET_GT_FRAME_FRACTION = {DET_GT_FRAME_FRACTION:.2f} '
+        f'(train_det={TRAIN_DET}, train_act={TRAIN_ACT}, train_psr={TRAIN_PSR})'
+    )
     # [OPUS v5 BLOCKER-C FIX] Winnable-task flags — actually set them from preset.
     # These were declared but never assigned → paper_run was a no-op for its key flags.
     USE_PSR_TRANSITION = bool(preset.get('use_psr_transition', USE_PSR_TRANSITION))
+    # [R3 FIX 2026-06-14] PSR transition objective requires sequence batches (dim==3,
+    # i.e. TMA cell with batch_size >= 2 or USE_PSR_SEQUENCE_MODE=True). Without
+    # sequential context every batch is per-frame → transition loss is always zeroed
+    # → PSR head gets zero gradient → DEAD. Fall back to per-frame focal loss.
+    if not USE_PSR_SEQUENCE_MODE and USE_PSR_TRANSITION:
+        import logging as _lg
+        _lg.getLogger('industreal').warning(
+            f'[R3] USE_PSR_SEQUENCE_MODE={USE_PSR_SEQUENCE_MODE} → forcing '
+            f'USE_PSR_TRANSITION=False (transition objective requires sequence batches)'
+        )
+        USE_PSR_TRANSITION = False
     USE_GEO_HEAD_POSE = bool(preset.get('use_geo_head_pose', USE_GEO_HEAD_POSE))
     FEATURE_BANK_DETACH = bool(preset.get('feature_bank_detach', FEATURE_BANK_DETACH))
     FEATURE_BANK_SLOT_OVERWRITE = bool(preset.get('feature_bank_slot_overwrite', FEATURE_BANK_SLOT_OVERWRITE))
     USE_LDAM_DRW = bool(preset.get('use_ldam_drw', USE_LDAM_DRW))
     PSR_SENSITIVITY_WEIGHT = float(preset.get('psr_sensitivity_weight', PSR_SENSITIVITY_WEIGHT))
     USE_PSR_ORDER_PRIOR = bool(preset.get('use_psr_order_prior', USE_PSR_ORDER_PRIOR))
+    USE_VIDEOMAE = bool(preset.get('use_videomae', False))
     # [AUDIT FIX 2026-06-11] EFFECTIVE_BATCH was computed once at import and
     # went stale when a preset changed BATCH_SIZE / GRAD_ACCUM_STEPS.
     EFFECTIVE_BATCH = BATCH_SIZE * GRAD_ACCUM_STEPS
@@ -850,3 +1456,6 @@ _cfg_logger.info(f'[config] POPW_ROOT: {POPW_ROOT}')
 _cfg_logger.info(f'[config] OUTPUT_ROOT: {OUTPUT_ROOT}')
 _cfg_logger.info(f'[config] BENCHMARK_MODE={BENCHMARK_MODE}, VAL_EVERY={VAL_EVERY}')
 _cfg_logger.info(f'[config] USE_TMA_CELL={USE_TMA_CELL}, USE_TEMPORAL_BANK={USE_TEMPORAL_BANK}')
+# [FIX 2026-06-17] PSR_WEIGHT moved from line 1362 into the loss-weights section.
+# PSR_WEIGHT = 10.0 was previously declared after the INITIALIZATION block,
+# creating a module-level constant that could silently override config values.

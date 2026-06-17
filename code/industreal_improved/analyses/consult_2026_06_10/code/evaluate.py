@@ -1,5 +1,6 @@
 import sys
 import os
+import signal
 from pathlib import Path
 import numpy as np
 
@@ -58,7 +59,7 @@ except ImportError:
     _NUMBA_AVAILABLE = False
     njit = lambda *a, **k: lambda f: f  # no-op decorator when numba unavailable
 
-import config as C
+from src import config as C
 
 # =============================================================================
 # Detection Collapse Probe (drop-in diagnostic)
@@ -754,6 +755,28 @@ def _compute_clip_level_accuracy(
     if len(all_gt) == 0 or clip_ids is None:
         return 0.0
 
+    # [FIX 2026-06-15] Defensive length alignment — eval must never crash a multi-hour
+    # run on an array-length mismatch. If gt/pred/clip_ids/frame_nums disagree (e.g. an
+    # upstream masking inconsistency), truncate all to the common minimum and warn rather
+    # than raising IndexError mid-eval. With the act_valid fix upstream this should never
+    # fire; it is pure insurance so the other heads' metrics still get computed + saved.
+    _lens = [len(all_gt), len(all_pred), len(clip_ids)]
+    if clip_frame_nums is not None:
+        _lens.append(len(clip_frame_nums))
+    _n = min(_lens)
+    if max(_lens) != _n:
+        logger.warning(
+            f'  [CLIP_EVAL] activity array length mismatch '
+            f'gt={len(all_gt)} pred={len(all_pred)} clip_ids={len(clip_ids)} '
+            f'fnums={len(clip_frame_nums) if clip_frame_nums is not None else None} '
+            f'— truncating all to {_n} to avoid crash (clip-level number may be approximate)'
+        )
+        all_gt = all_gt[:_n]
+        all_pred = all_pred[:_n]
+        clip_ids = clip_ids[:_n]
+        if clip_frame_nums is not None:
+            clip_frame_nums = clip_frame_nums[:_n]
+
     unique_clips = np.unique(clip_ids)
     correct = 0
     total = 0
@@ -802,7 +825,6 @@ def _compute_clip_level_accuracy(
             # single-frame clips or DEBUG_MAX_VIDEOS=2 smoke test subset)
             if len(pred_clip_valid) == 0 or np.isnan(pred_clip_valid).all():
                 pred_mode = 0  # fallback when all predictions are NaN
-                total += 1
                 gt_mode = int(stats.mode(gt_clip, keepdims=False)[0])
                 if pred_mode == gt_mode:
                     correct += 1
@@ -840,6 +862,8 @@ def compute_activity_segment_metrics(model, dataset, device, T=16):
     for seg in segs:
         try:
             clip, label = dataset.sample_segment_clip(seg, T=T)
+            if label == 0:  # NA segment — skip per docstring contract
+                continue
             clip = clip.unsqueeze(0).to(device)  # [1,T,3,H,W]
             with torch.no_grad():
                 out = model(clip)
@@ -3069,22 +3093,38 @@ def evaluate_all(
             act_valid = (act_labels_batch >= 0)
         act_preds.append(act_pred_batch[act_valid])
         act_labels.append(act_labels_batch[act_valid])
+        # [FIX 2026-06-15] act_clip_ids / act_clip_frame_nums MUST be filtered by the
+        # SAME act_valid mask as act_preds/act_labels (above). Previously they were
+        # appended for all B samples (unfiltered), so they grew longer than all_act_pred
+        # whenever any frame was masked (-1 sentinel / NA-excluded) — the boolean mask
+        # `clip_ids == clip_id` then became longer than all_pred and raised IndexError
+        # in _compute_clip_level_accuracy at epoch-end eval. Build per-sample arrays,
+        # then apply act_valid so all four activity arrays stay length-aligned.
+        _batch_rec_ids, _batch_frame_nums = [], []
         for i in range(B):
+            if not act_valid[i]:
+                continue
             metadata_item = targets['metadata'][i] if i < len(targets['metadata']) else {}
             rec_id = metadata_item.get('recording_id', metadata_item.get('rec_id', None))
             if rec_id is not None:
-                if isinstance(rec_id, torch.Tensor):
-                    rec_id = rec_id.item()
-                else:
-                    rec_id = str(rec_id)
+                rec_id = rec_id.item() if isinstance(rec_id, torch.Tensor) else str(rec_id)
             else:
                 rec_id = f'batch{bi}_i{i}'
-            act_clip_ids.append(rec_id)
+            _batch_rec_ids.append(rec_id)
             # Collect frame_num for 16-uniform-frame evaluation protocol
             frame_num = metadata_item.get('frame_num', 0)
             if isinstance(frame_num, torch.Tensor):
                 frame_num = frame_num.item()
-            act_clip_frame_nums.append(int(frame_num))
+            _batch_frame_nums.append(int(frame_num))
+        _valid_flat = np.asarray(act_valid).reshape(-1)
+        if _valid_flat.shape[0] != len(_batch_rec_ids):
+            # act_valid is not per-sample (unexpected shape) — keep all B to avoid data
+            # loss; the length guard in _compute_clip_level_accuracy will re-align.
+            _valid_flat = np.ones(len(_batch_rec_ids), dtype=bool)
+        for _i in range(len(_batch_rec_ids)):
+            if _valid_flat[_i]:
+                act_clip_ids.append(_batch_rec_ids[_i])
+                act_clip_frame_nums.append(_batch_frame_nums[_i])
 
         # --- Head Pose ---
         # Fix (Bashara 2026-05-18): guard against None if model.train_pose=False during eval
@@ -3184,8 +3224,6 @@ def evaluate_all(
             if keep_mask.sum().item() > 0:
                 del kept_cls, kept_reg, pb
             del scores_i, max_scores, keep_mask
-            if device_obj.type == 'cuda':
-                torch.cuda.empty_cache()
 
         del images, outputs, cls_sigmoid
         gc.collect()
@@ -3315,11 +3353,31 @@ def evaluate_all(
                 f'act_macro_f1=0 is a model collapse, not an eval bug.'
             )
     if getattr(C, 'TRAIN_ACT', True):
+        # [OPUS V5 FIX] Validate act_clip_ids vs all_act_gt length before passing
+        # to compute_activity_metrics. Mismatch causes IndexError that kills eval.
+        _n_pred = len(all_act_gt) if all_act_gt is not None else 0
+        _n_clip = len(act_clip_ids) if act_clip_ids else 0
+        if _n_pred > 0 and _n_clip > 0 and _n_pred != _n_clip:
+            logger.warning(
+                f'  [EVAL_GUARD] act_clip_ids len={_n_clip} != all_act_gt len={_n_pred} — '
+                f'truncating to shorter and continuing. This indicates a masking bug '
+                f'where activity_mask filtering produced inconsistent counts.'
+            )
+            _min_len = min(_n_pred, _n_clip)
+            all_act_gt = all_act_gt[:_min_len]
+            all_act_pred = all_act_pred[:_min_len]
+            if all_act_logits is not None:
+                all_act_logits = all_act_logits[:_min_len]
+            act_clip_ids = act_clip_ids[:_min_len]
         act_metrics = compute_activity_metrics(
             all_act_gt, all_act_pred, all_act_logits,
             class_names=C.ACT_CLASS_NAMES,
             save_dir=save_dir,
             clip_ids=np.asarray(act_clip_ids) if act_clip_ids else None,
+            # [FIX 2026-06-15] pass frame indices so the 16-uniform-frame clip protocol
+            # actually engages (was dropped → fell back to plain majority vote). Now
+            # length-aligned with clip_ids via the act_valid filter above.
+            clip_frame_nums=np.asarray(act_clip_frame_nums) if act_clip_frame_nums else None,
         )
     else:
         act_metrics = {
@@ -3344,6 +3402,60 @@ def evaluate_all(
             f'Frame Acc (no NA): {results["act_accuracy_no_na"]:.4f}  '
             f'Macro-Recall: {results["act_macro_recall"]:.4f}'
         )
+
+    # [GAP-B] Per-action-segment activity evaluation (MViTv2-comparable protocol)
+    # Each segment produces one prediction from 16 uniformly sampled frames.
+    # This is the protocol used by MViTv2 (65.25 Top-1) — per-recording majority
+    # vote is not directly comparable.
+    # [OPUS V5 FIX] Wrap in try/except so segment eval crash doesn't kill full eval.
+    # The segment protocol is supplementary to the main clip-level metric.
+    # [CUDA-HANG FIX 2026-06-16] Use SIGALRM timeout because CUDA kernel hangs
+    # (e.g. GroupNorm) do NOT raise Python exceptions and cannot be caught by
+    # try/except. The alarm delivers SIGALRM to the main thread; if we are stuck
+    # in a C extension the handler may not fire immediately, but it WILL fire on
+    # return to the Python eval loop — so this is a best-effort safety net.
+    # The real fix is the config split-brain correction (from src import config).
+    _run_seg_metrics = True
+    if not getattr(C, 'TRAIN_ACT', False):
+        logger.info('[GAP-B] TRAIN_ACT=False — skipping segment metrics (detection-only stage)')
+        _run_seg_metrics = False
+    elif getattr(C, 'DET_GT_FRAME_FRACTION', 0.0) >= 0.9:
+        logger.info('[GAP-B] DET_GT_FRAME_FRACTION>=0.9 — detection-dominant stage, skipping segment metrics')
+        _run_seg_metrics = False
+    if _run_seg_metrics:
+        class _SegTimeoutExc(Exception):
+            """Raised by SIGALRM handler when segment metrics exceed timeout."""
+        _seg_timeout = 600  # 10 minutes
+        def _seg_alarm(s, f):
+            raise _SegTimeoutExc(
+                f'[GAP-B] Segment metrics timed out after {_seg_timeout}s (CUDA kernel hang)'
+            )
+        _old_handler = signal.signal(signal.SIGALRM, _seg_alarm)
+        signal.alarm(_seg_timeout)
+        try:
+            seg_metrics = compute_activity_segment_metrics(
+                model, loader.dataset, device, T=16,
+            )
+            results['act_seg_top1'] = seg_metrics['act_top1']
+            results['act_seg_top5'] = seg_metrics['act_top5']
+            results['act_seg_n'] = seg_metrics['n_segments']
+            logger.info(
+                f'  [GAP-B] Activity Segment — Top-1: {seg_metrics["act_top1"]:.4f}  '
+                f'Top-5: {seg_metrics["act_top5"]:.4f}  '
+                f'Segments: {seg_metrics["n_segments"]}'
+            )
+        except Exception as e:
+            logger.error(f'  [GAP-B] Segment eval FAILED: {e} — skipping segment metrics')
+            results['act_seg_top1'] = 0.0
+            results['act_seg_top5'] = 0.0
+            results['act_seg_n'] = 0
+        finally:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, _old_handler)
+    else:
+        results['act_seg_top1'] = 0.0
+        results['act_seg_top5'] = 0.0
+        results['act_seg_n'] = 0
 
     # -------------------------------------------------------------------------
     # Head Pose Metrics
@@ -3714,6 +3826,7 @@ def _save_results_csv(results: Dict[str, Any], save_dir: str) -> None:
         # Activity
         'act_accuracy', 'act_top5_accuracy', 'act_mean_per_class_acc',
         'act_macro_f1', 'act_weighted_f1', 'act_macro_recall', 'act_clip_accuracy',
+        'act_seg_top1', 'act_seg_top5', 'act_seg_n',
         # Head pose
         'forward_angular_MAE_deg', 'up_angular_MAE_deg', 'position_MAE_mm',
         'head_pose_MAE', 'head_pose_MAE_std',

@@ -328,6 +328,11 @@ def get_cached_frame(recording_id: str, frame_num: int) -> np.ndarray:
 _PROC_COCO_CACHE: Dict[str, Dict[int, List[Dict[str, Any]]]] = {}
 _PROC_COCO_CACHE_MAX = max(1, min(getattr(C, 'COCO_CACHE_SIZE', 30), 30))
 
+# [FIX D5] COCO image dimensions cache — parsed once per recording, reused per frame.
+# Maps coco_path -> {frame_num: (width, height)}. Avoids re-parsing the full COCO
+# JSON (~40 min/epoch overhead) every time _extract_boxes_from_coco resizes boxes.
+_PROC_COCO_DIMS_CACHE: Dict[str, Dict[int, Tuple[int, int]]] = {}
+
 
 def _parse_coco_file(coco_path: str) -> Dict[int, List[Dict[str, Any]]]:
     """
@@ -364,7 +369,7 @@ def _parse_coco_file(coco_path: str) -> Dict[int, List[Dict[str, Any]]]:
 
 
 def _get_coco(coco_path: str) -> Dict[int, List[Dict[str, Any]]]:
-    """Return cached COCO data (frame_num → annotations list)."""
+    """Return cached COCO data (frame_num -> annotations list)."""
     if coco_path in _PROC_COCO_CACHE:
         return _PROC_COCO_CACHE[coco_path]
 
@@ -374,6 +379,39 @@ def _get_coco(coco_path: str) -> Dict[int, List[Dict[str, Any]]]:
         _PROC_COCO_CACHE.pop(next(iter(_PROC_COCO_CACHE)))
     _PROC_COCO_CACHE[coco_path] = result
     return result
+
+
+def _get_coco_img_dims(coco_path: str, frame_num: int) -> Tuple[int, int]:
+    """Return cached COCO image dimensions for a given frame.
+
+    Parses the COCO JSON once per recording and caches all image dimensions
+    (width, height) keyed by frame_num (derived from file_name stem).
+    Returns (1280, 720) as fallback if lookup fails.
+    """
+    if coco_path in _PROC_COCO_DIMS_CACHE and frame_num in _PROC_COCO_DIMS_CACHE[coco_path]:
+        return _PROC_COCO_DIMS_CACHE[coco_path][frame_num]
+
+    # Parse image dimensions from COCO JSON (first access for this recording)
+    try:
+        raw_coco = json.loads(Path(coco_path).read_text())
+    except Exception:
+        _PROC_COCO_DIMS_CACHE.setdefault(coco_path, {})[frame_num] = (1280, 720)
+        return (1280, 720)
+
+    dims: Dict[int, Tuple[int, int]] = {}
+    for img in raw_coco.get('images', []):
+        fname = str(img.get('file_name', ''))
+        stem = Path(fname).stem
+        try:
+            fid = int(stem)
+        except (ValueError, TypeError):
+            continue
+        w = int(img.get('width', 1280))
+        h = int(img.get('height', 720))
+        dims[fid] = (w, h)
+
+    _PROC_COCO_DIMS_CACHE[coco_path] = dims
+    return dims.get(frame_num, (1280, 720))
 
 
 # =========================================================================
@@ -441,6 +479,15 @@ class _PerRecordingCache:
         for start, end, action_id in spans:
             end = min(end, self._num_frames - 1)
             if start < self._num_frames:
+                # [FIX 2026-06-14] Clamp action_id to valid range [0, NUM_CLASSES_ACT-1]
+                # to prevent ScatterGatherKernel OOB in loss functions during validation.
+                if action_id < 0 or action_id >= C.NUM_CLASSES_ACT:
+                    logger.warning(
+                        f'[industreal_dataset] Clamping OOB action_id={action_id} '
+                        f'(valid 0..{C.NUM_CLASSES_ACT - 1}) in {self.rec_dir.name} '
+                        f'frames [{start}:{end}]'
+                    )
+                    action_id = max(0, min(action_id, C.NUM_CLASSES_ACT - 1))
                 labels[start: end + 1] = action_id
 
         return labels
@@ -1070,15 +1117,9 @@ class IndustRealMultiTaskDataset(Dataset):
         # native image coordinates (1280×720); _load_image resizes to self.img_size.
         # Currently self.img_size == native (1280,720), so scale is identity — but
         # this guard ensures correctness if IMG_SIZE changes.
-        _img_w, _img_h = 1280, 720  # IndustReal native resolution
-        try:
-            _raw_coco = json.loads(Path(coco_file).read_text())
-            for _img in _raw_coco.get('images', []):
-                if _img.get('id') == frame_num or str(_img.get('file_name', '')).startswith(str(frame_num)):
-                    _img_w = int(_img.get('width', 1280)); _img_h = int(_img.get('height', 720))
-                    break
-        except Exception:
-            pass
+        # [FIX D5] Use cached COCO image dimensions instead of re-parsing the full
+        # JSON per frame (~40 min/epoch overhead without cache).
+        _img_w, _img_h = _get_coco_img_dims(coco_file, frame_num)
         _sx = self.img_size[0] / max(_img_w, 1)
         _sy = self.img_size[1] / max(_img_h, 1)
 
@@ -1265,6 +1306,9 @@ class IndustRealMultiTaskDataset(Dataset):
             # Store sorted frame list for clip loading (Doc 2 A.1)
             self._rec_frame_paths[recording_id] = frame_nums
 
+            # Pre-load COCO annotations for task-aware sampling metadata
+            coco_data = _get_coco(self._get_coco_path(recording_id))
+
             # Build per-frame sample records
             stride = (
                 C.TRAIN_FRAME_STRIDE
@@ -1280,11 +1324,18 @@ class IndustRealMultiTaskDataset(Dataset):
                 # use 0 (NA)
                 action_label = int(cache.ar_per_frame[fn]) if fn < len(cache.ar_per_frame) else 0
 
+                # Task-aware sampling metadata
+                psr_row = cache.psr_per_frame[fn] if fn < len(cache.psr_per_frame) else None
+                psr_has_any = bool(psr_row.any()) if psr_row is not None else False
+                num_dets = len(coco_data.get(fn, []))
+
                 all_samples.append({
                     'recording_id': recording_id,
                     'frame_num': fn,
                     'img_path': str(rgb_dir / f'{fn:06d}.jpg'),
                     'action_label': action_label,
+                    'psr_has_any': psr_has_any,
+                    'num_dets': num_dets,
                 })
 
             rec_count += 1
@@ -1322,21 +1373,64 @@ class IndustRealMultiTaskDataset(Dataset):
             psr_boost = float(getattr(C, 'TASK_AWARE_PSR_BOOST', 1.5))
             det_boost = float(getattr(C, 'TASK_AWARE_DET_BOOST', 1.2))
             for i in range(len(sample_weights)):
-                sample_meta = self.frame_metadata[i] if i < len(self.frame_metadata) else None
-                if sample_meta is None:
+                if i >= len(self.samples):
                     continue
+                sample = self.samples[i]
                 # PSR: boost frames where any component has a positive label
-                psr_labels = sample_meta.get('psr_labels') if isinstance(sample_meta, dict) else None
-                if psr_labels is not None and hasattr(psr_labels, '__len__'):
-                    if any(psr_labels):
-                        sample_weights[i] *= psr_boost
+                if sample.get('psr_has_any', False):
+                    sample_weights[i] *= psr_boost
                 # Detection: boost frames with at least one detection target
-                if isinstance(sample_meta, dict) and sample_meta.get('num_dets', 0) > 0:
+                if sample.get('num_dets', 0) > 0:
                     sample_weights[i] *= det_boost
             # Re-normalize so weights still sum to 1
             total_w = sample_weights.sum()
             if total_w > 0:
                 sample_weights = sample_weights / total_w
+
+        # [DET GT-FRAME SAMPLING 2026-06-16] Absolute GT-frame fraction targeting.
+        # This is the real fix for the detection class-imbalance death spiral.
+        # Unlike the constant TASK_AWARE_DET_BOOST above (whose effect scales with
+        # the base OD density), this forces the *total* sampling mass on GT-bearing
+        # frames to exactly `det_frac`, so in expectation that fraction of every
+        # batch carries boxes regardless of how sparse the OD labels are. Activity
+        # class-balance is preserved *within* the GT and non-GT sub-populations.
+        det_frac = float(getattr(C, 'DET_GT_FRAME_FRACTION', 0.0))
+        if det_frac > 0.0:
+            gt_mask = np.array(
+                [
+                    (i < len(self.samples)) and (self.samples[i].get('num_dets', 0) > 0)
+                    for i in range(len(sample_weights))
+                ],
+                dtype=bool,
+            )
+            n_gt = int(gt_mask.sum())
+            n_total = len(gt_mask)
+            if n_gt == 0:
+                logger.warning(
+                    '[get_sampler] DET_GT_FRAME_FRACTION=%.2f requested but this '
+                    'subset contains ZERO frames with detection boxes. The detector '
+                    'CANNOT learn from it — the death spiral is upstream of the '
+                    'sampler. Check OD_labels.json coverage, raise SUBSET_RATIO, or '
+                    'select an OD-bearing recording subset (run diag_gt_coverage.py).',
+                    det_frac,
+                )
+            elif 0 < n_gt < n_total:
+                w_gt = sample_weights[gt_mask].sum()
+                w_bg = sample_weights[~gt_mask].sum()
+                if w_gt > 0 and w_bg > 0:
+                    sample_weights[gt_mask] = sample_weights[gt_mask] / w_gt * det_frac
+                    sample_weights[~gt_mask] = sample_weights[~gt_mask] / w_bg * (1.0 - det_frac)
+                # Final renormalize (already sums to 1 by construction, but be safe)
+                total_w = sample_weights.sum()
+                if total_w > 0:
+                    sample_weights = sample_weights / total_w
+                logger.info(
+                    '[get_sampler] DET_GT_FRAME_FRACTION=%.2f: %d/%d (%.2f%%) frames '
+                    'carry GT boxes -> reweighted so ~%.0f%% of every batch is '
+                    'GT-bearing (was ~%.2f%% under base sampler).',
+                    det_frac, n_gt, n_total, 100.0 * n_gt / max(n_total, 1),
+                    100.0 * det_frac, 100.0 * n_gt / max(n_total, 1),
+                )
 
         return WeightedRandomSampler(
             weights=torch.as_tensor(sample_weights, dtype=torch.double),

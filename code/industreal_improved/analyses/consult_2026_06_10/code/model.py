@@ -107,6 +107,10 @@ class SoftArgmax(nn.Module):
         """
         B, K, H, W = heatmaps.shape
         flat = heatmaps.view(B, K, H * W)  # [B, K, HW]
+        # [A2 FIX 2026-06-17] Clamp heatmap values to prevent exp overflow in softmax.
+        # Temperature=0.1 amplifies unbounded ReLU heatmaps by 10x, causing exp(>88) → NaN.
+        # Clamp to [-5, 5] keeps softmax input in [-50, 50] (exp(50) ~ 5e21, safe in float32).
+        flat = flat.clamp(-5.0, 5.0)
         weights = F.softmax(flat / self.temperature, dim=-1)  # [B, K, HW]
 
         # 2D coordinate grids [H, W]
@@ -358,13 +362,14 @@ class ResNet50Backbone(nn.Module):
         return c2, c3, c4, c5
 
 
-def build_backbone(backbone_type: str = 'resnet50', pretrained: bool = True) -> nn.Module:
+def build_backbone(backbone_type: str = 'resnet50', pretrained: bool = True,
+                   use_checkpoint: bool = False) -> nn.Module:
     """
     Factory function to build backbone by type.
     Doc 01 D.1: Supports 'resnet50' and 'convnext_tiny'.
     """
     if backbone_type == 'convnext_tiny':
-        return ConvNeXtBackbone(pretrained=pretrained)
+        return ConvNeXtBackbone(pretrained=pretrained, use_checkpoint=use_checkpoint)
     elif backbone_type == 'resnet50':
         return ResNet50Backbone(pretrained=pretrained)
     else:
@@ -490,10 +495,12 @@ class DetectionHead(nn.Module):
     - Cls subnet: 4x Conv3x3+ReLU -> Conv(9x24) for 24 ASD classes
     - Reg subnet: 4x Conv3x3+ReLU -> Conv(9x4)
     """
-    def __init__(self, in_channels: int = 256, num_classes: int = 24, num_anchors: int = 9):
+    def __init__(self, in_channels: int = 256, num_classes: int = 24, num_anchors: int = 9,
+                 detach_reg_fpn: bool = False):
         super().__init__()
         self.num_classes = num_classes
         self.num_anchors = num_anchors
+        self.detach_reg_fpn = detach_reg_fpn
 
         def make_subnet():
             layers = []
@@ -540,7 +547,12 @@ class DetectionHead(nn.Module):
             cls_out = cls_out.permute(0, 2, 3, 1).reshape(B, H * W * self.num_anchors, self.num_classes)
             cls_all.append(cls_out)
 
-            reg_out = self.reg_pred(self.reg_subnet(feat))
+            # [FIX 2026-06-16] Gradient isolation for regression path
+            # detach_reg_fpn=True prevents regression gradients from flowing into shared FPN
+            # features. This is the root fix for detection head collapse after --reinit-heads:
+            # regression gradient shock corrupts classification through FPN even with loss warmup.
+            reg_feat = feat.detach() if self.detach_reg_fpn else feat
+            reg_out = self.reg_pred(self.reg_subnet(reg_feat))
             reg_out = reg_out.permute(0, 2, 3, 1).reshape(B, H * W * self.num_anchors, 4)
             reg_all.append(reg_out)
 
@@ -1188,7 +1200,12 @@ class FeatureBank(nn.Module):
                 # [OPUS v5 AUDIT] FeatureBank gradient: when FEATURE_BANK_DETACH=False,
                 # gradient flows through bank entries enabling temporal learning (#14-16).
                 _bank_detach = bool(getattr(C, 'FEATURE_BANK_DETACH', True))
-                _stored = feat_i.detach().clone() if _bank_detach else feat_i.clone()
+                _bank_detach_grad_only = bool(getattr(C, 'FEATURE_BANK_DETACH_GRAD_ENTRIES_ONLY', False))
+                if _bank_detach_grad_only:
+                    # [E2] Detach stored entries but keep current frame gradient
+                    _stored = feat_i.detach().clone()
+                else:
+                    _stored = feat_i.detach().clone() if _bank_detach else feat_i.clone()
                 self._bank[key].append(_stored)
 
             if len(self._bank[key]) > self.window_size:
@@ -1198,13 +1215,21 @@ class FeatureBank(nn.Module):
             while len(seq) < self.window_size:
                 if feat_is_valid:
                     _bank_detach = bool(getattr(C, 'FEATURE_BANK_DETACH', True))
-                    pad_feat = feat_i.detach().clone() if _bank_detach else feat_i.clone()
+                    _bank_detach_grad_only = bool(getattr(C, 'FEATURE_BANK_DETACH_GRAD_ENTRIES_ONLY', False))
+                    if _bank_detach_grad_only:
+                        pad_feat = feat_i.detach().clone()
+                    else:
+                        pad_feat = feat_i.detach().clone() if _bank_detach else feat_i.clone()
                 else:
                     pad_feat = self._bank[key][0].clone()
                 seq = [pad_feat] + seq
             seq = seq[-self.window_size:]
 
             bank_i = torch.stack(seq)  # [T, 512]
+            if _bank_detach_grad_only:
+                # [E2] Replace last position (current frame) with live feat_i to allow gradient flow
+                bank_i = bank_i.clone()
+                bank_i[-1] = feat_i
             outputs.append(bank_i)
 
         return torch.stack(outputs)  # [B, T, 512]
@@ -1412,6 +1437,20 @@ class HeadPoseHead(nn.Module):
             nn.Linear(hidden_dim * 2, 9),
         )
 
+        # [A3 FIX 2026-06-17] Custom weight init — was the only head without _init_weights.
+        # All 5 Linear layers get small-std normal init; 2 LayerNorm modules get standard init.
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, std=0.01)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+            elif isinstance(m, nn.LayerNorm):
+                nn.init.ones_(m.weight)
+                nn.init.zeros_(m.bias)
+
     def forward(self, c4: torch.Tensor, c5: torch.Tensor) -> torch.Tensor:
         c4_gap = self.gap_c4(c4).flatten(1)
         c5_gap = self.gap_c5(c5).flatten(1)
@@ -1489,6 +1528,14 @@ class PSRHead(nn.Module):
             ) for _ in range(num_components)
         ])
 
+        # [AUDIT] Bias +0.1 on first Linear(256,64) of each output head pushes
+        # GELU into the linear regime, preventing zero-feature collapse into
+        # the final Linear(64,1) when transformer output has near-zero variance.
+        for head in self.output_heads:
+            if isinstance(head[0], nn.Linear):
+                nn.init.constant_(head[0].bias, 0.1)
+
+        self._debug_step = 0  # step counter for gradient-audit logging
         self._cache: Dict[Tuple[str, str], List[torch.Tensor]] = {}
         self._MAX_CACHE_LEN = 32
 
@@ -1509,6 +1556,32 @@ class PSRHead(nn.Module):
             # invert so True = ignore (cannot attend), False = attend
             self._cached_mask = mask
         return self._cached_mask
+
+    def _debug_log_head0(self, feat: torch.Tensor) -> None:
+        """Log intermediate activations of output_heads[0] at key steps."""
+        if not self.training:
+            return
+        if self._debug_step not in (0, 1, 10, 100, 200, 500):
+            return
+        head0 = self.output_heads[0]
+        h = head0[0](feat)  # Linear(256,64)
+        h_gelu = head0[1](h)  # GELU
+        if len(head0) > 2 and isinstance(head0[2], nn.Dropout):
+            h_drop = head0[2](h_gelu)
+        else:
+            h_drop = h_gelu
+        print(f'[PSR_DEBUG step={self._debug_step}] '
+              f'pre_linear:  mean={feat.mean():.4f} std={feat.std():.4f} '
+              f'min={feat.min():.4f} max={feat.max():.4f}')
+        print(f'[PSR_DEBUG step={self._debug_step}] '
+              f'post_linear64: mean={h.mean():.4f} std={h.std():.4f} '
+              f'min={h.min():.4f} max={h.max():.4f}')
+        print(f'[PSR_DEBUG step={self._debug_step}] '
+              f'post_gelu:   mean={h_gelu.mean():.4f} std={h_gelu.std():.4f} '
+              f'min={h_gelu.min():.4f} max={h_gelu.max():.4f}')
+        print(f'[PSR_DEBUG step={self._debug_step}] '
+              f'post_dropout: mean={h_drop.mean():.4f} std={h_drop.std():.4f} '
+              f'min={h_drop.min():.4f} max={h_drop.max():.4f}')
 
     def forward(self, pyramid: Dict[str, torch.Tensor],
                 video_ids: Optional[List[str]] = None,
@@ -1576,6 +1649,9 @@ class PSRHead(nn.Module):
         # For single frame, use the last position output
         last_out = encoded.squeeze(1)  # [B, gru_hidden]
 
+        self._debug_log_head0(last_out)
+        self._debug_step += 1
+
         # Per-component heads
         logits = torch.cat([
             head(last_out) for head in self.output_heads
@@ -1623,6 +1699,7 @@ class POPWMultiTaskModel(nn.Module):
         use_hand_film: bool = True,  # [FIX] Hand-FiLM conditional — enables ablation (paper: always on)
         use_videomae: bool = False,
         train_pose: bool = True,
+        use_backbone_checkpoint: bool = False,  # [FIX 2026-06-15] Enable gradient checkpointing on ConvNeXt stages
     ):
         super().__init__()
         self.backbone_type = backbone_type
@@ -1632,7 +1709,8 @@ class POPWMultiTaskModel(nn.Module):
         self.train_pose = train_pose
 
         # === Backbone (Doc 01 D.1) ===
-        self.backbone = build_backbone(backbone_type, pretrained=pretrained)
+        self.backbone = build_backbone(backbone_type, pretrained=pretrained,
+                                       use_checkpoint=use_backbone_checkpoint)
 
         # Channel dimensions by backbone type
         if backbone_type == 'convnext_tiny':
@@ -1651,7 +1729,10 @@ class POPWMultiTaskModel(nn.Module):
         self.fpn = FPN(in_channels=fpn_in_channels, out_channels=256)
 
         # === Detection Head ===
-        self.detection_head = DetectionHead(in_channels=256, num_classes=C.NUM_DET_CLASSES)
+        self.detection_head = DetectionHead(
+            in_channels=256, num_classes=C.NUM_DET_CLASSES,
+            detach_reg_fpn=getattr(C, 'DETACH_REG_FPN', False),
+        )
         self.anchor_gen = AnchorGenerator()
 
         # Pose head -- paper tau=0.07 (soft-argmax temperature)
@@ -1900,6 +1981,14 @@ class POPWMultiTaskModel(nn.Module):
                 p3_t = pyramid_seq['p3'][:, t]  # [B, C, H, W]
                 p4_t = pyramid_seq['p4'][:, t]
                 p5_t = pyramid_seq['p5'][:, t]
+                # [FIX 2026-06-16] Gradient isolation for PSR path
+                # detach_psr_fpn=True prevents PSR gradients from flowing into shared FPN
+                # features. PSR loss spikes (~23.9 at step ~850) corrupt detection features
+                # through the backbone even with OHEM and alpha fixes.
+                if getattr(C, 'DETACH_PSR_FPN', False):
+                    p3_t = p3_t.detach()
+                    p4_t = p4_t.detach()
+                    p5_t = p5_t.detach()
                 p3_gap = self.psr_head.gap_p3(p3_t).flatten(1)
                 p4_gap = self.psr_head.gap_p4(p4_t).flatten(1)
                 p5_gap = self.psr_head.gap_p5(p5_t).flatten(1)
@@ -1922,14 +2011,39 @@ class POPWMultiTaskModel(nn.Module):
             # masking already guarantees position t only sees frames <= t, so
             # every position is a valid (and supervised) per-frame prediction.
             enc_flat = encoded.reshape(B_main * T_main, -1)  # [BT, hidden]
+
+            # [AUDIT] Debug prints for output_heads[0] in sequence path
+            if self.training and hasattr(self.psr_head, '_debug_step'):
+                ds = self.psr_head._debug_step
+                if ds in (0, 1, 10, 100, 200, 500):
+                    head0 = self.psr_head.output_heads[0]
+                    h = head0[0](enc_flat)
+                    h_gelu = head0[1](h)
+                    print(f'[PSR_DEBUG_seq step={ds}] '
+                          f'pre_linear:  mean={enc_flat.mean():.4f} std={enc_flat.std():.4f} '
+                          f'min={enc_flat.min():.4f} max={enc_flat.max():.4f}')
+                    print(f'[PSR_DEBUG_seq step={ds}] '
+                          f'post_linear64: mean={h.mean():.4f} std={h.std():.4f} '
+                          f'min={h.min():.4f} max={h.max():.4f}')
+                    print(f'[PSR_DEBUG_seq step={ds}] '
+                          f'post_gelu:   mean={h_gelu.mean():.4f} std={h_gelu.std():.4f} '
+                          f'min={h_gelu.min():.4f} max={h_gelu.max():.4f}')
+
             psr_full = torch.cat([
                 head(enc_flat) for head in self.psr_head.output_heads
             ], dim=-1)  # [BT, 11]
+            self.psr_head._debug_step += 1
             confidence = torch.sigmoid(psr_full).max(dim=-1, keepdim=True)[0]  # [BT, 1]
             psr_logits = torch.cat([psr_full, confidence], dim=-1)  # [BT, 12]
             psr_confidence = psr_logits[..., 11:]  # [BT, 1]
         else:
-            psr_full = self.psr_head(pyramid, video_ids=video_ids)  # [B, 12]
+            # [FIX 2026-06-16] Gradient isolation for PSR non-sequence path
+            if getattr(C, 'DETACH_PSR_FPN', False):
+                psr_pyramid = {k: (v.detach() if k in ('p3', 'p4', 'p5') else v)
+                               for k, v in pyramid.items()}
+            else:
+                psr_pyramid = pyramid
+            psr_full = self.psr_head(psr_pyramid, video_ids=video_ids)  # [B, 12]
             psr_logits = psr_full[..., :11]  # [B, 11]
             psr_confidence = psr_full[..., 11:]  # [B, 1]
 
@@ -1939,15 +2053,27 @@ class POPWMultiTaskModel(nn.Module):
         # During eval: always compute head_pose so evaluate.py doesn't crash on None.
         if self.train_pose or not self.training:
             head_pose = self.head_pose_head(c4, c5)
+            # [GAP-C] GeometryAwareHeadPose returns (rot6d, rot_matrix, position) tuple.
+            # Convert to [B,9] for downstream compatibility (FiLM, eval, loss).
+            if isinstance(head_pose, tuple):
+                _rot6d, _rot_mat, _pos = head_pose
+                # Reconstruct [B,9] = forward(3) + position(3) + up(3)
+                _forward = _rot_mat[:, :, 0]                  # first column = forward dir
+                _up = _rot_mat[:, :, 2]                        # third column = up dir
+                head_pose = torch.cat([_forward, _pos, _up], dim=1)  # [B, 9]
             if self.use_headpose_film and hasattr(self, 'headpose_film'):
                 c5_mod = self.headpose_film(c5_mod, head_pose.detach())  # stop_grad per paper ?HeadPoseFiLM
         else:
             head_pose = None
 
+        # [A1 FIX 2026-06-17] Detach backbone/FPN features before activity projection.
+        # Without stop_grad, activity loss gradients flow backward into C5 and P4,
+        # corrupting shared visual features and causing multi-task collapse (act_accuracy=0.0).
+        # det_conf already has stop_grad from the detection head — only c5_mod and p4 need isolation.
         activity_proj = torch.cat([
             det_conf,
-            F.adaptive_avg_pool2d(c5_mod, 1).flatten(1),
-            F.adaptive_avg_pool2d(pyramid['p4'], 1).flatten(1),
+            F.adaptive_avg_pool2d(c5_mod.detach(), 1).flatten(1),
+            F.adaptive_avg_pool2d(pyramid['p4'].detach(), 1).flatten(1),
         ], dim=1)
 
         proj_feat = self.activity_head.proj_features(activity_proj)
