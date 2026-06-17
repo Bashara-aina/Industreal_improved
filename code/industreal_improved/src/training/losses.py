@@ -1586,7 +1586,12 @@ class MultiTaskLoss(nn.Module):
                 if self.train_pose and self.train_act:
                     pose_contribution = prec_hp * loss_pose + prec_hp * loss_head_pose + lv_hp  # both body+head, one lv_hp
                 elif self.train_pose:
-                    pose_contribution = prec_hp * loss_pose + lv_hp
+                    # [FIX 2026-06-17] Include loss_head_pose in Kendall total!
+                    # Bug: IndustReal has NO keypoint annotations → loss_pose is always ZERO,
+                    # making pose_contribution = lv_hp (just log_var reg, zero grad for head_pose_head).
+                    # Head pose (9-DoF MSE, ~1.7) was computed in forward pass but excluded from total loss,
+                    # neutralizing the entire train_head_pose=True fix (Opus RF1 prescription).
+                    pose_contribution = prec_hp * loss_pose + prec_hp * loss_head_pose + lv_hp
                 else:  # train_act only
                     pose_contribution = prec_hp * loss_head_pose + lv_hp
                 total = total + pose_contribution
@@ -1641,7 +1646,10 @@ class MultiTaskLoss(nn.Module):
             prec_det = prec_hp = prec_act = prec_psr = torch.tensor(1.0, device=device)
             _loss_act_staged = loss_act
             _loss_psr_staged = loss_psr
-            _loss_pose_staged = loss_pose if self.train_pose else loss_head_pose
+            # [FIX 2026-06-17] Same bug as Kendall path: loss_head_pose (9-DoF MSE)
+            # was excluded when train_pose=True. IndustReal has no keypoint annotations,
+            # so loss_pose=zero → head_pose_head got zero gradient even in non-Kendall path.
+            _loss_pose_staged = loss_pose + loss_head_pose if self.train_pose else loss_head_pose
             if bool(getattr(C, 'STAGED_TRAINING', True)) and self._current_epoch >= 1:
                 stage = _get_kendall_stage(self._current_epoch)
                 if stage == 1:
