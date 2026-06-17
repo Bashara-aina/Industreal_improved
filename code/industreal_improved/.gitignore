@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Training logs (not checked in)
+*.log
+
+# Runtime training state (PIDs, epochs, checkpoints)
+src/runs/
+checkpoints/
+
+# Large analysis artifacts (41MB training logs)
+analyses/*/logs/
+
+# Archives of old/pre-reorg source
+archive/
+
+# Lock / temp files
+.~lock.*
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

@@ -29,7 +29,7 @@ DEBUG_MODE         = False
 DEBUG_MAX_VIDEOS   = 2  # smoke test: 2 recordings only
 DEBUG_FRAME_STRIDE = 10
 
-SUBSET_RATIO = 0.10   # 10% subset (per run_10pct_train.sh benchmark; was 0.05 — silent killer)
+SUBSET_RATIO = 0.05   # 5% subset for quick training
 
 TRAIN_FRAME_STRIDE = 3  # A.2: stride 3 → T=16 covers 1.6s at 30FPS (median action)
 EVAL_FRAME_STRIDE  = 1
@@ -94,9 +94,6 @@ POPW_ROOT = Path('/media/newadmin/master/POPW/datasets/industreal')
 
 # Output root for runs (relative to this config file's directory)
 OUTPUT_ROOT = Path(__file__).parent / 'runs'
-# Allow override via environment variable for experiment naming
-if 'OUTPUT_ROOT_OVERRIDE' in os.environ:
-    OUTPUT_ROOT = Path(os.environ['OUTPUT_ROOT_OVERRIDE'])
 
 # Recordings root (train/val/test splits)
 RECORDINGS_ROOT = POPW_ROOT / 'recordings'
@@ -247,8 +244,6 @@ NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_la
 # Paper spec (matches RetinaNet P3-P7): (24, 48, 96, 192, 384)
 # =========================================================================
 ANCHOR_SIZES = (24, 48, 96, 192, 384)
-DET_POS_IOU_THRESH = 0.3       # FCOS anchor matching: positive IoU threshold
-DET_NEG_IOU_THRESH = 0.25      # FCOS anchor matching: negative IoU threshold (below this → background)
 IMG_WIDTH       = 1280
 IMG_HEIGHT      = 720
 IMG_SIZE        = (IMG_WIDTH, IMG_HEIGHT)
@@ -260,16 +255,14 @@ IMAGENET_STD  = [0.229, 0.224, 0.225]
 
 # =========================================================================
 # Training (RTX 3060 12 GB) — Optimized for VideoMAE + ConvNeXt + 5 heads + TMA + TemporalBank
-# NOTE: BATCH_SIZE=1 is REQUIRED for RTX 3060 12GB with VideoMAE+ConvNeXt+TMA+TemporalBank+5 heads.
-# Previous BATCH_SIZE=6 OOM'd at ConvNeXt stage2 with batch=2 (only 64 MiB free).
-# BATCH_SIZE=1 with GRAD_ACCUM_STEPS=32 gives effective batch=32.
-# OOM fallback: train.py automatically halves batch if CUDA OOM is detected.
-BATCH_SIZE = 1        # [OOM FIX] Was 6 — RTX 3060 12GB cannot fit batch=2 with all 5 heads + VideoMAE
-GRAD_ACCUM_STEPS = 32 # Was 6 — increased to keep EFFECTIVE_BATCH=32
+# NOTE: BATCH_SIZE=1 is REQUIRED. VideoMAE alone uses +600MB VRAM; batch=2 causes OOM.
+# GRAD_ACCUM=32 maintains effective batch=32 (same as old BATCH_SIZE=8, accum=4).
+BATCH_SIZE = 6        # Original — BATCH_SIZE=8 caused OOM even with more memory cap
+GRAD_ACCUM_STEPS = 6  # Keeps EFFECTIVE_BATCH=32
 EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
 
 VAL_BATCH_SIZE = 16   # Was 8→32; bumped again (VRAM headroom: 1.30GB/12.5GB used at batch_size=8)
-VAL_NUM_WORKERS = 1   # Reduced from 4 to prevent CPU RAM OOM
+VAL_NUM_WORKERS = 4
 VAL_PREFETCH_FACTOR  = 4
 
 EPOCHS        = 100 
@@ -284,7 +277,7 @@ GRAD_CLIP_NORM = 1.0
 VAL_EVERY = 1    # [BENCHMARK] Evaluate every 1 epoch (BENCHMARK_MODE override)
 EVAL_MAX_BATCHES = -1
 
-NUM_WORKERS = 2        # Reduced from 8 to prevent CPU RAM OOM
+NUM_WORKERS = 8
 PIN_MEMORY = True
 MIXED_PRECISION = True   # [FIX] Was False — FP16 for RTX 3060 Ampere tensor cores
 SEED            = 42
@@ -308,28 +301,7 @@ TRAIN_PREFETCH_FACTOR = 4  # 2 workers × 2 prefetch = 4 batches queued (was 4)
 # FIX: Lower DET_EVAL_SCORE_THRESH from 0.5 to 0.0 to avoid zero predictions when
 # model sigmoid scores cluster near 0.5 (e.g., [0.47, 0.53]) — all filtered out at 0.5.
 # With 0.0, at least the top-scoring prediction per location is kept for mAP calculation.
-# [FIX] Changed from 0.0 to 0.05: with threshold 0.0, ALL anchors (1.3M+) pass the filter,
-# top-300 are kept after NMS, and the false-positive flood drives AP to 0.0 by construction.
-# mAP needs a low-but-nonzero floor so the PR curve integrates correctly.
-# [FIX] Changed from 0.05 to 0.03: bias=-3.4 init produces scores ~0.033; 0.05 filters all
-# predictions even when model shows good localization (bestIoU_max=0.923, 554 preds at IoU>0.5).
-# 0.03 is high enough to filter the early-training false-positive flood but low enough to
-# capture predictions when the model is learning and scores are ~0.033-0.05.
-# [FIX 2026-06-04] Bumped to 0.1: with collapsed det head (flat scores ≈ 0.03 across 1.66M
-# predictions), 0.03 passes every anchor through NMS, drowning AP. 0.1 filters noise when
-# the head is untrained and still permits real detections once scores separate from the floor.
-# [FIX 2026-06-04 #2] Lowered to 0.02: at epoch=3, the actual crash_recovery.pth produces
-# score_max=0.076 and score_p99=0.022. With 0.1, EVERY prediction was rejected by the
-# keep_mask filter, leaving dp_boxes empty for all 64 images, so compute_ap_multi_thresh
-# had no positives and returned mAP=0. 0.02 is high enough to filter the random-init noise
-# floor (probe shows only 3107 anchors above 0.05 across 1.66M) but lets through the real
-# localizations that the probe confirms (151 preds at IoU>0.5 in batch 0 alone).
-# [FIX 2026-06-08] Lowered to 0.01 to match new bias init π=0.01 (bias=-4.595 → sigmoid≈0.01).
-# With old bias=-3.4 → sigmoid≈0.033, threshold 0.02 was above the floor and worked.
-# With new bias=-4.6 → sigmoid≈0.01, threshold 0.02 would reject ALL predictions and AP=0.
-# 0.01 sits at the bias-init floor: any score above is "model said yes" not just init bias.
-# Still high enough to filter ~99% of random-init anchors (which cluster <0.005).
-DET_EVAL_SCORE_THRESH = 0.01
+DET_EVAL_SCORE_THRESH = 0.0
 DET_EVAL_MAX_PER_IMAGE = 300
 DET_EVAL_NMS_IOU_THRESH = 0.5  # NMS IoU threshold for detection evaluation
 SAVE_VAL_CONFUSION_MATRIX = False
@@ -350,61 +322,15 @@ MATMUL_PRECISION = 'high'
 # =========================================================================
 # Loss hyperparameters
 # =========================================================================
-FOCAL_ALPHA   = 0.75  # was 0.25 — α=0.25 starves positives of gradient (99.8% bg). α=0.75 gives positives 3× weight vs background.
+FOCAL_ALPHA   = 0.25
 FOCAL_GAMMA   = 2.0
-
-# =========================================================================
-# Architecture toggles
-# =========================================================================
-# [FIX #12 TIER C 2026-06-08] CrossHeadFusion: per-level FiLM modulation from
-# cross-level context. Identity at init, ~125K params, near-zero cost.
-# Set False to ablate the contribution.
-USE_CROSS_HEAD_FUSION = True
-
-# [FIX #13 TIER C 2026-06-08] Gradient checkpointing on the PSR causal transformer
-# (PSRTransformerBlock at model.py:1396-1591). Trades compute for VRAM.
-# Set True when VRAM is tight (12GB RTX 3060 with full PSR context).
-USE_PSR_GRADIENT_CHECKPOINTING = True
-
 GIOU_WEIGHT   = 2.0  # Doc 01 B.2: GIoU regression weight vs cls weight=1.0
-
-# Per-head static loss multipliers — applied BEFORE Kendall weighting.
-# Kendall precision = exp(-log_var) with log_var∈[-4.0, 2.0], giving
-# precision∈[0.018, 54.6]. This bounded range cannot compensate >1000×
-# raw cross-head magnitude differences. Static multipliers provide the
-# base scaling that Kendall log_vars adapt on top of.
-# [FIX 2026-06-08] act raised 0.05 → 0.5. With stages 1-2 freezing act head,
-# act=0.05 only mattered at stage 3, where it suppressed act gradient 20x vs
-# other heads. The original 0.05 was set when activity loss spiked to 300+ on
-# collapse — that scenario is now prevented by:
-#   1) ACTIVITY_LOSS_CAP=80 (caps max contribution to 4.0 at 0.05 weight)
-#   2) New bias init π=0.01 + IoU 0.3/0.2 (model no longer collapses)
-#   3) PSR sens cap (no runaway gradients)
-# 0.5 gives activity parity with detection at stage 3 — both heads are equally
-# important, and the original 8× dominance is now blocked by cap+other fixes.
-HEAD_LOSS_WEIGHTS = {
-    'det': 1.0,
-    'act': 1.0,   # raised 0.5 -> 1.0 (checklist §6.2 F2): at parity with detection.
-                    # With ACTIVITY_LOSS_CAP=80 the cap blocks the gradient explosion
-                    # that previously required the 0.5 down-weight, so full parity is
-                    # safe and gives the activity head enough gradient to escape the
-                    # class-33 attractor documented in MASTER_PROMPT §4 BLOCKER 2.
-    'pose': 1.0,
-    'psr': 2.0,    # raised 1.0 -> 2.0 (checklist §6.4 F4): PSR has 11 binary
-                    # components vs 1 multiclass for act, so per-component gradient
-                    # is 11x smaller. Doubling weight restores equivalent signal.
-    'head_pose': 1.0,
-}
 
 WING_OMEGA   = 0.05
 WING_EPSILON = 0.005
 
-CB_BETA  = 0.99
-CB_GAMMA = 1.0  # was 2.0 — gamma=2.0 collapses activity to trivial solution
-                # (focuses predictions on 1-4 of 75 classes; dominant class reaches
-                # 100% by epoch 6 in v4 log). Mirrors PSR_FOCAL_GAMMA=1.0 fix at L418.
-                # gamma=1.0 gives ~10x more gradient on hard classes, allowing the
-                # head to escape the focal-γ=2.0 attractor and explore more classes.
+CB_BETA  = 0.999
+CB_GAMMA = 2.0
 CB_LABEL_SMOOTHING = 0.1  # label smoothing for 74-class activity recognition
 
 # PSR temporal smoothing weight (transition-aware loss)
@@ -426,7 +352,7 @@ PRETRAIN_HFLIP_PROB  = 0.5   # probability of random horizontal flip
 # =========================================================================
 # Staged training (Doc 2 B.1)
 # =========================================================================
-STAGED_TRAINING = True
+STAGED_TRAINING = False
 STAGE1_EPOCHS = 5    # Detection-only warmup
 STAGE2_EPOCHS = 10   # Add pose + head pose
 STAGE3_EPOCHS = 85   # Full multi-task with EMA — 5+10+85=100 total — was 35
@@ -437,21 +363,12 @@ DET_LOSS_CAP = 50.0      # Detection: GIoU + Focal cls loss cap
 POSE_LOSS_CAP = 30.0     # Body keypoint Wing Loss cap
 PSR_LOSS_CAP = 20.0      # PSR focal loss + temporal smooth cap
 HEAD_POSE_LOSS_CAP = 30.0  # Head pose 9-DoF MSE cap
-HEAD_POSE_POS_SCALE = 100.0  # Standardizes raw position (~110 in CSV) to O(1); also fixes mm/cm unit ambiguity
 STAGE3_WARMUP_EPOCHS = 3  # LR warmup epochs at Stage 3 entry to stabilize new head activation
-# PSR_WARMUP_EPOCHS disabled: STAGE3_WARMUP_EPOCHS already ramps psr_head via the
-# dedicated param group LR at train.py:2511-2526. Combining both ramps multiplied
-# gradient suppression (1/5 loss-side × 1/3 LR-side = 1/15 at epoch 16) — too
-# aggressive when used together. STAGE3_WARMUP alone is sufficient.
-PSR_WARMUP_EPOCHS = 0  # loss-side ramp disabled; STAGE3_WARMUP_EPOCHS handles psr_head
-CLEAR_FRAME_CACHE_EPOCH_END = True  # free ~5-7GB FRAME_CACHE between epochs
 
 # =========================================================================
 # LDAM-DRW for activity (Doc 01 §B.2 + Doc 2 C.2)
 # =========================================================================
-# NOTE: USE_LDAM_DRW is set to False below for A/B testing (CB-Focal vs LDAM).
-# Set back to True for the full 100-epoch run after confirming activity loss moves.
-USE_LDAM_DRW = True   # [OPUS FIX #2 + USER-AUTH] LDAM+DRW (long-tail fix, +~2% Top-1)
+USE_LDAM_DRW = True   # Use LDAM+DRW instead of CB-Focal for activity
 LDAM_MAX_M = 0.5
 LDAM_S = 30
 LDAM_DRW_EPOCH = 0    # Switch to CB weights at this epoch (DRW deferred re-weighting)
@@ -459,12 +376,6 @@ LDAM_DRW_EPOCH = 0    # Switch to CB weights at this epoch (DRW deferred re-weig
 # weights from the start. This corrects the prior misconfiguration where DRW was delayed
 # to epoch 60, resulting in 60 epochs of unweighted LDAM margin loss before CB re-weighting.
 # Features being "stable" at epoch 60 was not supported by IndustReal experimental evidence.
-
-# [OPUS FIX] LDAM_USE_DRW flag: when True, LDAMLoss.set_class_counts wires cb_weights
-# so that DRW applies class-balanced re-weighting at epoch >= LDAM_DRW_EPOCH.
-# Gate behind this flag for easy A/B testing vs LDAM margins only (no CB re-weighting).
-# NOTE: Set to True for full run after confirming CB-Focal moves the loss.
-LDAM_USE_DRW = True
 
 # =========================================================================
 # PSR focal loss (Doc 01 §D + Doc 2 C.3)
@@ -481,14 +392,8 @@ PSR_FOCAL_GAMMA = 1.0  # was 2.0 — gamma=2.0 collapses PSR to trivial solution
 # temporal Transformer dormant. Sequence-mode trains on contiguous T-frame
 # windows where the Transformer is properly engaged.
 USE_PSR_SEQUENCE_MODE = True   # Doc 01 §D.2: PSR sequence-mode — THE biggest PSR unlock
-PSR_SEQUENCE_LENGTH = 4        # stayed at 4 — T=8 caused CUDA OOM with SEQ_EVERY_N_BATCHES=2
-                              # (sequence-mode memory doubled and fires 5x more often). T=4 is
-                              # the memory-bounded choice; the bigger unlock is below.
+PSR_SEQUENCE_LENGTH = 4        # T=4 keeps memory bounded on 12GB GPU
 PSR_SEQ_EVERY_N_BATCHES = 10  # Draw one sequence batch every N normal batches
-
-# Fix 1 (2026-06-06): penalize constant per-frame PSR predictions in T=1 mode.
-# Stage 3 epoch 16 collapsed logit std to 0.12%; this penalty keeps it > 1e-3.
-PSR_SENSITIVITY_WEIGHT = 0.01  # 5% of typical binary-focal magnitude — gentle nudge
 
 # =========================================================================
 # Augmentation (Doc 2 D)
@@ -623,19 +528,15 @@ def update_dynamic_paths():
     """Recompute all dynamic paths after config changes."""
     global OUTPUT_ROOT, CHECKPOINT_DIR, LOG_DIR, EVAL_SAVE_DIR
 
-    # Don't override if set by environment variable
-    if 'OUTPUT_ROOT_OVERRIDE' in os.environ:
-        OUTPUT_ROOT = Path(os.environ['OUTPUT_ROOT_OVERRIDE'])
-    else:
-        parts = ['full_multi_task']
-        if USE_TMA_CELL:
-            parts.append('tma')
-        if USE_TEMPORAL_BANK:
-            parts.append('tbank')
-        if BENCHMARK_MODE:
-            parts.append('benchmark')
+    parts = ['full_multi_task']
+    if USE_TMA_CELL:
+        parts.append('tma')
+    if USE_TEMPORAL_BANK:
+        parts.append('tbank')
+    if BENCHMARK_MODE:
+        parts.append('benchmark')
 
-        OUTPUT_ROOT = Path(__file__).parent / 'runs' / '_'.join(parts)
+    OUTPUT_ROOT = Path(__file__).parent / 'runs' / '_'.join(parts)
     CHECKPOINT_DIR = OUTPUT_ROOT / 'checkpoints'
     LOG_DIR        = OUTPUT_ROOT / 'logs'
     EVAL_SAVE_DIR  = OUTPUT_ROOT / 'eval_outputs'

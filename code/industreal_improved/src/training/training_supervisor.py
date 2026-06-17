@@ -268,6 +268,63 @@ def is_pid_alive(pid: Optional[int]) -> bool:
         return False
 
 
+def is_any_training_running() -> bool:
+    """Check if ANY train.py process is running (beyond just the tracked PID)."""
+    try:
+        result = subprocess.run(
+            ['pgrep', '-af', 'train.py'],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split('\n'):
+                if 'train.py' in line and 'training_supervisor' not in line and 'stage_manager' not in line:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def kill_any_training() -> bool:
+    """Kill all train.py processes. Returns True if any were killed."""
+    killed = False
+    try:
+        result = subprocess.run(
+            ['pgrep', '-af', 'train.py'],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            for line in result.stdout.strip().split('\n'):
+                if 'train.py' in line and 'training_supervisor' not in line and 'stage_manager' not in line:
+                    parts = line.strip().split(None, 1)
+                    if parts:
+                        try:
+                            pid = int(parts[0])
+                            os.kill(pid, signal.SIGTERM)
+                            killed = True
+                        except (ValueError, OSError):
+                            pass
+        if killed:
+            time.sleep(2)
+    except Exception:
+        pass
+    return killed
+
+
+MIN_INTERVAL_MINUTES = 30
+
+
+def check_cooldown(state: Dict) -> bool:
+    """Return True if we should skip (cooldown active). Updates last run time."""
+    last_run = state.get('_last_supervisor_run', 0)
+    now = time.time()
+    elapsed_min = (now - last_run) / 60
+    if elapsed_min < MIN_INTERVAL_MINUTES and last_run > 0:
+        logger.info(f'[COOLDOWN] {elapsed_min:.0f}m < {MIN_INTERVAL_MINUTES}m — skipping (next check at '
+                    f'{datetime.fromtimestamp(last_run + MIN_INTERVAL_MINUTES * 60).strftime("%H:%M")})')
+        return True
+    return False
+
+
 def kill_training(pid: Optional[int]) -> bool:
     if pid is None or not is_pid_alive(pid):
         return False
@@ -415,21 +472,54 @@ SYMPTOM_DATABASE = [
 ]
 
 
+def _stage_trains_psr(stage_name: str) -> bool:
+    """Check if the given stage preset trains PSR.
+
+    Reads the preset dict from config.py to determine whether train_psr is
+    True for this stage. Returns True by default (safe — won't skip checks
+    for unknown stages).
+    """
+    try:
+        from src import config as C
+        preset_key = f'stage_{stage_name}'
+        presets = getattr(C, 'PRESETS', {})
+        if not presets:
+            # Try loading presets from config
+            presets = getattr(C, 'APPLY_PRESET_MAP', {}) or {}
+        if not presets:
+            # Fallback: check if apply_preset sets train_psr directly
+            return True
+        stage_cfg = presets.get(preset_key, {})
+        return bool(stage_cfg.get('train_psr', True))
+    except Exception:
+        return True  # safe default — don't skip if we can't determine
+
+
 def diagnose(det_debug: List[Dict], det_health: List[Dict],
-             psr_diag: List[Dict], gpu: Dict[str, Any]) -> List[Dict]:
-    """Run symptom detection on all available data."""
+             psr_diag: List[Dict], gpu: Dict[str, Any],
+             stage_name: str = '') -> List[Dict]:
+    """Run symptom detection on all available data.
+
+    Args:
+        stage_name: Current RF stage name (e.g. 'rf1'). Used to skip
+            PSR checks when train_psr=False for the stage.
+    """
     triggered = []
     for symptom in SYMPTOM_DATABASE:
         if symptom['detect'](det_debug):
             triggered.append(symptom)
-    # PSR-specific (needs psr_diag)
+
+    # PSR-specific (needs psr_diag) — skip if stage doesn't train PSR
+    trains_psr = _stage_trains_psr(stage_name) if stage_name else True
+    if not trains_psr:
+        logger.info(f'[STAGE-AWARE] Skipping PSR checks — train_psr=False for {stage_name}')
     for symptom in SYMPTOM_DATABASE:
-        if symptom['id'] == 'psr_dead' and symptom['detect'](psr_diag):
-            if symptom not in triggered:
-                triggered.append(symptom)
-        if symptom['id'] == 'psr_logits_diverging' and symptom['detect'](psr_diag):
-            if symptom not in triggered:
-                triggered.append(symptom)
+        if symptom['id'] in ('psr_dead', 'psr_logits_diverging'):
+            if not trains_psr:
+                continue  # PSR not trained in this stage — expected behavior
+            if symptom['detect'](psr_diag):
+                if symptom not in triggered:
+                    triggered.append(symptom)
     # OOM check
     for symptom in SYMPTOM_DATABASE:
         if symptom['id'] == 'gpu_oom' and symptom['detect'](None):
@@ -479,6 +569,10 @@ def run_stage_manager_check() -> Tuple[int, str]:
 
 def launch_training_via_stage_manager(stage: str) -> bool:
     """Launch training via stage_manager --launch."""
+    # Safety check: refuse if any training process is already running
+    if is_any_training_running():
+        logger.warning('[CONFLICT] Refusing to launch — training process already running')
+        return False
     try:
         result = subprocess.run(
             [sys.executable, str(STAGE_MANAGER), '--launch', stage.upper()],
@@ -605,24 +699,38 @@ def main():
     logger.info(f'Training Supervisor @ {datetime.now().isoformat()}')
     logger.info('=' * 60)
 
-    # ── 1. Load state & check PID ──
+    # ── 1. Load state & check cooldown ──
     state = load_state()
     if not state:
         logger.error('No state file — run stage_manager --launch RF1 first')
         return
 
+    if check_cooldown(state):
+        return
+
+    # ── 2. Check PID / conflicting processes ──
     pid = state.get('training_pid')
     stage = state.get('current_stage', '?')
     status = state.get('status', '?')
     pid_alive = is_pid_alive(pid)
 
-    logger.info(f'Stage: {stage} [{status}]  PID: {pid} [{"ALIVE" if pid_alive else "DEAD"}]')
+    # Detect orphaned/zombie training processes the PID file doesn't track
+    other_running = is_any_training_running()
+    if not pid_alive and other_running:
+        logger.warning(f'[CONFLICT] Stale PID {pid} but other train.py process(es) found — cleaning up')
+        kill_any_training()
+    elif pid_alive and not is_pid_alive(pid):
+        # PID died between checks
+        pid_alive = False
 
-    # ── 2. Read logs ──
+    logger.info(f'Stage: {stage} [{status}]  PID: {pid} [{"ALIVE" if pid_alive else "DEAD"}]'
+                f'  other_train={"YES" if other_running else "no"}')
+
+    # ── 3. Read logs ──
     sub_lines = tail_log(SUBPROCESS_LOG, 500) if SUBPROCESS_LOG.exists() else []
     epoch, step, total_steps = parse_epoch_progress(sub_lines) if sub_lines else (0, 0, 0)
 
-    # ── 3. GPU check ──
+    # ── 4. GPU check ──
     gpu = get_gpu_info()
     logger.info(f'GPU: {gpu["gpu_util_pct"]:.0f}% util  {gpu["mem_used_mib"]:.0f}/{gpu["mem_total_mib"]:.0f} MiB  '
                 f'{gpu["temp_c"]:.0f}°C')
@@ -631,7 +739,7 @@ def main():
     if gpu['mem_util_pct'] > 95 and pid_alive:
         logger.warning(f'[OOM GUARD] GPU memory at {gpu["mem_util_pct"]:.0f}% — potential OOM risk')
 
-    # ── 4. Parse DET-DEBUG ──
+    # ── 5. Parse DET-DEBUG ──
     det_debug = parse_det_debug(sub_lines)
     det_health = parse_det_health(sub_lines)
     psr_diag = parse_psr_diag(sub_lines)
@@ -651,17 +759,20 @@ def main():
         logger.info(f'PSR: loss={latest_psr["loss"]:.3e} logits_mean={latest_psr["logits_mean"]:.1f} '
                     f'zeros={latest_psr["zeros"]}/{latest_psr["total"]}')
 
-    # ── 5. Detection head assessment ──
+    # ── 6. Detection head assessment ──
     det_status, det_cls_mean, det_reason = assess_det_head(det_debug)
     if det_status in ('COLLAPSED', 'WARN'):
         logger.warning(f'[DET-{det_status}] {det_reason}')
 
-    # ── 6. PSR head assessment ──
+    # ── 7. PSR head assessment (stage-aware) ──
+    trains_psr = _stage_trains_psr(stage) if stage else True
     psr_status, psr_loss, psr_reason = assess_psr_head(psr_diag)
-    if psr_status in ('DEAD', 'DIVERGING'):
+    if psr_status in ('DEAD', 'DIVERGING') and not trains_psr:
+        logger.info(f'[PSR-{psr_status}] {psr_reason} — EXPECTED (train_psr=False for {stage})')
+    elif psr_status in ('DEAD', 'DIVERGING'):
         logger.info(f'[PSR-{psr_status}] {psr_reason}')
 
-    # ── 7. Checkpoints ──
+    # ── 8. Checkpoints ──
     ckpt_info = check_checkpoints(state)
     for name, info in ckpt_info.items():
         if info.get('stale'):
@@ -669,7 +780,7 @@ def main():
         elif info.get('exists'):
             logger.info(f'[CKPT] {name}: {info["age_min"]} min old, {info["size_mb"]} MB')
 
-    # ── 8. Run stage_manager --check (handles 5-category checklist + decision) ──
+    # ── 9. Run stage_manager --check (handles 5-category checklist + decision) ──
     logger.info('─' * 40)
     logger.info('Running stage_manager --check...')
     retcode, sm_output = run_stage_manager_check()
@@ -685,9 +796,9 @@ def main():
             decision = line.split('Decision:')[-1].strip()
             logger.info(f'Stage Manager decision: {decision}')
 
-    # ── 9. Deep intervention (only if training alive AND we detected issues) ──
+    # ── 10. Deep intervention (only if training alive AND we detected issues) ──
     if pid_alive:
-        symptoms = diagnose(det_debug, det_health, psr_diag, gpu)
+        symptoms = diagnose(det_debug, det_health, psr_diag, gpu, stage_name=stage)
         if symptoms:
             severities = [s['severity'] for s in symptoms]
             critical = [s for s in symptoms if s['severity'] == 'CRITICAL']
@@ -723,11 +834,11 @@ def main():
             elif warnings:
                 logger.info(f'[WARN] {len(warnings)} warning(s) — monitoring')
 
-    # ── 10. Epoch sync ──
+    # ── 11. Epoch sync ──
     if sub_lines:
         state = epoch_sync(state, sub_lines)
 
-    # ── 11. Summary ──
+    # ── 12. Summary ──
     logger.info('─' * 40)
     if pid_alive:
         logger.info(f'Status: RUNNING  Epoch {epoch} step {step}/{total_steps}  '
@@ -741,19 +852,16 @@ def main():
     else:
         logger.info(f'Status: {state.get("status", "?")} — waiting for stage_manager')
 
-    # ── 12. Show what the next check will do ──
+    # ── 13. Progress estimate ──
     if pid_alive and det_cls_mean is not None:
-        current_abs = 57  # RF1 started at epoch 57 (resume)
-        next_map_epoch = 59  # DET_METRICS_EVERY_N=5 from epoch 54: 59, 64, 69, 74
-        epochs_until_map = next_map_epoch - current_abs
         progress_pct = (step / total_steps * 100) if total_steps else 0
-        logger.info(f'Next mAP val: ~epoch {next_map_epoch} ({epochs_until_map} epochs away, '
-                    f'current epoch progress: {progress_pct:.0f}%)')
-        if epoch == 57 and det_cls_mean > -3.0:
-            logger.info('Collapse zone watch: cls_mean healthy, monitoring step ~850')
+        logger.info(f'Progress: epoch {epoch} step {step}/{total_steps} ({progress_pct:.0f}%)  '
+                    f'det_cls_mean={det_cls_mean:.3f}')
 
-    # ── Save state ──
+    # ── Save state + cooldown timestamp ──
+    state['_last_supervisor_run'] = time.time()
     save_state(state)
+    logger.info(f'[COOLDOWN] Next check allowed after {datetime.fromtimestamp(time.time() + MIN_INTERVAL_MINUTES * 60).strftime("%H:%M")}')
 
 
 if __name__ == '__main__':

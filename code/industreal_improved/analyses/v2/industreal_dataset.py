@@ -161,27 +161,6 @@ _FRAME_CACHE_LOADED = False
 _FRAME_CACHE_LOCK = threading.Lock()
 _FRAME_CACHE_METADATA: Dict[str, Dict] = {}  # {recording_id: {num_frames, loaded, corrupt_frames[]}}
 
-
-def clear_frame_cache() -> None:
-    """Free all RAM used by FRAME_CACHE. Idempotent.
-
-    Called at epoch boundaries by train.py to release ~5-7GB between epochs
-    so the OS can reclaim memory before the next epoch's pre-load step.
-    Also resets the _FRAME_CACHE_LOADED flag so a subsequent _preload_frames()
-    call will re-populate the cache.
-    """
-    global _FRAME_CACHE_LOADED, _FRAME_CACHE_METADATA
-    with _FRAME_CACHE_LOCK:
-        n_entries = len(FRAME_CACHE)
-        n_bytes = sum(arr.nbytes for arr in FRAME_CACHE.values())
-        FRAME_CACHE.clear()
-        _FRAME_CACHE_METADATA.clear()
-        _FRAME_CACHE_LOADED = False
-    logger.info(
-        f'[FRAME_CACHE] cleared {n_entries} entries '
-        f'({n_bytes / (1024 ** 3):.2f} GB freed)'
-    )
-
 # Corrupted frames known to fail PIL — substitute with zero arrays
 _KNOWN_BAD_FRAMES: set = set()
 
@@ -328,11 +307,6 @@ def get_cached_frame(recording_id: str, frame_num: int) -> np.ndarray:
 _PROC_COCO_CACHE: Dict[str, Dict[int, List[Dict[str, Any]]]] = {}
 _PROC_COCO_CACHE_MAX = max(1, min(getattr(C, 'COCO_CACHE_SIZE', 30), 30))
 
-# [FIX D5] COCO image dimensions cache — parsed once per recording, reused per frame.
-# Maps coco_path -> {frame_num: (width, height)}. Avoids re-parsing the full COCO
-# JSON (~40 min/epoch overhead) every time _extract_boxes_from_coco resizes boxes.
-_PROC_COCO_DIMS_CACHE: Dict[str, Dict[int, Tuple[int, int]]] = {}
-
 
 def _parse_coco_file(coco_path: str) -> Dict[int, List[Dict[str, Any]]]:
     """
@@ -369,7 +343,7 @@ def _parse_coco_file(coco_path: str) -> Dict[int, List[Dict[str, Any]]]:
 
 
 def _get_coco(coco_path: str) -> Dict[int, List[Dict[str, Any]]]:
-    """Return cached COCO data (frame_num -> annotations list)."""
+    """Return cached COCO data (frame_num → annotations list)."""
     if coco_path in _PROC_COCO_CACHE:
         return _PROC_COCO_CACHE[coco_path]
 
@@ -379,39 +353,6 @@ def _get_coco(coco_path: str) -> Dict[int, List[Dict[str, Any]]]:
         _PROC_COCO_CACHE.pop(next(iter(_PROC_COCO_CACHE)))
     _PROC_COCO_CACHE[coco_path] = result
     return result
-
-
-def _get_coco_img_dims(coco_path: str, frame_num: int) -> Tuple[int, int]:
-    """Return cached COCO image dimensions for a given frame.
-
-    Parses the COCO JSON once per recording and caches all image dimensions
-    (width, height) keyed by frame_num (derived from file_name stem).
-    Returns (1280, 720) as fallback if lookup fails.
-    """
-    if coco_path in _PROC_COCO_DIMS_CACHE and frame_num in _PROC_COCO_DIMS_CACHE[coco_path]:
-        return _PROC_COCO_DIMS_CACHE[coco_path][frame_num]
-
-    # Parse image dimensions from COCO JSON (first access for this recording)
-    try:
-        raw_coco = json.loads(Path(coco_path).read_text())
-    except Exception:
-        _PROC_COCO_DIMS_CACHE.setdefault(coco_path, {})[frame_num] = (1280, 720)
-        return (1280, 720)
-
-    dims: Dict[int, Tuple[int, int]] = {}
-    for img in raw_coco.get('images', []):
-        fname = str(img.get('file_name', ''))
-        stem = Path(fname).stem
-        try:
-            fid = int(stem)
-        except (ValueError, TypeError):
-            continue
-        w = int(img.get('width', 1280))
-        h = int(img.get('height', 720))
-        dims[fid] = (w, h)
-
-    _PROC_COCO_DIMS_CACHE[coco_path] = dims
-    return dims.get(frame_num, (1280, 720))
 
 
 # =========================================================================
@@ -448,12 +389,11 @@ class _PerRecordingCache:
         """
         Parse AR_labels.csv and interpolate to per-frame labels.
         Format: recording_id,action_class_id,action_description,start_frame.jpg,end_frame.jpg
-        Returns: np.ndarray of shape [num_frames] with raw action IDs.
-        Frames without any AR coverage get -1 (sentinel for "unlabeled").
+        Returns: np.ndarray of shape [num_frames] with action IDs (shifted by +1 for NA=0).
         """
         ar_file = self.rec_dir / 'AR_labels.csv'
         if not ar_file.exists():
-            return np.full(self._num_frames, -1, dtype=np.int64)
+            return np.zeros(self._num_frames, dtype=np.int64)
 
         # Load all action spans
         spans: List[Tuple[int, int, int]] = []  # (start_frame, end_frame, action_id)
@@ -462,6 +402,8 @@ class _PerRecordingCache:
             for row in reader:
                 if len(row) < 5:
                     continue
+                # row[0]=recording_id, row[1]=action_class_id, row[2]=description,
+                # row[3]=start_frame.jpg, row[4]=end_frame.jpg
                 try:
                     action_id = int(row[1])
                     start_frame = int(Path(row[3]).stem)
@@ -473,48 +415,16 @@ class _PerRecordingCache:
         # Sort by start frame
         spans.sort(key=lambda x: x[0])
 
-        # Initialize to -1 = unlabeled (sentinel); frames covered by action spans
-        # get their raw action_id (including 0 for "take_short_brace").
-        labels = np.full(self._num_frames, -1, dtype=np.int64)
+        # Interpolate: each frame gets the action active during that frame.
+        # action_id 0 → NA/background → class index 0 (prepended as ACT_CLASS_NAMES[0])
+        # action_id > 0 → class index = action_id (no shift needed; raw IDs 1-74 map to indices 1-74)
+        labels = np.zeros(self._num_frames, dtype=np.int64)
         for start, end, action_id in spans:
             end = min(end, self._num_frames - 1)
             if start < self._num_frames:
-                # [FIX 2026-06-14] Clamp action_id to valid range [0, NUM_CLASSES_ACT-1]
-                # to prevent ScatterGatherKernel OOB in loss functions during validation.
-                if action_id < 0 or action_id >= C.NUM_CLASSES_ACT:
-                    logger.warning(
-                        f'[industreal_dataset] Clamping OOB action_id={action_id} '
-                        f'(valid 0..{C.NUM_CLASSES_ACT - 1}) in {self.rec_dir.name} '
-                        f'frames [{start}:{end}]'
-                    )
-                    action_id = max(0, min(action_id, C.NUM_CLASSES_ACT - 1))
                 labels[start: end + 1] = action_id
 
         return labels
-
-    def _parse_ar_segments(self) -> list:
-        """[GAP-B] Return action segments from AR_labels.csv without frame interpolation.
-        Each segment = (start_frame, end_frame, action_id). NA (action_id=0) excluded.
-        Returns: list of (start, end, action_id) tuples.
-        """
-        ar_file = self.rec_dir / 'AR_labels.csv'
-        if not ar_file.exists():
-            return []
-        segments = []
-        with open(ar_file, encoding='utf-8') as f:
-            reader = csv.reader(f)
-            for row in reader:
-                if len(row) < 5: continue
-                try:
-                    action_id = int(row[1])
-                    if action_id == 0: continue  # NA excluded from metric clips
-                    start = int(Path(row[3]).stem)
-                    end = int(Path(row[4]).stem)
-                    end = min(end, self._num_frames - 1)
-                    if start < self._num_frames and end > start:
-                        segments.append((start, end, action_id))
-                except (ValueError, IndexError): continue
-        return segments
 
     def _parse_psr_raw(self) -> np.ndarray:
         """
@@ -551,19 +461,12 @@ class _PerRecordingCache:
         dense = np.zeros((self._num_frames, C.NUM_PSR_COMPONENTS), dtype=np.float32)
         current = np.zeros(C.NUM_PSR_COMPONENTS, dtype=np.float32)
 
-        # [OPUS v5 AUDIT] -1 transient fix: -1 is an error component — do NOT carry it
-        # forward. It over-counts ignores if propagated to all later frames. Instead,
-        # keep the last valid value (not -1) when encountering -1 in sparse data.
-        _last_valid = np.zeros(C.NUM_PSR_COMPONENTS, dtype=np.int64)  # defaults: all absent
         sparse_idx = 0
         for frame in range(self._num_frames):
             if sparse_idx < len(sparse) and frame == sparse[sparse_idx][0]:
-                _new = sparse[sparse_idx][1].copy()
+                current = sparse[sparse_idx][1].copy()
                 sparse_idx += 1
-                # Only update components that are NOT -1 (error); keep last valid
-                _valid_mask = _new >= 0
-                _last_valid[_valid_mask] = _new[_valid_mask]
-            dense[frame] = _last_valid.copy()
+            dense[frame] = current
 
         return dense
 
@@ -757,9 +660,8 @@ class IndustRealMultiTaskDataset(Dataset):
         self.activity_ids = np.array(
             [s['action_label'] for s in self.samples], dtype=np.int64
         )
-        valid_ids = self.activity_ids[self.activity_ids >= 0]  # exclude -1 sentinel
         self.class_counts = np.bincount(
-            valid_ids, minlength=C.NUM_ACT_CLASSES
+            self.activity_ids, minlength=C.NUM_ACT_CLASSES
         )
 
         # Doc 01 §D.1: Build sequence sample index for PSR sequence training
@@ -800,42 +702,6 @@ class IndustRealMultiTaskDataset(Dataset):
 
         self._psr_prevalence_cache = (component_sums / max(total_frames, 1)).astype(np.float32)
         return self._psr_prevalence_cache
-
-    # [GAP-B] Action-segment clip protocol (MViTv2-comparable activity eval)
-    def build_activity_segments(self):
-        """Returns [(rec_id, start, end, action_id), ...] from AR spans; NA excluded."""
-        segs = []
-        for rec_dir in sorted((self.recordings_root / self.split).iterdir()):
-            if not rec_dir.is_dir(): continue
-            rec_id = rec_dir.name
-            cache = self._anno_cache.get(rec_id)
-            if cache is None:
-                cache = _PerRecordingCache(rec_dir); cache.load(99999)
-                self._anno_cache[rec_id] = cache
-            for start, end, aid in cache._parse_ar_segments():
-                segs.append((rec_id, int(start), int(end), int(aid)))
-        return segs
-
-    def sample_segment_clip(self, seg, T=16):
-        """Sample T uniform frames from a segment [start, end].
-        Returns: frames [T,3,H,W], action_id (int, never NA).
-        """
-        rec_id, start, end, aid = seg
-        idxs = np.linspace(start, end, T).round().astype(int)
-        frames = []
-        for fn in idxs:
-            img_path = self.recordings_root / self.split / rec_id / 'rgb' / f'{fn:06d}.jpg'
-            try:
-                img = Image.open(img_path).convert('RGB')
-                img = img.resize((self.img_size[0], self.img_size[1]), _BILINEAR)
-                arr = np.array(img, dtype=np.float32) / 255.0
-                arr = (arr - np.array([0.485,0.456,0.406])) / np.array([0.229,0.224,0.225])
-                frames.append(torch.from_numpy(arr).permute(2,0,1))
-            except Exception:
-                frames.append(torch.zeros(3, self.img_size[1], self.img_size[0]))
-        if not frames:
-            return torch.zeros(T, 3, self.img_size[1], self.img_size[0]), 0
-        return torch.stack(frames), aid
 
     def __len__(self) -> int:
         if self.sequence_mode:
@@ -1113,24 +979,13 @@ class IndustRealMultiTaskDataset(Dataset):
                 torch.zeros(0, dtype=torch.long),
             )
 
-        # [GAP Part 4.1] Rescale boxes to match IMG_SIZE. COCO annotations are in
-        # native image coordinates (1280×720); _load_image resizes to self.img_size.
-        # Currently self.img_size == native (1280,720), so scale is identity — but
-        # this guard ensures correctness if IMG_SIZE changes.
-        # [FIX D5] Use cached COCO image dimensions instead of re-parsing the full
-        # JSON per frame (~40 min/epoch overhead without cache).
-        _img_w, _img_h = _get_coco_img_dims(coco_file, frame_num)
-        _sx = self.img_size[0] / max(_img_w, 1)
-        _sy = self.img_size[1] / max(_img_h, 1)
-
         boxes = []
         classes = []
         for ann in annots:
             bbox = ann.get('bbox', [])
             if len(bbox) == 4:
                 x, y, w, h = bbox
-                # [GAP 4.1] Rescale to IMG_SIZE
-                boxes.append([x*_sx, y*_sy, (x+w)*_sx, (y+h)*_sy])
+                boxes.append([x, y, x + w, y + h])  # Convert to xyxy format
                 # [OPUS FIX #5] COCO category_id is 1-24; head outputs 0-23.
                 # Subtract 1 to convert to 0-indexed (matches head output).
                 raw_cat = ann.get('category_id', 0)
@@ -1224,60 +1079,17 @@ class IndustRealMultiTaskDataset(Dataset):
 
         recordings_root = self.recordings_root / self.split
 
-        # Collect candidate recording dirs
-        _candidates = []
-        for rec_dir in recordings_root.iterdir():
+        rec_count = 0
+        for rec_dir in sorted(recordings_root.iterdir()):
             if not rec_dir.is_dir():
                 continue
-            _rid = rec_dir.name
-            if _rid not in split_rec_ids:
+            recording_id = rec_dir.name
+
+            if recording_id not in split_rec_ids:
                 continue
-            _candidates.append((_rid, rec_dir))
 
-        # [OPUS v5 AUDIT] Greedy coverage stratification when subset_ratio < 1.0.
-        # Alphabetical subset can exclude entire action classes → confounded activity metrics.
-        # Greedily pick recordings that maximize unique AR class coverage.
-        _max_recs = self.max_recordings
-        if _max_recs and len(_candidates) > _max_recs:
-            # Pre-scan: map recording_id → set of AR action classes present
-            _rec_ar_classes: dict = {}
-            for _rid, _rdir in _candidates:
-                _ar_file = _rdir / 'AR_labels.csv'
-                _cls_set = set()
-                if _ar_file.exists():
-                    import csv as _csv
-                    with open(_ar_file, encoding='utf-8') as _f:
-                        for _row in _csv.reader(_f):
-                            if len(_row) >= 2:
-                                try:
-                                    _cls_set.add(int(_row[1]))
-                                except ValueError:
-                                    pass
-                _rec_ar_classes[_rid] = _cls_set
-
-            # Greedy coverage: iteratively pick recording that adds most new classes
-            _chosen = []
-            _covered = set()
-            _remaining = list(_candidates)
-            for _ in range(_max_recs):
-                _best, _best_new = None, 0
-                for _rid, _rdir in _remaining:
-                    _new = len(_rec_ar_classes.get(_rid, set()) - _covered)
-                    if _new > _best_new:
-                        _best, _best_new = (_rid, _rdir), _new
-                if _best is None or _best_new == 0:
-                    break
-                _chosen.append(_best)
-                _covered |= _rec_ar_classes.get(_best[0], set())
-                _remaining.remove(_best)
-            # Append remaining recordings (in alphabetical order) if we didn't fill
-            _chosen += _remaining
-            _candidates[:] = _chosen[: _max_recs]
-
-        # Build ordered list: if greedy coverage was applied, use that order; otherwise alphabetical
-        _ordered = _candidates if (_max_recs and len(_candidates) <= _max_recs) else _candidates
-        rec_count = 0
-        for recording_id, rec_dir in _ordered:
+            if self.max_recordings and rec_count >= self.max_recordings:
+                break
 
             rgb_dir = rec_dir / 'rgb'
             if not rgb_dir.exists():
@@ -1306,9 +1118,6 @@ class IndustRealMultiTaskDataset(Dataset):
             # Store sorted frame list for clip loading (Doc 2 A.1)
             self._rec_frame_paths[recording_id] = frame_nums
 
-            # Pre-load COCO annotations for task-aware sampling metadata
-            coco_data = _get_coco(self._get_coco_path(recording_id))
-
             # Build per-frame sample records
             stride = (
                 C.TRAIN_FRAME_STRIDE
@@ -1324,18 +1133,11 @@ class IndustRealMultiTaskDataset(Dataset):
                 # use 0 (NA)
                 action_label = int(cache.ar_per_frame[fn]) if fn < len(cache.ar_per_frame) else 0
 
-                # Task-aware sampling metadata
-                psr_row = cache.psr_per_frame[fn] if fn < len(cache.psr_per_frame) else None
-                psr_has_any = bool(psr_row.any()) if psr_row is not None else False
-                num_dets = len(coco_data.get(fn, []))
-
                 all_samples.append({
                     'recording_id': recording_id,
                     'frame_num': fn,
                     'img_path': str(rgb_dir / f'{fn:06d}.jpg'),
                     'action_label': action_label,
-                    'psr_has_any': psr_has_any,
-                    'num_dets': num_dets,
                 })
 
             rec_count += 1
@@ -1361,77 +1163,8 @@ class IndustRealMultiTaskDataset(Dataset):
         class_weights = 1.0 / np.maximum(effective, 1e-8)
         class_weights /= class_weights.sum()
         sample_weights = np.array(
-            [class_weights[aid] if aid >= 0 else 0.0 for aid in self.activity_ids],
-            dtype=np.float64,
+            [class_weights[aid] for aid in self.activity_ids], dtype=np.float64
         )
-
-        # Tier 3.12 — Task-aware sample weighting. When enabled, upweight frames
-        # where the rarer secondary tasks (PSR, detection) have valid labels.
-        # The boost is small (≤2x) and applied multiplicatively, so it never
-        # overpowers the activity class balance.
-        if bool(getattr(C, 'USE_TASK_AWARE_SAMPLING', False)):
-            psr_boost = float(getattr(C, 'TASK_AWARE_PSR_BOOST', 1.5))
-            det_boost = float(getattr(C, 'TASK_AWARE_DET_BOOST', 1.2))
-            for i in range(len(sample_weights)):
-                if i >= len(self.samples):
-                    continue
-                sample = self.samples[i]
-                # PSR: boost frames where any component has a positive label
-                if sample.get('psr_has_any', False):
-                    sample_weights[i] *= psr_boost
-                # Detection: boost frames with at least one detection target
-                if sample.get('num_dets', 0) > 0:
-                    sample_weights[i] *= det_boost
-            # Re-normalize so weights still sum to 1
-            total_w = sample_weights.sum()
-            if total_w > 0:
-                sample_weights = sample_weights / total_w
-
-        # [DET GT-FRAME SAMPLING 2026-06-16] Absolute GT-frame fraction targeting.
-        # This is the real fix for the detection class-imbalance death spiral.
-        # Unlike the constant TASK_AWARE_DET_BOOST above (whose effect scales with
-        # the base OD density), this forces the *total* sampling mass on GT-bearing
-        # frames to exactly `det_frac`, so in expectation that fraction of every
-        # batch carries boxes regardless of how sparse the OD labels are. Activity
-        # class-balance is preserved *within* the GT and non-GT sub-populations.
-        det_frac = float(getattr(C, 'DET_GT_FRAME_FRACTION', 0.0))
-        if det_frac > 0.0:
-            gt_mask = np.array(
-                [
-                    (i < len(self.samples)) and (self.samples[i].get('num_dets', 0) > 0)
-                    for i in range(len(sample_weights))
-                ],
-                dtype=bool,
-            )
-            n_gt = int(gt_mask.sum())
-            n_total = len(gt_mask)
-            if n_gt == 0:
-                logger.warning(
-                    '[get_sampler] DET_GT_FRAME_FRACTION=%.2f requested but this '
-                    'subset contains ZERO frames with detection boxes. The detector '
-                    'CANNOT learn from it — the death spiral is upstream of the '
-                    'sampler. Check OD_labels.json coverage, raise SUBSET_RATIO, or '
-                    'select an OD-bearing recording subset (run diag_gt_coverage.py).',
-                    det_frac,
-                )
-            elif 0 < n_gt < n_total:
-                w_gt = sample_weights[gt_mask].sum()
-                w_bg = sample_weights[~gt_mask].sum()
-                if w_gt > 0 and w_bg > 0:
-                    sample_weights[gt_mask] = sample_weights[gt_mask] / w_gt * det_frac
-                    sample_weights[~gt_mask] = sample_weights[~gt_mask] / w_bg * (1.0 - det_frac)
-                # Final renormalize (already sums to 1 by construction, but be safe)
-                total_w = sample_weights.sum()
-                if total_w > 0:
-                    sample_weights = sample_weights / total_w
-                logger.info(
-                    '[get_sampler] DET_GT_FRAME_FRACTION=%.2f: %d/%d (%.2f%%) frames '
-                    'carry GT boxes -> reweighted so ~%.0f%% of every batch is '
-                    'GT-bearing (was ~%.2f%% under base sampler).',
-                    det_frac, n_gt, n_total, 100.0 * n_gt / max(n_total, 1),
-                    100.0 * det_frac, 100.0 * n_gt / max(n_total, 1),
-                )
-
         return WeightedRandomSampler(
             weights=torch.as_tensor(sample_weights, dtype=torch.double),
             num_samples=len(sample_weights),
@@ -1523,17 +1256,13 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Tuple[torch.Tensor, Dict[str, Any
     ], dim=0)  # [B, 17, 2]
     pose_confidence = torch.ones_like(keypoints[:, :, 0])  # [B, 17]
 
-    activity_stacked = torch.stack(activity_labels, dim=0)
-    activity_mask = (activity_stacked >= 0).float()  # 1.0 for labeled, 0.0 for unlabeled (-1 sentinel)
-
     targets: Dict[str, Any] = {
         'detection': detection_list,
         'box_mask': {'rgb': stacked_box_mask},
         'head_pose': torch.stack(head_poses, dim=0),
         'psr_labels': torch.stack(psr_labels_list, dim=0),
         'hand_joints': torch.stack(hand_joints_list, dim=0),
-        'activity': activity_stacked,
-        'activity_mask': activity_mask,
+        'activity': torch.stack(activity_labels, dim=0),
         'metadata': [item['metadata'] for item in batch],
         'keypoints': keypoints,
         'pose_confidence': pose_confidence,
@@ -1627,7 +1356,6 @@ def collate_fn_sequences(
         'sequence_lengths': sequence_lengths,
         'hand_joints': hand_joints,
         'activity': activity_labels,
-        'activity_mask': (activity_labels >= 0).float(),  # [OPUS v5] was missing from sequence collate
         'metadata': metadata_list,
     }
 
