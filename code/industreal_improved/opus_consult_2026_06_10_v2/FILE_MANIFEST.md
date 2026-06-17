@@ -1,4 +1,4 @@
-# Consultation Folder File Manifest — Updated 2026-06-15 07:45
+# Consultation Folder File Manifest — Updated 2026-06-17 16:15
 
 ## Core Python Source Files (code/) — WITH RC-28/RC-29 FIXES APPLIED
 
@@ -64,3 +64,7 @@
 | `19_PRE_TRAINING_READINESS_AUDIT_100.md` | **100-item pre-training readiness audit** — go/no-go gates with why-analysis per item, across architecture, backbone/FPN/anchors, cross-task conditioning, data/labels, loss/numerical hygiene, Kendall/gradient balance, optimization/training loop, per-head liveness, and per-task readiness (det/act/psr/headpose/assembly); 6 master gates; usage protocol |
 | `22_FINAL_PREFLIGHT_GAP_CLOSURE.md` | **Final pre-flight & gap closure** — closes the 3 verified gaps on `main` with exact patches: GAP-C (`apply_preset` never sets the 4 fix flags → paper_run no-op), GAP-A (PSR 9:1 static gradient + MonotonicDecoder unused at eval), GAP-B (activity eval per-recording not per-segment). Per-gap verification, 6-gate executable pre-flight, paper-run ladder, eval→`\popwres` map, 15-point sign-off |
 | `popw_paper_improved.tex` | Target paper with all benchmark tables and SOTA comparisons |
+| `26_RF1_RF10_COMPREHENSIVE_STATUS.md` | RF1-RF10 stage definitions and training pipeline (2026-06-16) |
+| `28_DET_DEATH_SPIRAL_FIX_AND_RUNBOOK.md` | Detection death spiral bounded background loss fix + runbook (2026-06-16) |
+| `29_RF1_DEATH_SPIRAL_AND_R2_5_PARADOX.md` | Root cause analysis of RF1 detection-only failure vs R2.5 success. Proves gradient sparsity (0.001% positive anchor ratio) kills RF1; multi-task masking made R2.5 look healthy. Key discovery: DETACH_REG_FPN only detaches regression, not classification — but classification gradient from 16 positive anchors out of 348K is too sparse to drive backbone updates. Solution: enable train_head_pose in RF1 or skip to RF2. (2026-06-17) |
+| `30_OPUS_MASTER_PROMPT_v7.md` | **NEW**: Self-contained overview prompt for sending to Opus. Summarizes all 30 files, current situation, 10 questions for Opus, gradient math proof, config comparison. Upload this file alongside the folder for fastest Opus onboarding. (2026-06-17) |
