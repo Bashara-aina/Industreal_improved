@@ -125,8 +125,8 @@ RF_STAGES = [
         'name': 'rf2',
         'description': 'Detection + Body/Head Pose',
         'preset': 'stage_rf2',
-        'subset_ratio': 0.35,
-        'max_epochs': 15,
+        'subset_ratio': 0.50,
+        'max_epochs': 30,
         'active_heads': 'det+pose',
         'gate': {
             'det_mAP50': 0.40,
@@ -140,7 +140,7 @@ RF_STAGES = [
             'max_loss_spike_factor': 10.0,
         },
         'convergence': {
-            'patience_epochs': 6,
+            'patience_epochs': 10,
             'min_improvement': 0.003,
         },
         'validation': {
@@ -1085,7 +1085,13 @@ def select_retry_strategy(state: StageState, stage_cfg: Optional[Dict[str, Any]]
             else:
                 strategy['lr_mult'] = min(strategy['lr_mult'], 0.05)
                 strategy['warmup_mult'] = max(strategy['warmup_mult'], 3.0)
-            strategy['reinit_heads'] = True
+            # [FIX 2026-06-19] RF2 first retry: don't reinit detection head.
+            # Reinit would destroy RF1 detection progress (best combined=0.2018).
+            # OHEM fix (RATIO 1->5, gamma_neg 2->1) should break equilibrium first.
+            if stage_name == 'rf2' and state.retry_count == 0:
+                strategy['reinit_heads'] = False
+            else:
+                strategy['reinit_heads'] = True
 
         # RF8-RF10: final tuning → gentle, avoid over-correcting
         elif stage_name in ('rf8', 'rf9', 'rf10'):
@@ -2951,10 +2957,16 @@ def _launch_current_stage(state: StageState, stage_cfg: Dict[str, Any],
     strategy = select_retry_strategy(state, stage_cfg) if retry else RETRY_STRATEGIES[0]
     if retry:
         logger.info(f'Retry #{state.retry_count + 1} — strategy: {strategy["name"]} ({strategy["description"]})')
+    else:
+        logger.info(f'First launch — strategy: {strategy["name"]}')
 
-    # Apply strategy to stage_cfg (override reinit_heads from strategy)
+    # Apply strategy to stage_cfg (override reinit_heads from strategy).
+    # CRITICAL: Only apply reinit_heads on actual retries. The default strategy
+    # (RETRY_STRATEGIES[0]) has reinit_heads=True, but applying it on a first-time
+    # stage transition silently resets the DET head to random weights, discarding
+    # all progress from the previous stage.
     launch_cfg = dict(stage_cfg)
-    if strategy.get('reinit_heads'):
+    if retry and strategy.get('reinit_heads'):
         launch_cfg['reinit_heads'] = True
 
     pid, run_max_epochs = launch_training(launch_cfg, resume_from, strategy=strategy, retry=retry)
@@ -2995,7 +3007,7 @@ def _print_paper_results(state: StageState) -> None:
     logger.info('=' * 60)
 
     det_map50 = final_metrics.get('det_mAP50', 'N/A')
-    det_map50_95 = final_metrics.get('det_mAP50:0.95', final_metrics.get('det_mAP50_95', 'N/A'))
+    det_map50_95 = final_metrics.get('det_mAP50:0.95', final_metrics.get('det_mAP50_95', final_metrics.get('det_mAP_50_95', 'N/A')))
     act_top1 = final_metrics.get('act_clip_accuracy', final_metrics.get('act_top1', 'N/A'))
     act_frame = final_metrics.get('act_frame_accuracy', 'N/A')
     psr_f1 = final_metrics.get('psr_f1_at_t', 'N/A')

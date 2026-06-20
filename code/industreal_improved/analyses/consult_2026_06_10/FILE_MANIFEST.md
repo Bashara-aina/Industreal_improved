@@ -1,14 +1,14 @@
-# Consultation Folder File Manifest — Updated 2026-06-17 21:41
+# Consultation Folder File Manifest — Updated 2026-06-20 (RF2 Epoch 16)
 
-## Core Python Source Files (code/) — LIVE FROM RUNNING TRAINING (RF1 Epoch 0 in progress)
+## Core Python Source Files (code/) — UPDATED 2026-06-20 FROM RUNNING SOURCE
 
 | File | Description | Key Changes |
 |------|-------------|-------------|
 | `losses.py` | FocalLoss + all loss functions | **RC-28**: Empty frames skipped, normalization by GT-bearing image count |
-| `train.py` | Main training loop | **RC-29**: committed/skipped telemetry, PRE_VAL_GUARD fixed (isfinite), TRAIN_MAX_STEPS support |
-| `config.py` | All configuration | `recovery_det_only` preset, TRAIN_MAX_STEPS from env, SKIP_DET_METRICS_EVAL=False |
+| `train.py` | Main training loop | **RC-29** + **heartbeat** (state file writes at epoch/batch boundaries for swarm, DET_BIAS_LR_FACTOR, REINIT_PI from config), global step fix (moved outside TRAIN_MAX_STEPS guard), stdout logging bootstrap |
+| `config.py` | All configuration | `DET_BIAS_LR_FACTOR=5.0`, `DET_OHEM_RATIO=2.0/MIN_NEG=32/GAMMA_NEG=1.5`, `POSE_LOSS_WEIGHT=5.0`, `SOFT_ARGMAX_TEMP_TRAIN=1.0`, RF1 aug disable, `DET_METRICS_EVERY_N=1` |
 | `evaluate.py` | Full evaluation pipeline | **5 guards**: top5 broadcast check, TRAIN_ACT/PSR skip for eval + logging |
-| `model.py` | POPW architecture | ConvNeXt-Tiny + FPN + 5 heads (~53M params) |
+| `model.py` | POPW architecture | **Soft-argmax training temp (1.0)** for gradient flow, **keypoint normalization to [0,1]** for Wing loss (~1300× scale fix) |
 | `optimizer.py` | Optimizer/scheduler builders | AdamW with differential LR, CosineAnnealingWarmRestarts |
 | `checkpoint.py` | Checkpoint save/load | Model/optimizer/scheduler state dict management |
 | `distillation.py` | Knowledge distillation | Distillation loss and teacher-student training |
@@ -16,7 +16,7 @@
 | `embedding_cache.py` | Embedding cache | Caching embeddings for efficient training |
 | `pretrain_mae.py` | MAE pretraining | Masked Autoencoder pretraining loop |
 | `pretrain_synthetic.py` | Synthetic pretraining | Synthetic data pretraining loop |
-| `stage_manager.py` | Stage manager | Multi-stage training orchestration |
+| `stage_manager.py` | Stage manager | RF2 params (50% data, 30 epochs, patience 10), reinit_heads only on actual retries (not first stage transition), det_map50_95 key fallback chain |
 | `training_supervisor.py` | Training supervisor | Supervisor layer for training monitoring |
 
 ## Diagnostic Scripts (code/) — LIVE FROM diagnostics/ TREE
@@ -88,11 +88,11 @@
 
 | File | Description |
 |------|-------------|
-| `00_JOURNEY_AND_STATUS.md` | Full project timeline (Phases 1-9) |
+| `00_JOURNEY_AND_STATUS.md` | Full project timeline (Phases 1-12) — UPDATED 2026-06-20 with Kendall bug, RF1 completion, RF2 epoch 15 collapse, 20-agent swarm deployment |
 | `10_OPUS_ANSWER_v2.md` | Opus v2 answer (RC-25, RC-27, recovery plan) |
 | `12_MASTER_PROMPT_v4.md` | Master prompt sent to Opus v4 |
 | `13_OPUS_ANSWER_v4.md` | **Opus v4 answer** — RC-28/RC-29 diagnosis, recovery protocol R0-R3 |
-| `14_POST_OPUS_V4_IMPLEMENTATION.md` | **What we did after Opus v4** — all fixes, crashes, retries, breakthrough |
+| `14_POST_OPUS_V4_IMPLEMENTATION.md` | **What we did after Opus v4** — UPDATED 2026-06-20: now covers Phase 10 (RF1 death spiral, gradient sparsity proof, Kendall bug), Phase 11 (RF1 completion, 0.45 vs 0.184 discrepancy), Phase 12 (RF2 epoch 15 collapse, cls_score bias equilibrium, 20-agent swarm, 5 proven/4 refuted hypotheses) |
 | `15_GIT_DIFF_SUMMARY.txt` | Complete git diff of all source changes (c454163..HEAD) |
 | `16_MASTER_PROMPT_v5.md` | **SEND THIS TO OPUS** — Ultimate path to SOTA-ready model, all SOTA targets, current state, key questions |
 | `17_OPUS_ANSWER_v5.md` | **Opus v5 answer** — ultimate path (R1→R4 ladder), det-gap framing, activity/PSR enable order, PSR `1e-4` sentinel diagnosis, efficiency-first cell-fill strategy, timeline |
@@ -100,7 +100,11 @@
 | `19_PRE_TRAINING_READINESS_AUDIT_100.md` | **100-item pre-training readiness audit** — go/no-go gates with why-analysis per item, across architecture, backbone/FPN/anchors, cross-task conditioning, data/labels, loss/numerical hygiene, Kendall/gradient balance, optimization/training loop, per-head liveness, and per-task readiness (det/act/psr/headpose/assembly); 6 master gates; usage protocol |
 | `22_FINAL_PREFLIGHT_GAP_CLOSURE.md` | **Final pre-flight & gap closure** — closes the 3 verified gaps on `main` with exact patches: GAP-C (`apply_preset` never sets the 4 fix flags → paper_run no-op), GAP-A (PSR 9:1 static gradient + MonotonicDecoder unused at eval), GAP-B (activity eval per-recording not per-segment). Per-gap verification, 6-gate executable pre-flight, paper-run ladder, eval→`\popwres` map, 15-point sign-off |
 | `popw_paper_improved.tex` | Target paper with all benchmark tables and SOTA comparisons |
-| `26_RF1_RF10_COMPREHENSIVE_STATUS.md` | RF1-RF10 stage definitions and training pipeline (2026-06-16) |
+| `26_RF1_RF10_COMPREHENSIVE_STATUS.md` | RF1-RF10 stage definitions and training pipeline — UPDATED 2026-06-20 (v4) with RF2 actual performance, epoch-by-epoch metrics, DET_PROBE analysis, EVAL COLLAPSE evidence, cls_score bias equilibrium analysis, updated timeline |
 | `28_DET_DEATH_SPIRAL_FIX_AND_RUNBOOK.md` | Detection death spiral bounded background loss fix + runbook (2026-06-16) |
-| `29_RF1_DEATH_SPIRAL_AND_R2_5_PARADOX.md` | Root cause analysis of RF1 detection-only failure vs R2.5 success. Proves gradient sparsity (0.001% positive anchor ratio) kills RF1; multi-task masking made R2.5 look healthy. Key discovery: DETACH_REG_FPN only detaches regression, not classification — but classification gradient from 16 positive anchors out of 348K is too sparse to drive backbone updates. Solution: enable train_head_pose in RF1 or skip to RF2. (2026-06-17) |
+| `29_RF1_DEATH_SPIRAL_AND_R2_5_PARADOX.md` | Root cause analysis — UPDATED 2026-06-20 with Section 13 postscript: RF2 epoch 15 collapse proves cls_score bias equilibrium is a DISTINCT failure mode from gradient sparsity (head_pose ALIVE but classifier still collapsed) |
 | `30_OPUS_MASTER_PROMPT_v7.md` | Self-contained overview prompt for sending to Opus. Summarizes all 30 files, current situation, 10 questions for Opus, gradient math proof, config comparison. Upload this file alongside the folder for fastest Opus onboarding. (2026-06-17) |
+| `31_KENDALL_BUG_DISCOVERY_AND_FIX.md` | Kendall weighting bug: losses.py line 1589 excluded head_pose from total loss when train_pose=True, train_act=False. Fix applied and confirmed — UPDATED 2026-06-20 with Section 10 RF2 cross-validation postscript |
+| `33_OPEN_QUESTIONS.md` | **ALL remaining confusions** — 24 open questions organized by severity (CRITICAL/HIGH/MEDIUM/LOW). Covers cls_score bias equilibrium, stage_history discrepancy, PSR never trained, Focal Loss suitability, head pose feature smoothing, GT frame overfitting. (2026-06-20 — NEW) |
+| `34_RF2_SWARM_MONITOR.md` | **20-agent monitoring swarm documentation** — 22 agents, 134 checks/cycle, 5-min interval, 40-thread ThreadPoolExecutor, auto-restart watchdog, 4-channel alerting, 6 bugs found and fixed. (2026-06-20 — NEW) |
+| `35_OPUS_MASTER_PROMPT_v8.md` | **Send this to Opus** — Self-contained overview prompt for Opus consultation v8. Covers all 34 files, 3 distinct failure modes (solved + unsolved), cls_score bias equilibrium, 5 fix proposals, 10 key questions for Opus, current config reference. (2026-06-20 — NEW) |
