@@ -1766,6 +1766,28 @@ def train_one_epoch(
                     ema.update()
                 # [FIX4] Per-param detection head weight stats (every 100 steps, --reinit-heads only)
                 if _REINIT_HEADS_ACTIVE and step % 100 == 0:
+                    # [OPUS v8 E4] Per-head backbone gradient norms — capture BEFORE optimizer step.
+                    # Collect per-head named params with gradients for cross-head comparison.
+                    _all_named_params = {n: p for n, p in model.named_parameters() if p.grad is not None}
+                    _backbone_grad_norm = 0.0
+                    _hp_head_grad_norm = 0.0
+                    _act_head_grad_norm = 0.0
+                    _psr_head_grad_norm = 0.0
+                    for _n, _p in _all_named_params.items():
+                        _gn = _p.grad.detach().norm().item()
+                        if _n.startswith('backbone') or _n.startswith('fpn'):
+                            _backbone_grad_norm += _gn ** 2
+                        elif _n.startswith('head_pose_head'):
+                            _hp_head_grad_norm += _gn ** 2
+                        elif _n.startswith('activity_head'):
+                            _act_head_grad_norm += _gn ** 2
+                        elif _n.startswith('psr_head'):
+                            _psr_head_grad_norm += _gn ** 2
+                    _backbone_grad_norm = math.sqrt(_backbone_grad_norm) if _backbone_grad_norm > 0 else 0.0
+                    _hp_head_grad_norm = math.sqrt(_hp_head_grad_norm) if _hp_head_grad_norm > 0 else 0.0
+                    _act_head_grad_norm = math.sqrt(_act_head_grad_norm) if _act_head_grad_norm > 0 else 0.0
+                    _psr_head_grad_norm = math.sqrt(_psr_head_grad_norm) if _psr_head_grad_norm > 0 else 0.0
+
                     _det_named_params = {n: p for n, p in model.named_parameters()
                                          if n.startswith('detection_head') and p.grad is not None}
                     if _det_named_params:
@@ -1803,6 +1825,22 @@ def train_one_epoch(
                             _det_parts.append(f'reg_subnet_last_grad:norm={_rslg.norm():.2e}')
                         if _det_parts:
                             logger.info(f'  [DET-DEBUG step={step}] ' + ' | '.join(_det_parts))
+                    # [OPUS v8 E4] Per-head backbone grad norm summary (same step cadence).
+                    # If head_pose_head grad norm >> detection_head, shared backbone is
+                    # optimized for head_pose. Logged at same step interval as DET-DEBUG.
+                    if _hp_head_grad_norm > 0 or _act_head_grad_norm > 0 or _psr_head_grad_norm > 0:
+                        _det_grad_norm = sum(
+                            _p.grad.detach().norm().item() ** 2
+                            for _p in _det_named_params.values()
+                        ) ** 0.5 if _det_named_params else 0.0
+                        logger.info(
+                            f'  [GRAD-NORM step={step}] '
+                            f'backbone={_backbone_grad_norm:.2e} '
+                            f'det={_det_grad_norm:.2e} '
+                            f'hp={_hp_head_grad_norm:.2e} '
+                            f'act={_act_head_grad_norm:.2e} '
+                            f'psr={_psr_head_grad_norm:.2e}'
+                        )
                 optimizer.zero_grad(set_to_none=True)
 
         # --- NaN/ZERO GUARD: zero per-component losses that are NaN before accumulating.
@@ -3897,6 +3935,23 @@ def main(args):
                     return default
                 return val
 
+            # [OPUS v8 E2] Kendall precision ratio: head_pose ÷ detection.
+            # If prec_ratio >> 1 (e.g., ~30-40×), head_pose dominates the shared backbone.
+            # Each precision = exp(-log_var), clamped range: exp(-2)≈0.14 to exp(4)≈54.6.
+            _lv_det = _safe_log(train_metrics.get('log_var_det', 0.0), 'log_var_det', default=0.0)
+            _lv_hp = _safe_log(train_metrics.get('log_var_pose', 0.0), 'log_var_pose', default=0.0)
+            _prec_det = math.exp(-_lv_det) if math.isfinite(_lv_det) else 0.0
+            _prec_hp = math.exp(-_lv_hp) if math.isfinite(_lv_hp) else 0.0
+            _prec_ratio = (_prec_hp / _prec_det) if _prec_det > 1e-10 else float('inf')
+
+            # [OPUS v8 E3] cls_score.weight.norm() — tracks backbone feature health.
+            # Shrinking norm = backbone losing object-discriminative features (symptom chain).
+            _cls_w_norm = 0.0
+            _cls_w_iter = next((p for n, p in model.named_parameters()
+                                if n.endswith('detection_head.cls_score.weight')), None)
+            if _cls_w_iter is not None:
+                _cls_w_norm = _cls_w_iter.detach().norm().item()
+
             logger.info(
                 f'Train: loss={_safe_log(train_metrics["total"], "total"):.4f}  '
                 f'det={_safe_log(train_metrics["det"], "det"):.4f}  '
@@ -3904,8 +3959,10 @@ def main(args):
                 f'act={_safe_log(train_metrics["activity"], "activity"):.4f}  '
                 f'psr={_safe_log(train_metrics["psr"], "psr"):.4f}  '
                 f'lr={current_lr:.2e}  '
-                f'kd_d={_safe_log(train_metrics["log_var_det"], "log_var_det", default=0.0):+.3f}  '
-                f'kd_p={_safe_log(train_metrics["log_var_pose"], "log_var_pose", default=0.0):+.3f}  '
+                f'prec_d={_prec_det:.2f} prec_hp={_prec_hp:.2f} prec_r={_prec_ratio:.1f}  '
+                f'cls_w_n={_cls_w_norm:.4f}  '
+                f'kd_d={_lv_det:+.3f}  '
+                f'kd_p={_lv_hp:+.3f}  '
                 f'kd_a={_safe_log(train_metrics["log_var_act"], "log_var_act", default=0.0):+.3f}  '
                 f'kd_r={_safe_log(train_metrics["log_var_psr"], "log_var_psr", default=0.0):+.3f}'
                 f'{ema_decay_str}  '
