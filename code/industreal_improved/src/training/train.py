@@ -2964,6 +2964,24 @@ def main(args):
         f'USE_KENDALL={CFG_USE_KENDALL}'
     )
 
+    # [OPUS v9 §R5] Step-0 effective config dump — logs the key config parameters
+    # that define the current run so we know exactly what state training started with.
+    logger.info(
+        f'Config: DET_POS_IOU_THRESH={C.DET_POS_IOU_THRESH}  '
+        f'DET_POS_IOU_TOP_K={C.DET_POS_IOU_TOP_K}  '
+        f'DET_POS_IOU_IOU_FLOOR={C.DET_POS_IOU_IOU_FLOOR}  '
+        f'DET_OHEM_ENABLED={getattr(C, "DET_OHEM_ENABLED", False)}  '
+        f'DET_ASYMMETRIC_GAMMA={getattr(C, "DET_ASYMMETRIC_GAMMA", False)}  '
+        f'DET_BIAS_LR_FACTOR={C.DET_BIAS_LR_FACTOR}  '
+        f'DET_LR_MULTIPLIER={C.DET_LR_MULTIPLIER}  '
+        f'KENDALL_HP_PREC_CAP={bool(getattr(C, "KENDALL_HP_PREC_CAP", True))}  '
+        f'KENDALL_FIXED_WEIGHTS={bool(getattr(C, "KENDALL_FIXED_WEIGHTS", False))}  '
+        f'KENDALL_HP_FIXED_LAMBDA={float(getattr(C, "KENDALL_HP_FIXED_LAMBDA", 0.2))}  '
+        f'KENDALL_STAGED_TRAINING={bool(getattr(C, "KENDALL_STAGED_TRAINING", False))}  '
+        f'DET_POS_ANCHOR_PROBE_EVERY={getattr(C, "DET_POS_ANCHOR_PROBE_EVERY", 200)}  '
+        f'_STAGE_NAME={_stage_name}'
+    )
+
     # Debug mode overrides
     max_recordings_train = None
     max_recordings_val = None
