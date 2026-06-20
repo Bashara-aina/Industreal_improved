@@ -357,3 +357,46 @@ backbone gradient starvation.
    - **H1: Bias init is wrong** — pi=0.01 is too low for 172K anchors; should be pi=0.1
    - **H2: Focal Loss needs revision** — QualityFocalLoss or VarifocalLoss eliminates bias parameter entirely
    - **H3: Dedicated bias LR** — classification bias needs its own learning rate schedule
+
+### 11. Opus v8 Postscript (2026-06-20): Bias Equilibrium Is a Symptom
+
+> **Key reframing from `36_OPUS_ANSWER_v8.md`:** The cls_score bias equilibrium
+> (−2.54 bias, σ=0.0068, score_mean=0.079) is a *downstream symptom* of dead
+> backbone features caused by Kendall head_pose domination, not an independent
+> failure mode of the classification head.
+
+The v8 analysis (§1.4 symptom chain) traces the actual mechanism:
+
+```
+head_pose dominates backbone (×40 via Kendall, from ep6)
+   └─> shared features drift toward orientation-mean, lose object discriminability
+        └─> cls_subnet input becomes uninformative; W·x ≈ const
+             └─> weight decay (1e-4) shrinks cls_score.weight toward 0
+                  └─> output ≈ bias for every class → cls_std → 0.0068
+                       └─> bias settles where Σσ(b)≈base-rate ≈ 0.079 → "−2.54 equilibrium"
+                            └─> mAP → 0.001
+```
+
+### 11.1 What Was Implemented (commit `beda631`)
+
+All 4 Opus v8 fixes applied to source:
+
+| Fix | What | File |
+|-----|------|------|
+| Fix 1 | `KENDALL_HP_PREC_CAP` — lv_hp >= lv_det so head_pose precision can never exceed detection's | `losses.py:1531-1533` |
+| Fix 1 (alt) | `KENDALL_FIXED_WEIGHTS` — fixed λ=0.2 for RF1-RF2 bootstrap, bypasses learned log_vars | `losses.py:1518-1547` |
+| Fix 2 | `DET_POS_IOU_TOP_K=9` — top-k force-match gives ~6-10 pos/GT instead of ~1 | `losses.py:129-141` |
+| Fix 2 | `DET_POS_IOU_THRESH=0.4` — lowered from 0.5 for small assembly parts | `config.py` |
+| Fix 2 | `DET_BIAS_LR_FACTOR=1.0` — reverted from 5.0 (was accelerating wrong drift) | `config.py` |
+| Fix 4 | `_validate_stage_history_entry()` — guard against phantom gate-threshold recording | `stage_manager.py:548-582` |
+
+### 11.2 Updated Status Table
+
+| Failure Mode | Root Cause | Fix | Status |
+|-------------|------------|-----|--------|
+| Gradient sparsity (RF1) | 16 positive anchors / 2.76M total | Head_pose dense gradient | ✅ FIXED by Kendall bug fix |
+| Kendall domination (RF2) | Head_pose precision ~54.6× via Kendall, detection ~1.4× | KENDALL_HP_PREC_CAP + fixed weights | ✅ FIXED by Opus v8 commit beda631 |
+| Anchor starvation | ~1 pos/GT, IoU≥0.5 threshold too strict for small parts | DET_POS_IOU_THRESH=0.4 + top-k=9 | ✅ FIXED by Opus v8 commit beda631 |
+| Phantom 0.45 gate metric | stage_history recorded gate constant not observed metric | _validate_stage_history_entry guard | ✅ FIXED by Opus v8 commit beda631 |
+
+The three hypotheses (H1-H3 from §10) should be re-evaluated after an RF2 run with the Opus v8 fixes. If mAP holds past epoch 13, the bias never reaches equilibrium because the features never go dead.

@@ -1,12 +1,12 @@
-# Consultation Folder File Manifest — Updated 2026-06-20 (RF2 Epoch 16)
+# Consultation Folder File Manifest — Updated 2026-06-20 (Opus v8 Fixes Applied)
 
 ## Core Python Source Files (code/) — UPDATED 2026-06-20 FROM RUNNING SOURCE
 
 | File | Description | Key Changes |
 |------|-------------|-------------|
-| `losses.py` | FocalLoss + all loss functions | **RC-28**: Empty frames skipped, normalization by GT-bearing image count |
-| `train.py` | Main training loop | **RC-29** + **heartbeat** (state file writes at epoch/batch boundaries for swarm, DET_BIAS_LR_FACTOR, REINIT_PI from config), global step fix (moved outside TRAIN_MAX_STEPS guard), stdout logging bootstrap |
-| `config.py` | All configuration | `DET_BIAS_LR_FACTOR=5.0`, `DET_OHEM_RATIO=2.0/MIN_NEG=32/GAMMA_NEG=1.5`, `POSE_LOSS_WEIGHT=5.0`, `SOFT_ARGMAX_TEMP_TRAIN=1.0`, RF1 aug disable, `DET_METRICS_EVERY_N=1` |
+| `losses.py` | FocalLoss + all loss functions | **Opus v8 fixes**: `DET_POS_IOU_TOP_K=9` top-k anchor matching (6-10 pos/GT vs ~1), `KENDALL_HP_PREC_CAP` clamp (lv_hp >= lv_det), `KENDALL_FIXED_WEIGHTS` fixed-lambda path for RF1-RF2. **Prior**: RC-28 empty frame skip + normalization, Kendall bug fix (include head_pose in total loss) |
+| `train.py` | Main training loop | Heartbeat (state file writes at epoch/batch boundaries for swarm), global step fix, stdout logging bootstrap |
+| `config.py` | All configuration | **Opus v8 fixes**: `KENDALL_HP_PREC_CAP=True`, `KENDALL_FIXED_WEIGHTS=False`, `KENDALL_STAGED_TRAINING=False`, `KENDALL_HP_FIXED_LAMBDA=0.2`, `DET_POS_IOU_THRESH=0.4`, `DET_POS_IOU_TOP_K=9`, `DET_BIAS_LR_FACTOR=1.0` (was 5.0). Prior: `DET_OHEM_RATIO=2.0/MIN_NEG=32/GAMMA_NEG=1.5`, `POSE_LOSS_WEIGHT=5.0`, `SOFT_ARGMAX_TEMP_TRAIN=1.0` |
 | `evaluate.py` | Full evaluation pipeline | **5 guards**: top5 broadcast check, TRAIN_ACT/PSR skip for eval + logging |
 | `model.py` | POPW architecture | **Soft-argmax training temp (1.0)** for gradient flow, **keypoint normalization to [0,1]** for Wing loss (~1300× scale fix) |
 | `optimizer.py` | Optimizer/scheduler builders | AdamW with differential LR, CosineAnnealingWarmRestarts |
@@ -16,7 +16,7 @@
 | `embedding_cache.py` | Embedding cache | Caching embeddings for efficient training |
 | `pretrain_mae.py` | MAE pretraining | Masked Autoencoder pretraining loop |
 | `pretrain_synthetic.py` | Synthetic pretraining | Synthetic data pretraining loop |
-| `stage_manager.py` | Stage manager | RF2 params (50% data, 30 epochs, patience 10), reinit_heads only on actual retries (not first stage transition), det_map50_95 key fallback chain |
+| `stage_manager.py` | Stage manager | **Opus v8 Fix 4**: `_validate_stage_history_entry()` guard against phantom gate-threshold recording. Prior: RF2 params (50% data, 30 epochs, patience 10), reinit_heads only on actual retries |
 | `training_supervisor.py` | Training supervisor | Supervisor layer for training monitoring |
 
 ## Diagnostic Scripts (code/) — LIVE FROM diagnostics/ TREE
@@ -82,7 +82,7 @@
 | File | Description |
 |------|-------------|
 | `eval_metrics.json` | Evaluation metrics (64KB) |
-| `rf_stage_state.json` | **Live stage state** — copied from `/media/newadmin/master/.../runs/rf_stage_state.json` (530 bytes) |
+| `rf_stage_state.json` | **Live stage state** — **Fix 4 applied**: phantom 0.45 → actual best_metric=0.184 |
 
 ## Documentation
 
@@ -107,4 +107,6 @@
 | `31_KENDALL_BUG_DISCOVERY_AND_FIX.md` | Kendall weighting bug: losses.py line 1589 excluded head_pose from total loss when train_pose=True, train_act=False. Fix applied and confirmed — UPDATED 2026-06-20 with Section 10 RF2 cross-validation postscript |
 | `33_OPEN_QUESTIONS.md` | **ALL remaining confusions** — 24 open questions organized by severity (CRITICAL/HIGH/MEDIUM/LOW). Covers cls_score bias equilibrium, stage_history discrepancy, PSR never trained, Focal Loss suitability, head pose feature smoothing, GT frame overfitting. (2026-06-20 — NEW) |
 | `34_RF2_SWARM_MONITOR.md` | **20-agent monitoring swarm documentation** — 22 agents, 134 checks/cycle, 5-min interval, 40-thread ThreadPoolExecutor, auto-restart watchdog, 4-channel alerting, 6 bugs found and fixed. (2026-06-20 — NEW) |
-| `35_OPUS_MASTER_PROMPT_v8.md` | **Send this to Opus** — Self-contained overview prompt for Opus consultation v8. Covers all 34 files, 3 distinct failure modes (solved + unsolved), cls_score bias equilibrium, 5 fix proposals, 10 key questions for Opus, current config reference. (2026-06-20 — NEW) |
+| `35_OPUS_MASTER_PROMPT_v8.md` | **Send this to Opus** — Self-contained overview prompt for Opus consultation v8. Covers all 34 files, 3 distinct failure modes (solved + unsolved), cls_score bias equilibrium, 5 fix proposals, 10 key questions for Opus, current config reference. (2026-06-20) |
+| `36_OPUS_ANSWER_v8.md` | **Opus v8 answer** — Unified diagnosis: RF2 collapse is one mechanism wearing three masks (Kendall head_pose domination, not separate bias equilibrium). 4 prioritized fixes. Verifies phantom 0.45, double curriculum, pi=0.03. (2026-06-20) |
+| `37_IMPLEMENTATION_SUMMARY.md` | **Implementation summary** — All 4 Opus v8 fixes applied to source (commit beda631). Config/loss-level changes only, safe on RTX 3060. (2026-06-20) |
