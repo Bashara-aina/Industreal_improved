@@ -72,9 +72,9 @@
   "log_cursor": 0,
   "cross_stage_memory": {},
   "max_epochs": 36,
-  "last_heartbeat": "2026-06-20T13:50:33.514495+00:00",
+  "last_heartbeat": "2026-06-20T13:58:04.950939+00:00",
   "batch": {
-    "current": 2550,
+    "current": 2850,
     "total": 3302
   }
 }
