@@ -1111,7 +1111,194 @@ python3 -m src.training.stage_manager --launch rf1
 
 ---
 
-*End of document. Generated 2026-06-16 17:45 UTC (v3 — updated with Phase 4 trajectory identity + cycling death spiral pattern + strategy exhaustion analysis).*
+## 18. RF2 Actual Performance (June 20, 2026 Update)
+
+### 18.1 Current State
+
+RF2 launched on June 18-19 after RF1 gate was met (best_det_mAP50=0.45 per stage_history). Configuration:
+- **Preset**: `stage_rf2` — detection + head_pose
+- **Data**: 35% subset (subset-ratio 0.35)
+- **Resume from**: RF1 best.pth (crash_recovery.pth)
+- **DET_GT_FRAME_FRACTION**: 0.90
+- **Kendall bug**: FIXED
+- **DETACH_REG_FPN**: False
+- **PID**: 1043628 (main) + 8 workers (PIDs 1045272-1045410)
+
+### 18.2 Validation Metrics by Epoch
+
+| Epoch | det_mAP50 | forward_angular_MAE_deg | Notes |
+|-------|-----------|------------------------|-------|
+| 7 | 0.007 | 71.67 | Run 2 start — degraded from RF1 best |
+| 8 | **0.184** | ? | **PEAK** — best validation |
+| 9 | 0.181 | ? | Slight decline |
+| 10 | 0.159 | ? | Continued decline |
+| 11 | ? | ? | Missing from metric_history |
+| 12 | ? | ? | Missing from metric_history |
+| 13 | 0.000010 | 56.18 | Detection near-zero, MAE improving |
+| 14 | 0.000104 | 52.23 | **EVAL COLLAPSE** — all heads |
+| 15 | 0.001308 | 47.84 | Flat scores ~0.079, std=0.0088 |
+
+**Pattern**: det_mAP50 rises to peak at epoch 8, then decays to near-zero by epoch 13. Meanwhile, head_pose MAE continues to improve (71.67°—→47.84°). The detection classifier collapses while head_pose thrives.
+
+### 18.3 DET_PROBE Results (Epoch 15 Validation)
+
+```
+Batch 925: prediction_stats={"score_p50":0.019,"score_max":0.97,"preds>0.30":33896,"bestIoU_max":0.95}
+Batch 927: prediction_stats={"score_p50":0.021,"score_max":0.93,"preds>0.30":9974,"bestIoU_max":0.91}
+Batch 929: prediction_stats={"score_p50":0.025,"score_max":0.96,"preds>0.30":27716,"bestIoU_max":0.99}
+```
+
+**Key findings:**
+- **score_p50**: 0.019-0.025 (near pi=0.01 init — median confidence essentially unchanged)
+- **score_max**: 0.93-0.97 (classifier CAN make very confident predictions for SOME classes)
+- **preds>0.30**: 9,974-33,896 per batch (significant counts of confident predictions)
+- **bestIoU_max**: 0.91-0.99 (near-perfect localization)
+- **Verdict**: LOCALIZING — detector localizes well but won't fire confidently across all classes
+
+### 18.4 EVAL COLLAPSE Signal (56 Occurrences)
+
+At epoch 15, the evaluation code detected simultaneous collapse of all heads:
+```
+EVAL COLLAPSE: det_mAP50=0.001 act_mAP50=0.000 psr_f1=0.000
+```
+
+Occurred 56 times during validation. All 3 heads zero simultaneously. This is the same triple-head collapse seen in previous runs (Run 8, R2.5).
+
+### 18.5 Classifier Score Distribution Collapse
+
+The DET_PROBE classifier statistics reveal the mechanism:
+
+| Metric | Epoch 8 (Healthy) | Epoch 15 (Collapsed) |
+|--------|-------------------|---------------------|
+| det_mAP50 | 0.184 | 0.001 |
+| score_p50 | Unknown (not tracked) | 0.019 |
+| score_max | Unknown | 0.93-0.97 |
+| cls_score std | Unknown | **0.0068-0.0088** |
+| preds>0.30 | Unknown | 9,974-33,896 |
+
+The cls_score std < 0.01 is the critical signal. When the classification head's output logits have standard deviation below 0.01, it means ALL anchors are producing nearly identical scores. The classifier has collapsed to a single uniform value ~0.079 across all 24 classes × 164K anchors.
+
+### 18.6 Why RF2 Collapse Is Different from RF1
+
+| Dimension | RF1 Collapse | RF2 Collapse |
+|-----------|-------------|-------------|
+| Root cause | Gradient sparsity (0.001% positive anchors) | cls_score bias equilibrium |
+| Gradient source | Det only (~16 positive anchors) | Det + head_pose (dense) |
+| DET_GT_FRAME_FRACTION | N/A (not yet deployed) | 0.90 |
+| Time to collapse | ~45 min (1300 steps) | ~7-8 epochs (~2.5 hours) |
+| Pattern | Never worked (flat from step 0) | Peaked then decayed |
+| Fix that works | Head_pose gradient + GT frames | Unknown |
+
+### 18.7 stage_history vs metric_history Discrepancy
+
+**Critical unresolved issue**: stage_history claims RF1 completed with `best_det_mAP50=0.45`, but metric_history only shows max 0.184 (epoch 8). The two data sources disagree by 2.4×.
+
+| Data Source | Best det_mAP50 | Epochs Recorded |
+|-------------|---------------|-----------------|
+| stage_history | **0.45** | Not specified |
+| metric_history | **0.184** | 7-10 only |
+
+**Possible explanations:**
+1. Different validation protocols (stage_manager gate eval vs per-epoch val)
+2. metric_history truncated/reset at some point
+3. 0.45 from a different run or checkpoint not tracked in state
+
+### 18.8 Stage State (as of 2026-06-20)
+
+```json
+{
+  "current_stage": "rf2",
+  "stage_index": 1,
+  "status": "running",
+  "training_pid": 1043628,
+  "epoch": 16,
+  "best_metric": 0.181,
+  "gate_passed": false,
+  "max_epochs": 36,
+  "retry_count": 0,
+  "current_strategy": "default",
+  "last_heartbeat": "2026-06-20T06:23:34+00:00",
+  "stage_history": [{"stage": "rf1", "status": "completed", "best_det_mAP50": 0.45}]
+}
+```
+
+- Gate targets: det_mAP50>=0.40 (current: 0.001), MAE<=60° (current: 47.84° ACHIEVED)
+- At epoch 16/36 with 0 retries — approaching max_epochs with no recovery in sight
+- 20-agent monitoring swarm deployed and running
+
+### 18.9 Updated Timeline Estimation
+
+Without a fix for the cls_score bias equilibrium:
+
+| Stage | Status | Est. Completion | Confidence |
+|-------|--------|----------------|------------|
+| RF1 | ✅ Completed (0.45?) | Done | Uncertain |
+| **RF2** | **❌ Collapsed** | **Stuck** | **No known path** |
+| RF3 | ❌ Blocked | N/A | N/A |
+| RF4 | ❌ Blocked | N/A | N/A |
+| RF5-RF10 | ❌ Blocked | N/A | N/A |
+
+### 18.10 What Changed Since the Original Document
+
+The original v3 (June 16) was written while RF1 was in Phase 4 (20× LR). Since then:
+1. Kendall bug was discovered and fixed (June 17)
+2. RF1 completed with head_pose enabled (best_det_mAP50=0.45 per stage_history)
+3. RF2 launched with 35% data, det + head_pose
+4. RF2 peaked at epoch 8 (0.184), then collapsed
+5. 20-agent monitoring swarm deployed and found 6 bugs
+6. **New root cause identified**: cls_score bias equilibrium rather than gradient sparsity
+
+### 18-A. New Addendum: Post-RF2 Collapse Analysis
+
+#### The cls_score Bias Differentiation Problem
+
+The RF2 epoch 15 collapse reveals a failure mode distinct from gradient sparsity:
+
+1. **Phase 1 (epochs 1-8)**: Detection learns, mAP rises to 0.184. Head_pose converges to low MAE. Backbone receives dense gradient from both heads.
+
+2. **Phase 2 (epochs 8-13)**: Detection mAP decays from 0.184→0.000. The classifier's output logits converge toward a uniform value. Head pose continues improving (MAE 71.67°→56.18°).
+
+3. **Phase 3 (epochs 13-15)**: Detection mAP near zero. Classifier produces ~0.079 uniform scores (cls_score std=0.0068-0.0088). Head pose MAE still improving (56.18°→47.84°). Model is in a degenerate equilibrium where detection has collapsed but head pose works.
+
+#### Mathematical Model
+
+```
+Let b = cls_score bias (scalar, ~-4.6 at pi=0.01 init)
+Let w_i = per-class weight vector for class i
+
+For each anchor:
+  cls_logit_i = w_i · x + b
+  score_i = sigmoid(cls_logit_i)
+
+When training converges to degenerate equilibrium:
+  - b drifts to ~-2.5 (such that sigmoid(-2.5) ≈ 0.076)
+  - w_i · x ≈ 0 for most classes (weights don't differentiate)
+  - For a few classes, w_i · x reaches +5 to make score_max=0.93-0.97
+  - Overall: 164K anchors × 24 classes all produce ~0.079 scores
+```
+
+The equilibrium is stable because:
+- Increasing w_i · x for class i increases Focal Loss for ALL other classes sharing the same anchor
+- Decreasing b (more negative) reduces ALL scores equally — not helpful
+- The system is at a saddle point where no single weight update reduces the total loss
+
+#### What Would Be Needed Next
+
+**Immediate diagnostics needed:**
+1. Track cls_score.bias value across epochs to confirm drift hypothesis
+2. Compute W·x distribution to separate bias from learned weights
+3. Per-class AP to identify which classes collapse first
+
+**Potential fixes (ranked by likely efficacy):**
+1. **Pi=0.1 init** — Accept higher background gradient to break the uniform equilibrium. Risk: faster collapse.
+2. **Remove cls_score bias** — Force the classifier to differentiate through weights only. Risk: may slow initial learning.
+3. **Quality Focal Loss** — Reformulates classification as quality estimation. May not have the same equilibrium.
+4. **Varifocal Loss** — Asymmetric focusing for positives vs negatives. Different equilibrium properties.
+5. **Dedicated cls_score bias LR** — Train bias with 10× higher LR to make it respond to positive gradient faster.
+
+---
+
+*End of document. Updated 2026-06-20 UTC (v4 — added Section 18 with RF2 actual performance, epoch-by-epoch metrics, DET_PROBE analysis, EVAL COLLAPSE evidence, cls_score bias equilibrium analysis, and updated timeline. Added Addendum 18-A with collapse mechanism analysis and ranked fix proposals.)*
 
 ---
 

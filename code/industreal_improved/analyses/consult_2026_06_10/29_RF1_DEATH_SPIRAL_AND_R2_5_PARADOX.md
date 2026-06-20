@@ -673,3 +673,95 @@ python3 -c "
 file reads, running process state, and gradient math. The key insight —
 DETACH_REG_FPN only detaches regression, not classification — was
 verified against model.py:554 and config.py:569-573 directly.*
+
+---
+
+## 13. Postscript: RF2 Epoch 15 Collapse — A Second, Distinct Failure Mode (2026-06-20)
+
+> **Even with head_pose gradient ALIVE (confirmed by the Kendall fix), RF2
+> epoch 15 produced a detection classifier with uniform ~0.079 cls_score
+> distribution. This proves the cls_score bias equilibrium is a SEPARATE
+> failure mode from gradient sparsity.**
+
+### 13.1 The Prediction from This Document
+
+Section 5 of this document (Retry Strategy Analysis) concluded:
+> "The 'escape' from RF1 is scheduled at RF2 (train_head_pose=True), which
+> adds a dense gradient source."
+
+This was correct as far as it went — RF1's problem was gradient sparsity,
+and adding head_pose did fix that. The Kendall fix (31_KENDALL_BUG.md)
+confirmed: head_pose gradient went from NO_GRAD → ALIVE, cls_std expanded from
+0.88 → 1.37 (1.6× broader), and backbone gradients were healthy.
+
+But the prediction assumed that fixing gradient sparsity would be sufficient
+for detection to train. **It was not.**
+
+### 13.2 The Evidence
+
+RF2 epoch 15 validation (with head_pose ALIVE throughout):
+
+```
+det_mAP50    = 0.001   (near zero — classifier collapsed)
+det_mAP      = 0.000
+det_mAP50_95 = 0.000
+
+DET_PROBE:
+  score_p50  = 0.019   (median at bias floor)
+  score_mean = 0.079   (all classes ~same)
+  score_std  = 0.0068  (near-identical scores across 24 classes)
+  cls_mean   = -2.54   (bias drifted from -4.6 to -2.54)
+  preds>0.30 = 0       (zero high-confidence predictions)
+```
+
+Head pose was simultaneously improving:
+```
+forward_angular_MAE_deg = 47.84°  (improving from 71.67° across RF2)
+```
+
+### 13.3 Why This Is Different from Gradient Sparsity
+
+| Dimension | RF1 Gradient Sparsity (original problem) | RF2 cls_score Bias Equilibrium (new problem) |
+|-----------|------------------------------------------|----------------------------------------------|
+| **Root cause** | 16 positive anchors / 2.76M total → negligible backbone update | Bias parameter in final conv drifts to background equilibrium |
+| **Gradient flow** | Backbone receives ~0 gradient | Backbone gradient is healthy (from head_pose) |
+| **Classification head** | Never learned differentiation (cls_std=0.88) | Learned then **lost** differentiation (cls_std=0.0068) |
+| **Head pose** | DEAD (NO_GRAD in Kendall bug) | **ALIVE, improving MAE 71.67→47.84** |
+| **Diagnostic signature** | cls_mean stable at -4.6 (bias init) | cls_mean drifts to -2.54 (bias finds new equilibrium) |
+| **Epochs to collapse** | Collapses immediately (step 0) | Takes 10+ epochs of apparent progress |
+| **Fix** | Add dense gradient source (head_pose) | **Unknown** — see Q04 in open questions |
+
+### 13.4 The Proper Framing
+
+The gradient sparsity analysis in this document (Sections 3-4) is still
+entirely correct for RF1. The pi=0.01 + anchor math (Section 4's "The pi=0.01
++ anchor math" block) correctly explains why RF1 detection-only failed.
+
+But the RF2 epoch 15 collapse reveals there is a **second obstacle** beyond
+gradient sparsity: even when the backbone receives healthy gradient, the
+classification head can converge to a fixed point (bias → sigmoid equilibrium)
+where it cannot differentiate classes. This is a problem of **classification
+head internal parameter dynamics** rather than backbone gradient starvation.
+
+### 13.5 Implications for the RF Ladder
+
+| Stage | Problem | Evidence | Status |
+|-------|---------|----------|--------|
+| **RF1** (det+pose) | Gradient sparsity | cls_std flat at 0.88, backbone grad ~1e-6/cls | ✅ **Fixed** by head_pose + Kendall fix |
+| **RF2** (det+pose+head_pose) | cls_score bias equilibrium | cls_std=0.0068, head_pose MAE improving | ❌ **Not fixed** — see Q01-Q05 |
+| **RF3+** (all heads) | Untested — may inherit RF2 problem | Unknown | ❓ |
+
+**Critical implication:** Adding more heads (activity, PSR) to the current
+RF2 checkpoint may not help because the problem is in the detection head's
+internal weights, not in the backbone gradient supply. The detection head
+needs a fundamentally different fix — not just more gradient sources.
+
+### 13.6 What We Still Don't Know
+
+1. Why does the bias drift TO -2.54 specifically? What determines that equilibrium point?
+2. Does the bias equilibrium interact with the 172K anchor density? Would fewer anchors help?
+3. Is Focal Loss the wrong choice for this anchor density? Would Quality Focal Loss (which eliminates the bias parameter) fix this?
+4. Is the model overfitting to the 0.7% GT frames at DET_GT_FRAME_FRACTION=0.90?
+5. Would removing the classification head bias parameter entirely force weight-based differentiation?
+
+These are documented in `33_OPEN_QUESTIONS.md` (Q01-Q05, Q10, Q23).

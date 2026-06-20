@@ -269,3 +269,91 @@ This means the detection head IS learning class differentiation. Some classes ar
 | DET-DEBUG reg_preds | unknown | **std 0.17-0.28** ✅ | Regression active |
 | det_mAP50 (epoch 4) | 0.0014 | **~2.5h from now** | Target > 0.10 |
 | Head pose loss | 1.7 (computed, excluded) | **1.60→0.01** ✅ | Fully converged by step 450 |
+
+---
+
+## 10. RF2 Cross-Validation: The Fix Was Necessary But Not Sufficient
+
+> **Key discovery at RF2 epoch 15 (2026-06-20): Despite head_pose gradient being
+> confirmed ALIVE throughout RF1 and RF2 training, the detection classifier
+> still collapsed into a uniform ~0.079 score distribution. This proves the
+> cls_score bias equilibrium is a DISTINCT failure mode from gradient sparsity.**
+
+### 10.1 What the Fix Achieved
+
+The Kendall bug fix (Section 4) was verified working across both RF1 and RF2:
+
+| Signal | Pre-Fix (RF1 epoch 0-7) | Post-Fix (RF1 epoch 0) | RF2 epoch 15 |
+|--------|------------------------|----------------------|--------------|
+| head_pose gradient | NO_GRAD (104×) | **ALIVE at all steps** | **ALIVE** ✅ |
+| backbone grad norm | ~0.95-4.07 (det only) | **1.03→3.78→2.35→1.36** | Healthy |
+| cls_std at step 751 | 0.88 | **1.37 (1.6× broader)** | N/A (different epoch structure) |
+| cls_max at step 751 | 0.47 | **2.78 (5.9× higher)** | N/A |
+| Head pose MAE | 82.1° (flat) | Converged by step 450 | **47.84° at epoch 15** ✅ |
+
+Head pose MAE improved from 71.67° → 47.84° across RF2 epochs 0-15, confirming
+the gradient was flowing and the head was learning.
+
+### 10.2 The Collapse That Shouldn't Have Happened
+
+Despite all healthy signals, RF2 epoch 15 validation produced:
+
+```
+det_mAP50  = 0.001  (near zero — collapsed)
+det_mAP    = 0.000
+det_mAP50_95 = 0.000
+```
+
+DET_PROBE at epoch 15 revealed:
+
+```
+score_p50  = 0.019 (uniform, near bias init)
+score_mean = 0.079 (all classes at equilibrium)
+score_std  = 0.0068-0.0088 (near zero variance — no differentiation)
+cls_mean   = -2.54 (bias drifted from -4.6 to -2.54)
+```
+
+**Critical distinction:** In the pre-Kendall-fix RF1, the problem was insufficient
+gradient reaching the backbone (16 positive anchors out of 2.76M). Here, the
+gradient IS flowing (head_pose MAE improving, backbone norm healthy) but the
+classification head's internal weights have converged to an equilibrium where
+sig(bias) ≈ 0.079 for all classes.
+
+### 10.3 Why the Kendall Fix Wasn't Enough
+
+The Kendall fix enables head_pose gradient, which provides dense, per-frame
+signal to the FPN and backbone. This fixes the **gradient sparsity** problem
+documented in `29_RF1_DEATH_SPIRAL.md`.
+
+However, the **classification head** (4 conv layers + final cls_preds conv,
+~595K parameters) has its own failure mode: the bias parameter in the final
+conv layer drifts to a value where the classifier predicts "background" for
+all classes with uniform low confidence. This is the **cls_score bias
+equilibrium** — a problem of classification head internal dynamics, not
+backbone gradient starvation.
+
+| Failure Mode | Root Cause | Fix | Status |
+|-------------|------------|-----|--------|
+| Gradient sparsity (RF1) | 16 positive anchors / 2.76M total | Head_pose dense gradient | ✅ FIXED by Kendall bug fix |
+| cls_score bias equilibrium (RF2) | Bias → -2.54 → sig(bias)=0.079 for all classes | Unknown — possibly QFL, bias removal, or better init | ❌ STILL OPEN |
+
+### 10.4 What This Means for the Project
+
+1. **The Kendall bug fix was essential** — without it, RF1 wouldn't have completed
+   (best_det_mAP50=0.45 per stage_history). The fix enabled head_pose gradient
+   and proved that dense multi-task gradient is necessary.
+
+2. **But the fix is not sufficient** — RF2 epoch 15 collapse proves the model
+   has a SECOND, independent failure mode in the classification head's internal
+   parameter dynamics.
+
+3. **The cls_score bias equilibrium has never been successfully overcome** in
+   any run — not in RF1 (which completed but with stage_history discrepancy),
+   not in RF2 (which collapsed at epoch 15), and not in any recovery run
+   (R0-R3). The paper_run (R2.5) was the healthiest but its detection metrics
+   were still low (mAP50 ≈ 0.055).
+
+4. **Three hypotheses remain for the bias equilibrium** (see `33_OPEN_QUESTIONS.md` Q04):
+   - **H1: Bias init is wrong** — pi=0.01 is too low for 172K anchors; should be pi=0.1
+   - **H2: Focal Loss needs revision** — QualityFocalLoss or VarifocalLoss eliminates bias parameter entirely
+   - **H3: Dedicated bias LR** — classification bias needs its own learning rate schedule

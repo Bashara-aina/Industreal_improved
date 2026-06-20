@@ -92,9 +92,11 @@ class SoftArgmax(nn.Module):
       coords = sum_{x,y} (x,y) * softmax(heatmap / temperature)
     Temperature controls sharpness -- lower = more peaked.
     """
-    def __init__(self, temperature: float = 0.1, eps: float = 1e-6):
+    def __init__(self, temperature: float = 0.1, training_temperature: Optional[float] = None,
+                 eps: float = 1e-6):
         super().__init__()
         self.temperature = temperature
+        self.training_temperature = training_temperature
         self.eps = eps
 
     def forward(self, heatmaps: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -111,7 +113,12 @@ class SoftArgmax(nn.Module):
         # Temperature=0.1 amplifies unbounded ReLU heatmaps by 10x, causing exp(>88) → NaN.
         # Clamp to [-5, 5] keeps softmax input in [-50, 50] (exp(50) ~ 5e21, safe in float32).
         flat = flat.clamp(-5.0, 5.0)
-        weights = F.softmax(flat / self.temperature, dim=-1)  # [B, K, HW]
+        # [FIX 2026-06-18] Use training temperature when in train mode to allow gradient flow.
+        # Low temperature (0.07) produces one-hot softmax — gradient d(coords)/d(logits) ≈ 0
+        # for all pixels. Higher temperature distributes weight, enabling Wing loss gradients
+        # to reach heatmap_head conv layers.
+        temp = self.training_temperature if (self.training and self.training_temperature is not None) else self.temperature
+        weights = F.softmax(flat / temp, dim=-1)  # [B, K, HW]
 
         # 2D coordinate grids [H, W]
         grid_x_2d = torch.arange(W, device=heatmaps.device, dtype=torch.float32).unsqueeze(0).repeat(H, 1)   # [H, W]
@@ -578,7 +585,7 @@ class PoseHead(nn.Module):
       Then heatmap head: 256 -> 17
     """
     def __init__(self, in_channels: int = 256, num_keypoints: int = 17,
-                 temperature: float = 0.1):
+                 temperature: float = 0.1, training_temperature: Optional[float] = None):
         super().__init__()
         self.num_keypoints = num_keypoints
 
@@ -594,7 +601,8 @@ class PoseHead(nn.Module):
             nn.Conv2d(in_channels, num_keypoints, 1),
         )
 
-        self.soft_argmax = SoftArgmax(temperature=temperature)
+        self.soft_argmax = SoftArgmax(temperature=temperature,
+                                      training_temperature=training_temperature)
 
     def forward(self, p3_feature: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -1735,8 +1743,13 @@ class POPWMultiTaskModel(nn.Module):
         )
         self.anchor_gen = AnchorGenerator()
 
-        # Pose head -- paper tau=0.07 (soft-argmax temperature)
-        self.pose_head = PoseHead(in_channels=256, num_keypoints=C.NUM_KEYPOINTS, temperature=0.07)
+        # Pose head -- paper tau=0.1, higher temperature during training for gradient flow
+        # [FIX 2026-06-18] train temp = 1.0 to prevent soft-argmax gradient vanishing
+        self.pose_head = PoseHead(
+            in_channels=256, num_keypoints=C.NUM_KEYPOINTS,
+            temperature=C.SOFT_ARGMAX_TEMPERATURE,
+            training_temperature=C.SOFT_ARGMAX_TEMP_TRAIN,
+        )
 
         # === PoseFiLM (keypoint-conditioned, hand-keypoint FiLM) ===
         # [FIX] USE_HAND_FILM now wired: conditional instantiation enables ablation.
@@ -1955,6 +1968,20 @@ class POPWMultiTaskModel(nn.Module):
             c5_mod = self.pose_film(c5, keypoints, pose_confidence)
         else:
             c5_mod = c5  # No hand-keypoint conditioning when USE_HAND_FILM=False
+
+        # [FIX 2026-06-18] Normalize soft-argmax keypoints to [0, 1] for Wing loss.
+        # Soft-argmax outputs grid coordinates [0, W-1] x [0, H-1] (heatmap grid).
+        # Hand joint targets from hands.csv are in 1280x720 pixel space and are
+        # normalized to [0, 1] in the collate_fn (industreal_dataset.py:1524).
+        # Both must be in [0, 1] for the Wing loss to compute meaningful gradients.
+        # Without this normalization, the raw Wing loss was ~267 (coordinate mismatch)
+        # vs ~0.2 after normalization — a ~1300× scale difference that made
+        # POSE_LOSS_WEIGHT=0.01 effectively zero out the pose contribution.
+        # Pseudo-keypoints (train_pose=False path) are already [0, 1] normalized.
+        if self.train_pose:
+            _, _, grid_h, grid_w = heatmaps.shape
+            kp_scale = torch.tensor([grid_w, grid_h], device=keypoints.device, dtype=keypoints.dtype)
+            keypoints = keypoints / kp_scale.view(1, 1, 2)
 
         with torch.no_grad():
             # [AUDIT FIX 2026-06-11 / RC-19, P7] sigmoid-bound the detection

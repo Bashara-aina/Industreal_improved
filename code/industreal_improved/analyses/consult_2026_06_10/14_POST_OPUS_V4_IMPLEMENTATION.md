@@ -134,10 +134,234 @@ Across all R1 runs, the model consistently shows:
 
 4. **Eval pipeline assumes all heads are trained**: Three separate crashes from activity eval code that assumes aligned prediction/GT arrays. We didn't anticipate this because recovery_det_only (det+head_pose only) is a new training mode the eval pipeline was never tested against.
 
-## Current State
+## Current State (as of 2026-06-13)
 
 - **R1 v4**: Running validation (DET_PROBE b601+, past all crash points)
 - **Training**: Healthy — committed=870, skipped=0, nan_skips=0
 - **Detection**: LOCALIZING on GT frames with bestIoU up to 0.94
 - **Waiting for**: Final `Val:` line with `det_mAP50` number
 - **Next**: If det_mAP50 ≥ 0.05 → proceed to R2 (joint recovery). If not → det-head LR ×3 for 2 more epochs.
+
+---
+
+## Phase 10: RF1 Death Spiral — Gradient Sparsity Proves Lethal (2026-06-14 to 2026-06-17)
+
+### 10.1 The Discovery
+
+RF1 (detection-only bootstrap, `train_head_pose=False`) kept dying. DET_PROBE consistently showed `LOCALIZING` across ALL runs — the detector could place boxes (GIoU 0.8-0.95) but never fired with confidence above 0.10. cls_mean was frozen at -4.70 (pi=0.01 bias init).
+
+**The pi=0.01 + anchor math** (documented in `29_RF1_DEATH_SPIRAL_AND_R2_5_PARADOX.md`):
+- 16 positive anchors per batch of 4 images
+- 2.76M total anchors per batch
+- Positive ratio: 0.00058%
+- Gradient per backbone parameter: ~3.4 × 10⁻⁸ per optimizer step
+- Total parameter change over 20 epochs: ~0.06%
+
+This is the **gradient sparsity** problem: not zero gradient, but gradient spread so thin across 28M backbone parameters that no parameter moves measurably.
+
+### 10.2 The R2.5 Paradox Resolved
+
+R2.5 (paper_run with ALL heads) trained visibly well. Why?
+
+```
+R2.5 gradient sources:
+  - Activity head: 22M gradient contributions/batch (dense, per-frame)
+  - PSR head: sequence-frame gradient (dense)
+  - HeadPose head: 400K gradient contributions/batch (dense)
+  - Detection: 16 positive anchors (sparse)
+  Total: ~22M dense + 16 sparse = healthy backbone gradient
+
+RF1 gradient sources:
+  - Detection cls: 16 positive anchors (sparse)
+  - Detection reg: DETACHED (DETACH_REG_FPN=True)
+  Total: 16 positive anchors across 28M backbone params = invisible
+```
+
+**Resolution**: RF1 fails because single-task detection with 172K anchors/image
+and pi=0.01 init creates gradient that's 10,000× too sparse. R2.5 worked because
+multi-task learning provided dense gradient from 3 additional heads.
+
+### 10.3 The Stages of RF1 Death Spiral
+
+| Phase | Run | Symptom | Root Cause |
+|-------|-----|---------|------------|
+| pi=0.01 collapse | All runs | cls_mean frozen at -4.70 | pi=0.01 too low for 172K anchors |
+| False-positive kills | RF1 retries | Bounded background loss dominates | Highest-scoring 512 anchors suppress features |
+| Death spiral | RF1 retry #2-4 | Det loss exists, cls_mean doesn't move | 16 positives / 2.76M = no gradient per param |
+| 20× LR identity | Retry strategies | LR 0.5×, 0.25×, 0.1× — all fail | Lower LR makes the tiny updates even smaller |
+
+### 10.4 The Kendall Bug (2026-06-16 21:10)
+
+Disaster: **The `train_head_pose=True` fix was silently neutralized by a bug in Kendall weighting logic.**
+
+The fix was prescribed by Opus (v6/v7): enable head_pose in RF1 for dense gradient. But `losses.py:1589` had:
+```python
+elif self.train_pose:
+    pose_contribution = prec_hp * loss_pose + lv_hp  # loss_head_pose MISSING!
+```
+Since IndustReal has NO keypoint annotations, `loss_pose=0` always. So:
+```
+pose_contribution = prec_hp * 0 + lv_hp = log_var ONLY
+```
+The `loss_head_pose` (~1.7) was computed in the forward pass but EXCLUDED from total loss. Head pose received ZERO gradient for 7+ epochs.
+
+**Detection:** LIVENESS_GRAD probe showed `head_pose_head:NO_GRAD` 104 times.
+**Fix applied:** Both Kendall and non-Kendall paths fixed, confirmed at step 0.
+
+---
+
+## Phase 11: RF1 Completion — The Kendall Fix Works (2026-06-17 to 2026-06-19)
+
+### 11.1 Post-Fix Verification
+
+Fresh RF1 launch (PID 1220890) confirmed at step 0:
+```
+head_pose_head:ALIVE[8.99e-01]/ALIVE[7.01e-03]
+                          ^^^^^^^^ gradient-based liveness (was NO_GRAD)
+```
+
+**cls_preds differentiation breakthrough:**
+```
+Broken run (step 751): cls_std=0.88, cls_max=0.47 — weak diff
+Fixed run  (step 751): cls_std=1.37, cls_max=2.78 — 1.6× broader, 5.9× higher
+```
+Head_pose converged from 1.60→0.01 by step 450 (99.4% reduction).
+
+### 11.2 RF1 Gate Met
+
+Per stage_history, RF1 achieved `best_det_mAP50=0.45`. However, metric_history
+shows max 0.184 — a **2.4× discrepancy** that remains UNRESOLVED (see Q02 in
+33_OPEN_QUESTIONS.md). Possible causes: different evaluation protocols, data
+splits, or metric_history truncation.
+
+### 11.3 Stage Progression
+
+Despite the discrepancy, RF1 was marked complete and the stage manager
+progressed through RF2 onward. The head_pose fix enabled the model to train
+through gradient-sparse detection-only, but the fundamental question remains:
+does RF1 actually work at 0.45 or is the 0.184 the real number?
+
+---
+
+## Phase 12: RF2 Epoch 15 Collapse — A New Failure Mode (2026-06-19 to 2026-06-20)
+
+### 12.1 The Collapse That Shouldn't Have Happened
+
+RF2 had everything supposedly needed:
+- All RF1 fixes applied (Kendall bug, FP32, bounded bg loss)
+- `train_head_pose=True` (head_pose gradient ALIVE throughout)
+- 35% data (vs 20% in RF1)
+- `DET_GT_FRAME_FRACTION=0.90` (90% of batches contain GT frames)
+- `DETACH_REG_FPN=False` (regression gradient flows to backbone)
+
+Yet at epoch 15, EVAL COLLAPSE struck:
+```
+det_mAP50    = 0.001  (near zero)
+det_mAP      = 0.000
+det_mAP50_95 = 0.000
+EVAL COLLAPSE: 56 occurrences at epoch 15, all 3 heads simultaneously zero
+```
+
+### 12.2 DET_PROBE Evidence at Epoch 15
+
+```
+score_p50  = 0.019 (median at bias floor)
+score_mean = 0.079 (all classes ~same)
+score_std  = 0.0068-0.0088 (near-zero variance — no differentiation)
+cls_mean   = -2.54 (bias drifted from -4.6 init to -2.54 equilibrium)
+preds>0.30 = 0     (zero high-confidence predictions across ALL probes)
+```
+
+**The cls_score bias equilibrium**: sig(-2.54) = 0.073. The bias parameter
+drifts from -4.6 (pi=0.01) to ~-2.5 where sigmoid produces ~0.076-0.079 for
+most classes. The classifier CAN make confident predictions (score_max =
+0.93-0.97 for SOME classes) but the median is stuck at 0.019.
+
+### 12.3 Head Pose MAE Was Improving While Detection Collapsed
+
+```
+epoch  7: forward_angular_MAE_deg = 71.67
+epoch  9: forward_angular_MAE_deg = 63.65
+epoch 11: forward_angular_MAE_deg = 56.61
+epoch 13: forward_angular_MAE_deg = 55.73
+epoch 15: forward_angular_MAE_deg = 47.84
+```
+
+MAE improving 71.67→47.84 while det_mAP50 drops from 0.184→0.001. This is the
+critical dissociation: head_pose gradient keeps backbone healthy, but the
+classification head converges to its own internal equilibrium independent
+of backbone state.
+
+### 12.4 cls_score Bias Equilibrium — Mathematical Model
+
+The bias parameter b in the final cls_preds conv layer follows:
+```
+b_update ∝ Σ(sigmoid(b + W·f_i) - target_i)  for all anchors i
+```
+At equilibrium, Σ(sigmoid(b + W·f_i)) = Σ(target_i) = total_positive_anchors.
+With target ≈ 0.0011% positive anchors:
+```
+Σ sigmoid(b + W·f_i) ≈ 0.0011% of total anchors
+```
+This forces b to a value where sigmoid(b) ≈ mean(cls_score) ≈ 0.079, exactly
+the observed equilibrium.
+
+### 12.5 20-Agent Monitoring Swarm Deployed (2026-06-20)
+
+The monolithic rf2_checklist.py (1320 lines, 118 checks) was replaced with a
+22-agent swarm (134 checks/cycle, 5-min interval, 40-thread ThreadPoolExecutor).
+
+**6 bugs found and fixed in first hours:**
+1. **ND01 NaN false positives**: Efficiency stat lines `Params: nanM, GFLOPs: nanG` matched NaN regex — fixed with EFFICIENCY_RE exclusion
+2. **ND01 compound word matching**: `\b` word boundaries added to NaN patterns
+3. **CS06 log_head_text missing**: Det_head_bias optimizer line at training start wasn't in data_sources — added log_head_text fallback
+4. **BU01 same log_head_text**: Same fix as CS06
+5. **L06 keyword spike unreliable**: Replaced keyword-based "spike" detection with 3σ statistical outlier detection
+6. **Training heartbeat**: Not updating — fix applied to train.py
+
+**Swarm limitation detected**: No check for cls_score equilibrium (uniform
+~0.079 scores). CS07: "cls_score std < 0.01" check is planned.
+
+### 12.6 What We Learned
+
+**Proven hypotheses (5):**
+1. Gradient sparsity (16/2.76M positive anchors) kills detection-only training
+2. Head_pose dense gradient enables backbone updates (Kendall fix confirmed)
+3. The R2.5 Paradox is resolved — multi-task gradient density, not architecture
+4. Focal Loss can train this architecture (R2.5 was healthy)
+5. Eval pipeline needs 5 guards for single-head training modes (TRAIN_ACT, TRAIN_PSR)
+
+**Refuted hypotheses (4):**
+1. "Run 8 proved architectural collapse" — wrong, it proved unfixed normalization
+2. "LR reduction = fix" — all retry strategies that reduce LR make things worse
+3. "Head_pose + Kendall fix = complete solution" — RF2 epoch 15 collapse disproves
+4. "DETACH_REG_FPN = main cause" — regression gradient helps but doesn't resolve
+   the classification head's internal equilibrium
+
+**Still unknown (see 33_OPEN_QUESTIONS.md):**
+- Why collapse AGAIN at epoch 15 with everything supposedly fixed?
+- stage_history 0.45 vs metric_history 0.184 — which is real?
+- Why has PSR NEVER trained in any configuration?
+- Is Focal Loss wrong for 172K anchors?
+- Is the model overfitting to 0.7% GT frames?
+
+---
+
+## What Comes Next
+
+The cls_score bias equilibrium is the central unsolved problem. Five fix proposals
+are ranked in `26_RF1_RF10_COMPREHENSIVE_STATUS.md` (Appendix A):
+
+| Option | Approach | Risk | ETA |
+|--------|----------|------|-----|
+| A | pi=0.1 bias init (was 0.01) | Low — known in RetinaNet literature | 1 epoch to verify |
+| B | Remove classification bias | Low — forces weight-based differentiation | 1 config change |
+| C | Quality Focal Loss | Medium — eliminates bias parameter entirely | Code change |
+| D | Varifocal Loss | Medium — asymmetric learning | Code change |
+| E | Dedicated bias LR | Low — keeps current training stable | 1 config change |
+
+The full journey, all open questions, and next steps are documented in:
+- `00_JOURNEY_AND_STATUS.md` — Full timeline Phases 1-12
+- `26_RF1_RF10_COMPREHENSIVE_STATUS.md` — Stage definitions + RF2 data + fix proposals
+- `33_OPEN_QUESTIONS.md` — 24 open questions organized by severity
+- `34_RF2_SWARM_MONITOR.md` — 20-agent monitoring swarm documentation

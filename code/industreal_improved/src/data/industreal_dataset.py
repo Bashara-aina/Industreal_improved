@@ -1521,6 +1521,14 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Tuple[torch.Tensor, Dict[str, Any
     keypoints = torch.stack([
         h.view(n_joints_per_hand, 2)[selected_indices] for h in hand_joints_list
     ], dim=0)  # [B, 17, 2]
+    # [FIX 2026-06-18] Normalize hand keypoints from pixel coords to [0, 1].
+    # hands.csv stores MediaPipe hand landmarks in 1280×720 pixel space. The Wing
+    # loss expects both predictions and targets in the same [0, 1] normalized space.
+    # Without this, the raw Wing loss is ~267 vs ~0.2 after normalization — the
+    # coordinate scale mismatch makes the loss contribution meaningless.
+    keypoints = keypoints / torch.tensor(
+        [C.IMG_WIDTH, C.IMG_HEIGHT], dtype=keypoints.dtype
+    )
     pose_confidence = torch.ones_like(keypoints[:, :, 0])  # [B, 17]
 
     activity_stacked = torch.stack(activity_labels, dim=0)

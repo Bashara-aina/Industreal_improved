@@ -1,139 +1,71 @@
 {
-  "current_stage": "rf1",
-  "stage_index": 0,
+  "current_stage": "rf2",
+  "stage_index": 1,
   "status": "running",
-  "training_pid": 4189479,
-  "epoch": 1,
-  "best_metric": 0.0,
-  "best_metrics": {},
+  "training_pid": 1043628,
+  "epoch": 16,
+  "best_metric": 0.181,
+  "best_metrics": {
+    "det_mAP50": 0.181,
+    "forward_angular_MAE_deg": null
+  },
   "gate_passed": false,
   "checklist_results": {
     "gate": {
       "passed": false,
-      "details": {
-        "det_mAP50": {
-          "status": "UNKNOWN",
-          "reason": "metric not found in validation"
-        },
-        "det_mAP50_95": {
-          "status": "UNKNOWN",
-          "reason": "metric not found in validation"
-        }
-      }
+      "details": {}
     },
     "health": {
-      "passed": true,
-      "details": {
-        "det_liveness": {
-          "status": "PASS",
-          "alive_ratio": 1.0,
-          "samples": 0
-        },
-        "loss_spike": {
-          "status": "PASS",
-          "spike_factor": 1.0,
-          "threshold": 10.0
-        },
-        "det_health": {
-          "status": "WARN",
-          "cls_mean": -4.7011,
-          "cls_std": 0.876657,
-          "near_zero": 0.0,
-          "issues": [
-            "cls_mean=-4.70 \u2014 moderately negative, may slow convergence"
-          ],
-          "trend": "insufficient_data"
-        }
-      }
+      "passed": false,
+      "details": {}
     },
     "convergence": {
-      "passed": true,
-      "details": {
-        "combined": {
-          "status": "UNKNOWN",
-          "reason": "No validation metrics in recent log \u2014 training may have just started or restarted"
-        }
-      }
+      "passed": false,
+      "details": {}
     },
     "validation": {
-      "passed": true,
+      "passed": false,
       "details": {}
     },
     "stability": {
-      "passed": true,
-      "details": {
-        "crash_count": {
-          "value": 0,
-          "status": "OK"
-        }
-      }
+      "passed": false,
+      "details": {}
     }
   },
   "metric_history": [
     {
-      "loss": 5.439,
-      "det_mAP50": NaN,
-      "act_clip": 0.0,
-      "act_frame": 0.0,
-      "act_macro_f1": 0.0,
-      "act_top5": 0.0,
-      "forward_angular_MAE_deg": 82.1,
-      "psr_f1": 0.0,
-      "psr_edit": 0.0,
-      "psr_pos": 0.0,
-      "as_f1": 0.0,
-      "as_map_r": 0.0,
-      "ev_ap": 0.0,
-      "ev_f1": 0.0,
-      "combined": 0.0973,
-      "epoch": 1
+      "epoch": 7,
+      "det_mAP50": 0.007
+    },
+    {
+      "epoch": 8,
+      "det_mAP50": 0.184
+    },
+    {
+      "epoch": 9,
+      "det_mAP50": 0.181
+    },
+    {
+      "epoch": 10,
+      "det_mAP50": 0.159
     }
   ],
-  "retry_count": 1,
-  "current_strategy": "reduce_lr_10x_warmup_2x",
-  "strategies_tried": [
-    "default"
-  ],
-  "det_health_history": [
+  "retry_count": 0,
+  "current_strategy": "default",
+  "strategies_tried": [],
+  "det_health_history": [],
+  "stage_history": [
     {
-      "step": 501,
-      "cls_mean": -4.7011,
-      "cls_std": 0.876657,
-      "near_zero": 0.0
-    }
-  ],
-  "stage_history": [],
-  "issues_log": [
-    {
-      "action": "unexpected_crash",
       "stage": "rf1",
-      "why_analysis": {
-        "findings": [
-          {
-            "title": "CUDA OOM / Runtime Error",
-            "whys": [
-              "Why 1: GPU VRAM exhausted (RTX 3060 = 12GB)",
-              "Why 2: Batch_size=2 + grad_accum=16 creates large activation memory",
-              "Why 3: Sequence batches (T=4) inflate memory 2-4x over frame batches",
-              "Why 4: Gradient checkpointing may not cover all transformer layers",
-              "Why 5: EMA shadow weights double model memory during EMA update",
-              "Why 6: Validation batch may use different batch_size than training",
-              "Why 7: DataLoader prefetch threads accumulate cached tensors",
-              "Why 8: torch.cuda.empty_cache() not called between val/train transitions",
-              "Why 9: Memory fragmentation from mixed-size tensors in multi-head model",
-              "Why 10: Other GPU processes consuming VRAM (check nvidia-smi)"
-            ],
-            "fix": "Kill other GPU processes. Reduce batch_size to 1. Disable EMA if needed."
-          }
-        ],
-        "timestamp": "2026-06-17T06:10:18.072049+00:00"
-      },
-      "timestamp": "2026-06-17T06:10:18.072064+00:00"
+      "status": "completed",
+      "best_det_mAP50": 0.45
     }
   ],
-  "last_check_time": "2026-06-17T06:45:03.226814+00:00",
-  "run_start_time": "2026-06-17T06:10:23.175458+00:00",
-  "log_cursor": 243923,
+  "issues_log": [],
+  "last_check_time": "2026-06-20T00:13:40+00:00",
+  "run_start_time": "2026-06-20T00:13:40+00:00",
+  "log_cursor": 0,
   "cross_stage_memory": {},
-  "max_epochs": 20
+  "max_epochs": 36,
+  "last_heartbeat": "2026-06-20T06:23:34.271671+00:00"
 }

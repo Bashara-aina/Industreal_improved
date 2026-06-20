@@ -53,6 +53,7 @@ DET_DEBUG_EVERY = 50  # [FIX4] Detection head debug diagnostic frequency (--rein
 # NOTE: Detection head warmup is HARDCODED in train.py (50 zero-grad + 200 linear ramp, 250 total).
 # DET_WARMUP_STEPS was considered as a config variable but was never wired up — see train.py for the actual logic.
 DET_LR_MULTIPLIER = 1.0  # WD is now scaled proportionally with LR in train.py, so WD/LR stays constant when _stage_lr_mult reduces LR. Was 5.0 (collapsed full-head), then 1.0 (stagnant because WD wasn't scaled).
+DET_BIAS_LR_FACTOR = 5.0  # [FIX 2026-06-19] Detection head biases get 5x head LR so cls_score.bias can escape the negative-prior (pi=0.01) equilibrium.
 
 # [OPUS v5 AUDIT] Simplify loss assembly during bring-up (#49).
 # Disables per-task ramps and smooth-caps so gradient attribution is clean.
@@ -426,8 +427,11 @@ GIOU_WEIGHT   = 2.0  # Doc 01 B.2: GIoU regression weight vs cls weight=1.0
 # OHEM keeps only the top-K hardest negatives per image (K = num_pos * RATIO),
 # breaking the cumulative negative gradient cycle. Ref: RetinaNet OHEM ablation.
 DET_OHEM_ENABLED = True
-DET_OHEM_RATIO = 1.0     # 1:1 — 3:1 still allows neg-dominant gradient when n_pos<22
-DET_OHEM_MIN_NEG = 16    # lower floor to prevent neg gradient overwhelm when n_pos≈0
+DET_OHEM_RATIO = 2.0     # [FIX 2026-06-19 v2] was 5.0 — 5:1 was too aggressive, suppressed all predictions.
+                         # 2:1 + gamma_neg=1.5 gives ~3.5× more negative gradient — enough to break stale
+                         # equilibrium without overwhelming positives.
+DET_OHEM_MIN_NEG = 32    # [FIX 2026-06-19 v2] was 128 — 128 negatives dominated the gradient in low-pos batches.
+                         # 32 provides diverse negatives without overwhelming the positive signal.
 
 # Asymmetric focal gamma: prevent cls_mean collapse by keeping positive gradient alive
 # With gamma=2 on both pos/neg, well-classified positives (p≈0.9) have near-zero gradient:
@@ -437,7 +441,11 @@ DET_OHEM_MIN_NEG = 16    # lower floor to prevent neg gradient overwhelm when n_
 #   negatives: p^2 * CE (gamma=2, standard) — only OHEM-kept hard negatives contribute
 DET_ASYMMETRIC_GAMMA = True     # enable per-class gamma (pos vs neg)
 DET_GAMMA_POS = 0.0             # no gamma suppression for positives
-DET_GAMMA_NEG = 2.0             # standard FL gamma for negatives
+DET_GAMMA_NEG = 1.5             # [FIX 2026-06-19 v2] was 1.0 — v1 fix at 1.0 was too aggressive.
+                                 # At p=0.074, gamma=1.0 gives 0.074 effective weight per negative (13.5× increase),
+                                 # which was excessive with RATIO=5/MIN_NEG=128 (67.5× total gradient) → suppressed
+                                 # all predictions. gamma=1.5 gives p^0.5=0.27 → 3.5× moderate increase, enough
+                                 # to break equilibrium without overwhelming positives. Paired with RATIO=2/MIN_NEG=32.
 
 WING_OMEGA   = 0.05
 WING_EPSILON = 0.005
@@ -470,6 +478,7 @@ PRETRAIN_HFLIP_PROB  = 0.5   # probability of random horizontal flip
 # Staged training (Doc 2 B.1)
 # =========================================================================
 STAGED_TRAINING = False  # Full production: all 5 heads active from epoch 0
+REINIT_PI = 0.01  # cls_score bias prior for reinit (RF1 uses 0.05)
 STAGE1_EPOCHS = 5    # Detection-only warmup
 STAGE2_EPOCHS = 10   # Add pose + head pose
 STAGE3_EPOCHS = 85   # Full multi-task with EMA — 5+10+85=100 total — was 35
@@ -487,7 +496,19 @@ HEAD_POSE_POS_SCALE = 100.0  # Standardizes raw position (~110 in CSV) to O(1); 
 # PSR_WEIGHT amplifies the PSR loss BEFORE Kendall weighting (applied at Kendall
 # assembly in losses.py). POSE_LOSS_WEIGHT replaces the old *0.001 fixed multiplier.
 PSR_WEIGHT = 10.0       # Reduce PSR weight to prevent backbone disruption
-POSE_LOSS_WEIGHT = 0.01    # Reduced from 0.02 — pose output at 4.46 (strongest head), less weight needed
+POSE_LOSS_WEIGHT = 5.0      # [FIX 2026-06-18] Increased from 0.01 to compensate for coordinate
+                            # normalization. Raw Wing loss dropped from ~267 (pixel-space mismatch)
+                            # to ~0.05-0.2 ([0,1] normalized space). At 5.0, contribution ≈ 0.25-1.0,
+                            # comparable to pre-fix contribution of ~2.67. Tune based on training.
+
+# [FIX 2026-06-18] Soft-argmax temperature for gradient flow
+# Low temperature (0.07-0.1) gives precise coordinates but kills gradient through
+# the softmax — weights become one-hot, so d(coords)/d(logits) ≈ 0 everywhere.
+# Higher temperature (1.0) distributes softmax probability across more pixels,
+# allowing Wing loss gradients to flow back through soft-argmax into heatmap_head
+# conv layers. Lower eval temperature preserves coordinate precision at inference.
+SOFT_ARGMAX_TEMPERATURE = 0.1     # Eval/inference temperature (paper default τ=0.1)
+SOFT_ARGMAX_TEMP_TRAIN = 1.0      # Training temperature for gradient flow
 
 # [FIX 2026-06-15] Detection empty-frame background loss
 # With 99.3% of frames having no GT boxes (activity-balanced sampler doesn't
@@ -720,7 +741,7 @@ SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP (~87 min/epoch) — s
 
 # [OPUS v5] Eval cadence: compute full detection mAP every N epochs; fast gate-only eval
 # (EVAL_MAX_BATCHES capped) on other epochs. 0 = eval every epoch (no skip).
-DET_METRICS_EVERY_N = int(os.environ.get('DET_METRICS_EVERY_N', '5'))  # Full mAP eval every N epochs; 0=every epoch
+DET_METRICS_EVERY_N = int(os.environ.get('DET_METRICS_EVERY_N', '1'))  # Full mAP eval every N epochs; 0=every epoch
 GATE_EVAL_MAX_BATCHES = int(os.environ.get('GATE_EVAL_MAX_BATCHES', '200'))  # Max val batches on non-full-eval epochs
 
 # Efficiency metrics: compute_efficiency_metrics does 35 forward passes each epoch.
@@ -949,6 +970,27 @@ PRESETS = {
         # Other stages retain detach_reg_fpn: True for multi-head gradient isolation.
         'detach_reg_fpn':           False,
         'detach_psr_fpn':           True,
+        # [RF1 FIX 2026-06-18] Disable RandAugment for RF1 bootstrap stage.
+        # With only 7 recordings and ~16 positive anchors per batch, every
+        # positive training example is RandAugment-distorted (num_ops=2,
+        # magnitude=9). The detection head learns features specific to the
+        # augmented training images that don't fire on clean validation images,
+        # causing det_mAP50 ≈ 0.01 even after 10 epochs while training
+        # DET-HEALTH shows cls_max=15.6. Disable for RF1; re-evaluate for RF2+.
+        'use_randaugment':          False,
+        # [RF1 FIX 2026-06-18] Disable spatial augmentation (horizontal flip +
+        # random crop+resize) for RF1 bootstrap stage. Training applies
+        # apply_spatial_aug() via industreal_dataset.py:886 when augment=True,
+        # but validation has augment=False. Same root cause as RandAugment:
+        # the detection head learns features on cropped/flipped views that
+        # don't fire on clean validation images. Disable for RF1 so training
+        # and validation see pixel-identical images; re-evaluate for RF2+.
+        'use_spatial_aug':          False,
+        # [RF1 FIX 2026-06-18] cls_score bias init pi prior for reinit.
+        # Default is 0.01 (bias=-4.60), but RF1 bootstrap benefits from a
+        # higher pi=0.05 (bias=-2.94) so the model starts closer to reasonable
+        # confidence, accelerating the escape from background equilibrium.
+        'reinit_pi':                0.05,
     },
     'stage_rf2': {
         'description': 'RF2: Detection + Body+Head Pose (35% data, 15 ep).',
@@ -962,8 +1004,12 @@ PRESETS = {
         'grad_accum_steps':   8,
         'zero_det_conf':      False,
         'staged_training':    False,
-        'mixed_precision':    False,
+        'mixed_precision':    False,   # [FIX 2026-06-19] PSR forward pass still runs (train_psr=False doesn't skip it)
+                                        # and PSR ops produce FP32 tensors that crash autocast backward.
+                                        # Stay FP32 for now; debug PSR dtype compatibility separately for perf gain.
         'use_mixup':          False,
+        'use_randaugment':    True,    # Explicit: photometric aug for backbone generalization
+        'use_spatial_aug':    True,    # Explicit: horizontal flip + random crop
         'use_ema':            True,
         'train_det':          True,
         'train_act':          False,
@@ -982,6 +1028,10 @@ PRESETS = {
         # stages with reinit_heads=True).
         'detach_reg_fpn':           True,
         'detach_psr_fpn':           True,
+        # [FIX 2026-06-19 v2] RF2 reinit also needs pi=0.05 for same reason as RF1 —
+        # default 0.01 (bias=-4.60) starts too cold; 0.05 (bias=-2.94) accelerates
+        # escape from background equilibrium after head reinit.
+        'reinit_pi':                0.05,
     },
     'stage_rf3': {
         'description': 'RF3: Detection + Pose + Activity (35% data, 15 ep).',
@@ -1292,7 +1342,9 @@ def apply_preset(preset_name: str) -> None:
     global DET_GT_FRAME_FRACTION
     global IMG_WIDTH, IMG_HEIGHT, IMG_SIZE
     # [FIX D7] FPN gradient detach flags — must be global for preset to set them
+    global USE_RANDAUGMENT, USE_SPATIAL_AUG
     global DETACH_REG_FPN, DETACH_PSR_FPN
+    global REINIT_PI
 
     if preset_name not in PRESETS:
         raise ValueError(f'Unknown preset: {preset_name}. Available: {list(PRESETS.keys())}')
@@ -1309,7 +1361,8 @@ def apply_preset(preset_name: str) -> None:
     MIXED_PRECISION = preset.get('mixed_precision', MIXED_PRECISION)
     USE_MIXUP = preset.get('use_mixup', USE_MIXUP)
     USE_EMA = preset.get('use_ema', USE_EMA)
-    # [FIX 12] Image size override — update IMG_WIDTH/IMG_HEIGHT/IMG_SIZE
+    USE_RANDAUGMENT = preset.get('use_randaugment', USE_RANDAUGMENT)
+    USE_SPATIAL_AUG = preset.get('use_spatial_aug', USE_SPATIAL_AUG)
     if 'img_width' in preset:
         IMG_WIDTH = preset['img_width']
         IMG_HEIGHT = preset.get('img_height', IMG_HEIGHT)
@@ -1326,6 +1379,7 @@ def apply_preset(preset_name: str) -> None:
     # stage_manager still gets gradient isolation for shared FPN features.
     DETACH_REG_FPN = bool(preset.get('detach_reg_fpn', DETACH_REG_FPN))
     DETACH_PSR_FPN = bool(preset.get('detach_psr_fpn', DETACH_PSR_FPN))
+    REINIT_PI = float(preset.get('reinit_pi', REINIT_PI))
     # [DET GT-FRAME SAMPLING 2026-06-16] Derive the absolute per-batch GT-frame
     # target from the active heads (unless the preset overrides it explicitly).
     # Detection-dominant stages (det on, activity/PSR off) need aggressive GT
