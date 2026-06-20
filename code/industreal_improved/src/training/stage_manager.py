@@ -543,6 +543,41 @@ def save_state(state: StageState) -> None:
         json.dump(asdict(state), f, indent=2, default=str)
 
 
+def _validate_stage_history_entry(entry: Dict[str, Any]) -> None:
+    """Guard: ensure stage_history entries record observed metrics, not gate thresholds.
+
+    The "phantom 0.45" bug (2026-06-20, Opus v8 §0) occurred when a previous code
+    version wrote the RF3 gate threshold (0.45) as best_det_mAP50 in stage_history,
+    even though the actual best metric was 0.184. This corrupted downstream gate
+    logic and the 24-open-questions analysis for weeks.
+
+    This cross-check compares every numeric metric in the entry against all known
+    gate thresholds. An exact match is almost certainly a recording bug — gate
+    constants are round numbers (0.40, 0.45, 0.50, 0.20, 55.0, 65.0), while
+    observed metrics are noisy floats (e.g., 0.184, 47.84).
+    """
+    # Collect all gate thresholds from all RF stages
+    gate_thresholds: set[float] = set()
+    for stage in RF_STAGES:
+        gate = stage.get('gate', {})
+        for v in gate.values():
+            if isinstance(v, (int, float)):
+                gate_thresholds.add(float(v))
+        health = stage.get('health', {})
+        for v in health.values():
+            if isinstance(v, (int, float)):
+                gate_thresholds.add(float(v))
+
+    for key, value in entry.items():
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if float(value) in gate_thresholds:
+                logger.warning(
+                    f'Gate-phantom guard: {key}={value} matches a gate threshold '
+                    f'— this should be an observed metric, not a gate constant. '
+                    f'Check caller above for recording bug.'
+                )
+
+
 # =========================================================================
 # Log Parsing
 # =========================================================================
@@ -2398,6 +2433,7 @@ def cmd_check() -> None:
             'checklist': {'gate': {'passed': True, 'details': signal_data.get('gate_details', {})}},
             'timestamp': datetime.now(timezone.utc).isoformat(),
         })
+        _validate_stage_history_entry(state.stage_history[-1])
 
         next_idx = stage_idx + 1
         if next_idx >= len(RF_STAGES):
@@ -2594,6 +2630,7 @@ def cmd_check() -> None:
                 'advancement_type': 'near_gate',
                 'timestamp': datetime.now(timezone.utc).isoformat(),
             })
+            _validate_stage_history_entry(state.stage_history[-1])
             next_idx = stage_idx + 1
             if next_idx >= len(RF_STAGES):
                 logger.info('ALL STAGES COMPLETE! Final model ready for paper.')
@@ -2643,6 +2680,7 @@ def cmd_check() -> None:
                 'strategies_used': list(state.strategies_tried),
                 'timestamp': datetime.now(timezone.utc).isoformat(),
             })
+            _validate_stage_history_entry(state.stage_history[-1])
 
             # Advance to next stage
             next_idx = stage_idx + 1
@@ -2716,6 +2754,7 @@ def cmd_check() -> None:
                     'best_metric': state.best_metric,
                     'timestamp': datetime.now(timezone.utc).isoformat(),
                 })
+                _validate_stage_history_entry(state.stage_history[-1])
                 next_stage = RF_STAGES[next_idx]
                 # Reset retry state for new stage
                 state.retry_count = 0

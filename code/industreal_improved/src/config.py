@@ -53,7 +53,35 @@ DET_DEBUG_EVERY = 50  # [FIX4] Detection head debug diagnostic frequency (--rein
 # NOTE: Detection head warmup is HARDCODED in train.py (50 zero-grad + 200 linear ramp, 250 total).
 # DET_WARMUP_STEPS was considered as a config variable but was never wired up — see train.py for the actual logic.
 DET_LR_MULTIPLIER = 1.0  # WD is now scaled proportionally with LR in train.py, so WD/LR stays constant when _stage_lr_mult reduces LR. Was 5.0 (collapsed full-head), then 1.0 (stagnant because WD wasn't scaled).
-DET_BIAS_LR_FACTOR = 5.0  # [FIX 2026-06-19] Detection head biases get 5x head LR so cls_score.bias can escape the negative-prior (pi=0.01) equilibrium.
+DET_BIAS_LR_FACTOR = 1.0  # [FIX 2026-06-20 (Opus v8 §3)] Reverted from 5.0. 5× bias LR was an own-goal:
+                               # when bias gradient points toward background (few positives), 5× LR drives
+                               # bias INTO the equilibrium faster. The bias isn't stuck — it's following
+                               # the gradient of dead features (see Opus v8 §1.4 symptom chain).
+
+# [OPUS v8 FIX 2026-06-20] Kendall multi-task fixes for RF2 detection collapse.
+# Three independent mechanisms were letting head_pose dominate the shared backbone:
+#
+# (1) KENDALL_HP_PREC_CAP — head_pose precision can never exceed detection precision.
+#     Without this, head_pose (loss ≈ 0.01) gets Kendall-optimal precision ~54.6×,
+#     vs detection (loss ≈ 0.5) getting ~1.4×. The shared backbone is then optimized
+#     for head_pose, losing object-discriminative features. See Opus v8 §1.1.
+KENDALL_HP_PREC_CAP = True
+#     Alternative: use fixed weights instead of learned Kendall for det-bootstrap.
+#     Detection drives backbone at λ=1.0, head_pose just stabilizes at λ=0.1-0.3.
+#     Set True for RF1-RF2; re-enable Kendall at RF3+ once detection is real.
+KENDALL_FIXED_WEIGHTS = False  # default off; toggled per-stage by stage_manager
+
+# (2) KENDALL_STAGED_TRAINING — kill the double curriculum (Opus v8 §3 Fix 3).
+#     The RF stage manager already controls which heads train. The epoch-indexed
+#     Kendall staging in losses.py (STAGE1_EPOCHS=5, STAGE2_EPOCHS=10) duplicates
+#     this and silently triggers head_pose takeover at epoch 6. Setting False
+#     makes staged_training in the loss a no-op; the RF stage manager is the
+#     sole curriculum.
+KENDALL_STAGED_TRAINING = False  # [FIX] was True — see Opus v8 §1.2 timing
+
+# Head-pose fixed-loss weight when KENDALL_FIXED_WEIGHTS=True.
+# Matches the λ range recommended in Opus v8 §3 Fix 1: 0.1–0.3
+KENDALL_HP_FIXED_LAMBDA = 0.2
 
 # [OPUS v5 AUDIT] Simplify loss assembly during bring-up (#49).
 # Disables per-task ramps and smooth-caps so gradient attribution is clean.
@@ -270,8 +298,18 @@ NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_la
 # K-means on 14,122 boxes gave (195,335,375,445,578) but these were too large — missed
 # small GT (h p10=156px). Keep the guess anchors which empirically gave 0.0172 mAP.
 ANCHOR_SIZES = (96, 160, 256, 384, 512)
-DET_POS_IOU_THRESH = 0.5       # RetinaNet anchor matching: positive IoU threshold (standard: 0.5)
+DET_POS_IOU_THRESH = 0.4       # [FIX 2026-06-20 (Opus v8 §3)] Was 0.5 — lowered to 0.4 so small assembly parts
+                               # light up more positive anchors. For typical IndustReal GT (h≈156px at 720p),
+                               # only ~1 anchor/GT clears IoU≥0.5 with these anchor sizes. 0.4 gives ~3–5× more
+                               # positives, fixing the supply-side root cause of gradient starvation at source.
 DET_NEG_IOU_THRESH = 0.4       # RetinaNet anchor matching: negative IoU threshold (standard: 0.4)
+DET_POS_IOU_TOP_K = 9          # [FIX 2026-06-20 (Opus v8 §3)] Top-k force-match per GT (was single argmax).
+                               # Standard RetinaNet only force-matches the single best anchor per GT (~1 pos/GT).
+                               # For small objects, this starves the classifier. Top-9 via IoU assigns ~6-10
+                               # positive anchors per GT, giving the cls_subnet enough positive gradient to
+                               # maintain discriminative features. Verify with MATCH_PROBE. RetinaNet-on-COCO
+                               # doesn't need this because COCO objects cover enough anchor area; IndustReal
+                               # assembly parts are systematically smaller than their anchor cells.
 # RC-25 recovery: zero det_conf input to activity head during recovery.
 # [AUDIT FIX 2026-06-11] env override added: a checkpoint TRAINED with
 # det_conf zeroed must also be EVALUATED with det_conf zeroed (otherwise the
