@@ -1764,8 +1764,17 @@ def train_one_epoch(
                         )
                 if ema is not None and (not staged_training or stage >= 3):
                     ema.update()
-                # [FIX4] Per-param detection head weight stats (every 100 steps, --reinit-heads only)
-                if _REINIT_HEADS_ACTIVE and step % 100 == 0:
+                # [FIX4] Per-param detection head weight stats (every 100 optimizer steps).
+                # NOTE: this block is inside `if (step + 1) % accum_steps == 0:` (optimizer step
+                # boundary), so forward-step-based checks like `step % 100 == 0` will NEVER fire
+                # because the optimizer fires at step = 7, 15, 23, 31, ... which are never
+                # multiples of 100. Use `(step + 1) % (accum_steps * 100) == 0` instead.
+                _OPT_STEP = (step + 1) // accum_steps  # optimizer step count
+                if accum_steps >= 1 and (step + 1) % (accum_steps * 100) == 0:
+                    logger.info(f'  [E4-TEST step={step} opt_step={_OPT_STEP}] ENTERED')
+                    # [OPUS v8 E4] Unconditional per-head backbone gradient norms (every 100 steps).
+                    # Not gated behind _REINIT_HEADS_ACTIVE so we can monitor gradient balance
+                    # throughout training, not just during head reinitialization phases.
                     # [OPUS v8 E4] Per-head backbone gradient norms — capture BEFORE optimizer step.
                     # Collect per-head named params with gradients for cross-head comparison.
                     _all_named_params = {n: p for n, p in model.named_parameters() if p.grad is not None}
@@ -1788,59 +1797,62 @@ def train_one_epoch(
                     _act_head_grad_norm = math.sqrt(_act_head_grad_norm) if _act_head_grad_norm > 0 else 0.0
                     _psr_head_grad_norm = math.sqrt(_psr_head_grad_norm) if _psr_head_grad_norm > 0 else 0.0
 
-                    _det_named_params = {n: p for n, p in model.named_parameters()
-                                         if n.startswith('detection_head') and p.grad is not None}
-                    if _det_named_params:
-                        _det_parts = []
-                        # cls_score.weight grad norm
-                        _cw = _det_named_params.get('detection_head.cls_score.weight')
-                        if _cw is not None:
-                            _cg = _cw.grad.detach()
-                            _det_parts.append(
-                                f'cls_w_grad:norm={_cg.norm():.2e} '
-                                f'mean={_cg.mean():.2e} std={_cg.std():.2e}'
-                            )
-                        # cls_score.bias actual values (prior-determining)
-                        _cb = _det_named_params.get('detection_head.cls_score.bias')
-                        if _cb is not None:
-                            _cb_val = _cb.detach()
-                            _det_parts.append(
-                                f'cls_bias:val_mean={_cb_val.mean():.4f} '
-                                f'val_min={_cb_val.min():.4f} val_max={_cb_val.max():.4f}'
-                            )
-                        # reg_pred.weight grad norm
-                        _rw = _det_named_params.get('detection_head.reg_pred.weight')
-                        if _rw is not None:
-                            _rg = _rw.grad.detach()
-                            _det_parts.append(f'reg_w_grad:norm={_rg.norm():.2e}')
-                        # cls_subnet final layer (index 9) grad norm
-                        _csl = _det_named_params.get('detection_head.cls_subnet.9.weight')
-                        if _csl is not None:
-                            _cslg = _csl.grad.detach()
-                            _det_parts.append(f'cls_subnet_last_grad:norm={_cslg.norm():.2e}')
-                        # reg_subnet final layer (index 9) grad norm
-                        _rsl = _det_named_params.get('detection_head.reg_subnet.9.weight')
-                        if _rsl is not None:
-                            _rslg = _rsl.grad.detach()
-                            _det_parts.append(f'reg_subnet_last_grad:norm={_rslg.norm():.2e}')
-                        if _det_parts:
-                            logger.info(f'  [DET-DEBUG step={step}] ' + ' | '.join(_det_parts))
-                    # [OPUS v8 E4] Per-head backbone grad norm summary (same step cadence).
-                    # If head_pose_head grad norm >> detection_head, shared backbone is
-                    # optimized for head_pose. Logged at same step interval as DET-DEBUG.
-                    if _hp_head_grad_norm > 0 or _act_head_grad_norm > 0 or _psr_head_grad_norm > 0:
-                        _det_grad_norm = sum(
-                            _p.grad.detach().norm().item() ** 2
-                            for _p in _det_named_params.values()
-                        ) ** 0.5 if _det_named_params else 0.0
-                        logger.info(
-                            f'  [GRAD-NORM step={step}] '
-                            f'backbone={_backbone_grad_norm:.2e} '
-                            f'det={_det_grad_norm:.2e} '
-                            f'hp={_hp_head_grad_norm:.2e} '
-                            f'act={_act_head_grad_norm:.2e} '
-                            f'psr={_psr_head_grad_norm:.2e}'
-                        )
+                    # DET-DEBUG: per-weight detection head stats (reinit-heads only, verbose)
+                    if _REINIT_HEADS_ACTIVE:
+                        _det_named_params = {n: p for n, p in model.named_parameters()
+                                             if n.startswith('detection_head') and p.grad is not None}
+                        if _det_named_params:
+                            _det_parts = []
+                            # cls_score.weight grad norm
+                            _cw = _det_named_params.get('detection_head.cls_score.weight')
+                            if _cw is not None:
+                                _cg = _cw.grad.detach()
+                                _det_parts.append(
+                                    f'cls_w_grad:norm={_cg.norm():.2e} '
+                                    f'mean={_cg.mean():.2e} std={_cg.std():.2e}'
+                                )
+                            # cls_score.bias actual values (prior-determining)
+                            _cb = _det_named_params.get('detection_head.cls_score.bias')
+                            if _cb is not None:
+                                _cb_val = _cb.detach()
+                                _det_parts.append(
+                                    f'cls_bias:val_mean={_cb_val.mean():.4f} '
+                                    f'val_min={_cb_val.min():.4f} val_max={_cb_val.max():.4f}'
+                                )
+                            # reg_pred.weight grad norm
+                            _rw = _det_named_params.get('detection_head.reg_pred.weight')
+                            if _rw is not None:
+                                _rg = _rw.grad.detach()
+                                _det_parts.append(f'reg_w_grad:norm={_rg.norm():.2e}')
+                            # cls_subnet final layer (index 9) grad norm
+                            _csl = _det_named_params.get('detection_head.cls_subnet.9.weight')
+                            if _csl is not None:
+                                _cslg = _csl.grad.detach()
+                                _det_parts.append(f'cls_subnet_last_grad:norm={_cslg.norm():.2e}')
+                            # reg_subnet final layer (index 9) grad norm
+                            _rsl = _det_named_params.get('detection_head.reg_subnet.9.weight')
+                            if _rsl is not None:
+                                _rslg = _rsl.grad.detach()
+                                _det_parts.append(f'reg_subnet_last_grad:norm={_rslg.norm():.2e}')
+                            if _det_parts:
+                                logger.info(f'  [DET-DEBUG step={step}] ' + ' | '.join(_det_parts))
+                    # [OPUS v8 E4] Per-head backbone grad norm summary (every 100 steps).
+                    # Uses _hp_head_grad_norm computed unconditionally above.
+                    # Re-collect detection head named params (defined in DET-DEBUG block which may not execute).
+                    _det_named_params_g = {n: p for n, p in model.named_parameters()
+                                           if n.startswith('detection_head') and p.grad is not None}
+                    _det_grad_norm = sum(
+                        _p.grad.detach().norm().item() ** 2
+                        for _p in _det_named_params_g.values()
+                    ) ** 0.5 if _det_named_params_g else 0.0
+                    logger.info(
+                        f'  [GRAD-NORM step={step}] '
+                        f'backbone={_backbone_grad_norm:.2e} '
+                        f'det={_det_grad_norm:.2e} '
+                        f'hp={_hp_head_grad_norm:.2e} '
+                        f'act={_act_head_grad_norm:.2e} '
+                        f'psr={_psr_head_grad_norm:.2e}'
+                    )
                 optimizer.zero_grad(set_to_none=True)
 
         # --- NaN/ZERO GUARD: zero per-component losses that are NaN before accumulating.

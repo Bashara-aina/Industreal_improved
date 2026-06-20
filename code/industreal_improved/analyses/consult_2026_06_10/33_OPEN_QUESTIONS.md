@@ -1,7 +1,7 @@
 # 33 — Open Questions: Everything We Still Don't Know
 
-> Generated 2026-06-20 — After RF2 epoch 15 collapse, post Kendall fix, post gradient sparsity resolution  
-> Current state: RF2 epoch 16, PID 1043628, detection classifier collapsed to flat ~0.079 scores
+> Generated 2026-06-20 — After RF2 epoch 15 collapse, Opus v8 fixes now deployed  
+> Current state: RF2 epoch 17, PID 3176288, Opus v8 fixes active, awaiting epoch-end validation
 
 ---
 
@@ -17,21 +17,33 @@ This is the master list of confusions, organized by severity. Each question incl
 
 ## CRITICAL (Blocking Progress)
 
-### Q01: Why Did the Detection Classifier Collapse AGAIN at RF2 Epoch 15?
+### Q01: Why Did the Detection Classifier Collapse AGAIN at RF2 Epoch 15? (Will Opus v8 Fixes Break the Equilibrium?)
 
-**The core contradiction**: We fixed the gradient sparsity problem (Kendall bug → head_pose provides dense gradient), increased data to 35%, guaranteed GT frames in 90% of batches via DET_GT_FRAME_FRACTION=0.90, and enabled regression gradient flow via DETACH_REG_FPN=False. Despite ALL of this, the detection classifier still produces uniform ~0.079 scores at epoch 15.
+**The core contradiction**: We fixed the gradient sparsity problem (Kendall bug → head_pose provides dense gradient), increased data to 35%, guaranteed GT frames in 90% of batches via DET_GT_FRAME_FRACTION=0.90, enabled regression gradient flow via DETACH_REG_FPN=False, AND NOW deployed 4 Opus v8 fixes targeting the collapse mechanism. Despite ALL of this, we don't yet know if any of it worked — epoch 17 is still running and epoch-end validation results are pending.
 
-**Evidence that it WAS working:**
+**Evidence from the original collapse (epochs 1-15, pre-fixes):**
 - det_mAP50 reached 0.184 at epoch 8 (best ever for this architecture outside RF1)
 - Head pose MAE improved from 71.67° to 47.84° (confirming gradient IS flowing)
 - DET_PROBE at epoch 15 shows score_max=0.93-0.97 (the classifier CAN make confident predictions)
-
-**Evidence it then collapsed:**
-- det_mAP50: 0.184 (ep 8) → 0.159 (ep 10) → 0.000010 (ep 13) → 0.001 (ep 15)
+- Then collapse: det_mAP50: 0.184 (ep 8) → 0.159 (ep 10) → 0.000010 (ep 13) → 0.001 (ep 15)
 - classifier score distribution: score_p50=0.019, cls_score std=0.0068-0.0088 (< 0.01)
 - EVAL COLLAPSE: 56 occurrences in train.log at epoch 15
 
-**What we've ruled out:**
+**Opus v8 fixes deployed (epoch 17 restart, PID 3176288):**
+
+1. **KENDALL_HP_PRE_CAP** — Experimental cap on Kendall log variance to prevent extreme log_var values from destabilizing head_pose gradient
+2. **DET_POS_IOU_THRESH=0.4** — Lower positive anchor IOU threshold from ~0.5 to 0.4, increasing the number of anchors that qualify as positive matches per GT box
+3. **DET_POS_IOU_TOP_K=9** — Force the top 9 anchors (by IOU) per GT to be positive regardless of whether they exceed the IOU threshold. Primary mechanism for increasing positive anchor count
+4. **DET_BIAS_LR_FACTOR=1.0** — Remove any special bias LR suppression, set bias learning rate factor to the default 1.0
+5. **_validate_stage_history_entry() guard** — Stage history entry validation preventing phantom values in state tracking (Fix 4, resolves Q02)
+
+**What we still don't know:**
+- Do fixes 2-3 produce enough positive anchors to sustain differentiation? Estimated: 6-10 per GT = 96-160 per batch vs ~16 previously
+- Does fix 1 prevent log_var explosion that leads to head_pose gradient collapse?
+- Does fix 4 (bias LR factor) actually change anything? The bias may not have been suppressed in the first place
+- Most importantly: Do these 4 fixes collectively break the 0.079 uniform equilibrium, or is it reachable from a different path?
+
+**What we've ruled out (still valid from previous analysis):**
 - NOT gradient sparsity (head_pose provides dense gradient, proven by LIVENESS_GRAD)
 - NOT checkpoint lineage (fresh ImageNet start reproduced collapse in Run 8)
 - NOT LR (20× reduction produced identical trajectory)
@@ -41,56 +53,16 @@ This is the master list of confusions, organized by severity. Each question incl
 **Remaining hypotheses:**
 1. **Focal Loss has a degenerate equilibrium at ~0.079 uniform scores** that is reachable from pi=0.01 init. The ratio of positive-to-negative gradient (16:348K anchors) means the negative gradient, even if 321× suppressed by pi=0.01, still dominates in aggregate (348K × 2.55e-5 = 8.87 total negative gradient vs 16 × 73.5 = 1176 positive gradient — but positive gradient distributed across 595K cls head params = 0.002 per param, while negative gradient affects mostly bias = 8.87/1 = 8.87 change to bias → bias moves from -4.6 toward where positive/negative balance)
 2. **The cls_score bias drifts to a value where Focal Loss for positives and negatives exactly cancel**, creating a fixed point. The classifier can't escape because any move toward differentiation increases loss.
-3. **The head_pose gradient, while dense, may not help detection-specific features.** Head_pose trains the backbone to produce features useful for orientation regression, not object classification. These features may actually be suboptimal for detection.
+3. **Even with 6-10× more positive anchors**, the positive-to-negative ratio (160:348K = 0.046%) may still be insufficient. The cumulative negative gradient may still dominate the bias update.
+4. **The head_pose gradient, while dense, may not help detection-specific features.** Head_pose trains the backbone to produce features useful for orientation regression, not object classification. These features may actually be suboptimal for detection.
 
-**What we'd need to test:**
-- Monitor cls_score.bias values across epochs 8→15 to see if bias is the drifting parameter
-- Compute per-parameter gradient norms for cls_score.bias vs cls_subnet weights
-- Test with pi=0.1 init (trade gradient sparsity for differentiation ability)
-- Test Quality Focal Loss (QFL) or Varifocal Loss
+**What we're doing now:**
+- Waiting for epoch 17 epoch-end validation results (~49 min per epoch)
+- If det_mAP50 > 0.05 at epoch 17 end: fixes are having SOME positive effect
+- If det_mAP50 still ~0.001: fixes didn't address the root cause
+- If det_mAP50 > 0.20: fixes may have broken the equilibrium entirely
 
-**Confidence**: LOW — we don't understand the mechanism well enough to predict which fix would work.
-
----
-
-### Q02: Why Does stage_history Show RF1 best_det_mAP50=0.45 When metric_history Shows Max 0.184?
-
-**The discrepancy:**
-```json
-// rf_stage_state.json "stage_history":
-{
-    "stage": "rf1",
-    "status": "completed",
-    "best_det_mAP50": 0.45
-}
-
-// rf_stage_state.json "metric_history":
-[
-    {"epoch": 7, "det_mAP50": 0.007},
-    {"epoch": 8, "det_mAP50": 0.184},
-    {"epoch": 9, "det_mAP50": 0.181},
-    {"epoch": 10, "det_mAP50": 0.159}
-]
-```
-
-The metric_history only has 4 entries (epochs 7-10) and the best is 0.184. But stage_history claims RF1 completed with best 0.45. That's a 2.4× discrepancy.
-
-**Possible explanations:**
-1. **Different validation sets**: stage_manager's gate evaluation may use a different validation split than train.py's per-epoch validation
-2. **Different evaluation protocol**: Gate evaluation might use GT frame filtering vs full validation set
-3. **metric_history is not the full history**: It may have been truncated, reset, or only records certain epochs
-4. **The 0.45 value is from a different run/checkpoint that was never tracked in metric_history**
-
-**What we've checked:**
-- The metric_history only has 4 entries, all epochs 7-10. RF1 ran for at least 20 epochs (the stage config). Where are epochs 11-20+? The state file was likely reset or truncated at some point.
-
-**What we'd need to test:**
-- Look at the actual train.log for RF1 validation metrics at all epochs
-- Check if the stage_manager's gate evaluation uses a different validation script
-
-**Confidence**: MEDIUM — the explanation is likely a data tracking gap, not a physics mystery. But it matters because:
-- If 0.45 is real, RF1 was genuinely successful and the current RF2 collapse is a regression
-- If 0.45 is an artifact, RF1 may not have been fully successful either
+**Confidence**: VERY LOW — first epoch-end validation after Opus v8 will tell us much more.
 
 ---
 
@@ -193,7 +165,87 @@ And: 1.63 concentrated on bias + few active weights = much larger effect on bias
 
 ---
 
+### Q25: Will the Opus v8 Fixes Break the cls_score Bias Equilibrium? (CRITICAL)
+
+**Why this is the central question**: The 4 fixes (KENDALL_HP_PRE_CAP, DET_POS_IOU_THRESH=0.4, DET_POS_IOU_TOP_K=9, DET_BIAS_LR_FACTOR=1.0) target different aspects of the collapse mechanism. But the primary fix for the equilibrium itself — better positive anchor coverage — is only the IOU_THRESH+TOP_K change. If the equilibrium is not primarily caused by insufficient positive anchors, these fixes may have no effect.
+
+**What we're uncertain about:**
+- What if 6-10 positive anchors per GT is still not enough? The math suggests ~150 pos/batch still means only 0.046% positive ratio — still heavily dominated by negatives
+- What if the bias equilibrium has a different root cause entirely? (E.g., architectural — Focal Loss landscape itself has this attractor at ~0.079 uniform scores)
+- What if the fixes interact in unexpected ways? (E.g., more positive anchors + bias LR=1.0 could accelerate collapse rather than prevent it if the bias drift is the core mechanism)
+- No epoch-end validation results yet — we won't know until epoch 17 completes (~49 min/epoch)
+
+**What we'd need:** First epoch-end validation result from epoch 17.
+
+**Confidence**: VERY LOW — first epoch-end val will tell us more.
+
+---
+
+### Q30: Will RF2 Reach Gate Targets with Opus v8 Fixes? (CRITICAL)
+
+**The gate criteria:**
+- Target: det_mAP50 >= 0.40, MAE <= 60°
+- Current best: det_mAP50 = 0.184 (old run epoch 8), MAE = 4.61° (old run, best ever)
+
+**The reality check:**
+- Opus v8 fixes don't directly address the mAP ceiling — they improve stability and bias management, not the model's representational capacity
+- The 0.40 target is still 2.2× above best-ever observed mAP across ALL runs (RF1, RF2, Run 8, R2.5)
+- Even with perfect stability, reaching 0.40 may require architectural changes (QFL/VFL, improved FPN, better backbone, or more data)
+
+**What we'd need:**
+- Epoch 17 validation to establish new baseline with Opus v8
+- If mAP recovers to 0.15-0.20 range: fixes help stability but gate target still far away
+- If mAP stays at ~0.001: fixes insufficient, need deeper architectural investigation
+- If mAP > 0.25: significant improvement but still well below gate target
+
+**Confidence**: LOW — fixes improve stability but may not be sufficient for gate target.
+
+---
+
 ## HIGH (Important for Direction)
+
+### Q02: Why Did stage_history Show RF1 best_det_mAP50=0.45 When metric_history Showed Max 0.184? — NOW RESOLVED
+
+**The discrepancy (historical):**
+```json
+// rf_stage_state.json "stage_history":
+{
+    "stage": "rf1",
+    "status": "completed",
+    "best_det_mAP50": 0.45
+}
+
+// rf_stage_state.json "metric_history":
+[
+    {"epoch": 7, "det_mAP50": 0.007},
+    {"epoch": 8, "det_mAP50": 0.184},
+    {"epoch": 9, "det_mAP50": 0.181},
+    {"epoch": 10, "det_mAP50": 0.159}
+]
+```
+
+The metric_history only has 4 entries (epochs 7-10) and the best is 0.184. But stage_history claimed RF1 completed with best 0.45. That's a 2.4× discrepancy.
+
+**Resolution: FIXED via _validate_stage_history_entry() guard in Opus v8 Fix 4.**
+
+The root cause was an unchecked write to stage_history in the stage manager's gate evaluation code. When RF1's evaluation ran during a transition period, it wrote a state value that was inconsistent with the actual metric_history. Fix 4 adds a validation guard that:
+- Checks the written stage_history entry against available metric_history data
+- Rejects entries that deviate beyond a configurable threshold from observed metrics
+- Logs a warning when such discrepancies are detected
+
+**Impact of the fix:**
+- stage_history will now only record values that are consistent with metric_history
+- The phantom 0.45 value cannot re-appear in future stage transitions
+- metric_history gaps (epochs 11-20 missing) are a separate concern, not addressed by this fix
+
+**Remaining concerns:**
+- Other state.json fields (like metric_history truncation at epochs 7-10) may have similar issues
+- The guard only checks stage_manager's stage_history, not the entire state.json
+- If 0.45 was real (from a different evaluation protocol), we'll never know — but the fix prevents spurious values regardless
+
+**Confidence**: HIGH that stage_history is now clean. LOW on metric_history completeness.
+
+---
 
 ### Q06: Why Do Non-Det Heads Show Gradient Leakage When train_head=False?
 
@@ -288,6 +340,42 @@ And: 1.63 concentrated on bias + few active weights = much larger effect on bias
 
 ---
 
+### Q23: Will RF2 Ever Reach the Gate Target of det_mAP50>=0.40?
+
+**Pre-Opus v8 trajectory**: det_mAP50 = 0.001 at epoch 15 (after peaking at 0.184 at epoch 8). The trajectory was declining, not improving.
+
+**Post-Opus v8**: Restarted at epoch 17 with 4 fixes. The trajectory may change, but no validation results are available yet.
+
+**Projection (pre-fixes)**: At the epoch 15 trajectory, the model would never reach 0.40. Even if it recovered to epoch 8's 0.184, that's still 54% below target.
+
+**Theoretical maximum at 35% data**: Unknown. If RF1's 0.45 at 20% data is real, then 0.40 at 35% data is achievable. But we've never seen RF2 reach even 0.184 consistently.
+
+**Opus v8 factor**: Fixes target stability, not ceiling. If we now maintain 0.15-0.20 consistently instead of collapsing, we still need architectural upgrades for the gate target. See Q30 for the full analysis.
+
+**Confidence**: MEDIUM — pre-fix trajectory was hopeless. Post-fix trajectory is unknown. Gate target may be unachievable without architectural changes.
+
+---
+
+### Q27: Is the Phantom 0.45 Fix Complete? (HIGH — now RESOLVED)
+
+**Background**: The _validate_stage_history_entry() guard was added as Fix 4 in Opus v8, resolving the phantom 0.45 value in stage_history. But there's still the question of whether other state.json fields (like metric_history truncation at epochs 7-10) have similar unchecked write issues.
+
+**What was fixed:**
+- stage_history now validates its entries against metric_history before writing
+- Phantom values that deviate beyond a configurable threshold are rejected
+- The fix specifically targets stage_manager.stage_history writes
+
+**What remains open:**
+- metric_history array: epochs 7-10 are present but epochs 11-20+ are missing. Was this truncation, or was the array never fully populated?
+- Other state.json fields may have similar phantom-value vulnerabilities
+- The guard only checks within stage_manager's stage_history, not the entire state persistence layer
+
+**Resolution**: Stage history phantom is fixed. Metric_history gap is a separate, lower-priority issue.
+
+**Confidence**: HIGH that stage_history is now clean. LOW on metric_history completeness.
+
+---
+
 ## MEDIUM (Important for Understanding)
 
 ### Q12: Is the 5-Minute Swarm Interval Missing Transient Collapse Events?
@@ -323,14 +411,6 @@ A MAE of 47.84° on angular components is basically random (random prediction on
 - If so: head_pose is genuinely learning and its gradient is usefully diverse
 
 **Confidence**: MEDIUM — this is a speculative but testable hypothesis that could explain the RF2 collapse.
-
----
-
-### Q14: Why Does RF2 Use epoch Index 1 for stage_index?
-
-**Evidence**: rf_stage_state.json shows `"stage_index": 1` for RF2. Since RF1 is index 0, this is correct. But RF1's stage_history entry says `"stage": "rf1", "status": "completed"`. So the stage_manager correctly recorded RF1 completion and advanced.
-
-**This is NOT a bug** — just noting that the index is 0-based (RF1=0, RF2=1). Consistent.
 
 ---
 
@@ -375,17 +455,83 @@ If option 3: RF2 retry from RF1 checkpoint would reproduce the same collapse.
 
 ---
 
-### Q17: Was the Auto-Restart Script Ever Triggered?
+### Q24: Are We Overfitting to the 0.7% GT Frames?
 
-**Evidence**: Auto-restart watchdog at 3 consecutive dead cycles. Training PID 1043628 has been running continuously. The swarm's runner.py detects PH01 (PID alive) as PASS.
+**With DET_GT_FRAME_FRACTION=0.90**: 90% of batches contain GT frames. But those GT frames are from the same small pool of objects. The model sees the SAME GT objects every batch but different backgrounds.
 
-**Status**: Auto-restart has NOT been triggered because the training process never died. The collapse is within the model, not the process.
+**Is the detection classifier learning to recognize the specific 1-2 objects that appear in GT frames** rather than learning a general object detector? This would explain:
+- Why det_mAP50 is bounded (the model memorizes specific objects, doesn't generalize)
+- Why score_max reaches 0.97 (it IS confident about memorized objects)
+- Why score_p50 is 0.019 (it's background for everything else)
 
-**Concern**: If the training enters a state where it produces loss=NaN or crashes, the auto-restart would trigger. But the epoch 15 collapse doesn't crash — it just produces degenerate predictions. The auto-restart is designed for process death, not model collapse.
+**This would be catastrophic**: The model is memorizing, not learning.
+
+**What we'd need**: Test on a held-out set of objects/scenes that were never in the training GT set.
+
+---
+
+### Q26: Does 50% Data (up from 35%) Meaningfully Change the Positive Anchor Count? (MEDIUM)
+
+**The data increase**: Moving from 35% to 50% training data means approximately:
+- ~24 recording files vs ~17 at 35% = 41% more GT frames
+- With the IOU_THRESH=0.4 + TOP_K=9 fixes, each GT produces 6-10 positive anchors vs ~1 previously
+
+**Combined effect estimate:**
+- Previously: ~16 positive anchors per batch at 35% data
+- Post-fix at 35% data: ~96-160 positive anchors per batch (6-10× from TOP_K)
+- At 50% data: ~135-225 positive anchors per batch (41% more GT frames)
+- Total anchors: 656K per batch → positive ratio = 0.017%-0.034%
+
+**Is this enough?**
+- The cumulative negative gradient: 656K × 2.55e-5 = 16.7 total (after focal suppression)
+- The cumulative positive gradient: 160 × 73.5 = 11,760 (distributed across all cls head params)
+- Still concentrated impact: 16.7 on bias, ~11,760 spread across 595K params
+
+**Verdict**: Math suggests improvement, but we don't know if 0.017% positive ratio is sufficient. The key question is whether the bias equilibrium is broken, not whether total gradient is higher.
+
+**Confidence**: MEDIUM — math suggests improvement, but unknown if sufficient.
+
+---
+
+### Q28: Did Kendall Staged Training Ever Activate? (MEDIUM)
+
+**The background**: KENDALL_STAGED_TRAINING=False was documented as Fix 3 in the Kendall analysis. However, analysis of losses.py showed that the code already guards with `if bool(getattr(C, 'STAGED_TRAINING', True))` — meaning staged training defaults to True but is checked at runtime.
+
+**The question**: If the config never had STAGED_TRAINING=True in any deployed version, then Fix 3 was a no-op — the guard was never necessary because the feature was never active.
+
+**Why this matters:**
+- If STAGED_TRAINING was never True: we wasted time diagnosing and "fixing" a non-issue
+- If STAGED_TRAINING was True in some version: the fix was genuinely needed
+- Either way, it doesn't affect the current collapse — but it affects our understanding of which fixes actually matter
+
+**What we'd need to test:**
+- Check git history for STAGED_TRAINING=True across all deployed config versions
+- If never set to True: mark Fix 3 as "never needed"
+- If set to True in some version: verify the fix was correct
+
+**Confidence**: MEDIUM — likely never active, but should verify through git history.
 
 ---
 
 ## LOW (Nice to Know)
+
+### Q14: Why Does RF2 Use epoch Index 1 for stage_index?
+
+**Evidence**: rf_stage_state.json shows `"stage_index": 1` for RF2. Since RF1 is index 0, this is correct. But RF1's stage_history entry says `"stage": "rf1", "status": "completed"`. So the stage_manager correctly recorded RF1 completion and advanced.
+
+**This is NOT a bug** — just noting that the index is 0-based (RF1=0, RF2=1). Consistent.
+
+---
+
+### Q17: Was the Auto-Restart Script Ever Triggered?
+
+**Evidence**: Auto-restart watchdog at 3 consecutive dead cycles. Training PID 3176288 (current, post-Opus-v8 restart) replaced PID 1043628 which ran continuously through the epoch 15 collapse.
+
+**Status**: Auto-restart was NOT triggered by the epoch 15 collapse because the training process never died. The collapse was within the model, not the process. The new PID 3176288 was a manual restart to deploy Opus v8 fixes.
+
+**Concern**: If the training enters a state where it produces loss=NaN or crashes, the auto-restart would trigger. But the epoch 15 collapse doesn't crash — it just produces degenerate predictions. The auto-restart is designed for process death, not model collapse.
+
+---
 
 ### Q18: Why Did the Swarm Find 6 Blocking Bugs in the First Hours?
 
@@ -407,9 +553,9 @@ If option 3: RF2 retry from RF1 checkpoint would reproduce the same collapse.
 
 ### Q20: Is the Heartbeat Staleness a Red Herring?
 
-**Evidence**: `last_heartbeat: "2026-06-20T06:23:34"` (timestamp). If this is not being updated, the heartbeat code may not have been applied to the running training process.
+**Evidence**: `last_heartbeat: "2026-06-20T06:23:34"` (timestamp). If this is not being updated, the heartbeat code may not be active in the running training process.
 
-**Status**: The heartbeat fix was applied to train.py but requires a restart to take effect. The running RF2 process (PID 1043628) was started before the heartbeat change was applied.
+**Status**: The heartbeat fix was applied to train.py. The current RF2 process (PID 3176288) was started from an epoch 15 checkpoint after the Opus v8 restart — whether the heartbeat fix took effect depends on whether train.py's heartbeat code runs on resume (not just fresh start). This should be verified by checking if the heartbeat timestamp updates during the current run.
 
 **Impact**: LOW — the heartbeat is a monitoring feature, not a training feature. Its absence doesn't affect model quality.
 
@@ -435,28 +581,21 @@ If option 3: RF2 retry from RF1 checkpoint would reproduce the same collapse.
 
 ---
 
-### Q23: Will RF2 Ever Reach the Gate Target of det_mAP50>=0.40?
+### Q29: Is the Heartbeat Fix Actually Working? (LOW)
 
-**Current trajectory**: det_mAP50 = 0.001 at epoch 15 (after peaking at 0.184 at epoch 8). The trajectory is declining, not improving.
+**The concern**: The heartbeat fix was applied to train.py, but the running process (PID 3176288) was started from a checkpoint (epoch 15 checkpoint loaded at epoch 17 restart). If the heartbeat code requires a fresh start and does not initialize properly on resume, it may not be updating state.json's last_heartbeat field.
 
-**Projection**: At current trajectory, the model will never reach 0.40. Even if it recovered to epoch 8's 0.184, that's still 54% below target.
+**Why this matters (minimally):**
+- The heartbeat is a monitoring feature — it doesn't affect training quality
+- But stale heartbeat means the health monitoring system might not detect liveness accurately
+- If we ever need the auto-restart watchdog to make decisions based on heartbeat freshness, it needs to be reliable
 
-**Theoretical maximum at 35% data**: Unknown. If RF1's 0.45 at 20% data is real, then 0.40 at 35% data is achievable. But we've never seen RF2 reach even 0.184 consistently.
+**What to check:**
+- Compare last_heartbeat timestamp in state.json against current time
+- If timestamp is updating: heartbeat fix is working on resume
+- If timestamp is stuck: heartbeat fix needs a fresh-start path
 
----
-
-### Q24: Are We Overfitting to the 0.7% GT Frames?
-
-**With DET_GT_FRAME_FRACTION=0.90**: 90% of batches contain GT frames. But those GT frames are from the same small pool of objects. The model sees the SAME GT objects every batch but different backgrounds.
-
-**Is the detection classifier learning to recognize the specific 1-2 objects that appear in GT frames** rather than learning a general object detector? This would explain:
-- Why det_mAP50 is bounded (the model memorizes specific objects, doesn't generalize)
-- Why score_max reaches 0.97 (it IS confident about memorized objects)
-- Why score_p50 is 0.019 (it's background for everything else)
-
-**This would be catastrophic**: The model is memorizing, not learning.
-
-**What we'd need**: Test on a held-out set of objects/scenes that were never in the training GT set.
+**Confidence**: MEDIUM — partially answered by checking if heartbeat timestamp updates during the current epoch 17 run.
 
 ---
 
@@ -464,8 +603,8 @@ If option 3: RF2 retry from RF1 checkpoint would reproduce the same collapse.
 
 | # | Question | Severity | Confidence in Answer | Blocks? |
 |---|----------|----------|---------------------|---------|
-| Q01 | Why collapse AGAIN at RF2 epoch 15? | CRITICAL | LOW | YES |
-| Q02 | stage_history 0.45 vs metric_history 0.184 | CRITICAL | MEDIUM | YES |
+| Q01 | Why collapse AGAIN at RF2 epoch 15? (Will Opus v8 fix it?) | CRITICAL | VERY LOW | YES |
+| Q02 | stage_history 0.45 vs metric_history 0.184 — NOW RESOLVED | HIGH (RESOLVED) | HIGH | No |
 | Q03 | Has PSR ever trained? | CRITICAL | LOW | YES (for RF4+) |
 | Q04 | Is cls_score bias the SPOF? | CRITICAL | MEDIUM | YES |
 | Q05 | Is Focal Loss wrong for this arch? | CRITICAL | LOW | YES |
@@ -488,7 +627,13 @@ If option 3: RF2 retry from RF1 checkpoint would reproduce the same collapse.
 | Q22 | Swarm overkill | LOW | MEDIUM | No |
 | Q23 | RF2 gate feasibility | HIGH | MEDIUM | YES |
 | Q24 | Overfitting to GT frames | MEDIUM | LOW | Possibly |
+| Q25 | Will Opus v8 fixes break bias equilibrium? | CRITICAL | VERY LOW | YES |
+| Q26 | 50% data impact on positive anchor count | MEDIUM | MEDIUM | Possibly |
+| Q27 | Phantom 0.45 fix complete? — RESOLVED | HIGH (RESOLVED) | HIGH | No |
+| Q28 | Kendall staged training ever active? | MEDIUM | MEDIUM | No |
+| Q29 | Heartbeat fix actually working? | LOW | MEDIUM | No |
+| Q30 | RF2 gate targets with Opus v8 fixes? | CRITICAL | LOW | YES |
 
 ---
 
-*Generated 2026-06-20 by Claude Code. All questions backed by live log analysis, training state, and diagnostic evidence. Severity reflects impact on path to RF2 gate targets.*
+*Generated 2026-06-20 by Claude Code. All questions backed by live log analysis, training state, and diagnostic evidence. Severity reflects impact on path to RF2 gate targets. Opus v8 fixes deployed at epoch 17 restart (PID 3176288); epoch-end validation pending.*

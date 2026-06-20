@@ -1,6 +1,6 @@
-# Consultation Folder File Manifest — Updated 2026-06-20 (Opus v8 Fixes Applied)
+# Consultation Folder File Manifest — Updated 2026-06-21 UTC (Opus v8 Fixes Applied)
 
-## Core Python Source Files (code/) — UPDATED 2026-06-20 FROM RUNNING SOURCE
+## Core Python Source Files (code/) — UPDATED 2026-06-21 FROM RUNNING SOURCE
 
 | File | Description | Key Changes |
 |------|-------------|-------------|
@@ -82,17 +82,17 @@
 | File | Description |
 |------|-------------|
 | `eval_metrics.json` | Evaluation metrics (64KB) |
-| `rf_stage_state.json` | **Live stage state** — **Fix 4 applied**: phantom 0.45 → actual best_metric=0.184 |
+| `rf_stage_state.json` | **Live stage state** — current epoch 17, PID 3176288, Opus v8 fixes applied |
 
 ## Documentation
 
 | File | Description |
 |------|-------------|
-| `00_JOURNEY_AND_STATUS.md` | Full project timeline (Phases 1-12) — UPDATED 2026-06-20 with Kendall bug, RF1 completion, RF2 epoch 15 collapse, 20-agent swarm deployment |
+| `00_JOURNEY_AND_STATUS.md` | Full project timeline (Phases 1-14) — UPDATED 2026-06-21 with Phase 13 (Opus v8 fixes) and Phase 14 (New training run epoch 17) |
 | `10_OPUS_ANSWER_v2.md` | Opus v2 answer (RC-25, RC-27, recovery plan) |
 | `12_MASTER_PROMPT_v4.md` | Master prompt sent to Opus v4 |
 | `13_OPUS_ANSWER_v4.md` | **Opus v4 answer** — RC-28/RC-29 diagnosis, recovery protocol R0-R3 |
-| `14_POST_OPUS_V4_IMPLEMENTATION.md` | **What we did after Opus v4** — UPDATED 2026-06-20: now covers Phase 10 (RF1 death spiral, gradient sparsity proof, Kendall bug), Phase 11 (RF1 completion, 0.45 vs 0.184 discrepancy), Phase 12 (RF2 epoch 15 collapse, cls_score bias equilibrium, 20-agent swarm, 5 proven/4 refuted hypotheses) |
+| `14_POST_OPUS_V4_IMPLEMENTATION.md` | **What we did after Opus v4** — UPDATED 2026-06-21: now covers Phase 10 (RF1 death spiral, gradient sparsity proof, Kendall bug), Phase 11 (RF1 completion, 0.45 vs 0.184 discrepancy), Phase 12 (RF2 epoch 15 collapse, cls_score bias equilibrium, 20-agent swarm, 5 proven/4 refuted hypotheses) |
 | `15_GIT_DIFF_SUMMARY.txt` | Complete git diff of all source changes (c454163..HEAD) |
 | `16_MASTER_PROMPT_v5.md` | **SEND THIS TO OPUS** — Ultimate path to SOTA-ready model, all SOTA targets, current state, key questions |
 | `17_OPUS_ANSWER_v5.md` | **Opus v5 answer** — ultimate path (R1→R4 ladder), det-gap framing, activity/PSR enable order, PSR `1e-4` sentinel diagnosis, efficiency-first cell-fill strategy, timeline |
@@ -100,13 +100,14 @@
 | `19_PRE_TRAINING_READINESS_AUDIT_100.md` | **100-item pre-training readiness audit** — go/no-go gates with why-analysis per item, across architecture, backbone/FPN/anchors, cross-task conditioning, data/labels, loss/numerical hygiene, Kendall/gradient balance, optimization/training loop, per-head liveness, and per-task readiness (det/act/psr/headpose/assembly); 6 master gates; usage protocol |
 | `22_FINAL_PREFLIGHT_GAP_CLOSURE.md` | **Final pre-flight & gap closure** — closes the 3 verified gaps on `main` with exact patches: GAP-C (`apply_preset` never sets the 4 fix flags → paper_run no-op), GAP-A (PSR 9:1 static gradient + MonotonicDecoder unused at eval), GAP-B (activity eval per-recording not per-segment). Per-gap verification, 6-gate executable pre-flight, paper-run ladder, eval→`\popwres` map, 15-point sign-off |
 | `popw_paper_improved.tex` | Target paper with all benchmark tables and SOTA comparisons |
-| `26_RF1_RF10_COMPREHENSIVE_STATUS.md` | RF1-RF10 stage definitions and training pipeline — UPDATED 2026-06-20 (v4) with RF2 actual performance, epoch-by-epoch metrics, DET_PROBE analysis, EVAL COLLAPSE evidence, cls_score bias equilibrium analysis, updated timeline |
+| `26_RF1_RF10_COMPREHENSIVE_STATUS.md` | RF1-RF10 stage definitions — UPDATED 2026-06-21 (v5) with Section 19: Opus v8 training run detailed analysis |
 | `28_DET_DEATH_SPIRAL_FIX_AND_RUNBOOK.md` | Detection death spiral bounded background loss fix + runbook (2026-06-16) |
-| `29_RF1_DEATH_SPIRAL_AND_R2_5_PARADOX.md` | Root cause analysis — UPDATED 2026-06-20 with Section 13 postscript: RF2 epoch 15 collapse proves cls_score bias equilibrium is a DISTINCT failure mode from gradient sparsity (head_pose ALIVE but classifier still collapsed) |
+| `29_RF1_DEATH_SPIRAL_AND_R2_5_PARADOX.md` | Root cause analysis — UPDATED 2026-06-21 with Section 13 postscript: RF2 epoch 15 collapse proves cls_score bias equilibrium is a DISTINCT failure mode from gradient sparsity (head_pose ALIVE but classifier still collapsed) |
 | `30_OPUS_MASTER_PROMPT_v7.md` | Self-contained overview prompt for sending to Opus. Summarizes all 30 files, current situation, 10 questions for Opus, gradient math proof, config comparison. Upload this file alongside the folder for fastest Opus onboarding. (2026-06-17) |
-| `31_KENDALL_BUG_DISCOVERY_AND_FIX.md` | Kendall weighting bug: losses.py line 1589 excluded head_pose from total loss when train_pose=True, train_act=False. Fix applied and confirmed — UPDATED 2026-06-20 with Section 10 RF2 cross-validation postscript |
-| `33_OPEN_QUESTIONS.md` | **ALL remaining confusions** — 24 open questions organized by severity (CRITICAL/HIGH/MEDIUM/LOW). Covers cls_score bias equilibrium, stage_history discrepancy, PSR never trained, Focal Loss suitability, head pose feature smoothing, GT frame overfitting. (2026-06-20 — NEW) |
-| `34_RF2_SWARM_MONITOR.md` | **20-agent monitoring swarm documentation** — 22 agents, 134 checks/cycle, 5-min interval, 40-thread ThreadPoolExecutor, auto-restart watchdog, 4-channel alerting, 6 bugs found and fixed. (2026-06-20 — NEW) |
-| `35_OPUS_MASTER_PROMPT_v8.md` | **Send this to Opus** — Self-contained overview prompt for Opus consultation v8. Covers all 34 files, 3 distinct failure modes (solved + unsolved), cls_score bias equilibrium, 5 fix proposals, 10 key questions for Opus, current config reference. (2026-06-20) |
-| `36_OPUS_ANSWER_v8.md` | **Opus v8 answer** — Unified diagnosis: RF2 collapse is one mechanism wearing three masks (Kendall head_pose domination, not separate bias equilibrium). 4 prioritized fixes. Verifies phantom 0.45, double curriculum, pi=0.03. (2026-06-20) |
-| `37_IMPLEMENTATION_SUMMARY.md` | **Implementation summary** — All 4 Opus v8 fixes applied to source (commit beda631). Config/loss-level changes only, safe on RTX 3060. (2026-06-20) |
+| `31_KENDALL_BUG_DISCOVERY_AND_FIX.md` | Kendall weighting bug: losses.py line 1589 excluded head_pose from total loss when train_pose=True, train_act=False. Fix applied and confirmed — UPDATED 2026-06-21 with Section 10 RF2 cross-validation postscript |
+| `33_OPEN_QUESTIONS.md` | **ALL remaining confusions** — 30 open questions. UPDATED 2026-06-21 with Q25-Q30 covering Opus v8 fix efficacy |
+| `34_RF2_SWARM_MONITOR.md` | **20-agent monitoring swarm documentation** — 22 agents, 134 checks/cycle, 5-min interval, 40-thread ThreadPoolExecutor, auto-restart watchdog, 4-channel alerting, 6 bugs found and fixed. (2026-06-21 — UPDATED) |
+| `35_OPUS_MASTER_PROMPT_v8.md` | **Send this to Opus** — Self-contained overview prompt for Opus consultation v8. Covers all 34 files, 3 distinct failure modes (solved + unsolved), cls_score bias equilibrium, 5 fix proposals, 10 key questions for Opus, current config reference. (2026-06-21) |
+| `36_OPUS_ANSWER_v8.md` | **Opus v8 answer** — Unified diagnosis: RF2 collapse is one mechanism wearing three masks (Kendall head_pose domination, not separate bias equilibrium). 4 prioritized fixes. Verifies phantom 0.45, double curriculum, pi=0.03. (2026-06-21) |
+| `37_IMPLEMENTATION_SUMMARY.md` | **Implementation summary** — All 4 Opus v8 fixes applied to source (commit beda631). Config/loss-level changes only, safe on RTX 3060. (2026-06-21 — 256 insertions, 119 deletions) |
+| `38_OPUS_V8_TRAINING_RESULTS.md` | **Opus v8 training run results** — Post-fix training run analysis, epoch 17 metrics, fix efficacy assessment, next steps. (2026-06-21 — NEW) |

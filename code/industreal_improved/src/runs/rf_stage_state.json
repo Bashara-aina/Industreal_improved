@@ -2,8 +2,8 @@
   "current_stage": "rf2",
   "stage_index": 1,
   "status": "running",
-  "training_pid": 1043628,
-  "epoch": 16,
+  "training_pid": 3176288,
+  "epoch": 17,
   "best_metric": 0.181,
   "best_metrics": {
     "det_mAP50": 0.181,
@@ -72,5 +72,9 @@
   "log_cursor": 0,
   "cross_stage_memory": {},
   "max_epochs": 36,
-  "last_heartbeat": "2026-06-20T06:23:34.271671+00:00"
+  "last_heartbeat": "2026-06-20T13:50:33.514495+00:00",
+  "batch": {
+    "current": 2550,
+    "total": 3302
+  }
 }

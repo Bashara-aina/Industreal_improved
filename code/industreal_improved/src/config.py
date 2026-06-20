@@ -29,7 +29,7 @@ DEBUG_MODE         = False
 DEBUG_MAX_VIDEOS   = 2  # smoke test: 2 recordings only
 DEBUG_FRAME_STRIDE = 10
 
-SUBSET_RATIO = 1.0    # Full dataset — production training for paper results
+SUBSET_RATIO = 0.50   # 50% subset — balance of training speed vs class coverage
 
 TRAIN_FRAME_STRIDE = 3  # A.2: stride 3 → T=16 covers 1.6s at 30FPS (median action)
 EVAL_FRAME_STRIDE  = 1
@@ -457,6 +457,48 @@ MATMUL_PRECISION = 'high'
 # =========================================================================
 FOCAL_ALPHA   = 0.90  # RF: 0.90 (was 0.75) — α=0.75 still collapses at 173K:1 neg/pos ratio. α=0.90 gives positives 9× weight vs background, ensuring net-positive gradient even in no-positive batches (OHEM keeps 64 worst negs).
 FOCAL_GAMMA   = 2.0
+
+# Per-class alpha for detection focal loss.
+# Mechanism: higher α = stronger positive gradient when class IS target,
+# WEAKER negative gradient when class is NOT target. Dominant classes need
+# LOW α to learn suppression on non-target anchors (1-α penalty).
+# Format: {model_class_idx: alpha}. Classes not listed default to FOCAL_ALPHA (0.90).
+DET_CLASS_ALPHAS = {
+        # [FIX 2026-06-20 v4] Corrected model-index mapping.
+        # v3 had critical errors: idx 7,12,17 (AP=0.7/0.7/0.4) given HIGH alpha
+        # as "stuck"; idx 20 (AP=0.0, 709 train GT) given LOW alpha as "already
+        # perfect"; idx 9 (AP=0.004) labeled as "dominant" with LOW alpha.
+        #
+        # HIGH alpha = stronger pos gradient, weaker neg. Use for stuck classes.
+        # LOW alpha = moderate pos, meaningful neg. Use for dominant classes.
+        # Default FOCAL_ALPHA=0.90.
+        #
+        # === Truly stuck (AP=0.0, significant train GT) --- HIGH alpha ===
+        20: 0.96,  # cat 21 '11101011110', train=709, val=91,  AP=0.000
+        18: 0.95,  # cat 19 '11100001110', train=340, val=47,  AP=0.000
+        8:  0.94,  # cat 9  '11110110000', train=142, val=20,  AP=0.000
+        9:  0.94,  # cat 10 '11110111100', train=427, val=88,  AP=0.004
+        # === Stuck but low train count --- moderate alpha ===
+        6:  0.92,  # cat 7  '11110010000', train=65,  val=91,  AP=0.000
+        16: 0.90,  # cat 17 '11110011110', train=26,  val=27,  AP=0.000
+        # === Marginal (0.05 < AP < 0.20) --- moderate boost ===
+        22: 0.92,  # cat 23 '11101111111', train=2000, val=249, AP=0.159
+        11: 0.92,  # cat 12 '11110110001', train=226,  val=68,  AP=0.095
+        # === Dominant (AP > 0.4) --- LOW alpha to improve suppression ===
+        10: 0.78,  # cat 11 '11110111110', train=1913, val=156, AP=0.807
+        7:  0.80,  # cat 8  '11110100000', train=1852, val=223, AP=0.704
+        12: 0.80,  # cat 13 '11110111101', train=1136, val=430, AP=0.676
+        17: 0.85,  # cat 18 '11110101110', train=1067, val=263, AP=0.433
+        # === Moderate performer --- slight low alpha ===
+        4:  0.88,  # cat 5  '10010110000', train=590,  val=246, AP=0.270
+        # === AP=1.0 artifact (no GT in 0.50 subset val) ===
+        21: 0.85,  # cat 22 '11101111110', train=561,  val=175, AP=1.000
+        # === Zero val GT (can't measure) --- default-adjacent ===
+        2:  0.88,  # cat 3  '10010010000', train=349, val=0
+        14: 0.88,  # cat 15 '11110101111', train=126, val=0
+        # Zero train GT (can't learn): idx 13/19/23 --- default
+        # Zero val GT (can't measure): idx 1/3/15 --- default
+    }
 GIOU_WEIGHT   = 2.0  # Doc 01 B.2: GIoU regression weight vs cls weight=1.0
 
 # Hard negative mining for detection FocalLoss (RF stage collapse fix)

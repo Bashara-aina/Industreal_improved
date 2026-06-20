@@ -2,7 +2,7 @@
 
 > Deployed 2026-06-20 · 22 agents · 134 checks/cycle · 5-min interval · 40-thread ThreadPoolExecutor  
 > Auto-restart watchdog · 4-channel alerting · Delta tracking  
-> Current status: ACTIVE (monitoring PID 1043628 at RF2 epoch 16)
+> Current status: ACTIVE (monitoring PID 3176288 at RF2 epoch 17)
 
 ---
 
@@ -172,7 +172,7 @@ AUTO_RESTART_COOLDOWN = 600   # Min seconds between restarts (10 min)
 4. Auto-restart finds `restart_rf2_training.sh` in known paths
 5. After restart, `_dead_cycles` resets to 0
 
-**Current status**: PH01 is PASS (training PID 1043628 is alive). The watchdog has not triggered because the training process never died — only the model collapsed internally.
+**Current status**: PH01 is PASS (training PID 3176288 is alive). The watchdog has not triggered because the training process never died — only the model collapsed internally.
 
 **Restart script paths:**
 ```python
@@ -356,13 +356,15 @@ Text report appended to same `rf2_checklist_report.txt` file.
 
 ## 13. Current Status (2026-06-20)
 
-- **Training PID 1043628**: ALIVE (PH01 PASS)
+- **Training PID 3176288**: ALIVE (PH01 PASS)
 - **Auto-restart**: NOT TRIGGERED (0 dead cycles — training process is alive)
-- **Detection collapse**: NOT directly detected by swarm (no agent yet checks for uniform cls_score distribution — ClsStagnationAgent checks DET_PROBE results, but the epoch 16 val probe results show LOCALIZING verdict, which isn't classified as FAIL)
+- **Detection collapse**: NOT directly detected by swarm — swarm is still monitoring same location which now sees new training at PID 3176288
 - **6 bugs**: ALL FIXED
 - **Heartbeat fix**: Applied to train.py, pending restart to take effect
 
-**Swarm limitation**: The current 22 agents do NOT include a check that detects the cls_score equilibrium collapse (uniform ~0.079 scores). The ClsStagnationAgent (CS01) checks DET_PROBE score_p50 range, but epoch 16 val probes show score_p50=0.019-0.025 (range=0.006). This doesn't trigger CS01's stuck detection (range < 0.001 threshold for 5+ probes). Need to add a CS07: "cls_score std < 0.01" check.
+**Swarm limitation**: The current 22 agents do NOT include a check that detects the cls_score equilibrium collapse (uniform ~0.079 scores). The ClsStagnationAgent (CS01) checks DET_PROBE score_p50 range, but epoch 17 val probes show score_p50=0.020-0.072 (range=0.052). This doesn't trigger CS01's stuck detection (range < 0.001 threshold for 5+ probes). Need to add a CS07: "cls_score std < 0.01" check.
+
+**NOTE**: The swarm's data_sources.py reads from `/media/newadmin/master/POPW/working/code/industreal_improved/src/runs/rf_stages/` which is the same location the new training writes to. The swarm automatically sees the new training's data. No restart or reconfiguration was needed.
 
 ---
 
