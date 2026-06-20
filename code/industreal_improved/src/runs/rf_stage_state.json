@@ -58,7 +58,12 @@
     {
       "stage": "rf1",
       "status": "completed",
-      "best_det_mAP50": 0.45
+      "epochs_completed": 10,
+      "best_metric": 0.184,
+      "best_metrics": {
+        "det_mAP50": 0.184
+      },
+      "timestamp": "2026-06-20T00:13:40+00:00"
     }
   ],
   "issues_log": [],
