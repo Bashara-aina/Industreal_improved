@@ -304,6 +304,14 @@ DET_POS_IOU_THRESH = 0.4       # [FIX 2026-06-20 (Opus v8 §3)] Was 0.5 — lowe
                                # positives, fixing the supply-side root cause of gradient starvation at source.
 DET_NEG_IOU_THRESH = 0.4       # RetinaNet anchor matching: negative IoU threshold (standard: 0.4)
 DET_POS_IOU_TOP_K = 9          # [FIX 2026-06-20 (Opus v8 §3)] Top-k force-match per GT (was single argmax).
+DET_POS_IOU_IOU_FLOOR = 0.2    # [FIX 2026-06-21 (Opus v9 §R2)] Minimum IoU for top-k force-match anchors.
+                               # Without this floor, top-k can label near-zero-IoU anchors as "positive",
+                               # injecting label noise into the cls head. At 0.2, only anchors with
+                               # ≥20% box overlap get positive labels. The argmax best anchor is always
+                               # assigned regardless of floor (standard RetinaNet behavior).
+DET_POS_ANCHOR_PROBE_EVERY = 200  # [FIX 2026-06-21 (Opus v9 §R3)] Log positive-anchor sigmoid scores
+                                  # every N images. Logs mean/median/max/min of p_t on pos_mask anchors.
+                                  # Set 0 to disable.
                                # Standard RetinaNet only force-matches the single best anchor per GT (~1 pos/GT).
                                # For small objects, this starves the classifier. Top-9 via IoU assigns ~6-10
                                # positive anchors per GT, giving the cls_subnet enough positive gradient to

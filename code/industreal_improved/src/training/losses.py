@@ -136,16 +136,21 @@ class FocalLoss(nn.Module):
         # match 1-2 anchors above threshold. Top-k force-match gives ~6-10 pos/GT,
         # fixing the supply-side root cause of gradient starvation at source.
         _topk = int(getattr(C, 'DET_POS_IOU_TOP_K', 9))
+        _iou_floor = float(getattr(C, 'DET_POS_IOU_IOU_FLOOR', 0.0))
         for gi in range(gt_boxes.shape[0]):
             gi_ious = ious[:, gi]
-            # Always assign the best anchor
+            # Always assign the best anchor (standard RetinaNet behavior, no floor)
             labels[gi_ious.argmax()] = gt_labels[gi]
-            # Then assign top-k (minus the best, already assigned above)
+            # Then assign top-k above IoU floor (minus the best, already assigned above)
+            # [OPUS v9 §R2] Without the IoU floor, top-k can label near-zero-IoU anchors
+            # as "positive", injecting label noise into the cls head. At 0.2, only anchors
+            # with ≥20% box overlap get positive labels from the force-match.
             if _topk > 1 and gi_ious.numel() > _topk:
                 _, topk_idx = gi_ious.topk(min(_topk, gi_ious.numel()), largest=True)
                 for idx in topk_idx.tolist():
                     if labels[idx] < 0:  # don't overwrite an already-positive anchor
-                        labels[idx] = gt_labels[gi]
+                        if _iou_floor <= 0 or gi_ious[idx].item() >= _iou_floor:
+                            labels[idx] = gt_labels[gi]
 
         return labels, matched_boxes
 
@@ -266,6 +271,25 @@ class FocalLoss(nn.Module):
 
             cls_pred = cls_preds[i][valid_mask]
             cls_target = torch.zeros_like(cls_pred)
+
+            # [OPUS v9 §R3] Positive-anchor score probe: log sigmoid scores of positive anchors
+            # to detect cls head collapse (scores → 0 despite force-match positives).
+            _pos_probe_every = int(getattr(C, 'DET_POS_ANCHOR_PROBE_EVERY', 0))
+            if _pos_probe_every > 0 and pos_mask.sum() > 0:
+                _ppc = self._probe_ctr = getattr(self, '_probe_ctr', 0) + 1
+                if _ppc % _pos_probe_every == 0:
+                    with torch.no_grad():
+                        _pp_iv = pos_mask[valid_mask]
+                        _pp_lab = matched_labels[valid_mask][_pp_iv]
+                        _pp_scores = torch.sigmoid(cls_pred[_pp_iv]).gather(1, _pp_lab.unsqueeze(1)).squeeze(1)
+                        _pp_msg = (f'[POS_ANCHOR_PROBE img={i} call={_ppc}] '
+                                   f'n_pos={int(pos_mask.sum().item())} '
+                                   f'mean={_pp_scores.mean().item():.4f} '
+                                   f'med={_pp_scores.median().item():.4f} '
+                                   f'max={_pp_scores.max().item():.4f} '
+                                   f'min={_pp_scores.min().item():.4f}')
+                        logger.warning(_pp_msg)
+                        print(_pp_msg, flush=True)
 
             if pos_mask.sum() > 0:
                 pos_in_valid = pos_mask[valid_mask]
