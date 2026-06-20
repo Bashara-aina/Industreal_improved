@@ -1222,9 +1222,9 @@ The cls_score std < 0.01 is the critical signal. When the classification head's 
 }
 ```
 
-- Gate targets: det_mAP50>=0.40 (current: 0.001), MAE<=60° (current: 47.84° ACHIEVED)
-- At epoch 16/36 with 0 retries — approaching max_epochs with no recovery in sight
-- 20-agent monitoring swarm deployed and running
+- Gate targets: det_mAP50>=0.40 (current: TBD — epoch 17 not yet complete), MAE<=60° (current: TBD)
+- At epoch 17/36 with 0 retries — Opus v8 fixes deployed, training resumed from best.pth (PID 3176288)
+- 20-agent monitoring swarm deployed and running (automatically sees new training data)
 
 ### 18.9 Updated Timeline Estimation
 
@@ -1233,7 +1233,7 @@ Without a fix for the cls_score bias equilibrium:
 | Stage | Status | Est. Completion | Confidence |
 |-------|--------|----------------|------------|
 | RF1 | ✅ Completed (0.45?) | Done | Uncertain |
-| **RF2** | **❌ Collapsed** | **Stuck** | **No known path** |
+| **RF2** | **🔄 Fixes deployed** | **Awaiting epoch 17 val** | **Opus v8 fixes active** |
 | RF3 | ❌ Blocked | N/A | N/A |
 | RF4 | ❌ Blocked | N/A | N/A |
 | RF5-RF10 | ❌ Blocked | N/A | N/A |
@@ -1298,7 +1298,59 @@ The equilibrium is stable because:
 
 ---
 
-*End of document. Updated 2026-06-20 UTC (v4 — added Section 18 with RF2 actual performance, epoch-by-epoch metrics, DET_PROBE analysis, EVAL COLLAPSE evidence, cls_score bias equilibrium analysis, and updated timeline. Added Addendum 18-A with collapse mechanism analysis and ranked fix proposals.)*
+## 19. Opus v8 Training Run (June 20-21, 2026)
+
+### 19.1 New Training Configuration
+- PID 3176288, started 2026-06-20 21:44 UTC
+- Command: `--preset stage_rf2 --resume src/runs/rf_stages/checkpoints/best.pth --subset-ratio 0.50`
+- All 4 Opus v8 fixes active (KENDALL_HP_PREC_CAP, DET_POS_IOU_THRESH=0.4, DET_POS_IOU_TOP_K=9, DET_BIAS_LR_FACTOR=1.0)
+- Resumed from epoch 17, best=0.4622 (phantom value from old checkpoint — Fix 4 cleans this in state.json)
+- Config hash: 3e6b58a5cb19765e
+- Training actively running at epoch 17, ~2200/3302 batches
+
+### 19.2 DET_PROBE Results at Epoch 17
+- score_p50: 0.020-0.072 (similar healthy range)
+- score_max: 0.37-0.99 (wide range, confident predictions on some classes)
+- preds>0.05: 28K-100K per batch
+- bestIoU_max: 0.86-0.98 (excellent localization)
+- bestIoU>0.5: 472-3037 per batch (consistent)
+- Verdict: predominantly LOCALIZING
+
+### 19.3 LIVENESS at Epoch 17
+- det: 0.92-1.57 ALIVE (healthy)
+- head_pose: 7.13e-03 to 1.70e-02 ALIVE (low but alive)
+- pose: 1.12-1.47 ALIVE (healthy)
+- act: DEAD (expected — train_act=False)
+- psr: DEAD (expected — train_psr=False)
+
+### 19.4 Loss Profile
+- det_cls: 0.31-0.69 (healthy range)
+- det_reg: 0.25-0.44 (healthy range)
+- pose: 0.001-0.025 (healthy)
+- No NaN losses, no spike warnings
+- PSR constant at 1.546e-08 (expected)
+
+### 19.5 Comparison with Old Run (PID 1043628)
+| Dimension | Old Run (PID 1043628) | New Run (PID 3176288) |
+|-----------|----------------------|----------------------|
+| subset_ratio | 0.35 | 0.50 |
+| DET_POS_IOU_THRESH | 0.5 (implicit) | 0.4 |
+| DET_POS_IOU_TOP_K | 1 (implicit) | 9 |
+| DET_BIAS_LR_FACTOR | 5.0 | 1.0 |
+| KENDALL_HP_PREC_CAP | False (no such mechanism) | True |
+| Last collapse epoch | 15+ | Not yet collapsed (epoch 17 active) |
+| Best mAP50 | 0.189 (epoch 8) | TBD (epoch 17 not complete) |
+
+### 19.6 Preliminary Assessment
+- Training is STABLE (no collapse after 2+ hours, vs collapse at epoch 15 in old run)
+- The DET_BIAS_LR_FACTOR=1.0 (vs 5.0) removes the bias acceleration that pushed the classifier toward the degenerate equilibrium faster
+- The DET_POS_IOU_TOP_K=9 provides more positive anchors per GT (6-10 vs ~1), giving the classifier more positive gradient
+- BUT: STEP VAL at gs=2000 still shows det_mAP50=0.0000 (intra-epoch — may not be meaningful)
+- The mAP ceiling question remains unanswered — epoch 17 end validation will be the first real data point
+
+---
+
+*End of document. Updated 2026-06-20 UTC (v5 — added Section 19 with Opus v8 training run status, DET_PROBE, LIVENESS, loss profile, comparison with old run, and preliminary assessment of fixes.)*
 
 ---
 

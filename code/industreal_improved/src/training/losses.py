@@ -81,12 +81,16 @@ class FocalLoss(nn.Module):
     GIoU directly optimizes the IoU metric evaluated at mAP@0.5.
     """
     def __init__(self, alpha: float = 0.25, gamma: float = 2.0,
-                 pos_iou_thresh: float = 0.5, neg_iou_thresh: float = 0.4):
+                 pos_iou_thresh: float = 0.5, neg_iou_thresh: float = 0.4,
+                 class_alphas: Optional[Dict[int, float]] = None):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
         self.pos_iou_thresh = pos_iou_thresh
         self.neg_iou_thresh = neg_iou_thresh
+        # [FIX 2026-06-20] Per-class alpha for fine-grained detection classes.
+        # Stored as {class_id: alpha}. Applied at the alpha_t step in forward().
+        self.class_alphas = class_alphas or {}
 
     def _match_anchors(self, anchors: torch.Tensor, gt_boxes: torch.Tensor,
                       gt_labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -320,7 +324,19 @@ class FocalLoss(nn.Module):
             else:
                 gamma_eff = self.gamma
 
-            alpha_t = self.alpha * cls_target + (1 - self.alpha) * (1 - cls_target)
+            # [FIX 2026-06-20] Per-class alpha: override default alpha for specific classes
+            # to break gradient conflicts from fine-grained class ambiguity (e.g., class_6 vs class_7).
+            # alpha_per_class[class_id] when set, else self.alpha.
+            if self.class_alphas:
+                num_det_classes = cls_target.shape[1]
+                base_alpha_arr = torch.full((num_det_classes,), self.alpha, device=cls_target.device)
+                for cid, ca in self.class_alphas.items():
+                    if 0 <= cid < num_det_classes:
+                        base_alpha_arr[cid] = ca
+                base_alpha_arr = base_alpha_arr.unsqueeze(0)  # [1, 24]
+                alpha_t = base_alpha_arr * cls_target + (1 - base_alpha_arr) * (1 - cls_target)
+            else:
+                alpha_t = self.alpha * cls_target + (1 - self.alpha) * (1 - cls_target)
             total_cls = total_cls + (alpha_t * (1 - p_t) ** gamma_eff * ce).sum() / num_pos
 
             # C.1: GIoU loss replaces SmoothL1 — directly optimizes IoU metric
@@ -997,7 +1013,8 @@ class MultiTaskLoss(nn.Module):
         # Sub-losses
         self.det_loss_fn = FocalLoss(alpha=C.FOCAL_ALPHA, gamma=C.FOCAL_GAMMA,
                                       pos_iou_thresh=C.DET_POS_IOU_THRESH,
-                                      neg_iou_thresh=C.DET_NEG_IOU_THRESH)
+                                      neg_iou_thresh=C.DET_NEG_IOU_THRESH,
+                                      class_alphas=getattr(C, 'DET_CLASS_ALPHAS', {}))
         self.pose_loss_fn = PoseLoss(wing_omega=C.WING_OMEGA, wing_epsilon=C.WING_EPSILON)
 
         # C.2: LDAM-DRW or CB-Focal for activity

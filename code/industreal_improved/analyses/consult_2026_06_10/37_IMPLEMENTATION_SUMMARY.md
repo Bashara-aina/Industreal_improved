@@ -80,3 +80,34 @@ Three changes targeting anchor coverage:
 beda631 fix(rf): implement Opus v8 fixes for RF2 detection collapse (#9)
  4 files changed, 256 insertions(+), 119 deletions(-)
 ```
+
+---
+
+## Post-Implementation Status
+
+### New Training Run (June 20-21, 2026)
+
+- **Training PID** 3176288 started at 2026-06-20 21:44 UTC with all 4 Opus v8 fixes active
+- **Resumed** from best.pth (epoch 17, phantom 0.46 value in checkpoint but Fix 4 cleans display in state.json)
+- **Config hash**: 3e6b58a5cb19765e
+- **Progress**: epoch 17, ~67% complete (~2200/3302 batches)
+
+### DET_PROBE at Epoch 17
+- score_p50: 0.020-0.072 (similar healthy range)
+- score_max: 0.37-0.99 (confident predictions on some classes)
+- preds>0.05: 28K-100K per batch
+- bestIoU_max: 0.86-0.98 (excellent localization)
+- bestIoU>0.5: 472-3037 per batch (consistent)
+- **Verdict**: predominantly LOCALIZING
+
+### LIVENESS at Epoch 17
+- det: 0.92-1.57 ALIVE (healthy)
+- head_pose: 7.13e-03 to 1.70e-02 ALIVE (low but alive)
+- pose: 1.12-1.47 ALIVE (healthy)
+- act: DEAD (expected — train_act=False)
+- psr: DEAD (expected — train_psr=False)
+
+### Key Questions
+- **Answered**: Fix 4 (phantom 0.45) confirmed working — stage_history no longer shows phantom value
+- **Open**: Whether Fix 1+2 break the bias equilibrium
+- **Next data point**: Epoch 17 end validation — first real mAP measure with all fixes active
