@@ -424,6 +424,157 @@ All three losses are in healthy ranges. Detection classification loss is not div
 
 ---
 
+## 8. Phase 15: The 6-Epoch Plateau — Epoch 20 LR Restart Failure (June 21, 2026)
+
+### 8.1 What Actually Happened
+
+The Opus v8 fixes successfully prevented the catastrophic collapse at epoch 13-15 that killed the previous run. But instead of collapse, the run entered a profoundly different regime: **a structural plateau at mAP50=0.20-0.215 that persisted for 6 consecutive epochs (15-20).**
+
+```
+Epoch  7: mAP50=0.007  MAE=71.67°  (run 2 start — degraded)
+Epoch  8: mAP50=0.184  MAE=?       (peak from old run)
+Epoch  9: mAP50=0.181  MAE=?
+Epoch 10: mAP50=0.159  MAE=20.73°  (declining in old run)
+... [old run collapse: epochs 11-15 all near-zero] ...
+... [Opus v8 fixes deployed, restart at epoch 17 checkpoint] ...
+Epoch 16: mAP50=0.215  mAP50_95=0.081  MAE=8.80°  combined=0.4622
+Epoch 17: mAP50=0.204  mAP50_95=0.077  MAE=9.25°  combined=0.4547
+Epoch 18: mAP50=0.207  mAP50_95=0.078  MAE=9.27°  combined=0.4564
+Epoch 19: mAP50=0.209  mAP50_95=0.081  MAE=9.33°  combined=0.4580
+Epoch 20: mAP50=0.205  mAP50_95=0.080  MAE=9.23°  combined=0.4553  ← LR restart HERE
+```
+
+**Key observations:**
+- Range over 5 epoch-ends: 0.2039-0.2151 (1.1 percentage point range)
+- **Zero trend direction**: Not improving, not degrading — flat with noise
+- Pseudo-classing mAP (det_mAP50_pc): 0.3442 → 0.3071 (also flat, ~50% above raw mAP)
+- **det_n_present_classes: 15-16/24 consistently** — same 8-9 classes never detected
+- **Combined metric stable**: 0.4547-0.4622 (driven by MAE+loss components, not detection)
+- MAE: 8.80° → 9.23° (well under 60° gate, flatter than expected)
+
+### 8.2 The CosineAnnealing Restart Failed — This Is Decisive
+
+**The LR restart at epoch 20 (CosineAnnealingWarmRestarts, T₀=10) had ZERO effect:**
+
+| Metric | Epoch 19 (pre-restart) | Epoch 20 (post-restart) | Change |
+|--------|----------------------|----------------------|--------|
+| det_mAP50 | 0.2088 | 0.2047 | −0.0041 |
+| det_mAP50_95 | 0.0810 | 0.0795 | −0.0015 |
+| forward_angular_MAE_deg | 9.33 | 9.23 | −0.10° |
+| combined | 0.4580 | 0.4553 | −0.0027 |
+| det_mAP50_pc | 0.3132 | 0.3071 | −0.0061 |
+
+This eliminates the hypothesis that "the plateau is schedule-dependent." The CosineAnnealing restart resets the LR to its maximum value and re-initializes the optimizer state. If the plateau were caused by a too-small LR (getting stuck in a local minimum), the restart would have produced a measurable improvement. It produced **nothing** — the epoch 20 value is statistically indistinguishable from epoch 19.
+
+**Conclusion**: The plateau at mAP50≈0.21 is structural, not schedule-dependent. The model has reached its current representational ceiling with the current configuration.
+
+### 8.3 POS_ANCHOR_PROBE Evidence — The Classifier IS Learning
+
+The POS_ANCHOR_PROBE (added in response to Opus v9) tracks sigmoid scores on **matched positive anchors only** — the first metric that can actually see classification health.
+
+At epoch 21 step 1600-1700:
+```
+POS_ANCHOR_PROBE img=0 call=204800: n_pos=525 mean=0.646 med=0.638 max=0.994 min=0.270
+POS_ANCHOR_PROBE img=1 call=205000: n_pos=346 mean=0.732 med=0.757 max=0.998 min=0.283
+POS_ANCHOR_PROBE img=0 call=205200: n_pos=476 mean=0.799 med=0.851 max=0.993 min=0.382
+POS_ANCHOR_PROBE img=0 call=205400: n_pos=164 mean=0.754 med=0.754 max=0.991 min=0.478
+```
+
+**This refutes the "classifier is collapsed" narrative.** The classifier scores positive anchors at mean=0.65-0.80, median=0.64-0.85, max=0.99. It can confidently classify objects it has matched to — with sigmoid outputs of 0.99 (essentially 100% confidence).
+
+**The question changes**: It's not "why is the classifier collapsed?" (it's not), but rather "why are 12/24 classes at AP=0 when the classifier clearly works?"
+
+### 8.4 Opus v9 Corrections — Three Critical Diagnoses
+
+On June 21, Opus was consulted for the 9th time with all epoch 16-20 data. The response (`39_OPUS_ANSWER_v9.md`) delivered three corrections that fundamentally changed the understanding of the problem:
+
+#### Correction 1: score_p50 Is Structurally Blind
+
+Opus proved that score_p50 (the median max-class sigmoid over ALL anchors) is the wrong metric. With ~172K anchors/image and a handful of GT, >99.99% of anchors are background. The median anchor's score is by definition ≈ sigmoid(bias) regardless of classification quality. A perfectly trained detector would show the same score_p50.
+
+**Impact**: All prior analysis treating score_p50 as a classification health metric was invalid. The number literally cannot move when classification improves.
+
+#### Correction 2: LOCALIZING Verdict Is IoU-Only
+
+The DET_PROBE's LOCALIZING verdict checks box overlap at score>0.01 — it never evaluates the predicted class. A model putting class-7 predictions on class-6 objects at IoU 0.9 would score LOCALIZING and mAP=0 simultaneously. The "LOCALIZING but not CLASSIFYING" narrative was half-right — the LOCALIZING half is real, the "not CLASSIFYING" half was inferred from score_p50 which can't see it.
+
+**Impact**: The LOCALIZING verdict is consistent with both "classification is fine" and "classification is dead." It cannot distinguish them.
+
+#### Correction 3: The detach_reg_fpn Split-Brain
+
+The committed stage_rf2 preset contains `detach_reg_fpn=True` (line 1109 of config.py), meaning the regression subnet is detached from FPN gradient flow. Under this configuration:
+- Only the classification subnet (and head_pose) shapes the backbone
+- The excellent localization (bestIoU=0.86-0.98) is produced by the reg subnet riding on features carved by CLS + POSE
+- This points AWAY from "bad features" and SQUARELY at the cls loss/cls targets/labels
+
+**However**, the actual running config may differ (the doc claims DETACH_REG_FPN=False). The effective value was never printed at step 0. **This must be resolved before the next diagnosis.**
+
+### 8.5 The Top-k IoU Floor Problem (New in Opus v9)
+
+Opus v9 identified a critical bug in Fix 2: `DET_POS_IOU_TOP_K=9` has **no minimum-IoU guard**. For a GT whose best anchors sit at IoU~0.2 (small parts against ANCHOR_SIZES starting at 96px), the code force-assigns 9 poorly-localized anchors to predict class `c` with target 1.0. Regression tolerates loose anchors (GIoU learns offset), but **classification is actively mistaught** that features at a 0.2-IoU location are class `c`.
+
+This can CREATE the uniform-output pathology for small/medium objects precisely because of Fix 2 — it trades gradient starvation for label noise.
+
+**Fix needed**: Gate the top-k by IoU — keep only topk_idx with IoU ≥ ~0.2-0.3, or adopt ATSS's per-GT adaptive threshold.
+
+### 8.6 What Opus v9 Recommended (Not Yet Done)
+
+1. **50-image cls-only overfit** (highest priority, <30 min parallel to live run): Train on 50 images, classification-only, head_pose OFF, Kendall OFF. Result bins the entire problem:
+   - mAP→0.8+: dynamics are the issue → flip KENDALL_FIXED_WEIGHTS=True
+   - mAP stalls, boxes localize: assignment/label noise → top-k IoU floor + label audit
+   - No localization: anchor/assignment bug upstream of cls
+
+2. **Add missing probes** (before next consultation):
+   - cls_score.weight.norm() per epoch (v8's E3 — still the most diagnostic line)
+   - prec_hp/prec_det ratio per epoch (confirms HP_PREC_CAP is holding)
+   - Effective C.DETACH_REG_FPN and C.REINIT_PI at step 0
+
+3. **PSR 50-sequence overfit** (de-risks paper's novelty claim): Run PSR-only on 50 sequences in parallel. If it can't overfit, the cause is transformer logit scale (−23/+22), fixable before RF4.
+
+4. **Don't jump to RF3 yet**: Run RF2 only until one epoch-end mAP50@0.001 holds for ≥3 consecutive evals past epoch 15, OR until 3 consecutive epochs with mAP50@0.001 < 0.10.
+
+### 8.7 The 12/24 AP=0 Mystery
+
+The most important finding from the epoch 16-20 data: **the same 12 classes are always at AP=0**. Pseudo-classing mAP (mAP50_pc = 0.307-0.344) is ~50% higher than raw mAP because it treats each class independently, confirming the problem IS class-specific.
+
+The mystery class: **Class 6** — consistently has 1500-1800 GT instances per epoch across ALL training runs, yet AP=0 at EVERY epoch. This has never been investigated.
+
+Hypotheses:
+1. Class 6 labels are wrong (synthetic label noise on this specific class)
+2. The top-k IoU floor poisoning particularly harms small/medium objects that map to class 6
+3. Class 6's features overlap with other classes in a way the classifier can't separate
+4. There are zero positive anchors for class 6 in the anchor grid (geometry mismatch)
+
+### 8.8 Current Training Status (Epoch 21)
+
+Training continues at epoch 21 (~50% complete, batch ~1700/3302) with:
+- **PID**: 3791482 (new PID — a restart occurred)
+- **det_mAP50**: 0.2047 (best_metrics), 0.4622 (combined best_metric)
+- **LIVENESS**: det ALIVE[2.35e-02], backbone ALIVE[2.770e+00], head_pose ALIVE[4.83e-03]
+- **DET gradient bottleneck**: detection_head grad 2.35e-02 vs backbone 2.770e+00 (117× ratio)
+- **head_pose borderline**: Alternates ALIVE (4.83e-03) and DEAD (5.34e-04)
+- **POS_ANCHOR_PROBE**: n_pos=164-525 per probe, mean=0.64-0.80, max=0.99
+- **Heartbeat**: Updating (2026-06-21T07:08 UTC)
+- **Remaining epochs**: ~15 (at max_epochs=36), ~86 min/epoch = ~22 hours wall time
+
+### 8.9 Updated Reality Summary
+
+| Metric | Value | Status |
+|--------|-------|--------|
+| **Stage** | RF2, epoch 21 (~50%) | Running — no collapse |
+| **Best det_mAP50** | 0.2047 | 6-epoch plateau (0.204-0.215) |
+| **Best mAP50_95** | 0.0810 | Also plateaued |
+| **Pseudo-class mAP** | 0.344 (det_mAP50_pc) | ~50% above raw mAP — problem IS class-specific |
+| **Head Pose MAE** | 9.23° | Well under 60° gate target |
+| **det_n_present_classes** | 15-16/24 | Same 8-9 classes never detected |
+| **Gate target** | det_mAP50 >= 0.40 | ~2× below target, no trend |
+| **Gate target** | MAE <= 60° | ACHIEVED ✅ |
+| **Metric history** | epochs 7-10 only | Still not updating in state.json |
+| **LR restart effect** | ZERO | CosineAnnealing at epoch 20 had no effect |
+| **Classifier health** | POSITIVE anchors get score 0.64-0.99 | Classifier IS working on matched positives |
+| **Opus v8 fixes** | Active | Prevented collapse but ceiling remains |
+| **Next decisive action** | 50-image cls-only overfit | Bins the problem in <30 min |
+
 ## 9. What We've Learned
 
 ### Proven Hypotheses
@@ -456,30 +607,34 @@ All three losses are in healthy ranges. Detection classification loss is not div
 
 ## 10. Current Status Snapshot
 
-**As of 2026-06-20 22:00 UTC:**
+**As of 2026-06-21 07:30 UTC:**
 
 ```
-Stage:      RF2 (epoch 17, stage_index=1)
-PID:        3176288 (main) + 14 workers
-Status:     running
-Best mAP:   0.181 (det_mAP50 from old run)
-Gate:       PENDING (no epoch-end validation from Opus v8 run yet)
-Last HB:    2026-06-20T13:41:49 UTC
-Run start:  2026-06-20T21:44 UTC
-Max epochs: 100 (stage_rf2 default)
-Subset:     50% (up from 35%)
+Stage:      RF2 (epoch 21, ~50%, stage_index=1)
+PID:        3791482 (main) + 14 workers
+Status:     running — no collapse
+Best mAP50: 0.2047 (epoch 20, best_metrics)
+Best mAP50_pc: 0.3442 (pseudo-classing, epoch 16)
+Best combined: 0.4622 (epoch 16)
+MAE:        9.23° (well under 60° gate)
+Gate mAP50: PENDING — 0.2047 vs 0.40 target (2× below, no trend)
+Gate MAE:   ACHIEVED (9.23° ≤ 60°)
+Max epochs: 36 (15 remaining)
 Config:     Opus v8 fixes ACTIVE (hash 3e6b58a5cb19765e)
-Swarm:      Monitoring old PID — needs restart
+LR restart: FAILED — epoch 20 CosineAnnealing had zero effect
+Heads:      det ALIVE[2.35e-02], pose ALIVE[1.08e-02], head_pose ALIVE[4.83e-03]
+Backbone:   ALIVE[2.770e+00|n=178]
 ```
 
 ### Available diagnostics:
-- Training log: train.log (still growing, Phase 14 run)
-- DET_PROBE: epoch 17 shows LOCALIZING verdict, score_p50=0.020-0.072, score_max=0.37-0.99
-- LIVENESS at step 2600: det=1.57 ALIVE, pose=1.12 ALIVE, head_pose=8.89e-03 ALIVE
-- Config: Opus v8 fixes in effect (KENDALL_HP_PREC_CAP=True, DET_POS_IOU_TOP_K=9, DET_BIAS_LR_FACTOR=1.0)
-- State file: rf_stage_state.json at epoch 17 (in progress)
-- No epoch-end validation results yet
-- Monitoring swarm (rf2_swarm/) monitoring old PID — needs reconfiguration for new PID
+- **5 epoch-end validation results available** (epochs 16-20) — all confirm plateau at mAP50=0.204-0.215
+- **POS_ANCHOR_PROBE added** — confirms classifier IS learning (n_pos=164-525, mean=0.64-0.80, max=0.99)
+- **Per-class AP** — same 12/24 classes at AP=0 across ALL epochs
+- **Pseudo-classing mAP** (det_mAP50_pc=0.307-0.344) — ~50% above raw mAP, confirms problem IS class-specific
+- **DET gradient bottleneck**: detection_head grad 2.35e-02 vs backbone 2.770e+00 (117× ratio)
+- **Opus v9 analysis**: score_p50 blindness, LOCALIZING IoU-only, detach_reg_fpn split-brain, top-k IoU floor
+- **50-image cls-only overfit**: NOT YET RUN — single highest-value next action
+- **Swarm**: Available but needs reconfiguration for PID 3791482
 
 ---
 
