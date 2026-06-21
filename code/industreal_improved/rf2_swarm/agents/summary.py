@@ -16,24 +16,42 @@ class SummaryAgent(BaseAgent):
     def __init__(self) -> None:
         super().__init__("summary", "Executive summary, trend direction, recommended actions")
 
+    def _get_best_mae(self, state: Dict[str, Any]) -> float:
+        """Extract best MAE from state, checking all possible key paths."""
+        mae = state.get("best_mae")
+        if mae is None:
+            best_metrics = state.get("best_metrics", {})
+            mae = best_metrics.get("forward_angular_MAE_deg")
+        if mae is None:
+            return float("inf")
+        return float(mae)
+
     def run(self, datastore: Dict[str, Any]) -> AgentResult:
         checks: List[CheckResult] = []
         state = datastore.get("state", {})
         e4 = datastore.get("e4_grad_norms", {})
 
         best_metric = state.get("best_metric", 0.0) or 0.0
+        best_metrics_nested = state.get("best_metrics", {})
+        if best_metrics_nested.get("det_mAP50") is not None:
+            best_metric = float(best_metrics_nested["det_mAP50"])
+        best_mae = self._get_best_mae(state)
+        max_epochs = int(state.get("max_epochs", C.DEFAULT_MAX_EPOCHS))
         epoch = datastore.get("epoch", 0) or 0
         pid_alive = datastore.get("pid_alive", False)
         gate_passed = state.get("gate_passed", False)
 
         # 1. Trend direction
         state_history = state.get("metric_history", [])
-        if isinstance(state_history, list) and len(state_history) >= 3:
-            recent = state_history[-3:]
-            if recent[-1] > recent[0] * 1.05:
+        # Normalize: entries may be floats or dicts like {'epoch': N, 'det_mAP50': V}
+        def _extract_val(entry):
+            return entry.get("det_mAP50", 0.0) if isinstance(entry, dict) else float(entry)
+        recent_vals = [_extract_val(e) for e in (state_history[-3:] if isinstance(state_history, list) else [])]
+        if isinstance(state_history, list) and len(recent_vals) >= 3:
+            if recent_vals[-1] > recent_vals[0] * 1.05:
                 trend = "IMPROVING"
                 tv = Verdict.PASS
-            elif recent[-1] >= recent[0] * 0.95:
+            elif recent_vals[-1] >= recent_vals[0] * 0.95:
                 trend = "FLAT"
                 tv = Verdict.WARN
             else:
@@ -46,12 +64,16 @@ class SummaryAgent(BaseAgent):
             name="trend_direction",
             verdict=tv,
             summary=f"Trend: {trend}",
-            detail=f"Recent metric history: {[f'{x:.4f}' for x in (state_history[-5:] if isinstance(state_history, list) and len(state_history) >= 5 else state_history)]}",
+            detail=f"Recent metric history: {[f'{x:.4f}' for x in recent_vals]}",
             dimension="trend_direction",
         ))
 
         # 2. Recommended action
         actions: List[str] = []
+        mae_met = best_mae <= C.GATE.forward_angular_MAE_deg
+
+        if mae_met:
+            actions.append(f"MAE gate already met ({best_mae:.1f}° ≤ {C.GATE.forward_angular_MAE_deg}°)")
 
         if not pid_alive:
             actions.append("CRITICAL: Training process is dead — restart immediately")
@@ -67,7 +89,7 @@ class SummaryAgent(BaseAgent):
             elif gap > 0.0:
                 actions.append(f"Small gate gap ({gap:.3f}) — continue monitoring, may converge naturally")
             if epoch >= 25 and gap > 0.05:
-                actions.append(f"CRITICAL: Only {30 - epoch} epochs remaining but gap={gap:.3f} — may need restart with tuned config")
+                actions.append(f"CRITICAL: Only {max_epochs - epoch} epochs remaining but gap={gap:.3f} — may need restart with tuned config")
 
         det_norm = e4.get("det", 0)
         if det_norm is not None and det_norm < C.HEALTH.min_grad_norm_det:
@@ -94,10 +116,17 @@ class SummaryAgent(BaseAgent):
             score = 100  # gate passed = goal achieved
         else:
             metric_ratio = min(1.0, best_metric / C.GATE.det_mAP50) if C.GATE.det_mAP50 > 0 else 0
-            score = int(metric_ratio * 70)  # metric contributes up to 70 points
+            score = int(metric_ratio * 55)  # metric contributes up to 55 points
+
+            # MAE bonus: up to +15 points if already meeting MAE gate
+            if mae_met and C.GATE.forward_angular_MAE_deg > 0:
+                mae_ratio = max(0, 1 - best_mae / C.GATE.forward_angular_MAE_deg)
+                mae_bonus = int(mae_ratio * 15)
+                score += mae_bonus
+
             if not pid_alive:
                 score -= 30
-            epoch_ratio = epoch / 30
+            epoch_ratio = epoch / max_epochs
             if epoch_ratio > 0.8 and metric_ratio < 0.5:
                 score -= 20  # running out of time
             if det_norm is not None and det_norm < 1e-6:
@@ -116,7 +145,7 @@ class SummaryAgent(BaseAgent):
             name="executive_health_score",
             verdict=sv,
             summary=f"Health score: {score}/100 (epoch {epoch}, best={best_metric:.3f}, gate={C.GATE.det_mAP50})",
-            detail=f"Score components: metric_ratio={min(1.0, best_metric / C.GATE.det_mAP50) if C.GATE.det_mAP50 > 0 else 0:.2f}, pid_alive={pid_alive}, epoch_ratio={epoch / 30:.2f}",
+            detail=f"Score components: metric_ratio={min(1.0, best_metric / C.GATE.det_mAP50) if C.GATE.det_mAP50 > 0 else 0:.2f}, MAE={'met' if mae_met else f'{best_mae:.1f}°'}, pid_alive={pid_alive}, epoch_ratio={epoch / max_epochs:.2f}",
             metric=float(score),
             threshold=40,
             dimension="health_score",

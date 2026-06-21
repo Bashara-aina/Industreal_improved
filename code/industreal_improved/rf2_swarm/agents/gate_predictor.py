@@ -26,7 +26,11 @@ class GatePredictorAgent(BaseAgent):
         # Parse epoch-vs-metric pairs from val lines
         epoch_map_pairs = self._parse_epoch_metric_pairs(val_lines)
         best_metric = state.get("best_metric", 0.0) or 0.0
+        best_metrics_nested = state.get("best_metrics", {})
+        if best_metrics_nested.get("det_mAP50") is not None:
+            best_metric = float(best_metrics_nested["det_mAP50"])
         current_epoch = datastore.get("epoch", 0) or 0
+        max_epochs = int(state.get("max_epochs", C.DEFAULT_MAX_EPOCHS))
 
         # Also check metrics.jsonl for val data
         if not epoch_map_pairs and metrics:
@@ -76,7 +80,7 @@ class GatePredictorAgent(BaseAgent):
             progress_per_epoch = best_metric / current_epoch
             if progress_per_epoch > 0:
                 epochs_to_gate = (C.GATE.det_mAP50 - best_metric) / progress_per_epoch
-                max_remaining = max(0, 30 - current_epoch)
+                max_remaining = max(0, max_epochs - current_epoch)
                 if epochs_to_gate <= max_remaining:
                     confidence = "HIGH" if epochs_to_gate <= max_remaining * 0.5 else "MEDIUM"
                     cv = Verdict.PASS if confidence == "HIGH" else Verdict.WARN
@@ -97,8 +101,13 @@ class GatePredictorAgent(BaseAgent):
             checks.append(CheckResult(name="gate_confidence", verdict=Verdict.SKIP,
                                        summary="Insufficient data"))
 
-        # 3. MAE gate prediction
-        best_mae = state.get("best_mae", float("inf"))
+        # 3. MAE gate prediction (check both flat key and best_metrics nested)
+        best_mae = state.get("best_mae")
+        if best_mae is None:
+            best_metrics_n = state.get("best_metrics", {})
+            best_mae = best_metrics_n.get("forward_angular_MAE_deg")
+        if best_mae is None:
+            best_mae = float("inf")
         if isinstance(best_mae, (int, float)) and best_mae < float("inf") and current_epoch > 0:
             mae_progress = max(0, (best_mae - C.GATE.forward_angular_MAE_deg) / current_epoch) if best_mae > C.GATE.forward_angular_MAE_deg else 0
             if best_mae <= C.GATE.forward_angular_MAE_deg:
@@ -143,7 +152,7 @@ class GatePredictorAgent(BaseAgent):
         # 5. Required improvement rate
         if best_metric > 0 and current_epoch > 0:
             remaining = C.GATE.det_mAP50 - best_metric
-            max_epochs_left = max(1, 30 - current_epoch)
+            max_epochs_left = max(1, max_epochs - current_epoch)
             required_rate = remaining / max_epochs_left
             if required_rate <= 0:
                 v = Verdict.PASS

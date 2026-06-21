@@ -31,7 +31,7 @@ class EpochTrackerAgent(BaseAgent):
         full_log_lines = self._read_full_log_timing()
 
         # 1. Epoch progression
-        max_epochs = 30
+        max_epochs = int(state.get("max_epochs", C.DEFAULT_MAX_EPOCHS))
         if epoch > 0:
             pct = epoch / max_epochs * 100
             remaining = max_epochs - epoch

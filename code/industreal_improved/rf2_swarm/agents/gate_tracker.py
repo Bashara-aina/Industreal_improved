@@ -34,8 +34,12 @@ class GateTrackerAgent(BaseAgent):
             dimension="gate_passed",
         ))
 
-        # 2. Best mAP50 vs gate target
+        # 2. Best mAP50 vs gate target (check both flat key and best_metrics nested)
         best_metric = state.get("best_metric", 0.0)
+        # best_metric may be a combined score; prefer best_metrics.det_mAP50 if available
+        best_metrics_nested = state.get("best_metrics", {})
+        if best_metrics_nested.get("det_mAP50") is not None:
+            best_metric = float(best_metrics_nested["det_mAP50"])
         if isinstance(best_metric, (int, float)):
             gap = C.GATE.det_mAP50 - best_metric
             if best_metric >= C.GATE.det_mAP50:
@@ -100,8 +104,13 @@ class GateTrackerAgent(BaseAgent):
                                        summary="mAP50_95 not tracked in state yet",
                                        detail="State JSON missing best_map50_95 field"))
 
-        # 5. MAE vs gate target
-        best_mae = state.get("best_mae", float("inf"))
+        # 5. MAE vs gate target (check both flat key and best_metrics nested)
+        best_mae = state.get("best_mae")
+        if best_mae is None:
+            best_metrics = state.get("best_metrics", {})
+            best_mae = best_metrics.get("forward_angular_MAE_deg")
+        if best_mae is None:
+            best_mae = float("inf")
         if isinstance(best_mae, (int, float)) and best_mae < float("inf"):
             if best_mae <= C.GATE.forward_angular_MAE_deg:
                 v = Verdict.PASS
@@ -175,7 +184,7 @@ class GateTrackerAgent(BaseAgent):
 
         # 8. Epoch count vs max
         epoch = datastore.get("epoch", 0) or 0
-        max_epochs = 30  # from stage_manager RF2
+        max_epochs = int(state.get("max_epochs", C.DEFAULT_MAX_EPOCHS))
         epoch_ratio = epoch / max_epochs if max_epochs > 0 else 0
         if epoch_ratio >= 0.9:
             v = Verdict.CRIT

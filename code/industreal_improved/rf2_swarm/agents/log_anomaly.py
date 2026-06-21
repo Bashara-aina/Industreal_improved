@@ -107,8 +107,17 @@ class LogAnomalyAgent(BaseAgent):
             checks.append(CheckResult(name="log_silence", verdict=Verdict.PASS,
                                        summary=f"{len(liveness)} liveness signals present"))
 
-        # 4. Unexpected pattern: NaN or Inf propagated
-        nan_propagation = re.findall(r"NaN.*?(?:loss|grad|metric|weight|param)", "\n".join(log_tail), re.IGNORECASE)
+        # 4. Unexpected pattern: NaN or Inf propagated (skip expected efficiency eval NaNs)
+        # Filter known efficiency eval lines BEFORE regex (re.findall matches don't contain full line prefix)
+        efficiency_filtered = [
+            l for l in log_tail
+            if "[EVAL NaN/Inf]" not in l
+            and "Efficiency" not in l
+            and "pipeline_" not in l
+            and "eff_" not in l
+        ]
+        all_log_text = "\n".join(efficiency_filtered)
+        nan_propagation = re.findall(r"NaN.*?(?:loss|grad|metric|weight|param)", all_log_text, re.IGNORECASE)
         if nan_propagation:
             checks.append(CheckResult(
                 name="nan_propagation",

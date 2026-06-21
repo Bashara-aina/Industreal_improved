@@ -1,5 +1,5 @@
 # POPW Project Journey — Complete Status Report
-## Updated 2026-06-20 — Through Opus v8 Fix Implementation and New Training Run
+## Updated 2026-06-21 — Through Opus v10 Breakthrough (detach_reg_fpn Smoking Gun)
 
 ---
 
@@ -583,56 +583,78 @@ Training continues at epoch 21 (~50% complete, batch ~1700/3302) with:
 3. **DET_GT_FRAME_FRACTION=0.90 works**: 90% of batches carry GT boxes, preventing complete gradient starvation
 4. **Multi-task gradient is 10,000× denser**: Activity/PSR/head_pose provide dense per-frame gradient vs detection's sparse anchor gradient
 5. **The R2.5 paradox is resolved**: R2.5 worked because all heads provided dense gradient; RF1 failed because detection-only training doesn't.
-6. **KENDALL_HP_PREC_CAP prevents head_pose gradient starvation**: Clamping `lv_hp >= lv_det` prevents the Kendall optimizer from assigning near-zero weight to head_pose, keeping dense gradient flowing to the backbone through all training stages.
-7. **DET_POS_IOU_TOP_K=9 dramatically increases positive anchors**: From ~16 to ~120 per batch (from ~1 to ~9 per GT box), providing an order of magnitude more classification gradient to drive bias differentiation.
-8. **DET_BIAS_LR_FACTOR=1.0 removes bias acceleration toward degenerate equilibrium**: The 5× bias learning rate was pushing the classifier bias toward uniform background prediction 5× faster than normal parameter updates could compensate.
-9. **Phantom 0.45 was a stage_manager recording bug**: Not a genuine metric discrepancy — the gate threshold was being stored as the best_metric value. Fixed by `_validate_stage_history_entry()` guard.
+6. **KENDALL_HP_PREC_CAP prevents head_pose gradient starvation**: Clamping `lv_hp >= lv_det` prevents the Kendall optimizer from assigning near-zero weight to head_pose.
+7. **DET_POS_IOU_TOP_K=9 dramatically increases positive anchors**: From ~16 to ~120 per batch (from ~1 to ~9 per GT box).
+8. **DET_BIAS_LR_FACTOR=1.0 removes bias acceleration**: The 5× bias LR was pushing the classifier toward uniform background prediction 5× faster than parameters could compensate.
+9. **Phantom 0.45 was a stage_manager recording bug**: Fixed by `_validate_stage_history_entry()` guard.
+10. **Opus v10 — detach_reg_fpn=True for RF2 is the primary cause of the 6-epoch plateau**: The regression gradient is detached from the backbone for stage_rf2 (config.py:1117). Only classification + head_pose shape the backbone. Per Opus v10: "the plateau is substantially dynamic (a config regression), not structural." Flipping detach_reg_fpn=False should allow box-regression gradient to the backbone. (2026-06-21, confirmed via code trace)
+11. **Per-class AP IS written to metrics.jsonl**: `det_per_class_ap` is a dict in every epoch-end validation entry. Not a gap — we just hadn't parsed it. Analysis of epochs 16-18 confirms exactly 12/24 classes at AP=0, but 8 of those have zero GT instances.
+12. **Per-class AP breakdown (epoch 18)**: Classes 4 (0.37), 5 (1.0), 7 (0.72), 10 (0.48), 12 (0.56), 17 (0.40) have substantive AP. Classes 9 (0.07), 11 (0.13), 20 (0.13), 22 (0.08) are barely present. Classes 5 and 21 have AP=1.0 but only 33 and 151 GT instances. **Class 6 has 1739 GT instances yet AP=0 — the single most important unsolved mystery.**
 
 ### Refuted Hypotheses
 1. **Checkpoint lineage poisoning (RC-25)**: Fresh ImageNet start reproduced identical 3-head collapse. Definitively refuted.
 2. **LR reduction breaks death spiral**: Phase 4 (20× LR) produced IDENTICAL outputs to Phase 3 (1× LR). LR changes affect speed, not equilibrium.
-3. **DETACH_REG_FPN blocks ALL detection gradient**: Verification shows only regression subnet detached. Classification gradient flows normally.
+3. **DETACH_REG_FPN blocks ALL detection gradient**: Verification shows only regression subnet detached. Classification gradient flows normally — but the regression detachment is what causes the plateau.
 4. **Detection-only training works for this architecture**: Proven false by gradient sparsity math and 5 failed retries across 4 phases.
+5. **The "head_pose ate the backbone" narrative**: Weakened by Opus v10. With detach_reg_fpn=True, the backbone receives no regression gradient — the plateau is NOT about multi-task interference but about a severed gradient path.
+6. **score_p50 as a classification health metric**: Proven structurally blind by Opus v9. The median over >99.99% background anchors equals sigmoid(bias) regardless of classification quality.
 
-### Open Questions (Critical)
-1. **Why did detection classifier collapse AGAIN at RF2 epoch 15** even with head_pose dense gradient + 35% data + DET_GT_FRAME_FRACTION=0.90?
-2. **Why does stage_history show RF1 best=0.45 when metric_history shows max 0.184?** Different evaluation protocols? Data splits? **UPDATE**: Partially resolved — the phantom 0.45 was a stage_manager recording bug (Fix 4 in Opus v8), but the genuine discrepancy between gate evaluation metrics and metric_history tracking remains unexplained.
+### Open Questions (Critical) — UPDATED for Opus v10 era
+1. **Can flipping detach_reg_fpn=False break the mAP ceiling?** Opus v10 predicts "should move the ceiling but may not single-handedly clear 0.40." The fix is deployed in the working tree (config.py:1115, change from True to False). Requires restart to take effect.
+2. **Why does class 6 have 1739 GT instances yet AP=0?** Per-class AP from metrics.jsonl confirms this. The single most important unsolved mystery after detach_reg_fpn fix.
 3. **Why has PSR NEVER trained** — loss=1.546e-08 constant across ALL configurations, architectures, and runs?
-4. **Is the cls_score bias differentiation problem architectural or loss-based?** The classifier produces uniform ~0.079 scores but individual classes reach score_max=0.97—it CAN differentiate but WON'T.
-5. **Is Focal Loss fundamentally unsuitable** for this architecture's anchor density (164K anchors/frame)? Should we switch to Varifocal Loss or Quality Focal Loss?
-6. **Can the 4 Opus v8 fixes together break the cls_score bias equilibrium?** The Phase 14 run is still in progress. Early indicators (score_p50 range 0.020-0.072, high prediction counts of 28K-100K per batch) are promising, but epoch-end validation mAP is the only true measure. No collapse after 2+ hours (vs epoch 15 collapse at ~1.5 hours in Phase 12).
-7. **Does subset_ratio=0.50 provide enough additional positive anchors?** The 43% increase in training data provides more GT frames per epoch, but the fundamental positive-to-negative anchor ratio (~120:656K per batch, or 0.018%) may still be insufficient for reliable differentiation.
+4. **Is the top-k IoU floor (DET_POS_IOU_IOU_FLOOR=0.2 already coded) sufficient to fix the label-poisoning problem?** The floor exists in losses.py:139,152. Needs restart to take effect.
+5. **Is Focal Loss structurally capped for the 12 classes that work?** Even among non-zero classes, the AP ranges from 0.02 (class 0) to 1.0 (class 5). Why do some classes reach near-perfect AP while others barely register?
+6. **Does the combined metric misleadingly mask failure?** 0.667·mAP50 + 0.333·(1/(1+MAE)) — 1/3 of the weight is head-pose, which is already near-optimal.
 
 ---
 
 ## 10. Current Status Snapshot
 
-**As of 2026-06-21 07:30 UTC:**
+**As of 2026-06-21 07:47 UTC (epoch 21, batch 3200/3302 — 97% complete):**
 
 ```
-Stage:      RF2 (epoch 21, ~50%, stage_index=1)
+Stage:      RF2 (epoch 21, 97%, stage_index=1)
 PID:        3791482 (main) + 14 workers
-Status:     running — no collapse
+Status:     running — no collapse, plateau continues
 Best mAP50: 0.2047 (epoch 20, best_metrics)
 Best mAP50_pc: 0.3442 (pseudo-classing, epoch 16)
 Best combined: 0.4622 (epoch 16)
 MAE:        9.23° (well under 60° gate)
-Gate mAP50: PENDING — 0.2047 vs 0.40 target (2× below, no trend)
+Gate mAP50: NOT MET — 0.2047 vs 0.40 target (2× below, flat trend)
 Gate MAE:   ACHIEVED (9.23° ≤ 60°)
 Max epochs: 36 (15 remaining)
-Config:     Opus v8 fixes ACTIVE (hash 3e6b58a5cb19765e)
+Config:     Opus v8 fixes ACTIVE + detach_reg_fpn=False in working tree (not yet restarted)
 LR restart: FAILED — epoch 20 CosineAnnealing had zero effect
 Heads:      det ALIVE[2.35e-02], pose ALIVE[1.08e-02], head_pose ALIVE[4.83e-03]
 Backbone:   ALIVE[2.770e+00|n=178]
 ```
 
+### Per-Class AP Analysis (NEW — parsed from metrics.jsonl)
+
+The per-class AP IS already being written to metrics.jsonl (not a gap). **Epoch 18 shows:**
+
+| Category | Classes (AP) |
+|----------|-------------|
+| **Working well** (AP>0.30) | 4 (0.37), 5 (1.0), 7 (0.72), 10 (0.48), 12 (0.56), 17 (0.40), 21 (1.0) |
+| **Barely present** (AP<0.20) | 0 (0.02), 9 (0.07), 11 (0.13), 20 (0.13), 22 (0.08) |
+| **AP=0 with GT instances** | 6 (1739 GT!), 8 (33 GT), 13 (37 GT), 19 (281 GT) |
+| **AP=0, zero GT** | 1, 2, 3, 14, 15, 16, 18, 23 (not in 50% subset) |
+
+**The real story is more nuanced than "12/24 AP=0":**
+- 8 classes have zero GT instances — likely not present in the 50% data subset
+- 4 classes have GT but AP=0 — **class 6 with 1739 GT is the standout mystery**
+- Classes 5 and 21 hit AP=1.0 but have only 33 and 151 instances — very distinctive rare objects
+- Classes 0, 9, 11, 20, 22 have AP 0.02-0.13 — these "barely work"
+
 ### Available diagnostics:
-- **5 epoch-end validation results available** (epochs 16-20) — all confirm plateau at mAP50=0.204-0.215
-- **POS_ANCHOR_PROBE added** — confirms classifier IS learning (n_pos=164-525, mean=0.64-0.80, max=0.99)
-- **Per-class AP** — same 12/24 classes at AP=0 across ALL epochs
+- **6 epoch-end validation results** (epochs 16-21) — all confirm plateau at mAP50=0.204-0.215
+- **POS_ANCHOR_PROBE** — confirms classifier IS learning (n_pos=164-525, mean=0.64-0.80, max=0.99)
+- **Per-class AP from metrics.jsonl** — parsed! 12/24 AP=0, class 6 mystery confirmed
 - **Pseudo-classing mAP** (det_mAP50_pc=0.307-0.344) — ~50% above raw mAP, confirms problem IS class-specific
 - **DET gradient bottleneck**: detection_head grad 2.35e-02 vs backbone 2.770e+00 (117× ratio)
-- **Opus v9 analysis**: score_p50 blindness, LOCALIZING IoU-only, detach_reg_fpn split-brain, top-k IoU floor
+- **Opus v10 diagnosis**: detach_reg_fpn=True is the primary cause. Fix applied (False) in working tree.
+- **DET_POS_IOU_IOU_FLOOR=0.2**: Already coded in config.py:307, losses.py:139,152. Needs restart.
 - **50-image cls-only overfit**: NOT YET RUN — single highest-value next action
 - **Swarm**: Available but needs reconfiguration for PID 3791482
 
@@ -684,3 +706,99 @@ The Phase 14 run is the first test of these combined fixes. Early indicators are
 - If det_mAP50 ~ 0, the cls_score bias equilibrium was not broken by the Opus v8 fixes
 - Restart monitoring swarm with new PID 3176288
 - Monitor LIVENESS probes for signs of renewed degradation past epoch 17
+
+---
+
+## 13. Phase 16: Opus v10 Breakthrough — detach_reg_fpn Is the Smoking Gun (June 21, 2026)
+
+### 13.1 The Consultation That Changed the Diagnosis
+
+After the 6-epoch plateau was confirmed through epoch 20 and the CosineAnnealing LR restart failure, Opus was consulted for the 10th time. For the first time, Opus was given a **self-contained comprehensive overview** (`41_OPUS_MASTER_PROMPT_v10.md`) that included ALL evidence — POS_ANCHOR_PROBE, pseudo-classing, LR restart failure, v9 corrections, per-class AP, gradient bottleneck, and full training state.
+
+**Opus v10's answer** (`42_OPUS_ANSWER_v10.md`) was definitive: **detach_reg_fpn resolves to True for stage_rf2, and this is the smoking gun.**
+
+### 13.2 The Code Trace That Proved It
+
+Opus traced the config resolution through the actual code (not summaries):
+
+```
+config.py:1117 → stage_rf2 preset has 'detach_reg_fpn': True
+stage_manager.py:121 → RF1 stage_cfg overrides to False (RF1 fix applied here)
+stage_manager.py:1649 → CLI override only fires if stage_cfg.get('detach_reg_fpn', False) is True
+RF2's stage_cfg → NO detach_reg_fpn key → default False → no CLI flag → preset wins = True
+```
+
+**Result**: RF2 runs with detach_reg_fpn=True. The regression gradient is severed from the FPN/backbone. The backbone is shaped by classification + head_pose **only**.
+
+### 13.3 Unified Diagnosis
+
+Opus v10's diagnosis reconciled all previously contradictory evidence:
+
+| Symptom | Explanation with detach_reg_fpn=True |
+|---------|--------------------------------------|
+| bestIoU 0.86-0.98 (localizes) | Reg subnet rides on CLS-carved features — localization doesn't need fine-grained class features |
+| mAP50=0.20 (won't fire) | Backbone never gets box-regression gradient — features never become object-discriminative |
+| 12/24 classes AP=0 | Feature-starvation is class-selective: discriminable classes survive, subtle/small/rare ones collapse |
+| LR restart = zero effect | A detached gradient path is NOT a local minimum — annealing can't restore a severed connection |
+| POS_ANCHOR_PROBE 0.64-0.80 | On the easy 12-16 classes, cls-shaped features ARE good enough |
+| Pseudo-classing +50% | Gap IS the dead classes — feature-starvation hits classes unevenly |
+
+**The key insight**: "detach_reg_fpn is NOT a bug that causes a local minimum — it's a config error that changes the architecture's training objective. The backbone is only trained to produce features that are good for classification + head_pose. It never receives the signal 'these features need to be good for predicting box coordinates and sizes.'"
+
+### 13.4 The One Caveat
+
+RF2 (detach=True, mAP50=0.204) actually reaches slightly **above** RF1 (detach=False, mAP50=0.184). This means:
+- The 2.5× more data (subset_ratio 0.50 vs 0.20) partially compensated for the detached gradient
+- Flipping detach_reg_fpn=False should raise the ceiling but may not single-handedly clear 0.40
+- Pair with per-class AP logging and top-k IoU floor (DET_POS_IOU_IOU_FLOOR=0.2, already coded)
+
+### 13.5 Config Changes Applied (Uncommitted Working Tree)
+
+Based on Opus v10's recommendations, the following changes were made to `config.py`:
+
+| Change | Opus v10 Recommendation | Status |
+|--------|------------------------|--------|
+| `stage_rf2` `detach_reg_fpn=False` | ✅ Tier 1, item 1 | Applied (line 1115) |
+| `DET_POS_IOU_IOU_FLOOR=0.2` | ✅ Tier 1, item 5 | Already coded (line 307) |
+| `DET_LR_MULTIPLIER=2.0` | ❌ NOT recommended by Opus v10 | Applied but NOT reviewed |
+| `DET_BIAS_LR_FACTOR=4.0` | ❌ CONFLICTS with Opus v8 (called 5× "an own-goal") | Applied but NOT reviewed |
+
+**⚠️ WARNING**: `DET_LR_MULTIPLIER=2.0` and `DET_BIAS_LR_FACTOR=4.0` are in the working tree but were never part of any Opus recommendation. The rationale comment ("IOU_FLOOR=0.2 prevents false-positive labels so bias can't cheat into equilibrium") is untested. These may need to be reverted to 1.0 before restart.
+
+### 13.6 Updated Reality Summary
+
+| Metric | Value | Status |
+|--------|-------|--------|
+| **Stage** | RF2, epoch 21 (97%) | Running — plateau continues |
+| **Best det_mAP50** | 0.2047 | 7-epoch plateau (0.204-0.215) |
+| **Best mAP50_95** | 0.0810 | Also plateaued |
+| **Pseudo-class mAP** | 0.344 (det_mAP50_pc) | ~50% above raw mAP |
+| **Head Pose MAE** | 9.23° | Well under 60° gate target |
+| **det_n_present_classes** | 15-16/24 | 4 AP=0 with GT (class 6 has 1739 GT) |
+| **Gate target** | det_mAP50 >= 0.40 | ~2× below target, no trend |
+| **Root cause identified** | detach_reg_fpn=True | Fix applied (False) — needs restart |
+| **Top-k IoU floor** | DET_POS_IOU_IOU_FLOOR=0.2 | Already coded — needs restart |
+| **Per-class AP** | Parsed from metrics.jsonl | 12 AP=0, 4 with GT, class 6 standout |
+
+### 13.7 Decision: What to Do About RF2
+
+**The Opus v10 recommendation is clear**:
+1. **Don't advance to RF3** — RF3 `stage_rf3` preset also has `detach_reg_fpn: True`. Advancing inherits the bug.
+2. **Fix RF2 first**: Set `detach_reg_fpn=False`, restart from `best.pth`, keep trained heads, don't reinit.
+3. Run for 3-4 epochs with per-class AP logging.
+4. **Decision rule**: If dead classes wake + mAP climbs past ~0.25-0.30 in 3-4 epochs → detach was the bottleneck. If flat → data-scale/assignment on dead classes.
+
+**The one missing measurement**: Per-class AP is already in metrics.jsonl. The remaining gaps are:
+- Per-class positive count (are dead classes getting any positive matches?)
+- Per-class max-anchor-IoU (do dead classes have anchor geometry issues?)
+- 50-image cls-only overfit (definitive architecture capacity test, still not run)
+
+### 13.8 Updated Python File Changes
+
+| File | Change | Status |
+|------|--------|--------|
+| `config.py:1115` | `stage_rf2` detach_reg_fpn: False | Uncommitted working tree |
+| `config.py:307` | DET_POS_IOU_IOU_FLOOR = 0.2 | Coded, uncommitted |
+| `evaluate.py:267-273` | Per-class AP computed, returned | Already working — no change needed |
+| `train.py:3625` | metrics.jsonl open for append | Already writing per-class AP |
+| `losses.py:139,152` | Top-k IoU floor code exists | Already coded — needs restart |

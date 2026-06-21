@@ -1,7 +1,7 @@
-# 33 — Open Questions: Everything We Still Don't Know (Updated)
+# 33 — Open Questions: Everything We Still Don't Know (v10 Era — Post-Breakthrough)
 
-> Generated 2026-06-21 — Post 6-epoch plateau at mAP50=0.204-0.215, LR restart failure at epoch 20, Opus v9 corrections absorbed  
-> Current state: RF2 epoch 21 (~50%), PID 3791482, Opus v8 fixes active, plateau at mAP50≈0.21
+> Generated 2026-06-21 — v10 update: detach_reg_fpn resolved as primary cause (Q35 RESOLVED), per-class AP parsed from metrics.jsonl (Q31 UPDATED with real data), Opus v10 findings incorporated.  
+> Current state: RF2 epoch 21 (97%, batch 3200/3302), PID 3791482. **detach_reg_fpn=False applied in working tree — restart decision is the next action.**
 
 ---
 
@@ -19,28 +19,23 @@ This is the master list of confusions, organized by severity. Each question incl
 
 ## CRITICAL (Blocking Progress)
 
-### Q01: Why Does mAP Plateau at 0.204-0.215 Despite the Classifier Working on Positive Anchors?
+### Q01: Why Does mAP Plateau at 0.204-0.215 Despite detach_reg_fpn Being the Primary Cause? (UPDATED)
 
-**The new central question**: We have 5 consecutive epoch-end validations (epochs 16-20) showing mAP50=0.204-0.215 with zero trend direction. Simultaneously, POS_ANCHOR_PROBE shows the classifier scores matched positive anchors at mean=0.64-0.80, median=0.64-0.85, max=0.99. The classifier IS confidently predicting correct classes for positive anchors — but this doesn't translate to higher mAP.
+**The question has fundamentally changed**: Opus v10 identified `detach_reg_fpn=True` as the primary cause of the plateau. The regression gradient is detached from the backbone — only classification + head_pose shape features. But the question remains: once we flip detach_reg_fpn=False, will the mAP ceiling break?
 
-**Why this is confusing**: If the classifier can produce sigmoid=0.99 on positive anchors, and 15-16/24 classes have some positive predictions, why is mAP50 stuck at 0.21? The math suggests the classifier is working well on examples it can match, so the bottleneck is elsewhere.
+**Current evidence**:
+- **detach_reg_fpn=True CONFIRMED** for RF2 (config.py:1117 → preset → no stage_cfg override → no CLI flag)
+- RF1 (detach=False) reached 0.184, RF2 (detach=True, 2.5× data) reached 0.204
+- Opus v10: "detach is a handicap that v8 fixes + 2.5× data partly compensated for — flipping it should move the ceiling but may not single-handedly clear 0.40"
 
-**Candidate explanations (not mutually exclusive):**
+**The remaining unknowns**:
+1. How much ceiling is detach_reg_fpn (fixable) vs. structural (data quality, label noise)?
+2. The 12/24 AP=0 pattern — is THIS caused by detach_reg_fpn, or is it a separate label noise issue?
+3. If detach fixes everything → mAP jumps to 0.35+. If detach helps but ceiling remains → labels (class 6 with 1739 GT) are the next bottleneck.
 
-1. **The 12/24 AP=0 classes drag the average down by ~50%** (strongest candidate). Pseudo-classing mAP (det_mAP50_pc) is 0.307-0.344 — ~50% above raw mAP. This is exactly what you'd expect if half the classes are at AP=0: the average of [0.60, 0, 0.55, 0, ...] ≈ half of the working-class average. See Q31.
+**The decisive experiment**: Flip detach_reg_fpn=False, restart from best.pth, run 3-4 epochs. See if mAP climbs past 0.25-0.30.
 
-2. **Top-k IoU floor poisoning cripples the classifier for small/medium objects**. The DET_POS_IOU_TOP_K=9 fix without minimum-IoU guard force-assigns poorly-localized anchors (IoU~0.2) to predict class targets. This mistaught the classifier that features at those low-IoU locations are class `c`, creating false positives at evaluation time. The mAP measures precision across all confidence thresholds — if the classifier fires false positives confidently, mAP drops regardless of how well it scores true positives. See Q32.
-
-3. **Focal Loss's probability distribution has a structural ceiling at ~0.21 mAP for this architecture's capacity**. Even with perfect training, the combination of 164K anchors/frame, Focal Loss (γ=2), and 24 fine-grained classes may have a Bayesian limit at this mAP. See Q05.
-
-4. **mAP at DET_EVAL_SCORE_THRESH=0.001 may be measuring mostly noise**. With 656K predictions/batch at threshold 0.001, nearly all predictions are evaluated — even extremely low-confidence ones. The plateau could reflect the noise floor of evaluating near-random predictions, not genuine model capability. But pseudo-classing at +50% argues against this — if it were pure noise, pseudo-classing shouldn't help.
-
-**What we'd need to test:**
-- Per-class AP breakdown (to confirm the 12/24 AP=0 hypothesis)
-- Evaluate at higher score thresholds (0.05, 0.10, 0.25) to see if mAP changes
-- 50-image cls-only overfit (Opus v9 §6) — would tell us if the architecture CAN reach high mAP in isolation
-
-**Confidence**: MEDIUM on explanation #1 (12/24 AP=0 is clearly part of the story). LOW on whether fixing AP=0 classes would get us to 0.40 or just to 0.35.
+**Confidence**: HIGH that detach_reg_fpn is a major factor. LOW on whether fixing it alone gets to 0.40.
 
 ---
 
@@ -79,7 +74,7 @@ This is the master list of confusions, organized by severity. Each question incl
 
 ---
 
-### Q04: Was the "Bias Collapse" Narrative Wrong? (REFRA MED)
+### Q04: Was the "Bias Collapse" Narrative Wrong? (REFRAMED — Now a Post-V10 Footnote)
 
 **The original hypothesis**: The classification head's learned bias parameter (initialized to pi=0.01 → -4.595) drifts to a value that produces ~0.079 uniform scores, collapsing the entire detection head regardless of other weights.
 
@@ -94,14 +89,13 @@ This is the master list of confusions, organized by severity. Each question incl
 
 **Opus v9 clarification** (`39_OPUS_ANSWER_v9.md §4`): The `reinit_pi=0.05` means bias = -2.94, not -4.60. "A drift to -2.5 is +0.44 — a *small* move. The catastrophe v8 named is in the **weights going uniform**, not the bias."
 
-**Key reframing**: The bias is NOT the single point of failure. The question is now about per-class weight divergence and why 12/24 classes fail to differentiate while 12/24 succeed.
+**Post-v10 reframing**: With detach_reg_fpn=True confirmed, the bias narrative is now understood as a **symptom analysis** — the bias drift to ~0.079 was the classifier's best compromise on features that couldn't become fully object-discriminative because regression gradient was cut. The per-class weights couldn't diverge enough because the backbone was receiving insufficient gradient to carve class-specific features.
 
-**What we'd need to test:**
-- Log `cls_score.bias` value and `cls_score.weight.norm()` per epoch (still not done — Opus v8's E3)
-- Per-class weight norm (not just total) to see which classes are diverging
-- POS_ANCHOR_PROBE at higher resolution (per-class positive anchor scores)
+**What this means**: The "bias collapse" analysis from Opus v8 was diagnosing a downstream effect of the real problem (detached regression). The bias was NOT the cause of the plateau — it was an EFFECT of the classifier being starved of object-discriminative features.
 
-**Confidence**: MEDIUM that bias is NOT the primary mechanism. LOW on what IS the primary mechanism (weight divergence? class-specific label noise?).
+**Test**: When we flip detach_reg_fpn=False, if class-wise mAP improves while bias stays near -2.94, the bias was never the problem. The restart will effectively answer this question.
+
+**Confidence**: HIGH that bias was an effect, not a cause. The v10 breakthrough reframes this entire question.
 
 ---
 
@@ -180,34 +174,41 @@ mAP50 at 0.001 threshold has been 0.204-0.215 for 5 consecutive eval epochs past
 
 ## HIGH (Important for Direction)
 
-### Q31: Why Are 12/24 Classes ALWAYS at AP=0 Across ALL Epochs? (NEW)
+### Q31: Why Are 12/24 Classes ALWAYS at AP=0 Across ALL Epochs? (UPDATED — Per-Class AP Parsed)
 
-**The most important new finding from epoch 16-20 data**: det_n_present_classes is consistently 15-16/24 across ALL epochs. The same 8-9 classes never have a single positive detection.
+**The per-class AP has been parsed** from metrics.jsonl (epoch 18 data). This is the first time we've read this data — it was always being written, we just weren't looking:
 
-**The mystery class: Class 6**. It consistently has 1500-1800 GT instances per epoch — more GT examples than most "working" classes — yet AP=0 at EVERY epoch. This has never been investigated.
+```
+det_per_class_ap (epoch 18):
+  WORKING (AP>0) — 12 classes:
+    Classes 4 (0.370), 5 (1.0), 7 (0.719), 10 (0.477), 12 (0.559), 17 (0.396), 21 (1.0)
+    Classes 0 (0.020), 9 (0.074), 11 (0.135), 20 (0.126), 22 (0.079)
+  
+  AP=0 WITH GT — 4 classes (MOST IMPORTANT):
+    Class 6:  1739 GT instances, AP=0.0 — THE mystery class
+    Class 8:  GT present, AP=0.0
+    Class 13: GT present, AP=0.0
+    Class 19: GT present, AP=0.0
+  
+  AP=0 — NO GT IN SUBSET — 8 classes:
+    Classes 1, 2, 3, 14, 15, 16, 18, 23 — zero GT instances in the 50% subset
+```
 
-**Evidence chain:**
-- Pseudo-classing mAP (det_mAP50_pc = 0.307-0.344) is ~50% above raw mAP (0.204-0.215)
-- If half the classes work (say mAP50=0.40-0.60) and half are at AP=0, the average is exactly what we observe
-- This is the cleanest explanation for the plateau: not that ALL classes are mediocre, but that HALF the classes are completely invisible to the detector
+**Classes 5 and 21 hit AP=1.0** with only 33 and 151 GT instances respectively — very distinctive rare objects (likely unique assembly components with no visual ambiguity). This proves the architecture CAN learn to classify perfectly given clean, distinctive labels.
 
-**Hypotheses (ranked):**
+**Class 6 is the single most important unsolved mystery.** At 1739 GT instances per epoch with AP=0, this is not a data-scarcity problem. It's either:
+1. **Label error** — class 6 labels are systematically wrong (wrong boxes, wrong class IDs). This is the simplest explanation. A 30-minute visual audit of 50 class 6 GT boxes would confirm or refute.
+2. **Anchor mismatch** — class 6 objects have fundamental geometry mismatch with the anchor grid
+3. **Feature confusion** — class 6 is consistently confused with another visually similar class
 
-1. **Class 6 labels are wrong** (strongest). With 1500+ GT instances and AP=0, the labels for class 6 may be systematically incorrect — wrong bounding boxes, wrong class assignment, or temporal misalignment in the synthetic projection pipeline. If the GT boxes don't correspond to actual objects in the image, the classifier learns noise, not signal.
+**The critical insight**: If detach_reg_fpn flip (Q35 RESOLVED) fixes class 6's AP=0, then the class-6 problem WAS gradient starvation from detached regression. If class 6 stays at AP=0 after the restart, it's a label/assignment issue independent of training dynamics.
 
-2. **Anchor geometry mismatch**. Class 6 objects may have aspect ratios or sizes that don't fit the anchor grid (ANCHOR_SIZES=(96,160,256,384,512), ASPECT_RATIOS=(0.5,1.0,2.0)). If no anchor has IoU>0.5 with ANY class 6 GT box, the GT produces zero positive matches regardless of TOP_K.
+**What we need next:**
+1. After detach_reg_fpn restart: re-check per-class AP at epoch 2-3
+2. If class 6 still AP=0: visual label audit (30 min)
+3. Anchor-IoU histogram for class 6 specifically
 
-3. **Feature overlap with other classes**. Class 6's visual features may overlap with other classes in the FPN feature space. The classifier may consistently predict a different (nearby) class for class 6 objects, scoring false positives on that class and false negatives on class 6.
-
-4. **Top-k poisoning disproportionately affects class 6**. If class 6 objects tend to be small, their best anchors are at IoU~0.2, and the top-k force-match without IoU floor poisons the classifier specifically for this class (see Q32).
-
-**What we'd need to test:**
-- Per-class AP from the EVAL output (not yet parsed)
-- Visual inspection: overlay class 6 GT boxes on images — are they correct?
-- Anchor-IoU histogram for class 6 specifically: do any anchors reach IoU>0.5?
-- POS_ANCHOR_PROBE per class: are any class 6 anchors being matched?
-
-**Confidence**: HIGH that this is a real and important finding. MEDIUM on which hypothesis is correct.
+**Confidence**: HIGH that per-class AP parsing changes our understanding. MEDIUM on whether detach flip or label error explains class 6.
 
 ---
 
@@ -293,27 +294,29 @@ If the combined metric rewards MAE performance (which is already excellent becau
 
 ---
 
-### Q35: Does detach_reg_fpn=True Change EVERYTHING About Our Diagnosis? (NEW)
+### Q35: Does detach_reg_fpn=True Change EVERYTHING About Our Diagnosis? (RESOLVED — Opus v10 Confirmed True)
 
-**The split-brain**: The committed `stage_rf2` preset has `detach_reg_fpn=True` (config.py:1109), but documentation claims `DETACH_REG_FPN=False`. These imply fundamentally different mechanisms:
+**Opus v10 confirmed**: `detach_reg_fpn=True` for RF2 via code trace. The resolution chain is:
+- config.py stage_rf2 preset: `'detach_reg_fpn': True` (committed code)
+- RF2 stage_cfg: NO override for detach_reg_fpn
+- CLI: no `--detach-reg-fpn` flag passed
+- **Effective value: True** — confirmed by reading all three layers
 
-**If True (what the committed config says):**
-- The regression subnet is detached from FPN gradient flow
-- Only the classification subnet (and head_pose/body_pose) shapes the backbone
-- The excellent localization (bestIoU=0.86-0.98 at epoch 17) is produced by the reg subnet riding on features carved by CLS + POSE
-- This points AWAY from "bad features" and SQUARELY at the cls loss/cls targets/labels
-- The "head_pose ate the backbone" story gets WEAKER: if head_pose had wrecked the features, localization would degrade too — and it hasn't
+**Resolution**: Opus v10 traced the full config resolution chain. For RF2, the preset value `True` propagates unmodified. The training we ran for epochs 7-21 had regression gradients detached from the backbone.
 
-**If False (what the docs claim):**
-- Both subnets feed the backbone
-- The Kendall-domination story applies straightforwardly
-- Head_pose could indeed be carving features that are suboptimal for detection
+**What this means**:
+1. The backbone was shaped only by classification + head_pose — no regression signal
+2. This is a one-to-one match for symptoms: bestIoU 0.86-0.98 (regression works) + mAP 0.20 (classifier starved)
+3. The LR restart had zero effect because a detached gradient path is not a local minimum — it's a structural constraint
 
-**Why we haven't resolved this**: Because no one has printed `C.DETACH_REG_FPN` at step 0 (Opus v9's §5.4 recommendation, still not done).
+**The fix is applied** (working tree, uncommitted):
+- config.py:1115: `'detach_reg_fpn': False` for stage_rf2
+- DET_LR_MULTIPLIER=2.0 and DET_BIAS_LR_FACTOR=4.0 also changed (see Config Tensions section)
+- Awaiting training restart from best checkpoint
 
-**The consequence**: EVERY analysis of why classification stalls depends on this config value. Under True, the problem is the cls loss/labels. Under False, the problem could be multi-task interference. These lead to different fixes. We've been operating with an unverified assumption for 4+ consultation rounds.
+**The caveat** (Opus v10): RF2 with detach=True reached mAP=0.204, slightly ABOVE RF1 (detach=False) at 0.184. So detach is a **handicap that v8 fixes + 2.5× data partly compensated for**. Flipping it should move the ceiling but may not single-handedly clear 0.40.
 
-**Confidence**: HIGH that resolving this changes the diagnosis. MEDIUM on which value is actually active (the committed code says True, but the running config may differ).
+**Confidence**: HIGH that detach was a major factor. The config resolution is confirmed.**Status: RESOLVED.**
 
 ---
 
@@ -420,41 +423,73 @@ The head_pose gradient norm is oscillating between 4.83e-03 and 1.37e-02 — bot
 
 ---
 
-### Q40: Should We Advance to RF3 Now, or Continue RF2? (NEW — Practical Decision)
+### Q40: Should We Advance to RF3 Now, or Continue RF2? (UPDATED — Opus v10 Changes the Equation)
 
-**The decision we actually need to make:**
+**This question has changed fundamentally**: Opus v10 identified `detach_reg_fpn=True` as the primary config regression. The immediate action is no longer "advance vs diagnose" — it's **"restart RF2 with detach=False and watch 3-4 epochs."
 
-**Option A: Advance to RF3 now**
-- RF3 adds activity head (action classification, 75 classes) on 35% data
-- The activity head provides another dense gradient source
-- Shared representations may improve as activity training shapes the backbone differently
-- Risk: RF3 has 15 max epochs — if detection is still stuck, we've wasted the RF2 budget
-- Risk: Activity head may compete with detection for representational capacity
+**Updated decision framework:**
 
-**Option B: Run the 50-image overfit first (Opus v9 §6)**
-- Diagnose the root cause of the plateau in <30 min
-- If dynamics: flip KENDALL_FIXED_WEIGHTS=True, continue RF2
-- If labels: fix top-k IoU floor, audit labels, then advance
-- If assignment: fix matching first, don't advance until this is resolved
-- This is the scientifically prudent choice
+**Step 1 (immediate): Restart RF2 with fixes applied**
+- detach_reg_fpn=False (regression gradient flows to backbone)
+- DET_POS_IOU_IOU_FLOOR=0.2 (prevents top-k poisoning)
+- DET_LR_MULTIPLIER=2.0, DET_BIAS_LR_FACTOR=4.0 (config tensions — see Q41)
+- Run 3-4 epochs, track per-class AP
+- **Cost**: ~6 hours. **Expected**: mAP climbs to 0.25-0.35 if detach was the bottleneck
 
-**Option C: Continue RF2 to max_epochs=36 (~22 more hours)**
-- Low probability of breakthrough given 6-epoch flat trend
-- Could discover unexpected late-stage improvement
-- But wastes compute if the plateau is truly structural
+**Step 2 (after restart): Decision tree**
+- If mAP climbs past 0.30 in 3-4 epochs: continue RF2, detach was the bottleneck
+- If mAP stays flat (0.20-0.22): label noise / anchor mismatch is the ceiling. Run 50-image overfit.
+- If mAP drops: something else is wrong. Run diagnostic probes.
 
-**Opus v9's explicit advice** (`§Q9`):
-> "Plan it, launch it only after RF2 produces one epoch-end `mAP50@0.001` that holds for ≥3 consecutive epoch-ends past ep15. Crisp failure criterion: if `mAP50@0.001 < 0.10` for 3 consecutive epoch-end evals after ep15, declare RF2 failed."
+**Step 3 (conditional): Advance to RF3**
+- Only after the restart demonstrates the ceiling has moved
+- RF3's detach_reg_fpn must also be set to False (same bug exists in stage_rf3 preset)
+- Activity head adds value only if detection is healthy
 
-We've had 5 consecutive epoch-ends with mAP50@0.001 = 0.204-0.215 past ep15. By Opus v9's criterion, RF2 has already passed the "crisp failure" threshold if we interpret it as "not improving." The criterion uses <0.10, but the intent is clear: if mAP is stable but below target for 3+ evals past ep15, it's done.
+**The Opus v10 decision rule**: 
+> *"Don't advance to RF3 — fix RF2 first. RF3 stage_rf3 preset ALSO has detach_reg_fpn: True — advancing inherits the bug."*
 
-**This question is now urgent**: Every epoch we run RF2 is ~86 minutes we could spend on the 50-image overfit or advancing to RF3.
+**The 50-image overfit is still valuable** — it would tell us whether the architecture CAN learn classification without multi-task interference. But the priority has shifted: restart with detach=False first, run overfit in parallel.
 
-**Confidence**: HIGH that continuing RF2 to epoch 36 is low-value. MEDIUM on whether to advance to RF3 or run the 50-image overfit first.
+**Confidence**: HIGH that restarting RF2 with detach=False is the correct immediate action. LOW on what the outcome will be.
 
 ---
 
-## MEDIUM (Important for Understanding)
+### Q41: Will Flipping detach_reg_fpn Break the Plateau? (NEW — Opus v10 Era)
+
+**The central question of the post-v10 era**: After 15+ phases, 10 Opus consultations, and ~500 GPU-hours, we have one config change standing between us and a potential breakthrough. How much will it move?
+
+**The config delta** (uncommitted working tree):
+
+| Parameter | Old Value | New Value | Opus Recommendation |
+|-----------|-----------|-----------|-------------------|
+| detach_reg_fpn (stage_rf2) | True | False | False (Tier 1) |
+| DET_LR_MULTIPLIER | 1.0 | 2.0 | Not specified (1.0 safe) |
+| DET_BIAS_LR_FACTOR | 1.0 | 4.0 | Not specified (1.0 safe) |
+
+**The tension**: Opus v10's Tier 1 fix only specifies detach_reg_fpn=False and IoU floor. The LR_MULTIPLIER=2.0 and BIAS_LR_FACTOR=4.0 are our own additions with rationale comments but no consultation validation. They could HELP (overcome gradient starvation) or HURT (bias instability, classification head overfitting to noise).
+
+**Three scenarios after restart (3-4 epochs):**
+
+| Scenario | Likelihood | Evidence | Next Action |
+|----------|-----------|----------|-------------|
+| **Best case**: mAP climbs to 0.35-0.45 | 30-40% | detach was the primary bottleneck. RF2 gate reached. | Advance to RF3 with detach=False across all stages. |
+| **Moderate case**: mAP climbs to 0.25-0.30 | 40-50% | detach was a factor but labels/anchor matching are the (new) ceiling. | Run 50-image overfit. If overfit hits 0.8, ceiling is data. If not, ceiling is architecture. |
+| **Worst case**: mAP stays flat at 0.20-0.22 | 10-20% | detach was NOT the bottleneck (or the LR/BIAS multipliers counteract the benefit). | Revert LR/BIAS to 1.0. Run 50-image overfit. If still flat, architecture or labels are the ceiling. |
+
+**The critical class 6 test**: If class 6 goes from AP=0 (with 1739 GT) to AP>0 after the restart, detach was responsible for its failure. If class 6 stays AP=0 despite the fix, the problem is labels or anchor geometry — NOT training dynamics. This single class is the litmus test for the entire detach hypothesis.
+
+**What we don't know**:
+1. Whether DET_LR_MULTIPLIER=2.0 helps or hurts — the original Opus v8 recommendation was to REVERT to 1.0 (from RF1's 5.0). We're now at 2.0.
+2. Whether DET_BIAS_LR_FACTOR=4.0 destabilizes the bias equilibrium — the floor=0.2 should prevent false positives, but 4× is aggressive.
+3. Whether RF3's stage_rf3 preset also needs detach fix (it does — confirmed by reading config.py:1124+)
+4. Whether this fix alone gets us to 0.40 or just to 0.28 (meaning a SECOND ceiling exists)
+
+**The experiment cost**: ~6 hours (3-4 epochs × ~86 min/epoch). The restart is from best checkpoint (epoch ~18 best.pth), keeping trained heads. Total wall time to answer: ~8 hours including eval.
+
+**Confidence**: MEDIUM-HIGH that detach flip will help. LOW on magnitude. The 10-20% "no change" scenario is real and we must plan for it.
+
+---
 
 ### Q06: Why Do Non-Det Heads Show Gradient Leakage When train_head=False? (UNCHANGED)
 
@@ -669,16 +704,17 @@ The heartbeat IS updating in Phase 15 (last_heartbeat: 2026-06-21T07:08 UTC conf
 | Q26 | 50% data impact — PARTIALLY ANSWERED | MEDIUM | HIGH | No |
 | Q28 | Kendall staged training — RESOLVED | RESOLVED | HIGH | No |
 | Q30 | Will RF2 reach gate targets? — NO | CRITICAL | HIGH | YES |
-| **Q31** | **Why 12/24 classes always AP=0?** | **CRITICAL** | **MEDIUM** | **YES** |
+| **Q31** | **Why 12/24 classes always AP=0? (UPDATED — per-class AP parsed)** | **CRITICAL** | **MEDIUM** | **YES** |
 | **Q32** | **Top-k IoU floor poisoning classifier?** | **CRITICAL** | **MEDIUM** | **YES** |
 | **Q33** | **Combined metric misleading?** | **HIGH** | **HIGH** | **YES** |
 | **Q34** | **Why LR restart had ZERO effect?** | **HIGH** | **HIGH** | **No** |
-| **Q35** | **detach_reg_fpn split-brain changes everything?** | **CRITICAL** | **MEDIUM** | **YES** |
+| **Q35** | **detach_reg_fpn split-brain — RESOLVED (Opus v10 confirmed True)** | **RESOLVED** | **HIGH** | **No** |
 | **Q36** | **50-image overfit definitive?** | **HIGH** | **HIGH** | **No** |
 | **Q37** | **DET gradient bottleneck (117×)?** | **HIGH** | **MEDIUM** | **Possibly** |
 | **Q38** | **head_pose borderline ALIVE/DEAD?** | **MEDIUM** | **MEDIUM** | **No** |
 | **Q39** | **score_p50 blindness invalidates prior analysis?** | **HIGH** | **HIGH** | **No** |
-| **Q40** | **Advance to RF3 now or diagnose first?** | **CRITICAL** | **MEDIUM** | **YES** |
+| **Q40** | **Restart RF2 with detach=False first? (REFRAMED)** | **CRITICAL** | **MEDIUM** | **YES** |
+| **Q41** | **Will flipping detach_reg_fpn break the plateau?** | **CRITICAL** | **LOW** | **YES** |
 
 ---
 
@@ -686,15 +722,16 @@ The heartbeat IS updating in Phase 15 (last_heartbeat: 2026-06-21T07:08 UTC conf
 
 | Previous Status | Current Status | Questions |
 |----------------|---------------|-----------|
-| CRITICAL | CRITICAL | Q01, Q03, Q04, Q05, Q30 (reframed) |
-| CRITICAL | RESOLVED / REFRAMED | Q25 (v8 fixes worked, ceiling remains) |
+| CRITICAL | CRITICAL | Q01, Q03, Q04, Q05, Q30 (reframed), Q41 (new) |
+| CRITICAL | RESOLVED / REFRAMED | Q25 (v8 fixes worked, ceiling remains), Q35 (detach_reg_fpn — Opus v10 confirmed) |
+| CRITICAL | REFRAMED | Q40 (now: restart RF2 with detach=False, not advance-or-diagnose) |
 | HIGH | RESOLVED | Q02, Q10 (phantom 0.45 fixed), Q27 (merged into Q10) |
 | HIGH | MEDIUM | Q06, Q07, Q13, Q16 |
 | MEDIUM | LOW | Q09, Q12 |
-| NEW | CRITICAL | Q31 (12/24 AP=0), Q32 (top-k IoU floor), Q35 (detach_reg_fpn), Q40 (advance decision) |
+| NEW | CRITICAL | Q31 (12/24 AP=0 — UPDATED with parsed data), Q32 (top-k IoU floor), Q40 (reframed), Q41 (will detach flip work?) |
 | NEW | HIGH | Q33 (combined metric), Q34 (LR restart failure), Q36 (50-image overfit), Q37 (gradient bottleneck), Q39 (score_p50 blindness) |
 | NEW | MEDIUM | Q38 (head_pose borderline) |
 
 ---
 
-*Generated 2026-06-21 by Claude Code. Updated from the epoch 16-20 era with POS_ANCHOR_PROBE evidence, LR restart failure data, Opus v9 corrections, and 10 new questions (Q31-Q40). All questions backed by live log analysis, training state, and diagnostic evidence from the current Phase 14-15 run at epoch 21.*
+*Generated 2026-06-21 by Claude Code. Updated for the Opus v10 era: detach_reg_fpn resolved (Q35→RESOLVED), per-class AP parsed from metrics.jsonl (Q31→UPDATED with real class-6 data), Q40 reframed as restart decision, Q41 added for the post-v10 era. 41 questions total covering 15+ phases, 10 Opus consultations, ~500 GPU-hours of investigation.*

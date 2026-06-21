@@ -52,11 +52,8 @@ LIVENESS_GRAD_EVERY = 200  # [FIX 2026-06-15] Separate grad-norm liveness (kept 
 DET_DEBUG_EVERY = 50  # [FIX4] Detection head debug diagnostic frequency (--reinit-heads only)
 # NOTE: Detection head warmup is HARDCODED in train.py (50 zero-grad + 200 linear ramp, 250 total).
 # DET_WARMUP_STEPS was considered as a config variable but was never wired up — see train.py for the actual logic.
-DET_LR_MULTIPLIER = 1.0  # WD is now scaled proportionally with LR in train.py, so WD/LR stays constant when _stage_lr_mult reduces LR. Was 5.0 (collapsed full-head), then 1.0 (stagnant because WD wasn't scaled).
-DET_BIAS_LR_FACTOR = 1.0  # [FIX 2026-06-20 (Opus v8 §3)] Reverted from 5.0. 5× bias LR was an own-goal:
-                               # when bias gradient points toward background (few positives), 5× LR drives
-                               # bias INTO the equilibrium faster. The bias isn't stuck — it's following
-                               # the gradient of dead features (see Opus v8 §1.4 symptom chain).
+DET_LR_MULTIPLIER = 2.0  # [FIX 2026-06-21] 2× head LR to overcome gradient starvation (det=0.01 vs backbone=3.6). Was 5.0 (collapsed RF1 reinit), then 1.0 (stagnant — det grad can't compete with head_pose at parity LR). 2× gives head enough gradient magnitude to shift FPN features toward detection.
+DET_BIAS_LR_FACTOR = 4.0  # [FIX 2026-06-21] 4× bias LR (RetinaNet paper uses 10×). IOU_FLOOR=0.2 prevents false-positive labels so bias can't cheat into equilibrium. Without boost: pi=0.03 → bias=-3.5 → all anchors near 0 → gradient ≈ 0 → bias never moves. 4× breaks the equilibrium.
 
 # [OPUS v8 FIX 2026-06-20] Kendall multi-task fixes for RF2 detection collapse.
 # Three independent mechanisms were letting head_pose dominate the shared backbone:
@@ -1110,11 +1107,12 @@ PRESETS = {
         'use_psr_order_prior':      False,
         'psr_sensitivity_weight':   0.0,
         'use_ldam_drw':             False,
-        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
-        # through shared FPN features. Required when running outside stage_manager
-        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
-        # stages with reinit_heads=True).
-        'detach_reg_fpn':           True,
+        # [FIX 2026-06-21] Was True (detached). RF2 is NOT a reinit stage — the
+        # regression head already has decent GIoU signal that SHOULD flow into FPN.
+        # detach=True cuts reg gradients (the strongest detection signal) from FPN,
+        # leaving only tiny cls gradient (norm=0.01) and head_pose to update features.
+        # False lets regression GIoU signal help FPN → cls escapes equilibrium.
+        'detach_reg_fpn':           False,
         'detach_psr_fpn':           True,
         # [FIX 2026-06-19 v2] RF2 reinit also needs pi=0.05 for same reason as RF1 —
         # default 0.01 (bias=-4.60) starts too cold; 0.05 (bias=-2.94) accelerates

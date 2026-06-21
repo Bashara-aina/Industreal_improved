@@ -162,8 +162,14 @@ class ValidationAgent(BaseAgent):
             checks.append(CheckResult(name="val_metric_consistency", verdict=Verdict.SKIP,
                                        summary=f"Need ≥3 val measurements, have {len(val_map)}"))
 
-        # 5. NaN in val metrics from log
-        nan_val_lines = [l for l in val_lines if "nan" in l.lower() or "inf" in l.lower()]
+        # 5. NaN in val metrics from log (skip expected efficiency eval NaNs)
+        nan_val_lines = [
+            l for l in val_lines if ("nan" in l.lower() or "inf" in l.lower())
+            and "[EVAL NaN/Inf]" not in l
+            and "Efficiency" not in l
+            and "pipeline_" not in l
+            and "eff_" not in l
+        ]
         if nan_val_lines:
             checks.append(CheckResult(
                 name="val_nan_metrics",

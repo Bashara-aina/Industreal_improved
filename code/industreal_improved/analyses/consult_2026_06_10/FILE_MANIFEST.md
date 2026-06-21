@@ -1,4 +1,4 @@
-# Consultation Folder File Manifest — Updated 2026-06-21 UTC (Opus v8 Fixes Applied)
+# Consultation Folder File Manifest — Updated 2026-06-21 UTC (Opus v10 Breakthrough)
 
 ## Core Python Source Files (code/) — UPDATED 2026-06-21 FROM RUNNING SOURCE
 
@@ -82,7 +82,7 @@
 | File | Description |
 |------|-------------|
 | `eval_metrics.json` | Evaluation metrics (64KB) |
-| `rf_stage_state.json` | **Live stage state** — current epoch 17, PID 3176288, Opus v8 fixes applied |
+| `rf_stage_state.json` | **Live stage state** — epoch 21, PID 3791482, Opus v10 findings applied (detach_reg_fpn=False fix in working tree) |
 
 ## Documentation
 
@@ -105,11 +105,13 @@
 | `29_RF1_DEATH_SPIRAL_AND_R2_5_PARADOX.md` | Root cause analysis — UPDATED 2026-06-21 with Section 13 postscript: RF2 epoch 15 collapse proves cls_score bias equilibrium is a DISTINCT failure mode from gradient sparsity (head_pose ALIVE but classifier still collapsed) |
 | `30_OPUS_MASTER_PROMPT_v7.md` | Self-contained overview prompt for sending to Opus. Summarizes all 30 files, current situation, 10 questions for Opus, gradient math proof, config comparison. Upload this file alongside the folder for fastest Opus onboarding. (2026-06-17) |
 | `31_KENDALL_BUG_DISCOVERY_AND_FIX.md` | Kendall weighting bug: losses.py line 1589 excluded head_pose from total loss when train_pose=True, train_act=False. Fix applied and confirmed — UPDATED 2026-06-21 with Section 10 RF2 cross-validation postscript |
-| `33_OPEN_QUESTIONS.md` | **ALL remaining confusions** — 30 open questions. UPDATED 2026-06-21 with Q25-Q30 covering Opus v8 fix efficacy |
+| `33_OPEN_QUESTIONS.md` | **ALL remaining confusions** — 41 open questions. UPDATED 2026-06-21 (v10 era): Q35 RESOLVED (detach_reg_fpn), Q31 UPDATED (per-class AP parsed with class-6 data), Q41 NEW (will detach flip break plateau?), Q40 REFRAMED (restart decision) |
 | `34_RF2_SWARM_MONITOR.md` | **20-agent monitoring swarm documentation** — 22 agents, 134 checks/cycle, 5-min interval, 40-thread ThreadPoolExecutor, auto-restart watchdog, 4-channel alerting, 6 bugs found and fixed. (2026-06-21 — UPDATED) |
 | `35_OPUS_MASTER_PROMPT_v8.md` | **Send this to Opus** — Self-contained overview prompt for Opus consultation v8. Covers all 34 files, 3 distinct failure modes (solved + unsolved), cls_score bias equilibrium, 5 fix proposals, 10 key questions for Opus, current config reference. (2026-06-21) |
 | `36_OPUS_ANSWER_v8.md` | **Opus v8 answer** — Unified diagnosis: RF2 collapse is one mechanism wearing three masks (Kendall head_pose domination, not separate bias equilibrium). 4 prioritized fixes. Verifies phantom 0.45, double curriculum, pi=0.03. (2026-06-21) |
 | `37_IMPLEMENTATION_SUMMARY.md` | **Implementation summary** — All 4 Opus v8 fixes applied to source (commit beda631). Config/loss-level changes only, safe on RTX 3060. (2026-06-21 — 256 insertions, 119 deletions) |
-| `38_OPUS_V8_TRAINING_RESULTS.md` | **Opus v8 training run results** — Post-fix training run analysis, epoch 17 metrics, fix efficacy assessment, next steps. (2026-06-21 — NEW) |
-| `39_OPUS_ANSWER_v9.md` | **Opus v9 answer** — Response to the v9 post-fix status update. Core finding: the epoch-17 telemetry cannot answer "are the fixes working" because `score_p50` (median over background-dominated anchors) and the IoU-only `DET_PROBE` verdict structurally cannot see classification; only epoch-end mAP@0.001 can. Flags the `detach_reg_fpn:True`/`reinit_pi:0.05` config-vs-doc split-brain (`config.py:1109/1114`), the unbounded top-k force-match injecting positive-label noise into the cls head (`losses.py:138-148`), and a label-noise→uniform-output hypothesis for Q3/Q8. Prescribes 4 missing probes + a 50-image cls-only overfit as the decisive experiment. (2026-06-21 — NEW) |
-| `38_OPUS_MASTER_PROMPT_v9.md` | **v9 master overview prompt** — Self-contained post-fix status update for Opus. Covers all 4 v8 fixes (commit beda631), current epoch 17 training state, DET_PROBE LOCALIZING, updated questions for Opus. Send to Opus alongside directory. (2026-06-21 — NEW) |
+| `38_OPUS_MASTER_PROMPT_v9.md` | **v9 master overview prompt** — Self-contained post-fix status update for Opus. Covers all 4 v8 fixes (commit beda631), current epoch 17 training state, DET_PROBE LOCALIZING, updated questions for Opus. (2026-06-21) |
+| `39_OPUS_ANSWER_v9.md` | **Opus v9 answer** — Core finding: `score_p50` is structurally blind (median over background-dominated anchors → cannot see classification). Flags `detach_reg_fpn:True` config-vs-doc split-brain (`config.py:1109`), the unbounded top-k force-match injecting positive-label noise, and a label-noise→uniform-output hypothesis. Prescribes 4 missing probes + 50-image cls-only overfit. (2026-06-21) |
+| `40_DEEP_OPEN_QUESTIONS.md` | **Deep open questions** — 11 chapters. UPDATED 2026-06-21 (v10): Ch4 RESOLVED (detach_reg_fpn confirmed True), Ch11 NEW (post-breakdown retrospective — verification pipeline failures, two-ceiling hypothesis) |
+| `41_OPUS_MASTER_PROMPT_v10.md` | **v10 master overview prompt** — Self-contained overview for Opus round 10. 8 sections covering full project state, epoch-21 evidence, POS_ANCHOR_PROBE, pseudo-classing, LR restart failure, top-k IoU floor, 12/24 AP=0 analysis. (2026-06-21) |
+| `42_OPUS_ANSWER_v10.md` | **Opus v10 answer** — The breakthrough. Unified diagnosis: `detach_reg_fpn=True` for RF2 is the smoking gun (config.py:1117, confirmed via code trace). Plateau is substantially dynamic (config regression), not structural. Includes verification table, 7-tier recommendations (Tier 0–1), decision rules, per-class diagnostic table. (2026-06-21) |

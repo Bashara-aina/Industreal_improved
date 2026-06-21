@@ -27,8 +27,12 @@ class ConvergenceAgent(BaseAgent):
 
         # 1. Metric stagnation — best not improving over patience window
         state_history = state.get("metric_history", [])
-        if isinstance(state_history, list) and len(state_history) >= 3:
-            recent = state_history[-C.CONVERGENCE.patience_epochs:] if len(state_history) >= C.CONVERGENCE.patience_epochs else state_history
+        # Normalize: entries may be floats or dicts like {'epoch': N, 'det_mAP50': V}
+        def _extract_val(entry):
+            return entry.get("det_mAP50", 0.0) if isinstance(entry, dict) else float(entry)
+        hist_vals = [_extract_val(e) for e in (state_history if isinstance(state_history, list) else [])]
+        if len(hist_vals) >= 3:
+            recent = hist_vals[-C.CONVERGENCE.patience_epochs:] if len(hist_vals) >= C.CONVERGENCE.patience_epochs else hist_vals
             oldest = recent[0]
             newest = recent[-1]
             improvement = newest - oldest
@@ -50,11 +54,11 @@ class ConvergenceAgent(BaseAgent):
                                        summary=f"Need ≥{C.CONVERGENCE.patience_epochs} history entries"))
 
         # 2. Metric oscillation (zigzag pattern)
-        if isinstance(state_history, list) and len(state_history) >= 5:
-            oscillations = sum(1 for i in range(2, len(state_history))
-                               if (state_history[i] - state_history[i - 1]) *
-                                  (state_history[i - 1] - state_history[i - 2]) < 0)
-            osc_ratio = oscillations / (len(state_history) - 2)
+        if len(hist_vals) >= 5:
+            oscillations = sum(1 for i in range(2, len(hist_vals))
+                               if (hist_vals[i] - hist_vals[i - 1]) *
+                                  (hist_vals[i - 1] - hist_vals[i - 2]) < 0)
+            osc_ratio = oscillations / (len(hist_vals) - 2)
             if osc_ratio > 0.6:
                 v = Verdict.FAIL
             elif osc_ratio > 0.4:
@@ -64,7 +68,7 @@ class ConvergenceAgent(BaseAgent):
             checks.append(CheckResult(
                 name="metric_oscillation",
                 verdict=v,
-                summary=f"Oscillation: {osc_ratio:.0%} direction changes ({oscillations}/{len(state_history) - 2})",
+                summary=f"Oscillation: {osc_ratio:.0%} direction changes ({oscillations}/{len(hist_vals) - 2})",
                 detail="High oscillation = unstable training dynamics",
                 metric=osc_ratio,
                 threshold=0.4,
@@ -75,8 +79,8 @@ class ConvergenceAgent(BaseAgent):
                                        summary="Need ≥5 history entries for oscillation detection"))
 
         # 3. Convergence velocity (rate of improvement)
-        if isinstance(state_history, list) and len(state_history) >= 3:
-            recent3 = state_history[-3:]
+        if len(hist_vals) >= 3:
+            recent3 = hist_vals[-3:]
             if recent3[-1] > 0 and recent3[0] > 0:
                 velocity = (recent3[-1] - recent3[0]) / 3
                 if velocity > 0.01:
