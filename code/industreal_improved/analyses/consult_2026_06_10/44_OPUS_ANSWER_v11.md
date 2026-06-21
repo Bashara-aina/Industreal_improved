@@ -218,19 +218,76 @@ That makes the next 4 epochs interpretable.
 
 ---
 
-## What I Did Not Touch
+## Part D — The Deeper Root Cause (found while implementing)
 
-The two reverts and the RF3–RF10 propagation are config changes that feed a
-6–8h GPU run on your hardware. They are clearly correct per the codebase's own
-prior conclusions, but I'm leaving the trigger to you rather than mutating the
-training config unilaterally. Say the word and I'll apply: (a) the `1.0/1.0`
-reverts, (b) `detach_reg_fpn=False` for `stage_rf3…rf10`, and (c) the per-class
-AP persistence patch in `evaluate.py`/`train.py`.
+While wiring up the per-class persistence I traced the metric itself, and the
+"0.20 plateau vs 0.40 gate" is **substantially a measurement artifact**, not only
+a training-dynamics one.
+
+**The headline `det_mAP50` is diluted.** `compute_ap_multi_thresh`
+(`evaluate.py:1492–1535`) averages AP over **all 24 channels**, setting
+zero-GT channels to `0.0` and **including them in the mean**, plus the
+**background channel (0)**. The dataset maps COCO `category_id` (1–24) → model
+channel via `idx = raw_cat − 1` (`industreal_dataset.py:1135`), so channel 0 =
+category 1 = `background`. On a sparse subset, ~8–12 channels have zero GT and
+the background channel contributes nothing — yet all are averaged in at 0.0.
+
+**The honest metric already exists and nothing consumes it.**
+`det_mAP50_pc` (present-class mean, GT>0 only) is computed at
+`evaluate.py:1536/1588` but the gate, the combined metric, `best_metric`, and the
+swarm state all read **`det_mAP50`** (`train.py:4303, 4240`). Using the repo's
+own curated per-class numbers (`DET_CLASS_ALPHAS`), the present-class mean is
+**~0.35 while the diluted headline is ~0.16** — a **+0.19 gap**. You have likely
+been chasing a phantom: the model is roughly **at the gate** on the classes that
+actually have validation GT.
+
+**This also re-explains §5.** Detection per-class AP **is** persisted
+(`det_per_class_ap` + `det_per_class_gt`, `evaluate.py:1595–1596`, merged via
+`results.update` → `record['val']`, `train.py:4468`). The v10/v11 docs read the
+**legacy** `compute_detection_map` path (which discards it) and concluded it was
+never written. The "class 6 = 1739 GT" figure is an index/source error: channel 6
+= category 7 = `'11110010000'` with **65 train / ~91 val GT**, not 1739. And the
+"architecture learns perfectly (class 21 = AP 1.0)" claim is the config's own
+flagged **artifact** (no/low val GT).
+
+## Part E — Changes Applied (this branch)
+
+| Change | File | What | Risk |
+|---|---|---|---|
+| Revert LR multiplier | `config.py:55` | `DET_LR_MULTIPLIER 2.0 → 1.0` | none (back to v8 baseline) |
+| Revert bias factor | `config.py:56` | `DET_BIAS_LR_FACTOR 4.0 → 1.0` | none (undoes the "own-goal") |
+| Propagate detach fix | `config.py` | `detach_reg_fpn=False` for **rf3–rf10 + paper_run** (0 `True` remain); rf10 made explicit | low — those stages haven't run; matches rf1 + recovery |
+| Name-labeled per-class | `evaluate.py:1581+` | adds `det_per_class` = `[{channel, category_id, name, gt, ap, is_background}]` — kills index ambiguity permanently | none (pure addition) |
+| Honest-metric visibility | `train.py:4308+` | logs `det_mAP50` vs `det_mAP50_pc` + a `[DILUTION]` warning each epoch | none (logging only) |
+| State persistence | `train.py:206+` | persists `det_mAP50_pc` + `det_n_present_classes` to `rf_stage_state.json` | none (additive) |
+| Diagnostic | `diag_per_class_truth.py` (new) | stdlib-only reader of `metrics.jsonl` → authoritative per-class table, dilution gap, class-6 answer. **Run it now on your existing logs.** | none (read-only) |
+
+All four edited Python files byte-compile; the labeling and the diagnostic were
+unit-tested against synthetic records (both legacy `det_per_class_ap` and the new
+labeled format).
+
+**First action — no GPU needed:** from `src/`, run
+`python3 diag_per_class_truth.py` (or `--run runs/<rf2_run>`). It prints the real
+per-class AP/GT and `det_mAP50_pc` from data you already have. That single read
+likely shows you near the gate and reduces "class 6" to a 3-row worklist.
+
+## The One Remaining Decision (yours)
+
+I deliberately did **not** switch the **gate / `best_metric`** from `det_mAP50`
+to `det_mAP50_pc`. That changes which checkpoint is "best" and when stages
+advance, and it interacts with the gate **threshold** (calibrated against the
+diluted metric) and with paper comparability (IndustReal's 0.641 is COCO-style).
+It is a one-line change at `train.py:4303` (and the step-val at `:4240`). My
+recommendation: **gate subset stages on `det_mAP50_pc`**, keep `det_mAP50` as the
+logged paper number. Say the word and I'll make the switch + recalibrate the gate
+note.
 
 ---
 
-*Saved from Opus consultation round 11. Code-grounded: the v10 fix is correct
-and committed; the remaining risks are experimental hygiene (four variables at
-once) and a per-class dataset whose provenance the repository contradicts.
-Restart one-variable-clean, persist per-class AP, and let class 6 be answered by
-measurement rather than narrative.*
+*Saved from Opus consultation round 11. Code-grounded and implemented: the v10
+detach fix is correct, committed, and now propagated to every non-reinit stage;
+the experiment is one-variable-clean; per-class data is name-labeled and a
+read-only diagnostic resolves "class 6" from existing logs. The deeper finding —
+`det_mAP50` is diluted by background + zero-GT channels while the honest
+`det_mAP50_pc` (~0.35) goes unused — means the plateau is as much a measurement
+artifact as a training one. Run the diagnostic before spending another GPU-hour.*
