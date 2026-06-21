@@ -203,9 +203,15 @@ def _write_stage_heartbeat(
         if best_metric is not None:
             state['best_metric'] = best_metric
         if best_metrics is not None:
+            _prev_bm = state.get('best_metrics', {})
             state['best_metrics'] = {
-                'det_mAP50': best_metrics.get('det_mAP50', state.get('best_metrics', {}).get('det_mAP50')),
-                'forward_angular_MAE_deg': best_metrics.get('forward_angular_MAE_deg', state.get('best_metrics', {}).get('forward_angular_MAE_deg')),
+                'det_mAP50': best_metrics.get('det_mAP50', _prev_bm.get('det_mAP50')),
+                # [FIX 2026-06-21 Opus v11 §D] Also persist the present-class (un-diluted)
+                # mAP so the swarm/monitor sees the honest detection number, not just the
+                # COCO-24 mean that zero-GT channels drag down on sparse subset stages.
+                'det_mAP50_pc': best_metrics.get('det_mAP50_pc', _prev_bm.get('det_mAP50_pc')),
+                'det_n_present_classes': best_metrics.get('det_n_present_classes', _prev_bm.get('det_n_present_classes')),
+                'forward_angular_MAE_deg': best_metrics.get('forward_angular_MAE_deg', _prev_bm.get('forward_angular_MAE_deg')),
             }
         if batch is not None:
             state['batch'] = {'current': batch[0], 'total': batch[1]}
@@ -4306,6 +4312,31 @@ def main(args):
                     _mae_pose = _s(_mae_pose_raw, alt=float('nan'))
                     # [FIX 2026-05-31] Use psr_f1_at_t (real ±3-frame F1) instead of psr_macro_f1 (= psr_overall_f1 = 0.0)
                     _f1_psr = _s(val_metrics.get('psr_f1_at_t', 0.0))
+
+                    # [FIX 2026-06-21 Opus v11 §D] Surface the HONEST detection metric.
+                    # det_mAP50 is the COCO-24 mean: it averages AP over ALL 24 channels,
+                    # including the background channel (0) and every channel with zero GT in
+                    # this val subset (each contributes AP=0). On sparse subset stages this
+                    # DILUTES the headline far below real per-present-class performance.
+                    # det_mAP50_pc averages only channels with GT>0 — the number to judge
+                    # subset-stage progress by. Logging-only; the gate still uses det_mAP50 for
+                    # paper-baseline comparability (see 44_OPUS_ANSWER_v11.md §D).
+                    _map50_pc = _s(val_metrics.get('det_mAP50_pc', 0.0))
+                    _n_present = int(val_metrics.get('det_n_present_classes', 0))
+                    _n_total = int(getattr(C, 'NUM_DET_CLASSES', 24))
+                    if _map50_pc > 0 or _map50 > 0:
+                        logger.info(
+                            f'  det_mAP50={_map50:.4f} (COCO-{_n_total}, diluted)  '
+                            f'det_mAP50_pc={_map50_pc:.4f} (present-class, honest)  '
+                            f'n_present={_n_present}/{_n_total}'
+                        )
+                        if (_map50_pc - _map50) >= 0.05:
+                            logger.warning(
+                                f'  [DILUTION] det_mAP50_pc exceeds det_mAP50 by '
+                                f'{_map50_pc - _map50:+.4f} — the headline is dragged down by '
+                                f'{_n_total - _n_present} zero-GT/background channels. '
+                                f'Judge subset-stage progress by det_mAP50_pc.'
+                            )
 
                     # [NaN Guard] Validate inputs before computing combined metric
                     # [FIX 2026-05-31] OR instead of AND — fire when ANY component is non-finite
