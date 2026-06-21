@@ -24,8 +24,13 @@ class NanDetectorAgent(BaseAgent):
 
         log_text = "\n".join(log_tail)
 
-        # 1. NaN/Inf in log
-        nan_log_lines = [l for l in log_tail if re.search(r"\bNaN\b|\binf\b|\binfinity\b", l, re.IGNORECASE)]
+        # 1. NaN/Inf in log (skip expected efficiency eval NaNs like FPS/GFLOPs)
+        nan_log_lines = [l for l in log_tail
+                         if re.search(r"\bNaN\b|\binf\b|\binfinity\b", l, re.IGNORECASE)
+                         and "[EVAL NaN/Inf]" not in l
+                         and "Efficiency" not in l
+                         and "pipeline_" not in l
+                         and "eff_" not in l]
         nan_count = len(nan_log_lines)
         if nan_count > 0:
             v = Verdict.CRIT if nan_count > 5 else Verdict.FAIL
@@ -62,11 +67,14 @@ class NanDetectorAgent(BaseAgent):
             checks.append(CheckResult(name="nan_in_metrics", verdict=Verdict.PASS,
                                        summary="No NaN/Inf in metrics.jsonl"))
 
-        # 3. NaN/Inf in validation metrics
+        # 3. NaN/Inf in validation metrics (skip expected eval efficiency NaNs)
         nan_val = 0
         for line in val_lines:
-            if re.search(r"\bNaN\b|\binf\b|\binfinity\b", line, re.IGNORECASE):
-                nan_val += 1
+            if not re.search(r"\bNaN\b|\binf\b|\binfinity\b", line, re.IGNORECASE):
+                continue
+            if "[EVAL NaN/Inf]" in line or "Efficiency" in line or "pipeline_" in line or "eff_" in line:
+                continue
+            nan_val += 1
         if nan_val > 0:
             checks.append(CheckResult(
                 name="nan_in_validation",

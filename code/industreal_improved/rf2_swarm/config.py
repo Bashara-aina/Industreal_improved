@@ -17,7 +17,7 @@ LOGS_DIR = os.path.join(RUNS_DIR, "logs")
 CKPT_DIR = os.path.join(RUNS_DIR, "checkpoints")
 
 TRAIN_LOG = os.path.join(LOGS_DIR, "train.log")
-STATE_JSON = os.path.join(RUNS_DIR, "rf_stage_state.json")
+STATE_JSON = os.path.join(PROJECT_ROOT, "src", "runs", "rf_stage_state.json")
 METRICS_JSONL = os.path.join(LOGS_DIR, "metrics.jsonl")
 SUBPROCESS_LOG = os.path.join(LOGS_DIR, "subprocess.log")
 
@@ -67,6 +67,11 @@ HEALTH = RF2HealthThresholds()
 CONVERGENCE = RF2ConvergenceThresholds()
 VALIDATION = RF2ValidationThresholds()
 STABILITY = RF2StabilityThresholds()
+
+# ---------------------------------------------------------------------------
+# Epoch limits
+# ---------------------------------------------------------------------------
+DEFAULT_MAX_EPOCHS: int = 36  # actual max from training config; state overrides
 
 # ---------------------------------------------------------------------------
 # Monitoring intervals

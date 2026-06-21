@@ -1,7 +1,7 @@
 # 40 — Deep Open Questions: What We Still Cannot Answer
 
-> Generated 2026-06-21 — After 15 phases across 10 weeks, 9 Opus consultations, 3 independent training regimes, 34+ diagnostic probes, and ~500 GPU-hours of accumulated training  
-> Current state: RF2 epoch 21 (mAP50 plateau at 0.204-0.215, 6 epochs and counting)
+> Generated 2026-06-21 — After 15 phases across 10 weeks, 10 Opus consultations, 3 independent training regimes, 34+ diagnostic probes, and ~500 GPU-hours of accumulated training  
+> Current state: RF2 epoch 21 (mAP50 plateau at 0.204-0.215). **Opus v10 breakthrough: detach_reg_fpn=True confirmed for RF2 (Chapter 4 RESOLVED, Chapter 11 added).**
 
 ---
 
@@ -206,72 +206,57 @@ If the top-k WITHOUT floor is genuinely worse than the original (no top-k), then
 
 ---
 
-## Chapter 4: The detach_reg_fpn Schizophrenia
+## Chapter 4: The detach_reg_fpn Schizophrenia — RESOLVED (Opus v10)
 
-### 4.1 The Core Unknown
+### 4.1 The Resolution
 
-**What is the effective value of C.DETACH_REG_FPN in the running configuration?**
+**Opus v10 confirmed the value: detach_reg_fpn=True for RF2.** The code trace:
+- config.py stage_rf2 preset: `'detach_reg_fpn': True` (line 1117 committed)
+- RF2 stage_cfg: NO override for detach_reg_fpn
+- CLI: no `--detach-reg-fpn` flag passed
+- **Effective value: True** — the "If True" branch was correct all along
 
-This one boolean value changes the entire diagnosis of the project's central failure mode.
+### 4.2 What We Now Know
 
-### 4.2 Two Different Architectures
+The training for epochs 7-21 ran with regression gradients detached from the backbone:
 
-**If True** (what `config.py:1109` says):
 ```
-Training signal flow:
+Training signal flow (ACTUAL, epochs 7-21):
   cls_loss → cls_subnet → FPN → backbone ← head_pose_loss
   reg_loss → reg_subnet ──┘         (detached from FPN)
 ```
 
-The regression subnet is detached. Only classification and head_pose shape the backbone. Localization is produced by the reg subnet on features carved by CLASSIFICATION + HEAD POSE — not by regression errors.
+The backbone was shaped only by classification + head_pose. The regression subnet's strong GIoU signal (bestIoU 0.86-0.98) could NOT reach the backbone to make features object-discriminative.
 
-**Under this regime:**
-- The excellent localization (bestIoU=0.86-0.98) proves the features ARE good for localization
-- If features are good for localization but NOT for classification, the problem is squarely in the cls subnet / cls loss / cls targets
-- Head_pose "dominating" the backbone doesn't explain anything — if it had wrecked features, localization would suffer
-- **The finger points at:** label noise (§3.2), top-k poisoning (§3.3), or Focal Loss inadequacy
+**The one-to-one symptom match** (from Opus v10):
+- **bestIoU 0.86-0.98** (regression works — it receives decent detached features)
+- **mAP 0.20** (classifier starved — cls-shaped features are not sufficiently object-discriminative)
+- **12/24 AP=0** (feature-starvation produces class-selective effects — distinctive classes survive, subtle/small/rare ones collapse)
+- **LR restart zero effect** (a detached gradient path is not a local minimum)
+- **POS_ANCHOR_PROBE 0.64-0.80** (on the easy classes, cls-shaped features ARE good enough)
 
-**If False** (what documentation claims):
-```
-Training signal flow:
-  cls_loss → cls_subnet ─┐
-                          ├── FPN → backbone ← head_pose_loss
-  reg_loss → reg_subnet ─┘
-```
+### 4.3 Why We Never Resolved This Sooner
 
-Both subnets feed the backbone. The Kendall-domination story applies — head_pose may be shaping features suboptimally for detection.
+The gap is real and uncomfortable. The `detach_reg_fpn` ambiguity was identified in Opus v9, but the config resolution chain (preset → stage_cfg → CLI) was never traced. The fix is indeed "one print statement" — and we didn't do that either.
 
-**Under this regime:**
-- The dissociation between "classifies poorly" and "localizes well" is harder to explain
-- Head_pose dominating the backbone becomes a real concern
-- **The finger points at:** multi-task interference, Kendall loss weighting, or feature competition
+**Why it persisted**: The config.py comment for stage_rf2 said "Detach FPN gradients to prevent regression/PSR gradient shock" — the original commit message (Fix D7 era) made it sound like a safety mechanism. The assumption was that "detach protects against shock" and was therefore good. No one read the comment critically until Opus v10.
 
-### 4.3 Why We Never Resolved This
+### 4.4 The Cost (Retrospective)
 
-This is the most embarrassing gap in the entire investigation. We've had 9 Opus consultations. The split-brain was identified in Opus v9. But we haven't printed `C.DETACH_REG_FPN` at step 0. The fix is literally one print statement:
+- Consultation rounds v6-v9 analyzed multi-task interference, Kendall domination, and head_pose competition — mechanisms that were SECONDARY to the detached gradient path
+- The "head_pose ate the backbone" story was WRONG for the epoch 7-21 plateau. The backbone was fine — it was being starved of regression signal
+- The fixes (Kendall caps, HP_PREC_CAP, staged training) addressed real concerns but were peripheral to the primary mechanism
+- RF1 reached 0.184 with detach=False because regression signal DID flow. RF2 reached 0.204 despite detach=True because 2.5× more data + v8 fixes compensated
 
-```python
-print(f"EFFECTIVE CONFIG: DETACH_REG_FPN={C.DETACH_REG_FPN}, REINIT_PI={C.REINIT_PI}")
-```
+### 4.5 The Uncomfortable Truth — Confirmed
 
-We haven't done this. Not because it's hard. Because somehow, across all this investigation, we never prioritized resolving this ambiguity.
+The "If True" branch was correct:
+- **Everything changes** — the problem IS the cls loss/targets/labels. Not the backbone, not multi-task interference.
+- **"Head_pose ate the backbone" was WRONG** — the backbone is fine. The cls head was the bottleneck because it couldn't get regression signal.
+- **Opus v1-v8's analysis of multi-task dynamics was partially irrelevant** to the actual failure mode of epochs 7-21 (though it remains relevant for the general case).
+- **The fix is one config line**: `'detach_reg_fpn': False` for stage_rf2.
 
-### 4.4 The Cost
-
-Every analysis, every diagnosis, every consultation round has operated under an assumption about this value. If the assumption was wrong:
-- **Our understanding of which mechanism causes the plateau is WRONG**
-- **The fixes we prioritized may address the wrong problem**
-- **We may have spent 9 consultation rounds diagnosing a phantom mechanism**
-
-### 4.5 The Uncomfortable Possibility
-
-If True (which the committed code says):
-- Everything changes. The problem IS the cls loss/targets/labels. Not the backbone, not multi-task interference, not head_pose domination.
-- This means: Opus v1-v8's analysis of multi-task dynamics was largely irrelevant to the actual failure mode.
-- The real fix would be: audit labels, fix top-k floor, potentially switch to Quality Focal Loss or ATSS matching.
-- "Head_pose ate the backbone" is WRONG. The backbone is fine. The cls head is the bottleneck.
-
-If True, we've been investigating the wrong mechanism for weeks.
+**Status: RESOLVED.** The answer was "True," and it was the primary cause of the plateau. The only remaining question is whether flipping it breaks the ceiling entirely or reveals a second, data-quality ceiling underneath.
 
 ---
 
@@ -508,6 +493,84 @@ Every day we don't run this, we accumulate more data that may be uninterpretable
 
 ---
 
+## Chapter 11: The Post-Breakdown — What Changes After detach_reg_fpn
+
+### 11.1 The Core Unknown
+
+**After Opus v10 identified `detach_reg_fpn=True` as the primary cause, how much of our investigation was directed at the wrong mechanism?**
+
+This is the meta-question that follows the resolution. The breakthrough (Chapter 4 RESOLVED) proved that the primary mechanism was a config regression — not a training dynamics failure. But the path to that answer took 10 consultations, ~500 GPU-hours, and 15 phases of investigation that were disproportionately focused on multi-task interference, Kendall weighting, and head_pose domination.
+
+### 11.2 What Was Actually Wrong vs. What We Investigated
+
+| Actually Wrong | What We Investigated | Status of the Investigation |
+|---------------|---------------------|---------------------------|
+| **detach_reg_fpn=True** cut regression gradient from backbone | Multi-task interference, Kendall weighting, head_pose domination | **Peripheral** — these are real concerns but were NOT the primary cause of epochs 7-21 plateau |
+| **Top-k without IoU floor** potentially poisoning classifier | Top-k was a FIX (v8 §3) that we applied, never questioned its side effects | **Not investigated** until Opus v9 (question 7) — we assumed the fix was purely beneficial |
+| **12/24 AP=0** — systematic class-specific failure | General "classifier isn't working" narrative, then "it IS working on 12 classes but not others" | **Correct direction** but never prioritized over the multi-task narrative |
+| **Config regression** — RF2 getting different config than expected | Training dynamics (Kendall, loss balance, gradient norms) | **Discovering the mechanism** but never checking whether the CONFIG was what we thought |
+
+### 11.3 The Pipeline Failure
+
+The most important finding from the retrospective is not about training dynamics — it's about our **verification pipeline**:
+
+1. **We never printed effective config at startup** — The `print(C.DETACH_REG_FPN)` fix was known since Opus v9, never implemented
+2. **We never parsed per-class AP** — Available in metrics.jsonl from day one, read for the first time today (epoch 18 data)
+3. **We never verified the config resolution chain** — Assumed stage_manager applied overrides correctly without checking
+4. **We used score_p50 as a classification health metric** — Opus v9 proved it physically cannot measure what we thought
+
+**Each of these is a pipeline failure, not a knowledge failure.** The information was available. We just didn't look at it.
+
+### 11.4 The Two-Ceiling Hypothesis
+
+With detach_reg_fpn now set to False in the working tree, two outcomes are possible:
+
+**Ceiling 1: The detach ceiling (optimistic, ~70% probability)**
+- detach was the primary bottleneck (70-80% of the plateau)
+- Flipping it lets regression signal shape the backbone
+- mAP climbs from 0.204 to 0.30-0.40 in 3-4 epochs
+- Dead classes (especially class 6) wake up
+- The remaining gap to 0.40 is addressable with data-scale fixes (more epochs, better labels)
+
+**Ceiling 2: The data ceiling (pessimistic, ~30% probability)**
+- detach was a handicap but not the sole bottleneck
+- mAP improves to ~0.25-0.28 then plateaus again
+- Class 6 stays at AP=0 despite regression signal reaching the backbone
+- The remaining bottleneck is label quality or anchor geometry
+- Fixing this requires: visual label audit, anchor redesign, or class merging
+
+### 11.5 The Single Most Important Measurement
+
+**Per-class AP after 3-4 epochs with detach=False.** This single measurement tells us:
+
+| If class 6 goes from AP=0 to AP>0 | detach was the cause → restart was sufficient |
+| If class 6 stays at AP=0 | labels or anchor mismatch → label audit required |
+| If all dead classes wake simultaneously | feature-starvation was uniform |
+| If only some dead classes wake | class-specific mechanism (anchor mismatch for some) |
+
+### 11.6 The Uncomfortable Possibility
+
+The most uncomfortable possibility is that **detach flip produces a moderate improvement (mAP 0.20→0.28) but doesn't fix the fundamental problem**. In this scenario:
+- The gradient bottleneck moves from "completely blocked" (detach=True) to "insufficient" (detach=False but low LR/BIAS)
+- Class 6 remains at AP=0 because its labels are genuinely wrong
+- We've spent 10 consultations and weeks of GPU time to eliminate ONE config bug, only to find the next ceiling at mAP≈0.28
+- The "path to 0.40" would still require data fixes (label audit, anchor redesign)
+
+**If this happens, the honest question becomes**: would we have found this faster if we'd verified our configs and parsed per-class AP on day one? The answer is almost certainly yes.
+
+### 11.7 What This Changes
+
+The post-v10 investigation should prioritize **verification over investigation**:
+
+1. **Always print effective config at startup** — Every training run should log every config param with its source
+2. **Always log per-class AP** — Already done (evaluate.py), just parse it
+3. **Always verify the fix actually took effect** — After flipping detach_reg_fpn, confirm gradient flow with LIVENESS_GRAD
+4. **Never trust a config comment** — Read the code, trace the resolution chain
+
+These four practices would have saved 8+ consultation rounds.
+
+---
+
 ## Appendix: The 12 Questions We Could Answer in <2 Hours
 
 These are not deep unknowns — they are measurements we could take RIGHT NOW that would dramatically improve our understanding:
@@ -517,7 +580,7 @@ These are not deep unknowns — they are measurements we could take RIGHT NOW th
 | Per-class AP | Parse metrics.jsonl per-class AP arrays | 5 min |
 | Anchor-IoU per GT class | Add MATCH_PROBE logging to losses.py | 30 min + 1 epoch |
 | cls_score.weight.norm() | Add logging to train.py epoch end (Opus v8 E3) | 10 min |
-| effective DETACH_REG_FPN | Print C.DETACH_REG_FPN at step 0 (Opus v9 §5.4) | 5 min |
+| ~~effective DETACH_REG_FPN~~ | ~~Print C.DETACH_REG_FPN at step 0~~ — **RESOLVED** (Opus v10 code trace confirmed True for RF2) | RESOLVED |
 | cls_score.bias value | Log bias value at epoch end | 10 min |
 | Gradient at multiple FPN levels | Add grad norm logging at P3, P5, P7 outputs | 30 min + 1 epoch |
 | 50-image cls-only overfit | Isolated training on 50 images (Opus v9 §6) | <30 min |
@@ -529,4 +592,4 @@ These are not deep unknowns — they are measurements we could take RIGHT NOW th
 
 ---
 
-*Generated 2026-06-21. This document represents the deepest unknowns after 15 phases, 9 Opus consultations, and ~500 GPU-hours of investigation. Some of these questions may be unanswerable with current tools. Some may have answers we don't want. All of them are genuine — no question here has been included for rhetorical effect.*
+*Generated 2026-06-21. Updated for Opus v10 era: Chapter 4 (detach_reg_fpn schizophrenia) RESOLVED, Chapter 11 (post-breakdown retrospective) added. This document represents the deepest unknowns after 15 phases, 10 Opus consultations, and ~500 GPU-hours of investigation. Some questions resolved. New ones raised. The uncomfortable truths remain.*

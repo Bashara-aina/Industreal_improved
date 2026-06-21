@@ -158,8 +158,13 @@ def _compute_state_from_metrics(metrics: List[Dict[str, Any]]) -> Dict[str, Any]
             metric_history.append(m50)
 
     state["best_metric"] = best_mAP50
-    state["best_mAP50_95"] = best_mAP50_95
-    state["best_MAE"] = best_MAE if best_MAE != float("inf") else 0.0
+    state["best_map50_95"] = best_mAP50_95
+    state["best_mae"] = best_MAE if best_MAE != float("inf") else 0.0
+    state["best_metrics"] = {
+        "det_mAP50": best_mAP50,
+        "det_mAP50_95": best_mAP50_95 if best_mAP50_95 != float("inf") else 0.0,
+        "forward_angular_MAE_deg": best_MAE if best_MAE != float("inf") else 0.0,
+    }
     state["best_epoch"] = best_epoch
     state["metric_history"] = metric_history
     state["gate_passed"] = best_mAP50 >= 0.40

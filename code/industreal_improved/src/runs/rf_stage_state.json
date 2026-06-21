@@ -2,12 +2,12 @@
   "current_stage": "rf2",
   "stage_index": 1,
   "status": "running",
-  "training_pid": 3176288,
-  "epoch": 17,
-  "best_metric": 0.181,
+  "training_pid": 3791482,
+  "epoch": 21,
+  "best_metric": 0.4622134028185104,
   "best_metrics": {
-    "det_mAP50": 0.181,
-    "forward_angular_MAE_deg": null
+    "det_mAP50": 0.20472672232904232,
+    "forward_angular_MAE_deg": 9.231378555297852
   },
   "gate_passed": false,
   "checklist_results": {
@@ -72,9 +72,9 @@
   "log_cursor": 0,
   "cross_stage_memory": {},
   "max_epochs": 36,
-  "last_heartbeat": "2026-06-20T13:58:04.950939+00:00",
+  "last_heartbeat": "2026-06-21T07:50:07.191797+00:00",
   "batch": {
-    "current": 2850,
+    "current": 3300,
     "total": 3302
   }
 }
