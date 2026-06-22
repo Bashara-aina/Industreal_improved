@@ -4243,7 +4243,14 @@ def main(args):
                         return alt
 
                     # Compute combined metric before printing Val: line (same logic as below, with safe fallback)
-                    _map50_v  = _s(val_metrics.get('det_mAP50', 0.0))
+                    # [HONEST METRIC 2026-06-22] Judge progress on the present-class mAP
+                    # (det_mAP50_pc — channels with GT>0 only), NOT the COCO-24 mean that
+                    # averages in ~8 zero-GT channels + the background channel and so dilutes
+                    # the headline ~40% below real performance. det_mAP50 stays the logged
+                    # paper number on the Val: line; only the combined/best/gate DECISION uses _pc.
+                    _n_present_v = int(_s(val_metrics.get('det_n_present_classes'), alt=0))
+                    _map50_v  = (_s(val_metrics.get('det_mAP50_pc', 0.0))
+                                 if _n_present_v > 0 else _s(val_metrics.get('det_mAP50', 0.0)))
                     _f1_act_v = _s(val_metrics.get('act_macro_f1', 0.0))
                     _mae_raw  = val_metrics.get('head_pose_MAE', float('nan'))
                     _mae_pose_v = _s(_mae_raw, alt=float('nan'))
@@ -4268,6 +4275,8 @@ def main(args):
                     logger.info(
                         f'Val: loss={_s(val_metrics.get("loss")):.4f}  '
                         f'det_mAP50={_s(val_metrics.get("det_mAP50")):.4f}  '
+                        f'det_mAP50_pc={_s(val_metrics.get("det_mAP50_pc")):.4f}  '
+                        f'det_n_present={int(_s(val_metrics.get("det_n_present_classes"), alt=0))}  '
                         f'act_clip={_s(val_metrics.get("act_clip_accuracy")):.4f}  '
                         f'act_frame={_s(val_metrics.get("act_frame_accuracy")):.4f}  '
                         f'act_macro_f1={_s(val_metrics.get("act_macro_f1")):.4f}  '
@@ -4361,8 +4370,13 @@ def main(args):
                             f'f1_psr={_orig_components[3]}->{_clamped[3]}'
                         )
                     _map50, _f1_act, _mae_pose, _f1_psr = _clamped
+                    # [HONEST METRIC 2026-06-22] best.pth + stage gate are driven by the
+                    # combined metric below. Feed it the present-class mAP (det_mAP50_pc,
+                    # computed above), not the diluted COCO-24 det_mAP50. This is the single
+                    # change that stops the project chasing a ~40%-artifact headline.
+                    _map50_decision = _map50_pc if _n_present > 0 else _map50
                     combined = _compute_combined_metric(
-                        _map50, _f1_act, _mae_pose, _f1_psr,
+                        _map50_decision, _f1_act, _mae_pose, _f1_psr,
                         active_det=CFG_TRAIN_DET,
                         active_act=CFG_TRAIN_ACT,
                         active_pose=CFG_TRAIN_HEAD_POSE,
