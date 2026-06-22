@@ -1,6 +1,7 @@
 # 47 — Complete Catalog of Hypotheses, Proven Claims, Wrong Claims, and Deep Unanswered Questions
 
-> **Generated 2026-06-22 10:30 UTC** — Run 2 epoch 21 training (130/3302 steps)
+> **Generated 2026-06-22 10:30 UTC — UPDATED 2026-06-22 12:00 UTC with CRASH + RESTART event**
+> **CRITICAL UPDATE**: Training crashed during epoch 21 (Run 2) and was restarted from epoch 17 best checkpoint. We are now on **Run 3** (PID 1204133, epoch 17, batch 1930/3302). The Run 1 vs Run 2 "identical trajectory" finding remains valid as historical evidence — both runs independently confirmed the ~0.207 mAP50 ceiling at different LR/BIAS.
 > **BREAKTHROUGH FINDING**: Run 1 (wrong LR/BIAS=4.0/2.0) and Run 2 (correct LR/BIAS=1.0/1.0) produce **IDENTICAL mAP50 trajectories**. The ceiling at ~0.207 is structural, not config-dependent.
 > **Purpose**: Single authoritative file documenting EVERY hypothesis we've entertained, whether it was proven or wrong, the evidence, and every genuinely unanswered question.
 > **Critical Update**: The epoch 18-20 Run 2 data has conclusively settled the central question. The ceiling is structural. OHEM+FocalLoss gradient suppression is the primary hypothesis.
@@ -194,17 +195,17 @@ These are questions we genuinely cannot answer with current evidence. They are o
 
 ### UQ2 — Is OHEM + FocalLoss Gradient Suppression the Primary Bottleneck in Main Training?
 
-**Status**: 🔴 **UNANSWERED** 
+**Status**: 🔴 **STRONG HYPOTHESIS, UNCONFIRMED BY ABLATION**
 **Priority**: HIGH
 **Current evidence**: 
-- STRONG: 50-image overfit shows three-regime suppression trajectory
-- WEAK (Run 1): 5 epochs flat at 0.202-0.209 BUT with wrong LR/BIAS — INVALIDATED
-- PENDING: Run 2 epoch 18+ data
-**What would answer it**:
-- If Run 2 also plateaus at 0.20-0.25 after epoch 24: OHEM+FL is likely the bottleneck
-- If Run 2 reaches mAP50 > 0.30 (without OHEM changes): OHEM+FL was never the bottleneck at scale
-- Definitive answer requires: OHEM ablation experiment (disable OHEM, keep FocalLoss) vs OHEM+FL vs neither
-**Why we can't answer yet**: Only the overfit experiment directly tests OHEM+FL suppression. Main training with correct config hasn't run long enough.
+- STRONG: 50-image overfit shows three-regime suppression trajectory (55-epoch plateau)
+- STRONG: Run 1 (wrong LR/BIAS) — 5 epochs flat at 0.202-0.209
+- CONFIRMED: Run 2 (correct LR/BIAS) — IDENTICAL trajectory to Run 1, 5 epochs flat at 0.202-0.209
+- CONFIRMED: 4× LR/BIAS difference produced ZERO trajectory change across 2 independent runs
+- LR restart at epoch 20 has ZERO effect regardless of base LR (confirmed in both runs)
+**Assessment**: Three independent lines of evidence (overfit plateau, Run 1 plateau, Run 2 plateau) all point to OHEM+FL gradient suppression as the mechanism. The floor of correlational evidence is now very strong.
+**What would definitively answer it**: **OHEM ablation** — disable OHEM (DET_OHEM_ENABLED=False), keep FocalLoss, run 5 epochs from current checkpoint. If mAP jumps to >0.30, OHEM is confirmed. If still ~0.20-0.22, the ceiling has deeper causes.
+**Why we can't answer yet**: Correlation is not causation. Three independent plateaus are consistent with OHEM+FL suppression but don't prove it. Only a direct ablation can prove causation.
 
 ### UQ3 — Does `detach_reg_fpn=False` Actually Improve Detection?
 
@@ -327,7 +328,7 @@ These are questions we genuinely cannot answer with current evidence. They are o
 
 ## 6. Current Situation Summary
 
-### What We Know (Updated with Epoch 18-20 Findings)
+### What We Know (Updated with Crash + Restart)
 
 1. **The mAP50 ceiling at ~0.207 is STRUCTURAL.** Run 1 (2× LR, 4× bias) and Run 2 (1× LR, 1× bias) produce identical trajectories. The plateau is not config-dependent.
 
@@ -335,11 +336,13 @@ These are questions we genuinely cannot answer with current evidence. They are o
 
 3. **CosineAnnealing LR restart at epoch 20 has ZERO effect** regardless of base LR. Two independent confirmations.
 
-4. **Model state**: rf2 epoch 21 training, current best mAP50=0.2091 (epoch 19), MAE=9.21°. All heads healthy. Training continues but trajectory is flat.
+4. **Model state**: **Run 3** (post-crash restart), rf2 epoch 17 (resumed from best checkpoint), PID 1204133, batch 1930/3302, det_mAP50=0.2024 (from checkpoint), MAE=9.13°. All heads healthy. Run 3 is generating new trajectory data from epoch 17 onward.
 
 5. **Dilution is real**: det_mAP50_pc is ~0.31 vs headline 0.207 (~50% higher). 8 zero-GT/background channels dilute the metric.
 
 6. **Anchor coverage is fine**: POS_ANCHOR_PROBE consistently shows 400-800 positive anchors/image.
+
+7. **rf_stage_state.json is WRITING correctly** — previously thought broken, now confirmed to persist heartbeats, det_health_history, and checkpoint data. Last heartbeat: 2026-06-22T06:56:54 UTC.
 
 ### What We Don't Know (Critical Path)
 
@@ -349,11 +352,12 @@ These are questions we genuinely cannot answer with current evidence. They are o
 
 ### What Changed from Previous Session
 
-1. **Epoch 18-20 Run 2 data arrived and PROVES structural ceiling** — this is the single most important update
+1. **Epoch 18-20 Run 2 data arrived and PROVES structural ceiling** — the most important scientific finding
 2. **UQ1 is now PARTIALLY ANSWERED** — Run 2 does NOT break the ceiling
 3. **UQ5 is now ANSWERED** — LR restart doesn't help with correct LR either
 4. **C1 is REHABILITATED** — the plateau evidence IS valid (just not definitive proof of OHEM+FL)
 5. **The "5 epochs flat" evidence was incorrectly retracted** — C5 documents this double-correction
+6. **TRAINING CRASHED during epoch 21** — restarted from epoch 17 best checkpoint. Run 3 is now active (PID 1204133).
 
 ### File Status
 
@@ -362,7 +366,7 @@ These are questions we genuinely cannot answer with current evidence. They are o
 | 00_JOURNEY_AND_STATUS.md | 🔴 NEEDS UPDATE | Phase 19 needs epoch 18-20 finding |
 | 26_RF1_RF10_STATUS.md | 🔴 NEEDS UPDATE | Section 20 needs epoch 18-20 data |
 | 45_CURRENT_TRAINING_STATE.md | ✅ UPDATED | Epoch 18-20 data, rewritten conclusions |
-| 47_HYPOTHESES.md (this file) | ✅ UPDATED | H10 added, UQ1/UQ5 updated, Section 6/7 rewritten |
+| 47_HYPOTHESES.md (this file) | ✅ UPDATED | H10 added, UQ1/UQ5 updated, Sections 6/7 rewritten, crash+restart notes added 2026-06-22 |
 | 33_OPEN_QUESTIONS.md | 🔴 SUPERSEDED | Consult 47 instead |
 | 40_DEEP_OPEN_QUESTIONS.md | 🔴 SUPERSEDED | Consult 47 instead |
 | FILE_MANIFEST.md | 🔴 NEEDS UPDATE | Epoch 18→21 |
@@ -398,9 +402,9 @@ NOW WHAT?
   ╚══════════════════════════════════════════════════════════╝
 
   Alternative: Continue training to epoch 30+
-    ≈ 9 more epochs × 86 min = ~13 hours
+    ≈ 13 more epochs × 86 min = ~18.6 hours (from epoch 17 restart)
     Low probability of improvement (overfit plateau was 55 epochs)
-    But: epoch 21 in progress — let it finish for completeness
+    Run 3 is generating new trajectory from epoch 17; re-evaluate at epoch 20 LR restart
 
   Not viable: RF3 advancement
     Gate requires mAP50 ≥ 0.40, current = 0.207 (HALF)

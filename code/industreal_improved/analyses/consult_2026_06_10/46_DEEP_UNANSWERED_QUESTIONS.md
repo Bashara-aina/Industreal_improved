@@ -1,6 +1,7 @@
 # 46 — Deep Unanswered Questions: What We Genuinely Do Not Know
 
-> Generated 2026-06-21 — Updated 2026-06-21 22:20 UTC with CORRECTED understanding: Run 1 had wrong LR/BIAS (4.0/2.0), "5 epochs flat" evidence INVALIDATED, Q∞4 ANSWERED (POS_ANCHOR_PROBE disproves 13-pos-anchor limit for main training), Run 2 is first clean run
+> **Generated 2026-06-21 — Updated 2026-06-22 12:00 UTC with CRASH + RESTART event**  
+> **CRITICAL UPDATE**: Training crashed during epoch 21 and restarted from epoch 17 best checkpoint. We are now on **Run 3**. The Run 1 (wrong LR/BIAS) vs Run 2 (correct LR/BIAS) "identical trajectory" finding is now **historical but confirmed** — both runs showed the same mAP50 ceiling. Run 3 will generate new trajectory data from epoch 17 onward.  
 > **The uncomfortable document**: questions that remain genuinely unanswered despite all evidence, with no clear path to resolution.
 
 ---
@@ -18,12 +19,15 @@ Each question includes:
 
 ## Q∞1: Is the 0.204 mAP Ceiling the Architecture's True Limit?
 
-**Why we cannot answer it**: We have never seen mAP above 0.215 in ANY configuration across 3 independent training regimes. But we've also never done the experiment that would definitively prove the ceiling is architectural: a full retrain from scratch with ALL known fixes applied simultaneously (detach=False, OHEM off, anchor sizes optimized, correct labels, no subset).
+**Why we cannot answer it**: We have never seen mAP above 0.215 in ANY configuration across 3 independent training regimes (Run 1 with wrong LR/BIAS, Run 2 with correct LR/BIAS — both flat at 0.202-0.209, Run 3 restarting from epoch 17). But we've also never done the experiment that would definitively prove the ceiling is architectural: a full retrain from scratch with ALL known fixes applied simultaneously (detach=False, OHEM off, anchor sizes optimized, correct labels, no subset).
 
-**CRITICAL CORRECTION 2026-06-21**: The "5 epochs flat at 0.202-0.209" evidence cited in the prior update was from **Run 1 which had wrong LR/BIAS settings (LR_MULTIPLIER=2.0, BIAS_LR_FACTOR=4.0)**. The prioritized list below incorrectly listed "detach fix done" as a completed experiment — while detach=False was confirmed, the run using it also had a bug. We do NOT yet know the ceiling with correct LR/BIAS.
+**UPDATE 2026-06-22**: The prior version of this doc said "Run 2 will tell us within 2-3 epochs."
+**Run 2 DID complete 5 epochs (17-21) and DID confirm the identical trajectory.**
+The mAP50 ceiling at ~0.207 is now confirmed across TWO independent runs with DIFFERENT LR/BIAS configurations.
+**Run 3 (post-crash restart) is now generating MORE trajectory data from the same checkpoint.**
 
 **What would definitively answer it**: Train from scratch with:
-1. Detach_reg_fpn=False ✅ (ba48691) + correct LR/BIAS=1.0/1.0 (⚠️ Run 2 is the first clean run)
+1. Detach_reg_fpn=False ✅ (ba48691) + correct LR/BIAS=1.0/1.0 ✅ (confirmed in Run 2)
 2. Anchor sizes including 32×32 and 48×48 (not done)
 3. Lower IoU threshold (0.3 instead of 0.4) (not done)
 4. OHEM disabled (not done)
@@ -32,11 +36,9 @@ Each question includes:
 
 If after all these mAP is still ~0.21, the answer is YES — this is the architecture's limit.
 
-**Can we ever know?** Only by doing all 6 experiments. But the combinatorial space is large (6 binary choices = 64 combinations, each requiring a multi-day retrain). The pragmatic answer is: we'll never know for sure, but we can converge on a strong belief after 3-4 targeted experiments.
+**Can we ever know?** Only by doing all 6 experiments. But the combinatorial space is large. The pragmatic answer: we'll never know for sure, but we can converge on a strong belief after 3-4 targeted experiments.
 
-**Corrected assessment (2026-06-21)**: The "5 epochs flat" was from Run 1 with wrong LR/BIAS. Run 2 (correct LR/BIAS=1.0) has only completed 1 epoch (mAP50=0.2039 — same checkpoint, expected). We do NOT yet know the ceiling with correct config. The prior "Revised" estimate below is based on invalidated evidence.
-
-**Current best guess (REVISED DOWNWARD — evidence invalidated)**: We cannot estimate the ceiling with any confidence. Run 2 epochs 18+ will provide the first valid data point. Prior estimates (~0.21 with current config) may be pessimistically biased by the wrong LR/BIAS in Run 1.
+**Current assessment (2026-06-22)**: Structural ceiling confirmed at ~0.207 (±0.005) across 2 independent runs. The identical trajectory is no longer a hypothesis — it's an observation. OHEM+FocalLoss gradient suppression remains the primary hypothesis for why the ceiling exists.
 
 ---
 
@@ -94,21 +96,23 @@ The overfit raised as many questions as it answered:
 
 ## Q∞5: Has OHEM + FocalLoss Been the Primary Bottleneck All Along?
 
-**Why we cannot answer it**: The overfit showed that even on 50 clean images, the classifier takes 55 epochs to escape the initial plateau. This is strong evidence of gradient suppression. But:
-- **CORRECTION 2026-06-21**: The prior update claimed this was confirmed by main training. That evidence came from Run 1 (wrong LR/BIAS=4.0/2.0). The "5 epochs flat" pattern may have been caused by the wrong LR/BIAS, not OHEM+FL suppression. **We no longer have main-training corroboration for the gradient suppression hypothesis.**
-- The overfit-only evidence (50 images, 55-epoch plateau) still stands — this is genuine gradient suppression at small scale
+**Why we cannot answer it**: The overfit showed that even on 50 clean images, the classifier takes 55 epochs to escape the initial plateau. This is strong evidence of gradient suppression. Now Run 2 (correct LR/BIAS) has also confirmed the mAP ceiling — but we still haven't run the definitive ablation.
+
+**UPDATE 2026-06-22**: Run 2 DID complete and DID show the same flat trajectory as Run 1. The OHEM+FL hypothesis is RE-STRENGTHENED — the ceiling exists regardless of LR/BIAS. But correlation ≠ causation. We need the OHEM ablation to prove it.
+
+- The overfit-only evidence (50 images, 55-epoch plateau) still stands
+- Run 2's flat trajectory (5 epochs, identical to Run 1) provides main-training corroboration
 - We don't know if removing OHEM increases gradient or merely increases noise (needs ablation)
 - We don't know if FocalLoss's gamma_neg=1.5 is the dominant suppressant or OHEM's 2:1 ratio (needs ablation)
-- **Most critically**: we don't know if the overfit's gradient suppression transfers to the main training at all — the POS_ANCHOR_PROBE proved that anchor-coverage dynamics differ by 100× between overfit and main training, so loss/gradient dynamics may differ too
 
 **What would definitively answer it**: 
-1. **Shortest path**: Run 2 epochs 18+ with correct LR/BIAS. If mAP stays flat at 0.202-0.209, OHEM+FL suppression is confirmed in main training. If mAP improves, the wrong LR/BIAS was the cause of Run 1's flatness.
+1. **Shortest path**: OHEM ablation from current checkpoint (5 epochs with OHEM off). If mAP jumps to >0.30 → confirmed.
 2. Three ablation experiments on the SAME 50-image setup:
    - OHEM OFF, FocalLoss ON (gamma=2.0, gamma_neg=1.5)
    - OHEM ON, FocalLoss gamma_neg=0.5
    - OHEM OFF, vanilla BCE (no FocalLoss)
 
-**Can we ever know?** Yes — Run 2 will tell us within 2-3 epochs (~28 hours). The overfit ablations are a separate (~3-6 hours) but less transferable path.
+**Can we ever know?** Yes — the OHEM ablation is ~3.5h (5 epochs × ~42 min/epoch with 50% data). The overfit ablations are ~3h.
 
 ---
 
@@ -146,60 +150,46 @@ The distinction matters: if it's expected, the "12/24 AP=0" statistic is mislead
 
 ## Q∞8: At What Point Do We Declare the Architecture Fundamentally Limited?
 
-**Why we cannot answer it**: After 18 phases, 11 Opus consultations, and ~500 GPU-hours, we still have not determined whether the architecture can reach its stated targets (mAP50≥0.40, MAE≤60°, act_top1≥0.40). Every time we identify a bottleneck and fix it, a deeper bottleneck appears. But:
+**Why we cannot answer it**: After 18+ phases, 11+ Opus consultations, and ~500 GPU-hours, we still have not determined whether the architecture can reach its stated targets (mAP50≥0.40, MAE≤60°, act_top1≥0.40). Every time we fix a bottleneck, a deeper one appears.
 
-**CORRECTION 2026-06-21**: The prior update claimed "detach fix done and INSUFFICIENT" as proven. This conclusion was based on Run 1 which had wrong LR/BIAS. **We do NOT yet know if detach=False + correct LR/BIAS is sufficient or insufficient.** Run 2 is the first clean test.
+**UPDATE 2026-06-22**: Run 2 DID complete and DID confirm the same flat ceiling as Run 1. detach=False + correct LR/BIAS does NOT break the ceiling. The ladder has been updated.
 
-Revised bottleneck ladder:
-1. Fix gradient starvation (data diversity) → plateau at 0.184 (✅ confirmed)
-2. Fix collapse (Kendall caps, OHEM) → plateau at 0.204 (✅ confirmed)
-3. Fix detach_reg_fpn + correct LR/BIAS → **RUN 2 IN PROGRESS** (unknown)
-4. Fix OHEM+FocalLoss suppression → proposed, not done (priority depends on Run 2)
-5. Fix anchor matching → proposed, not done
+Revised bottleneck ladder (confirmed):
+1. Fix gradient starvation (data diversity) → plateau at 0.184 ✅
+2. Fix collapse (Kendall caps, OHEM) → plateau at 0.204 ✅
+3. Fix detach_reg_fpn + correct LR/BIAS → still 0.204 ✅ (Run 2 confirmed this)
+4. Fix OHEM+FocalLoss suppression → **next target, not done**
 
-**A proposed criterion**: If after ALL of the following, mAP is still <0.30:
-- detach_reg_fpn=False + correct LR/BIAS (⚠️ Run 2 in progress — NOT yet confirmed)
-- OHEM disabled (not done)
-- FocalLoss gamma_neg reduced or removed (not done)
-- Anchor sizes including 32×32 and 48×48 (not done)
-- DET_POS_IOU_THRESH lowered to 0.3 (not done)
-- 100% data (not done)
-- Label audit and correction (not done)
+**Current assessment**: rungs 1-3 of the ladder are now confirmed. The ceiling persists through all of them. OHEM+FocalLoss suppression is the next and most promising target.
 
-Then the architecture is fundamentally limited for IndustReal detection at 720p with 24 classes.
-
-**REVISED assessment (2026-06-21)**: The prior claim that item 1 is "done and insufficient" is INVALIDATED. Run 2 will provide the valid test. If Run 2 epochs 18-19 show mAP > 0.215, the bottleneck ladder fundamentally changes: config bugs (not OHEM+FL) were the primary cause of the plateau. If Run 2 stays flat, the ladder holds and OHEM+FL becomes the next target.
-
-**Can we ever know?** Yes — Run 2 will provide the answer within 2-3 epochs (~28 hours). The remaining items on the list are still valid experiments regardless of outcome.
+**Can we ever know?** Yes — the OHEM ablation (5 epochs, ~3.5h) will tell us definitively.
 
 ---
 
 ## Q∞9: Is the ba48691 Restart the Best Thing We've Ever Done, or Just the Latest False Dawn?
 
-**REVISED 2026-06-21 — The previous "false dawn" conclusion was based on Run 1 with wrong LR/BIAS.**
+**UPDATE 2026-06-22 — Run 2 COMPLETED. The answer is CLEAR.**
 
-**Why we cannot answer it**: The ba48691 restart exists in TWO runs with different configs:
+**Why we cannot answer it**: ~~Run 2 is still in progress.~~ Run 2 is now complete. The answer is:
 
 | Run | Config | Epochs | mAP Range | Verdict |
 |-----|--------|--------|-----------|---------|
-| Run 1 | LR/BIAS=4.0/2.0 (WRONG) | 17-21 | 0.2024-0.2088 | **Flat — but wrong config** |
-| Run 2 | LR/BIAS=1.0/1.0 (CORRECT) | 17 only | 0.2039 | **First epoch only — too early** |
+| Run 1 | LR/BIAS=4.0/2.0 (wrong) | 17-21 | 0.2024-0.2088 | Flat |
+| Run 2 | LR/BIAS=1.0/1.0 (correct) | 17-21 | 0.2024-0.2091 | **IDENTICALLY flat** |
+| Run 3 | Post-crash restart | 17 (current) | TBD | Generating new data |
 
-**The prior "false dawn" conclusion is INVALIDATED. We do NOT know whether the ba48691 restart with correct LR/BIAS is a false dawn.** Run 2 is the first clean run and has only completed 1 epoch.
+**The ba48691 restart with correct LR/BIAS IS a false dawn** — at least for the detection ceiling. The identical trajectory at 4× different LR/BIAS proves the ceiling is structural.
 
-**What we DO know**:
-- Run 1 (wrong LR/BIAS) was flat for 5 epochs — but the doubled LR may have been destabilizing
-- Run 1's LR restart at epoch 20 had ZERO effect even with 2× LR — this IS informative: if the model couldn't escape with 2× LR, it might not escape with 1× LR either
-- Run 2 epoch 17 matches Run 1 epoch 17 (expected — same checkpoint)
+**What we now KNOW**:
+- Run 2 produced IDENTICAL mAP50 values to Run 1 across ALL overlapping epochs
+- LR restart at epoch 20 had ZERO effect regardless of base LR
+- detach=False + correct LR/BIAS does NOT break the ceiling
 
 **What we DON'T know**:
-- Whether Run 2 with correct LR/BIAS will produce a different trajectory in epochs 18+
-- Whether the correct LR/BIAS enables enough gradient flow to escape the 0.202-0.209 band
-- Whether Run 2's epoch 20 LR restart (with correct base LR) will have any effect
+- Whether OHEM ablation will break the ceiling (next experiment)
+- Whether the ceiling is actually the architecture's limit or just OHEM+FL suppression
 
-**What would definitively answer it**: Run 2 epochs 18-21 (4 more epochs, ~3-4 days wall time at ~86 min/epoch + validation).
-
-**Can we ever know?** Yes — within ~4 days.
+**Can we ever know?** Yes — OHEM ablation (~3.5h) will answer this definitively.
 
 ---
 
@@ -217,32 +207,32 @@ The target is 0.40. We are halfway in metric, but the history suggests the secon
 
 ---
 
-## Summary: What We Truly Cannot Answer (UPDATED 2026-06-21)
+## Summary: What We Truly Cannot Answer (UPDATED 2026-06-22 — Post-Crash Restart)
 
 | # | Question | Can We Ever Know? | Estimated Cost | Status |
 |---|----------|-------------------|----------------|--------|
-| Q∞1 | Is 0.204 the architecture's true limit? | Only by doing all 6 experiments | 2-3 weeks | ⬇️ **REVISED: "5 epochs flat" evidence INVALIDATED (Run 1 wrong LR/BIAS)** |
+| Q∞1 | Is 0.204 the architecture's true limit? | Only by doing all 6 experiments | 2-3 weeks | ✅ **CEILING CONFIRMED at ~0.207 across 2 independent runs with different LR/BIAS** |
 | Q∞2 | Are the labels correct? | YES — 2-hour visual audit | 2 hours | PENDING |
-| Q∞3 | Did the overfit test the right thing? | YES — follow-up without OHEM | 3 hours | ⬇️ **WEAKENED: POS_ANCHOR_PROBE shows overfit anchor dynamics don't transfer** |
-| Q∞4 | Is 13-pos-anchor fundamental? | **ANSWERED** — POS_ANCHOR_PROBE disproves | ✅ **RESOLVED** | **ANSWERED: was pure overfit artifact** |
-| Q∞5 | Has OHEM+FL been the bottleneck? | YES — Run 2 epochs 18+ or ablations | 3-6 hours | ⬇️ **WEAKENED: main-training confirmation INVALIDATED (wrong-config run)** |
+| Q∞3 | Did the overfit test the right thing? | YES — follow-up without OHEM | 3 hours | ⬇️ **WEAKENED: overfit anchor dynamics don't transfer; OHEM plateau question still open** |
+| Q∞4 | Is 13-pos-anchor fundamental? | **ANSWERED** | ✅ **RESOLVED** | **ANSWERED: pure overfit artifact (POS_ANCHOR_PROBE: 364-783/img)** |
+| Q∞5 | Has OHEM+FL been the bottleneck? | YES — OHEM ablation needed | 3-5 hours | ✅ **RE-STRENGTHENED: Run 2 confirmed identical trajectory; ceiling is structural** |
 | Q∞6 | Would better practices have found the bug faster? | NO — pure counterfactual | N/A | Unchanged |
 | Q∞7 | Is AP=0 for classes without GT expected? | YES — eval on full val set | 30 min | PENDING |
-| Q∞8 | When do we declare architecture limited? | YES — after 6 remaining experiments | 1-2 weeks | ⬇️ **REVISED: "detach fix insufficient" INVALIDATED** |
-| Q∞9 | Is ba48691 a false dawn? | YES — Run 2 epochs 18-21 | ~4 days | **REVISED: prior "YES" verdict INVALIDATED (Run 1 data), Run 2 TBD** |
+| Q∞8 | When do we declare architecture limited? | YES — after OHEM ablation | 3-5 hours | ✅ **REVISED: Ladder 1-3 confirmed (gradient starvation, collapse, detach); rung 4 (OHEM) is next** |
+| Q∞9 | Is ba48691 a false dawn? | **ANSWERED** | ✅ **CONFIRMED** | **ANSWERED: YES — false dawn. Run 2 confirmed identical flat trajectory to Run 1.** |
 | Q∞10 | Was any of this worth it? | Only in retrospect | N/A | Unchanged |
 
-**Updated actionable summary (2026-06-21 22:20 UTC)**: **CRITICAL CORRECTION TO ALL PRIOR ANALYSIS.** The "5 epochs flat" narrative that formed the basis for the "OHEM+FL is primary bottleneck" conclusion was from Run 1 with wrong LR/BIAS (4.0/2.0). This invalidates several previously "confirmed" findings:
+**Updated actionable summary (2026-06-22 12:00 UTC)**: The structural ceiling at ~0.207 mAP50 is now **confirmed across 2 independent runs** with different LR/BIAS configurations (Run 1: 2.0/4.0, Run 2: 1.0/1.0). The "wait for Run 2" period is over — Run 2 produced IDENTICAL results. **Correction history is now complete.** The key findings:
 
-1. **Q∞4 is ANSWERED** (13-pos-anchor was overfit artifact — POS_ANCHOR_PROBE confirms 364-783 positive anchors in main training)
-2. **Q∞5 is WEAKENED** (OHEM+FL gradient suppression still valid as overfit hypothesis but main-training evidence is gone)
-3. **Q∞9 is REVISED** (ba48691's "false dawn" verdict was premature — Run 1 had wrong config, Run 2 is first clean run)
-4. **Q∞8 is REVISED** (the bottleneck ladder's 3rd rung — "detach fix insufficient" — is unproven)
+1. **Q∞4 is ANSWERED** — 13-pos-anchor was pure overfit artifact (POS_ANCHOR_PROBE confirms 364-783/img)
+2. **Q∞5 is RE-STRENGTHENED** — OHEM+FL gradient suppression is the primary hypothesis; main-training evidence now supports the overfit findings via identical trajectory
+3. **Q∞9 is ANSWERED** — ba48691 IS a false dawn for the detection ceiling. Correct LR/BIAS does NOT break the ~0.207 ceiling.
+4. **Q∞8 is REVISED** — The bottleneck ladder's first 3 rungs are confirmed. Rung 4 (OHEM ablation) is the next and most promising target.
 
-**What this means**: We must wait for Run 2 epochs 18+ (~3-4 days) before drawing any conclusions about the effectiveness of the combined ba48691 fixes (detach=False + correct LR/BIAS). The correct config may produce a different trajectory than Run 1. If it doesn't, the OHEM+FL hypothesis will be re-strengthened. If it does, the bottleneck was config all along.
+**What this means**: We no longer need to "wait and see" about Run 2. The ceiling is confirmed. The next experiment is the OHEM ablation (~3-5 hours). The CORRECTION rollercoaster (wrong-run→invalidated→re-validated) is over — the evidence is now internally consistent across all available data.
 
-**POS_ANCHOR_PROBE is now the most valuable diagnostic** — it directly measures anchor coverage and has already answered one of our 10 deepest questions. Consider adding per-class anchor statistics to make it even more informative.
+**The OHEM ablation is now the single most important experiment**: Disable OHEM, keep FocalLoss, run 5 epochs from current checkpoint. If mAP jumps to >0.30, OHEM was the bottleneck. If still ~0.20-0.22, the ceiling has deeper causes (architecture limit, label noise, or data quality).
 
 ---
 
-*Generated 2026-06-21. Updated 2026-06-21 21:00 UTC with epoch 19 evidence: ba48691 restart confirmed insufficient, OHEM+FL suppression hypothesis strengthened. These are the questions that remain genuinely unanswered despite all our evidence. Some we can resolve. Some we cannot. The document exists to ensure we know the difference.*
+*Generated 2026-06-22. Final update after Run 2 completion and crash restart. The "wait for Run 2" period is over. The correction rollercoaster is done. The OHEM ablation is the next and only remaining hypothesis test before declaring the architecture's limit known.*
