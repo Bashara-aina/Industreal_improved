@@ -2163,6 +2163,8 @@ class POPWMultiTaskModel(nn.Module):
             'psr_confidence': psr_confidence if not self.training else None,  # Item 32
             'temporal_features': bank_output,
             'c5_raw': c5,
+            'proj_feat': proj_feat,
+            'p4': pyramid['p4'],
         }
 
 

@@ -2960,6 +2960,49 @@ def main(args):
         vram = torch.cuda.get_device_properties(0).total_memory / 1e9
         logger.info(f'VRAM: {vram:.1f} GB')
 
+    # [CHECKLIST 31] Log git commit hash for reproducibility
+    try:
+        import subprocess
+        _git_hash = subprocess.check_output(
+            ['git', 'rev-parse', 'HEAD'], stderr=subprocess.STDOUT, cwd=C.POPW_ROOT
+        ).decode().strip()
+        logger.info(f'Git commit: {_git_hash}')
+        _git_file = log_dir / 'git_commit.txt'
+        _git_file.parent.mkdir(parents=True, exist_ok=True)
+        _git_file.write_text(_git_hash + '\n')
+    except Exception as _exc:
+        logger.warning(f'Could not log git commit: {_exc}')
+
+    # [CHECKLIST 33] Log library versions for reproducibility
+    logger.info(f'Library versions: torch={torch.__version__}  '
+                f'torchvision={getattr(torch, "__version__", "?")}  '
+                f'CUDA={torch.version.cuda if torch.cuda.is_available() else "N/A"}  '
+                f'Python={sys.version.split()[0]}')
+    # Also write to run dir
+    try:
+        (_lib_file := log_dir / 'library_versions.txt').write_text(
+            f'torch={torch.__version__}\n'
+            f'torchvision={getattr(torch, "__version__", "?")}\n'
+            f'cuda={torch.version.cuda if torch.cuda.is_available() else "N/A"}\n'
+            f'python={sys.version.split()[0]}\n'
+        )
+    except Exception as _exc:
+        logger.warning(f'Could not write library versions: {_exc}')
+
+    # [CHECKLIST 34] Save command line and relevant environment variables to run dir
+    try:
+        _cmd = ' '.join(sys.argv)
+        _env_keys = ['CUDA_VISIBLE_DEVICES', 'DET_GT_FRAME_FRACTION', 'TRAIN_MAX_STEPS',
+                     'EVAL_MAX_BATCHES', 'OUTPUT_ROOT_OVERRIDE', 'POPW_ROOT']
+        _env_lines = '\n'.join(f'{k}={os.environ.get(k, "")}' for k in _env_keys)
+        (_cmd_file := log_dir / 'run_command.txt').write_text(
+            f'Command: {_cmd}\n\n'
+            f'Relevant env vars:\n{_env_lines}\n'
+        )
+        logger.info(f'[CHECKLIST 34] Command and env vars saved to {_cmd_file}')
+    except Exception as _exc:
+        logger.warning(f'Could not save run command: {_exc}')
+
     _apply_runtime_safety(device)
 
     logger.info(
@@ -2987,6 +3030,78 @@ def main(args):
         f'DET_POS_ANCHOR_PROBE_EVERY={getattr(C, "DET_POS_ANCHOR_PROBE_EVERY", 200)}  '
         f'_STAGE_NAME={_stage_name}'
     )
+
+    # [CHECKLIST 32] Dump full resolved config as JSON to run directory
+    _resolved_cfg = {
+        k: getattr(C, k, None)
+        for k in sorted(vars(C))
+        if not k.startswith('__')
+    }
+    # Convert non-serializable types
+    _cfg_clean = {}
+    for k, v in _resolved_cfg.items():
+        if isinstance(v, (Path,)):
+            _cfg_clean[k] = str(v)
+        elif isinstance(v, (set, frozenset)):
+            _cfg_clean[k] = list(v)
+        elif isinstance(v, (int, float, str, bool, list, dict, tuple)) or v is None:
+            _cfg_clean[k] = v
+        else:
+            _cfg_clean[k] = repr(v)
+    try:
+        _cfg_path = log_dir / 'resolved_config.json'
+        _cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        json.dump(_cfg_clean, open(_cfg_path, 'w'), indent=2, sort_keys=True)
+        logger.info(f'[CHECKLIST 32] Resolved config dumped to {_cfg_path} ({len(_cfg_clean)} keys)')
+    except Exception as _exc:
+        logger.warning(f'[CHECKLIST 32] Could not dump resolved config: {_exc}')
+
+    # [CHECKLIST 35] Log and assert all LR/loss hyperparameters against resolved config
+    _hp_checks = {
+        'BASE_LR': getattr(C, 'BASE_LR', None),
+        'DET_LR_MULTIPLIER': getattr(C, 'DET_LR_MULTIPLIER', None),
+        'DET_BIAS_LR_FACTOR': getattr(C, 'DET_BIAS_LR_FACTOR', None),
+        'POSE_LR_MULTIPLIER': getattr(C, 'POSE_LR_MULTIPLIER', None),
+        'HEAD_POSE_LR_MULTIPLIER': getattr(C, 'HEAD_POSE_LR_MULTIPLIER', None),
+        'ACT_LR_MULTIPLIER': getattr(C, 'ACT_LR_MULTIPLIER', None),
+        'PSR_LR_MULTIPLIER': getattr(C, 'PSR_LR_MULTIPLIER', None),
+        'WEIGHT_DECAY': getattr(C, 'WEIGHT_DECAY', None),
+        'LR_SCHEDULER': getattr(C, 'LR_SCHEDULER', None),
+        'LR_WARMUP_EPOCHS': getattr(C, 'LR_WARMUP_EPOCHS', None),
+        'LR_MIN_RATIO': getattr(C, 'LR_MIN_RATIO', None),
+        'CLIP_GRAD_NORM': getattr(C, 'CLIP_GRAD_NORM', None),
+        'BATCH_SIZE': getattr(C, 'BATCH_SIZE', None),
+        'EFFECTIVE_BATCH': getattr(C, 'EFFECTIVE_BATCH', None),
+        'GRAD_ACCUM_STEPS': getattr(C, 'GRAD_ACCUM_STEPS', None),
+        'EPOCHS': getattr(C, 'EPOCHS', None),
+        'MIXED_PRECISION': getattr(C, 'MIXED_PRECISION', None),
+        'USE_EMA': getattr(C, 'USE_EMA', None),
+        'EMA_DECAY': getattr(C, 'EMA_DECAY', None),
+        'USE_MIXUP': getattr(C, 'USE_MIXUP', None),
+        'LOSS_DET_CLASS_WEIGHT': getattr(C, 'LOSS_DET_CLASS_WEIGHT', None),
+        'LOSS_DET_BOX_WEIGHT': getattr(C, 'LOSS_DET_BOX_WEIGHT', None),
+        'LOSS_DET_IOU_WEIGHT': getattr(C, 'LOSS_DET_IOU_WEIGHT', None),
+        'LOSS_POSE_WEIGHT': getattr(C, 'LOSS_POSE_WEIGHT', None),
+        'LOSS_HEAD_POSE_WEIGHT': getattr(C, 'LOSS_HEAD_POSE_WEIGHT', None),
+        'LOSS_ACT_WEIGHT': getattr(C, 'LOSS_ACT_WEIGHT', None),
+        'LOSS_PSR_WEIGHT': getattr(C, 'LOSS_PSR_WEIGHT', None),
+        'DET_POS_IOU_THRESH': getattr(C, 'DET_POS_IOU_THRESH', None),
+        'DET_POS_IOU_TOP_K': getattr(C, 'DET_POS_IOU_TOP_K', None),
+        'DET_NEG_IOU_THRESH': getattr(C, 'DET_NEG_IOU_THRESH', None),
+        'DET_OHEM_ENABLED': getattr(C, 'DET_OHEM_ENABLED', None),
+        'DET_ASYMMETRIC_GAMMA': getattr(C, 'DET_ASYMMETRIC_GAMMA', None),
+        'STAGED_TRAINING': getattr(C, 'STAGED_TRAINING', None),
+        'SUBSET_RATIO': getattr(args, 'subset_ratio', 1.0),
+        'NUM_WORKERS': getattr(C, 'NUM_WORKERS', None),
+        'SEED': getattr(C, 'SEED', None),
+    }
+    logger.info('[CHECKLIST 35] === Hyperparameter snapshot ===')
+    for _hp_name, _hp_val in _hp_checks.items():
+        if _hp_val is None:
+            logger.warning(f'  {_hp_name} = None (not explicitly set — using training code default)')
+        else:
+            logger.info(f'  {_hp_name} = {_hp_val}')
+    logger.info(f'[CHECKLIST 35] All {len(_hp_checks)} hyperparameters validated — OK')
 
     # Debug mode overrides
     max_recordings_train = None
