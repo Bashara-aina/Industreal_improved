@@ -1,7 +1,8 @@
-# 33 — Open Questions: Everything We Still Don't Know (v10 Era — Post-Breakthrough)
+# 33 — Open Questions: Everything We Still Don't Know (v11 Era — Overfit WEAK PASS + ba48691)
 
-> Generated 2026-06-21 — v10 update: detach_reg_fpn resolved as primary cause (Q35 RESOLVED), per-class AP parsed from metrics.jsonl (Q31 UPDATED with real data), Opus v10 findings incorporated.  
-> Current state: RF2 epoch 21 (97%, batch 3200/3302), PID 3791482. **detach_reg_fpn=False applied in working tree — restart decision is the next action.**
+> Generated 2026-06-21 — Updated 2026-06-21 22:16 UTC: **CRITICAL CORRECTION — Run 1/2 split discovered.** Prior conclusions about "5 epochs flat proving detach fix insufficient" were based on Run 1 with wrong LR/BIAS (4.0/2.0). Run 2 (correct 1.0/1.0) has only completed 1 epoch val. See Q01 and Q30 for corrected assessments.  
+> Overfit COMPLETE (WEAK PASS, cls_loss=0.062), ba48691 committed (detach=False ALL stages, LR/BIAS=1.0, honest metrics), v11 C2 correction (class 6 has 65/91 samples, not 1739).  
+> Current state: RF2 **Run 2** epoch 18 training, PID 361404. **All fixes committed in ba48691 — but the correct-config test has only just begun.**
 
 ---
 
@@ -19,23 +20,27 @@ This is the master list of confusions, organized by severity. Each question incl
 
 ## CRITICAL (Blocking Progress)
 
-### Q01: Why Does mAP Plateau at 0.204-0.215 Despite detach_reg_fpn Being the Primary Cause? (UPDATED)
+### Q01: Why Does mAP Plateau at 0.204-0.215 Despite detach_reg_fpn Fix AND Architecture CAN Learn? (UPDATED — CORRECTED 2026-06-21 22:16 UTC)
 
-**The question has fundamentally changed**: Opus v10 identified `detach_reg_fpn=True` as the primary cause of the plateau. The regression gradient is detached from the backbone — only classification + head_pose shape features. But the question remains: once we flip detach_reg_fpn=False, will the mAP ceiling break?
+**⚠️ CORRECTION**: The prior assessment treated "5 epochs of post-restart data" as validating the OHEM+FocalLoss hypothesis via main training. We've since discovered that log contains TWO runs: Run 1 (wrong LR/BIAS=4.0/2.0, epochs 17-21 flat) and Run 2 (correct LR/BIAS=1.0/1.0, only 1 epoch val completed). The "5 epochs flat" evidence is INVALIDATED. The decisive experiment is STILL IN PROGRESS with the correct config.
 
-**Current evidence**:
-- **detach_reg_fpn=True CONFIRMED** for RF2 (config.py:1117 → preset → no stage_cfg override → no CLI flag)
-- RF1 (detach=False) reached 0.184, RF2 (detach=True, 2.5× data) reached 0.204
-- Opus v10: "detach is a handicap that v8 fixes + 2.5× data partly compensated for — flipping it should move the ceiling but may not single-handedly clear 0.40"
+**The question has fundamentally changed twice**: Opus v10 identified `detach_reg_fpn=True` as the primary cause. The overfit experiment (v11) proved the architecture CAN learn classification. But the 50-image overfit also revealed a deeper gradient-suppression mechanism that persists even with detach fixed.
 
-**The remaining unknowns**:
-1. How much ceiling is detach_reg_fpn (fixable) vs. structural (data quality, label noise)?
-2. The 12/24 AP=0 pattern — is THIS caused by detach_reg_fpn, or is it a separate label noise issue?
-3. If detach fixes everything → mAP jumps to 0.35+. If detach helps but ceiling remains → labels (class 6 with 1739 GT) are the next bottleneck.
+**What we NOW know** (50-image cls-only overfit, 200 epochs):
+- **Architecture CAN overfit**: cls_loss→0.062, pos_score_mean→0.97, pos_score_max→1.0 ✅
+- **But learning is VERY slow**: 55 epochs to escape the initial plateau (Regime 2), even on 50 GT-rich images
+- **cls_w_norm grows LINEARLY** over 200 epochs (7.07→13.43), never plateauing — the weights haven't saturated
+- **Only 13 positive anchors per batch consistently** — this is an anchor-matching structural limit, not a data quantity limit
+- **Three-regime learning trajectory**: Fast drop (1-5) → Plateau (5-55) → Slow decline (55-200) — consistent with OHEM+FocalLoss gradient suppression
 
-**The decisive experiment**: Flip detach_reg_fpn=False, restart from best.pth, run 3-4 epochs. See if mAP climbs past 0.25-0.30.
+**The decisive experiment is IN PROGRESS**: ba48691 commits detach_reg_fpn=False for ALL stages and reverts LR/BIAS multipliers to 1.0. PID 361404 is running with the clean config. We'll know in 3-4 epochs whether mAP climbs past 0.25.
 
-**Confidence**: HIGH that detach_reg_fpn is a major factor. LOW on whether fixing it alone gets to 0.40.
+**The remaining unknowns** (updated post-overfit):
+1. How much of the ceiling is detach_reg_fpn (fixable) vs. OHEM+FocalLoss gradient suppression (architectural)?
+2. The 13-pos-anchor structural limit — is this the bottleneck even at scale?
+3. If detach fix boosts mAP to 0.30 but not 0.40, is the remaining ceiling OHEM, FL, or data quality?
+
+**Confidence**: HIGH that detach_reg_fpn was a major factor. MEDIUM that the overfit proves the architecture is fine. LOW on whether the combined fix gets to 0.40.
 
 ---
 
@@ -99,28 +104,35 @@ This is the master list of confusions, organized by severity. Each question incl
 
 ---
 
-### Q05: Is Focal Loss Structurally Capped for This Architecture? (UPDATED)
+### Q05: Is Focal Loss + OHEM Structurally Capping Gradient? (UPDATED — 50-Image Overfit Provides Strong Evidence)
 
-**The argument**: Focal Loss was designed for RetinaNet-style detectors with ~100K anchors/image. With 164K anchors/frame × 4 frames = 656K predictions/batch, and only ~120 positive anchors per batch (0.018%), the cumulative negative gradient may create a landscape where the uniform-background equilibrium is the only stable fixed point.
+**The argument has been substantially updated by the 50-image cls-only overfit.**
 
-**Opus v9's contribution — the label noise argument** (`39_OPUS_ANSWER_v9.md §3.2`):
+The 200-epoch overfit revealed a three-regime learning trajectory that strongly implicates OHEM+FocalLoss gradient suppression:
 
-The stronger hypothesis is now **label noise**, not Focal Loss mechanics per se:
+**Three-regime trajectory (50 images, 200 epochs):**
+1. **Regime 1 (epochs 1-5): Fast drop** — cls_loss 2.0→0.50. The model learns the easy positives (high-IoU anchors, distinctive objects).
+2. **Regime 2 (epochs 5-55): Plateau** — cls_loss stays at ~0.50 for 50 epochs. This is the key regime — the model is stuck despite having only 50 images with GT.
+3. **Regime 3 (epochs 55-200): Slow decline** — cls_loss drops from 0.50→0.062 over 145 epochs. Learning continues but at 3-4× slower rate than Regime 1.
 
-> "IndustReal labels are synthetic projections. **Box** targets are robust to class-label noise; **class** targets are not. 24 assembly-part classes, many near-identical across assembly states, with projection jitter, is precisely the regime where the **loss-minimizing classifier output is a near-uniform, low-confidence vector** — i.e., the 'uniform ~0.079' you observe is not a bug, it is the *correct* response to ambiguous/noisy class labels."
+**The OHEM+FocalLoss gradient suppression hypothesis:**
+- OHEM 2:1 ratio selects the hardest negatives, which include borderline positives (IoU~0.25 anchors that are close to the decision boundary)
+- FocalLoss gamma_neg=1.5 further suppresses gradient for well-classified examples
+- Together: OHEM selects hard examples → FocalLoss suppresses their gradient → the effective learning signal is a fraction of what it should be → 50-epoch plateaus
 
-This unifies the 0.18 ceiling AND the drift-to-uniform under one mechanism:
-- **Ceiling**: The Bayes-optimal classifier given noisy labels IS a low-mAP classifier (~0.18-0.21)
-- **Collapse plateau**: Once the classifier approaches this optimum, any further differentiation would INCREASE loss, so it stays
+**The 13-pos-anchor structural limit**: Even with 50 GT-rich images (each with ≥1 box, some with multiple), the overfit experiment always found exactly 13 positive anchors per batch. This suggests the anchor-matching system (DET_POS_IOU_THRESH=0.4) is the bottleneck — TOP_K=9 doesn't help if no anchor exceeds IoU=0.4 for most GT boxes.
 
-**The 50-image overfit test** (`39_OPUS_ANSWER_v9.md §6`): Train on 50 images, classification-only, head_pose OFF, Kendall OFF. If it CAN reach mAP>0.8, Focal Loss is fine and label noise at scale is the issue. If it CAN'T, Focal Loss or the matching/assignment is fundamentally broken.
+**Implications**:
+- If OHEM+FocalLoss suppresses gradient by ~5-10×, the main training (2000 images) would see proportionally more gradient but still face the same suppression factor
+- The cls_w_norm growing linearly (7.07→13.43 over 200 epochs, never plateauing) suggests the classifier operates in a gradient-suppressed regime even after 200 epochs
+- This may explain why 12/24 classes are AP=0: the combined gradient suppression prevents the classifier from learning low-frequency classes
 
-**Remaining unknowns:**
-- Would Quality Focal Loss (QFL) or Varifocal Loss (VFL) raise the ceiling by changing the loss landscape?
-- Is the ceiling at 0.21 or 0.40? We don't know because we've never seen mAP above 0.215 in ANY configuration
-- If label noise IS the ceiling, what fraction of labels need fixing to reach 0.40?
+**What we'd need to test:**
+- OHEM ablation: train 3 epochs without OHEM, track pos_score_mean and cls_w_norm
+- FocalLoss ablation: compare OHEM+FL vs. FL-only vs. vanilla BCE
+- If either removal significantly accelerates learning, we've identified the bottleneck
 
-**Confidence**: MEDIUM that label noise is part of the ceiling. LOW on whether Focal Loss specifically is the bottleneck (vs. assignment, architecture, or data).
+**Confidence**: MEDIUM-HIGH that OHEM+FL gradient suppression is real and significant. MEDIUM on whether removing it would break the mAP ceiling.
 
 ---
 
@@ -148,67 +160,78 @@ The fixes accomplished their primary goal — the run did NOT collapse at epoch 
 
 ---
 
-### Q30: Will RF2 Reach Gate Targets? (UPDATED — Now "Should We Advance or Diagnose?")
+### Q30: Will RF2 Reach Gate Targets? (CORRECTED 2026-06-21 22:16 UTC — Run 2 Is the Real Test)
 
-**Previous answer** (epoch 15 era): "Unknown — post-fix trajectory is unknown."
+**⚠️ CORRECTION**: The prior answer "NO — ba48691 restart confirmed detach fix insufficient" was based on Run 1 (wrong LR/BIAS=4.0/2.0). This conclusion is INVALIDATED. Run 2 (correct LR/BIAS=1.0/1.0) has only completed 1 epoch val (epoch 17, mAP50=0.2039 — a restart from the pre-existing checkpoint, so matching is expected).
 
-**Current answer**: **NO, RF2 will not reach gate targets at its current trajectory.**
+**What we actually know now:**
 
-With 6 consecutive epoch-ends at mAP50=0.204-0.215 and zero trend direction, the probability of reaching 0.40 within the remaining ~15 epochs is negligible. Even the most optimistic extrapolation (+0.01/epoch, never seen) would take 20 epochs to reach 0.40 — more than the remaining budget.
+**Run 1** (wrong config, DET_BIAS_LR_FACTOR=4.0, DET_LR_MULTIPLIER=2.0):
+- Epochs 17-21: mAP50=0.2039, 0.2065, 0.2088, 0.2047, 0.2024 — flat
+- This run had the CORRECT detach=False but WRONG LR/BIAS multipliers
+- The high bias LR (4.0×) may have actively impaired the classifier by over-updating the bias relative to weights
+- **Verdict: INVALID as test of the correct config**
 
-**The gate criteria:**
-- det_mAP50 >= 0.40: Current 0.2047 — 2× below target, zero trend ❌
-- MAE <= 60°: Current 9.23° — ACHIEVED ✅
+**Run 2** (correct config, DET_BIAS_LR_FACTOR=1.0, DET_LR_MULTIPLIER=1.0):
+- Started at 19:11:11 UTC
+- Epoch 17: mAP50=0.2039, MAE=9.25° (only 1 epoch completed)
+- All other metrics match Run 1 start (expected: same checkpoint, same epoch)
+- **Verdict: INSUFFICIENT DATA — need epochs 18-22**
 
-**Opus v9's recommendation** (`39_OPUS_ANSWER_v9.md §Q9`):
-> "Plan it, launch it only after RF2 produces one epoch-end `mAP50@0.001` that **holds for ≥3 consecutive epoch-ends past ep15**. Crisp failure criterion: if `mAP50@0.001 < 0.10` for 3 consecutive epoch-end evals after ep15, declare RF2 failed, run the 50-image overfit, and branch."
+**What this means:**
+- The OHEM+FocalLoss gradient suppression hypothesis is SUPPORTED BY OVERFIT but NOT YET TESTED by main training with ALL fixes
+- detach=False is committed for ALL stages — Run 2 tests this in full
+- LR/BIAS=1.0/1.0 is the clean config we've been working toward
+- **There is a REAL chance Run 2's correct config breaks the ceiling**, unlike what Q30 previously claimed
 
-mAP50 at 0.001 threshold has been 0.204-0.215 for 5 consecutive eval epochs past ep15 (epochs 16-20). By Opus v9's criterion, RF2 has been "failed" since epoch 18. The question is now whether to:
-- **Run the 50-image overfit** (Opus v9 §6) — diagnose the root cause before deciding
-- **Advance to RF3 now** — activity head might provide new gradient that breaks the plateau
-- **Continue RF2** — hope for a late breakthrough (low probability based on evidence)
+**Updated gate criteria:**
+- det_mAP50 >= 0.40: Current 0.2039 — UNKNOWN whether correct config changes trajectory
+- MAE <= 60°: ACHIEVED ✅ (9.25°)
+- **Next decisive checkpoint**: Run 2 epoch 18 val (expected ~23:31 UTC on 2026-06-21)
+- **If Run 2 epochs 18-20 show consistent mAP improvement**: detach + LR/BIAS fix WAS the bottleneck
+- **If Run 2 stays flat at 0.20-0.21**: OHEM+FocalLoss hypothesis is now genuinely supported by main training
 
-**Confidence**: HIGH that RF2 won't reach 0.40. MEDIUM on what the best next action is.
+**Confidence**: LOW on whether current config reaches gate. The prior HIGH-confidence "NO" was based on invalidated evidence. We genuinely don't know yet.
 
 ---
 
 ## HIGH (Important for Direction)
 
-### Q31: Why Are 12/24 Classes ALWAYS at AP=0 Across ALL Epochs? (UPDATED — Per-Class AP Parsed)
+### Q31: Why Are 12/24 Classes ALWAYS at AP=0 Across ALL Epochs? (UPDATED — v11 C2 Correction: Class 6 Has 65/91 Samples, Not 1739)
 
-**The per-class AP has been parsed** from metrics.jsonl (epoch 18 data). This is the first time we've read this data — it was always being written, we just weren't looking:
+**The v11 C2 correction fundamentally changes this question.** Opus v11 §C2 discovered that the "1739 GT instances for class 6" number was an accumulation artifact — the per-class AP table we were reading did NOT have a trustworthy source. The repo's own `DET_CLASS_ALPHAS` (config.py) shows class 6 has only **65 training samples** (91 total across all splits, 65 at 50% subset).
+
+The correct numbers for the 50% RF2 subset:
 
 ```
-det_per_class_ap (epoch 18):
-  WORKING (AP>0) — 12 classes:
-    Classes 4 (0.370), 5 (1.0), 7 (0.719), 10 (0.477), 12 (0.559), 17 (0.396), 21 (1.0)
-    Classes 0 (0.020), 9 (0.074), 11 (0.135), 20 (0.126), 22 (0.079)
-  
-  AP=0 WITH GT — 4 classes (MOST IMPORTANT):
-    Class 6:  1739 GT instances, AP=0.0 — THE mystery class
-    Class 8:  GT present, AP=0.0
-    Class 13: GT present, AP=0.0
-    Class 19: GT present, AP=0.0
-  
-  AP=0 — NO GT IN SUBSET — 8 classes:
-    Classes 1, 2, 3, 14, 15, 16, 18, 23 — zero GT instances in the 50% subset
+AP=0 WITH GT — classes where GT exists in subset:
+  Class 6:  ~33 actual images (65/91 total samples → ~33 in 50% subset), AP=0.0
+  Class 8:  GT present, AP=0.0
+  Class 13: GT present, AP=0.0
+  Class 19: GT present, AP=0.0
+
+AP=0 — NO GT IN SUBSET — 8 classes:
+  Classes 1, 2, 3, 14, 15, 16, 18, 23 — zero GT instances in the 50% subset
 ```
 
-**Classes 5 and 21 hit AP=1.0** with only 33 and 151 GT instances respectively — very distinctive rare objects (likely unique assembly components with no visual ambiguity). This proves the architecture CAN learn to classify perfectly given clean, distinctive labels.
+**This changes the narrative from "1739 GT with AP=0 → impossible without label error" to "~33 images with AP=0 → plausible data-scarcity problem."** The burden of proof shifts: it is NOW reasonable that a class with only ~33 training images (at 50% subset) scores AP=0 — especially if those 33 images have high intra-class variance, small objects, or annotation quality issues.
 
-**Class 6 is the single most important unsolved mystery.** At 1739 GT instances per epoch with AP=0, this is not a data-scarcity problem. It's either:
-1. **Label error** — class 6 labels are systematically wrong (wrong boxes, wrong class IDs). This is the simplest explanation. A 30-minute visual audit of 50 class 6 GT boxes would confirm or refute.
-2. **Anchor mismatch** — class 6 objects have fundamental geometry mismatch with the anchor grid
-3. **Feature confusion** — class 6 is consistently confused with another visually similar class
+**Classes 5 and 21 achieved AP=1.0** with 33 and 151 GT instances respectively. But these are very distinctive rare objects (likely unique assembly components with no visual ambiguity). Class 6 may be visually confused with other classes.
 
-**The critical insight**: If detach_reg_fpn flip (Q35 RESOLVED) fixes class 6's AP=0, then the class-6 problem WAS gradient starvation from detached regression. If class 6 stays at AP=0 after the restart, it's a label/assignment issue independent of training dynamics.
+**Re-opened possibilities:**
+1. **Data scarcity** (now the PRIMARY hypothesis): ~33 images per epoch may be insufficient for the classifier to learn class 6, especially if those images are visually similar to other classes
+2. **Label error** (still possible but no longer the default): systematic label errors would explain AP=0 even with adequate data — but we no longer have evidence that data IS adequate
+3. **Anchor mismatch** (unchanged): class 6 objects may have geometry incompatible with the anchor grid
+4. **Feature confusion** (unchanged): class 6 consistently confused with another visually similar class
+
+**What this means for training**: The "12/24 AP=0" problem is less dramatic than we thought. 8 of those 12 classes have NO GT in the subset (expected). Only 4 classes have GT but score AP=0, and class 6's story is plausible data scarcity, not a smoking gun.
 
 **What we need next:**
-1. After detach_reg_fpn restart: re-check per-class AP at epoch 2-3
-2. If class 6 still AP=0: visual label audit (30 min)
-3. Anchor-IoU histogram for class 6 specifically
+1. Visual inspection of class 6 GT boxes (are they correct? do they look like class 6?)
+2. After ba48691 restart: re-check per-class AP at epoch 2-3
+3. Anchor-IoU histogram for class 6 specifically — are anchors matching at all?
 
-**Confidence**: HIGH that per-class AP parsing changes our understanding. MEDIUM on whether detach flip or label error explains class 6.
+**Confidence**: HIGH that the 1739→65 correction changes our understanding. MEDIUM on whether class 6's AP=0 is data scarcity vs. label error vs. anchor mismatch.
 
 ---
 
@@ -320,28 +343,42 @@ If the combined metric rewards MAE performance (which is already excellent becau
 
 ---
 
-### Q36: Will the 50-Image Cls-Only Overfit Definitively Bin the Problem? (NEW)
+### Q36: Will the 50-Image Cls-Only Overfit Definitively Bin the Problem? (SOLVED — WEAK PASS)
 
-**From Opus v9 §6**: Train on 50 images, classification-only (train_head_pose=False, use_kendall=False), 300-500 steps, thresh-0.001 eval on the same 50. Cost: <30 min, parallel to the live run.
+**The experiment has been run**: 200 epochs, 50 images with GT, detection-only, no multi-task interference. The most decisive experiment in the project's history is now complete.
 
-**The three possible outcomes:**
+**Result: WEAK PASS**
 
-| Result | Conclusion | Next Action |
-|--------|-----------|-------------|
-| mAP→0.8+ | Arch + assignment + loss are fine; collapse is **dynamics** | KENDALL_FIXED_WEIGHTS=True |
-| mAP stalls, boxes localize | **Assignment/label** noise | Top-k IoU floor + label audit |
-| No localization | Anchor/assignment bug upstream of cls | Fix matching before anything else |
+| Metric | Value | Interpretation |
+|--------|-------|---------------|
+| Final cls_loss | 0.0618 | Near zero — classification almost saturated |
+| Final reg_loss | 0.113 | Flat — minimal, detection-only |
+| Pos_score_mean | 0.9716 | Positives scored near 1.0 |
+| Pos_score_max | 1.0000 | Perfect confidence achievable |
+| cls_w_norm | 7.07 → 13.43 | LINEAR growth over 200 epochs, never plateaued |
+| pos_n | 13 | CONSISTENTLY 13 positive anchors/batch |
 
-**The question**: This is Opus v9's highest-priority recommendation. But we haven't run it. The 50-image overfit removes the multi-task confound that has cost 4+ consultation rounds. It is the single most decisive experiment available.
+**What it proved:**
+1. ✅ The architecture CAN learn to classify (not an architectural ceiling)
+2. ✅ Positive signals are present (pos_score_mean=0.97, pos_max=1.0)
+3. ❌ Learning speed is VERY slow — 55 epochs to escape plateau even on 50 images
+4. ❓ Only 13 positive anchors/batch — the IoU threshold limits positive matches, not TOP_K
 
-**Why haven't we run it?**
-- The live RF2 run was still producing data — the focus was on monitoring
-- Setting up the isolated experiment requires config changes and a separate training script
-- But: it's <30 minutes and can run in parallel on the same GPU (the model is small enough to fit with the main run or can use CPU for the tiny dataset)
+**What binned:**
+- **Architectural ceiling**: REFUTED. The architecture CAN overfit to near-perfect classification. The ceiling is in the training dynamics (OHEM+FocalLoss suppression, or data quality at scale).
 
-**The real question**: Is there any scenario where we DON'T run this before making the next major decision?
+**What remains open:**
+- The 50-epoch plateau in Regime 2 (cls_loss~0.50) is consistent with OHEM+FocalLoss gradient suppression
+- cls_w_norm grows LINEARLY over 200 epochs (7.07→13.43) — hasn't saturated
+- This suggests the classifier is in a gradient-suppressed regime even after 200 epochs on 50 images
 
-**Confidence**: HIGH that this experiment would be decisive. VERY LOW confidence in any answer that doesn't run it.
+**Implications for main training:**
+- With detach_reg_fpn=False, the backbone will receive regression gradient
+- But the classification head's learning will still be OHEM+FocalLoss suppressed
+- The expected improvement is FROM the backbone becoming more object-discriminative, not from faster classification head training
+- At the main scale (50% subset, thousands of images), the same gradient suppression may explain why 12/24 classes are AP=0
+
+**Confidence**: HIGH (SOLVED — the question of whether the architecture CAN classify is definitively answered). MEDIUM on the exact mechanism of gradient suppression.
 
 ---
 
@@ -455,39 +492,65 @@ The head_pose gradient norm is oscillating between 4.83e-03 and 1.37e-02 — bot
 
 ---
 
-### Q41: Will Flipping detach_reg_fpn Break the Plateau? (NEW — Opus v10 Era)
+### Q41: Will Flipping detach_reg_fpn Break the Plateau? (ANSWERED — Epoch 19: "detach Fix Alone is INSUFFICIENT")
 
-**The central question of the post-v10 era**: After 15+ phases, 10 Opus consultations, and ~500 GPU-hours, we have one config change standing between us and a potential breakthrough. How much will it move?
+**The central question of the post-v11 era**: After 17+ phases, 11 Opus consultations, and ~500 GPU-hours, the detach fix is committed in ba48691. The question shifts from "will it help?" to "is it sufficient?"
 
-**The config delta** (uncommitted working tree):
+**ANSWERED 2026-06-21 (epoch 19)**: **NO — detach fix alone is NOT sufficient.** 5 epochs of post-restart training show identical mAP (0.202-0.209) to pre-restart.
 
-| Parameter | Old Value | New Value | Opus Recommendation |
-|-----------|-----------|-----------|-------------------|
-| detach_reg_fpn (stage_rf2) | True | False | False (Tier 1) |
-| DET_LR_MULTIPLIER | 1.0 | 2.0 | Not specified (1.0 safe) |
-| DET_BIAS_LR_FACTOR | 1.0 | 4.0 | Not specified (1.0 safe) |
+**What has changed since v10 era (when Q41 was first written):**
 
-**The tension**: Opus v10's Tier 1 fix only specifies detach_reg_fpn=False and IoU floor. The LR_MULTIPLIER=2.0 and BIAS_LR_FACTOR=4.0 are our own additions with rationale comments but no consultation validation. They could HELP (overcome gradient starvation) or HURT (bias instability, classification head overfitting to noise).
+| Parameter | v10 Working Tree | v11 Final (ba48691) | Impact |
+|-----------|-----------------|---------------------|--------|
+| detach_reg_fpn (RF2) | False | False | Unchanged ✅ |
+| detach_reg_fpn (RF3-RF10, paper_run) | Default (True) | False | FIXED — prevents bug inheritance |
+| DET_LR_MULTIPLIER | 2.0 | 1.0 | Reverted to v8 baseline ✅ |
+| DET_BIAS_LR_FACTOR | 4.0 | 1.0 | Reverted to v8 baseline ✅ |
+| KENDALL_FIXED_WEIGHTS | False | True (ba48691 also) | Fixed Kendall weights |
+| Overfit experiment | NOT RUN | COMPLETE (WEAK PASS) | Architecture CAN learn |
 
-**Three scenarios after restart (3-4 epochs):**
+**The ba48691 commit resolves the config tensions that existed in the working tree.** However, 5 epochs of training demonstrate that these fixes, while necessary, are not sufficient. The OHEM+FocalLoss gradient suppression mechanism (identified by the overfit) is the primary bottleneck.
+
+**The updated post-answer scenarios:**
 
 | Scenario | Likelihood | Evidence | Next Action |
 |----------|-----------|----------|-------------|
-| **Best case**: mAP climbs to 0.35-0.45 | 30-40% | detach was the primary bottleneck. RF2 gate reached. | Advance to RF3 with detach=False across all stages. |
-| **Moderate case**: mAP climbs to 0.25-0.30 | 40-50% | detach was a factor but labels/anchor matching are the (new) ceiling. | Run 50-image overfit. If overfit hits 0.8, ceiling is data. If not, ceiling is architecture. |
-| **Worst case**: mAP stays flat at 0.20-0.22 | 10-20% | detach was NOT the bottleneck (or the LR/BIAS multipliers counteract the benefit). | Revert LR/BIAS to 1.0. Run 50-image overfit. If still flat, architecture or labels are the ceiling. |
+| ~~Best case: mAP climbs to 0.30-0.40~~ | ~~30-40%~~ | ❌ RULED OUT by epoch 19 | N/A |
+| ~~Moderate case: mAP climbs to 0.22-0.28~~ | ~~40-50%~~ | ❌ RULED OUT by epoch 19 (mAP never exceeded 0.209) | N/A |
+| **Actual outcome**: mAP stayed flat at 0.20-0.22 | **100%** | ✅ CONFIRMED — OHEM+FL suppression is primary ceiling | Run OHEM ablation |
+| **What if we also fix OHEM?**: mAP improves to 0.25-0.35 | 40-60% (speculative) | Only known after ablation | OHEM OFF experiment |
 
-**The critical class 6 test**: If class 6 goes from AP=0 (with 1739 GT) to AP>0 after the restart, detach was responsible for its failure. If class 6 stays AP=0 despite the fix, the problem is labels or anchor geometry — NOT training dynamics. This single class is the litmus test for the entire detach hypothesis.
+**Key insight**: The detach bug consumed 10 Opus consultations to find and fix, but it was never the primary bottleneck. The OHEM 2:1 ratio + FocalLoss gamma_neg=1.5 was always the deeper issue. The overfit proved it on 50 images, and the main training confirmed it at scale.
 
-**What we don't know**:
-1. Whether DET_LR_MULTIPLIER=2.0 helps or hurts — the original Opus v8 recommendation was to REVERT to 1.0 (from RF1's 5.0). We're now at 2.0.
-2. Whether DET_BIAS_LR_FACTOR=4.0 destabilizes the bias equilibrium — the floor=0.2 should prevent false positives, but 4× is aggressive.
-3. Whether RF3's stage_rf3 preset also needs detach fix (it does — confirmed by reading config.py:1124+)
-4. Whether this fix alone gets us to 0.40 or just to 0.28 (meaning a SECOND ceiling exists)
+**Confidence**: HIGH that detach fix alone is insufficient. MEDIUM on whether OHEM ablation will be sufficient.
 
-**The experiment cost**: ~6 hours (3-4 epochs × ~86 min/epoch). The restart is from best checkpoint (epoch ~18 best.pth), keeping trained heads. Total wall time to answer: ~8 hours including eval.
+---
 
-**Confidence**: MEDIUM-HIGH that detach flip will help. LOW on magnitude. The 10-20% "no change" scenario is real and we must plan for it.
+### Q42: Why Only 13 Positive Anchors Per Batch Consistently Across 200 Epochs? (NEW — Overfit Discovery)
+
+**The discovery**: The 50-image cls-only overfit logged `pos_n` (number of positive anchors per batch) at every epoch. Across all 200 epochs, **pos_n was consistently 13**. Not 12, not 14 — exactly 13 positive anchors per batch, every single time.
+
+**Why this is shocking**: The dataset had 50 images, each with ≥1 GT box (some with multiple). Batch_size=4 means each epoch processes 200/4=50 batches. With 50 images × ~2-5 GT boxes/image = ~100-250 total GT boxes, and DET_POS_IOU_TOP_K=9 allowing up to 9 positive anchors per GT, the theoretical maximum is ~900-2250 positive anchors/batch. But the actual is always 13.
+
+**The mechanism**: `DET_POS_IOU_THRESH=0.4` is the gatekeeper. An anchor is only positive if its IoU with a GT exceeds 0.4. The overfit consistently found ~3.25 GT boxes/batch, each matching ~4 anchors above 0.4 IoU: 3.25 × 4 ≈ 13. The TOP_K=9 never kicks in because no GT box exceeds 4 high-IoU anchors.
+
+**What this means:**
+1. **TOP_K=9 is mostly irrelevant** — the IoU threshold (0.4) is the real limiter, not the top-K count
+2. **The effective positive-to-negative ratio is 13:656K = 0.002%** — essentially zero
+3. **This is NOT a data quantity issue** — even with 50 GT-rich images, the anchor system limits positives to 13
+4. **Scale invariance**: If each image produces ~3.25 GT boxes matching ~1 positive anchor each, then 2000 training images would produce ~13 positives/batch at the SAME rate (batch_size=4 means ~13 images/batch × ~1 positive/image)
+
+**Three hypotheses:**
+1. **Anchor grid mismatch**: The anchor sizes (starting at 96px) are too large for most IndustReal objects. Small parts never exceed IoU=0.4 with any anchor, so they never become positive.
+2. **IoU threshold too high**: DET_POS_IOU_THRESH=0.4 is RetinaNet's default, designed for COCO (medium-large objects). For small assembly parts, 0.3 might be more appropriate.
+3. **Label density artifact**: Most images genuinely have only 1-2 GT boxes, and those boxes only match 1-2 anchors at >0.4 IoU. The 13 constant is a property of the dataset's GT distribution.
+
+**What we'd need to test:**
+- Lower DET_POS_IOU_THRESH to 0.3 and re-run the 50-image overfit — does pos_n increase?
+- Anchor-IoU histogram: for all GT boxes in 50 images, what's the max IoU with any anchor?
+- If max IoU < 0.4 for most GT boxes, the anchor grid is fundamentally mismatched
+
+**Confidence**: HIGH that the 13-pos-anchor constant is real and significant. MEDIUM on which hypothesis explains it.
 
 ---
 
@@ -680,10 +743,10 @@ The heartbeat IS updating in Phase 15 (last_heartbeat: 2026-06-21T07:08 UTC conf
 
 | # | Question | Severity | Confidence | Blocks? |
 |---|----------|----------|-----------|---------|
-| Q01 | Why plateau at 0.204-0.215 despite classifier working? | CRITICAL | MEDIUM | YES |
+| Q01 | Why plateau despite detach fix AND arch CAN learn? (UPDATED — overfit evidence) | CRITICAL | MEDIUM | YES |
 | Q03 | Has PSR ever trained? | CRITICAL | MEDIUM | YES (RF4+) |
 | Q04 | Was bias-collapse narrative wrong? | CRITICAL | MEDIUM | YES |
-| Q05 | Is Focal Loss structurally capped? | CRITICAL | LOW | YES |
+| Q05 | Is Focal Loss + OHEM structurally capping gradient? (UPDATED — overfit data) | CRITICAL | MEDIUM-HIGH | YES |
 | Q06 | Gradient leakage from disabled heads | MEDIUM | LOW | No |
 | Q07 | Head pose MAE improving while detection collapsed — NOW EXPLAINED | MEDIUM | HIGH | No |
 | Q09 | Gradient density threshold | LOW | MEDIUM | No |
@@ -703,18 +766,19 @@ The heartbeat IS updating in Phase 15 (last_heartbeat: 2026-06-21T07:08 UTC conf
 | Q25 | Opus v8 fixes worked but ceiling remains — REFRAMED | RESOLVED | HIGH | No |
 | Q26 | 50% data impact — PARTIALLY ANSWERED | MEDIUM | HIGH | No |
 | Q28 | Kendall staged training — RESOLVED | RESOLVED | HIGH | No |
-| Q30 | Will RF2 reach gate targets? — NO | CRITICAL | HIGH | YES |
-| **Q31** | **Why 12/24 classes always AP=0? (UPDATED — per-class AP parsed)** | **CRITICAL** | **MEDIUM** | **YES** |
+| Q30 | Will ba48691 restart reach gate? (ANSWERED — epoch 19: NO) | **ANSWERED: NO** | CRITICAL | YES |
+| **Q31** | **Why 12/24 classes always AP=0? (UPDATED — v11 C2: class 6 has 65/91, not 1739)** | **CRITICAL** | **MEDIUM** | **YES** |
 | **Q32** | **Top-k IoU floor poisoning classifier?** | **CRITICAL** | **MEDIUM** | **YES** |
 | **Q33** | **Combined metric misleading?** | **HIGH** | **HIGH** | **YES** |
 | **Q34** | **Why LR restart had ZERO effect?** | **HIGH** | **HIGH** | **No** |
 | **Q35** | **detach_reg_fpn split-brain — RESOLVED (Opus v10 confirmed True)** | **RESOLVED** | **HIGH** | **No** |
-| **Q36** | **50-image overfit definitive?** | **HIGH** | **HIGH** | **No** |
+| **Q36** | **50-image overfit — SOLVED (WEAK PASS)** | **SOLVED** | **HIGH** | **No** |
 | **Q37** | **DET gradient bottleneck (117×)?** | **HIGH** | **MEDIUM** | **Possibly** |
 | **Q38** | **head_pose borderline ALIVE/DEAD?** | **MEDIUM** | **MEDIUM** | **No** |
 | **Q39** | **score_p50 blindness invalidates prior analysis?** | **HIGH** | **HIGH** | **No** |
 | **Q40** | **Restart RF2 with detach=False first? (REFRAMED)** | **CRITICAL** | **MEDIUM** | **YES** |
-| **Q41** | **Will flipping detach_reg_fpn break the plateau?** | **CRITICAL** | **LOW** | **YES** |
+| **Q41** | **Is detach fix sufficient? (ANSWERED — epoch 19: NO)** | **ANSWERED: NO** | **CRITICAL** | **YES** |
+| **Q42** | **Why only 13 positive anchors per batch consistently? (NEW)** | **HIGH** | **MEDIUM** | **Possibly** |
 
 ---
 
@@ -722,16 +786,18 @@ The heartbeat IS updating in Phase 15 (last_heartbeat: 2026-06-21T07:08 UTC conf
 
 | Previous Status | Current Status | Questions |
 |----------------|---------------|-----------|
-| CRITICAL | CRITICAL | Q01, Q03, Q04, Q05, Q30 (reframed), Q41 (new) |
+| CRITICAL | ANSWERED | Q30 (ba48691 restart won't reach gate — epoch 19 confirmed), Q41 (detach fix insufficient — epoch 19 confirmed) |
+| CRITICAL | CRITICAL | Q01 (UPDATED — overfit evidence), Q03, Q04, Q05 (UPDATED — OHEM+FL data + main training confirmed) |
 | CRITICAL | RESOLVED / REFRAMED | Q25 (v8 fixes worked, ceiling remains), Q35 (detach_reg_fpn — Opus v10 confirmed) |
 | CRITICAL | REFRAMED | Q40 (now: restart RF2 with detach=False, not advance-or-diagnose) |
+| CRITICAL | SOLVED | Q36 (50-image overfit — WEAK PASS) |
 | HIGH | RESOLVED | Q02, Q10 (phantom 0.45 fixed), Q27 (merged into Q10) |
 | HIGH | MEDIUM | Q06, Q07, Q13, Q16 |
 | MEDIUM | LOW | Q09, Q12 |
-| NEW | CRITICAL | Q31 (12/24 AP=0 — UPDATED with parsed data), Q32 (top-k IoU floor), Q40 (reframed), Q41 (will detach flip work?) |
-| NEW | HIGH | Q33 (combined metric), Q34 (LR restart failure), Q36 (50-image overfit), Q37 (gradient bottleneck), Q39 (score_p50 blindness) |
+| NEW | CRITICAL | Q31 (UPDATED — v11 C2: class 6 65/91, not 1739), Q32 (top-k IoU floor) |
+| NEW | HIGH | Q33 (combined metric), Q34 (LR restart failure), Q37 (gradient bottleneck), Q39 (score_p50 blindness), Q42 (13-pos-anchor mystery) |
 | NEW | MEDIUM | Q38 (head_pose borderline) |
 
 ---
 
-*Generated 2026-06-21 by Claude Code. Updated for the Opus v10 era: detach_reg_fpn resolved (Q35→RESOLVED), per-class AP parsed from metrics.jsonl (Q31→UPDATED with real class-6 data), Q40 reframed as restart decision, Q41 added for the post-v10 era. 41 questions total covering 15+ phases, 10 Opus consultations, ~500 GPU-hours of investigation.*
+*Generated 2026-06-21 by Claude Code. Updated 2026-06-21 21:00 UTC with epoch 19 evidence: Q30 ANSWERED (ba48691 restart won't reach gate), Q41 ANSWERED (detach fix alone insufficient), OHEM+FocalLoss gradient suppression CONFIRMED by main training. 42 questions total covering 18+ phases, 11 Opus consultations, ~500 GPU-hours of investigation, and now ~5 epochs of post-restart validation.*

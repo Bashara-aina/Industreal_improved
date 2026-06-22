@@ -29,7 +29,7 @@ DEBUG_MODE         = False
 DEBUG_MAX_VIDEOS   = 2  # smoke test: 2 recordings only
 DEBUG_FRAME_STRIDE = 10
 
-SUBSET_RATIO = 1.0    # Full dataset — production training for paper results
+SUBSET_RATIO = 0.50   # 50% subset — balance of training speed vs class coverage
 
 TRAIN_FRAME_STRIDE = 3  # A.2: stride 3 → T=16 covers 1.6s at 30FPS (median action)
 EVAL_FRAME_STRIDE  = 1
@@ -52,8 +52,42 @@ LIVENESS_GRAD_EVERY = 200  # [FIX 2026-06-15] Separate grad-norm liveness (kept 
 DET_DEBUG_EVERY = 50  # [FIX4] Detection head debug diagnostic frequency (--reinit-heads only)
 # NOTE: Detection head warmup is HARDCODED in train.py (50 zero-grad + 200 linear ramp, 250 total).
 # DET_WARMUP_STEPS was considered as a config variable but was never wired up — see train.py for the actual logic.
-DET_LR_MULTIPLIER = 1.0  # WD is now scaled proportionally with LR in train.py, so WD/LR stays constant when _stage_lr_mult reduces LR. Was 5.0 (collapsed full-head), then 1.0 (stagnant because WD wasn't scaled).
-DET_BIAS_LR_FACTOR = 5.0  # [FIX 2026-06-19] Detection head biases get 5x head LR so cls_score.bias can escape the negative-prior (pi=0.01) equilibrium.
+DET_LR_MULTIPLIER = 1.0  # [REVERT 2026-06-21 (Opus v11 Q2)] Back to 1.0. The detach_reg_fpn=False
+                         # restart must change ONE training-dynamics variable. 2.0 was our own
+                         # untested addition bundled with the detach flip — a confound. Restore the
+                         # v8 baseline; if the det head looks gradient-starved AFTER detach stabilizes
+                         # (≥2 epochs of upward trend), raise this ALONE to 1.5–2.0 and observe.
+DET_BIAS_LR_FACTOR = 1.0  # [REVERT 2026-06-21 (Opus v11 Q2)] Back to 1.0. v8 found bias acceleration
+                         # toward the all-background equilibrium IS the collapse mechanism (called an
+                         # "own-goal" 5×). IOU_FLOOR=0.2 reduces false-positive labels but does NOT
+                         # reverse the dominant negative gradient direction under 173K:1 imbalance — a
+                         # 4× bias LR just reaches that equilibrium faster. The RetinaNet prior is set
+                         # once via reinit_pi, not driven by a high bias LR.
+
+# [OPUS v8 FIX 2026-06-20] Kendall multi-task fixes for RF2 detection collapse.
+# Three independent mechanisms were letting head_pose dominate the shared backbone:
+#
+# (1) KENDALL_HP_PREC_CAP — head_pose precision can never exceed detection precision.
+#     Without this, head_pose (loss ≈ 0.01) gets Kendall-optimal precision ~54.6×,
+#     vs detection (loss ≈ 0.5) getting ~1.4×. The shared backbone is then optimized
+#     for head_pose, losing object-discriminative features. See Opus v8 §1.1.
+KENDALL_HP_PREC_CAP = True
+#     Alternative: use fixed weights instead of learned Kendall for det-bootstrap.
+#     Detection drives backbone at λ=1.0, head_pose just stabilizes at λ=0.1-0.3.
+#     Set True for RF1-RF2; re-enable Kendall at RF3+ once detection is real.
+KENDALL_FIXED_WEIGHTS = False  # default off; toggled per-stage by stage_manager
+
+# (2) KENDALL_STAGED_TRAINING — kill the double curriculum (Opus v8 §3 Fix 3).
+#     The RF stage manager already controls which heads train. The epoch-indexed
+#     Kendall staging in losses.py (STAGE1_EPOCHS=5, STAGE2_EPOCHS=10) duplicates
+#     this and silently triggers head_pose takeover at epoch 6. Setting False
+#     makes staged_training in the loss a no-op; the RF stage manager is the
+#     sole curriculum.
+KENDALL_STAGED_TRAINING = False  # [FIX] was True — see Opus v8 §1.2 timing
+
+# Head-pose fixed-loss weight when KENDALL_FIXED_WEIGHTS=True.
+# Matches the λ range recommended in Opus v8 §3 Fix 1: 0.1–0.3
+KENDALL_HP_FIXED_LAMBDA = 0.2
 
 # [OPUS v5 AUDIT] Simplify loss assembly during bring-up (#49).
 # Disables per-task ramps and smooth-caps so gradient attribution is clean.
@@ -270,8 +304,26 @@ NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_la
 # K-means on 14,122 boxes gave (195,335,375,445,578) but these were too large — missed
 # small GT (h p10=156px). Keep the guess anchors which empirically gave 0.0172 mAP.
 ANCHOR_SIZES = (96, 160, 256, 384, 512)
-DET_POS_IOU_THRESH = 0.5       # RetinaNet anchor matching: positive IoU threshold (standard: 0.5)
+DET_POS_IOU_THRESH = 0.4       # [FIX 2026-06-20 (Opus v8 §3)] Was 0.5 — lowered to 0.4 so small assembly parts
+                               # light up more positive anchors. For typical IndustReal GT (h≈156px at 720p),
+                               # only ~1 anchor/GT clears IoU≥0.5 with these anchor sizes. 0.4 gives ~3–5× more
+                               # positives, fixing the supply-side root cause of gradient starvation at source.
 DET_NEG_IOU_THRESH = 0.4       # RetinaNet anchor matching: negative IoU threshold (standard: 0.4)
+DET_POS_IOU_TOP_K = 9          # [FIX 2026-06-20 (Opus v8 §3)] Top-k force-match per GT (was single argmax).
+DET_POS_IOU_IOU_FLOOR = 0.2    # [FIX 2026-06-21 (Opus v9 §R2)] Minimum IoU for top-k force-match anchors.
+                               # Without this floor, top-k can label near-zero-IoU anchors as "positive",
+                               # injecting label noise into the cls head. At 0.2, only anchors with
+                               # ≥20% box overlap get positive labels. The argmax best anchor is always
+                               # assigned regardless of floor (standard RetinaNet behavior).
+DET_POS_ANCHOR_PROBE_EVERY = 200  # [FIX 2026-06-21 (Opus v9 §R3)] Log positive-anchor sigmoid scores
+                                  # every N images. Logs mean/median/max/min of p_t on pos_mask anchors.
+                                  # Set 0 to disable.
+                               # Standard RetinaNet only force-matches the single best anchor per GT (~1 pos/GT).
+                               # For small objects, this starves the classifier. Top-9 via IoU assigns ~6-10
+                               # positive anchors per GT, giving the cls_subnet enough positive gradient to
+                               # maintain discriminative features. Verify with MATCH_PROBE. RetinaNet-on-COCO
+                               # doesn't need this because COCO objects cover enough anchor area; IndustReal
+                               # assembly parts are systematically smaller than their anchor cells.
 # RC-25 recovery: zero det_conf input to activity head during recovery.
 # [AUDIT FIX 2026-06-11] env override added: a checkpoint TRAINED with
 # det_conf zeroed must also be EVALUATED with det_conf zeroed (otherwise the
@@ -419,6 +471,48 @@ MATMUL_PRECISION = 'high'
 # =========================================================================
 FOCAL_ALPHA   = 0.90  # RF: 0.90 (was 0.75) — α=0.75 still collapses at 173K:1 neg/pos ratio. α=0.90 gives positives 9× weight vs background, ensuring net-positive gradient even in no-positive batches (OHEM keeps 64 worst negs).
 FOCAL_GAMMA   = 2.0
+
+# Per-class alpha for detection focal loss.
+# Mechanism: higher α = stronger positive gradient when class IS target,
+# WEAKER negative gradient when class is NOT target. Dominant classes need
+# LOW α to learn suppression on non-target anchors (1-α penalty).
+# Format: {model_class_idx: alpha}. Classes not listed default to FOCAL_ALPHA (0.90).
+DET_CLASS_ALPHAS = {
+        # [FIX 2026-06-20 v4] Corrected model-index mapping.
+        # v3 had critical errors: idx 7,12,17 (AP=0.7/0.7/0.4) given HIGH alpha
+        # as "stuck"; idx 20 (AP=0.0, 709 train GT) given LOW alpha as "already
+        # perfect"; idx 9 (AP=0.004) labeled as "dominant" with LOW alpha.
+        #
+        # HIGH alpha = stronger pos gradient, weaker neg. Use for stuck classes.
+        # LOW alpha = moderate pos, meaningful neg. Use for dominant classes.
+        # Default FOCAL_ALPHA=0.90.
+        #
+        # === Truly stuck (AP=0.0, significant train GT) --- HIGH alpha ===
+        20: 0.96,  # cat 21 '11101011110', train=709, val=91,  AP=0.000
+        18: 0.95,  # cat 19 '11100001110', train=340, val=47,  AP=0.000
+        8:  0.94,  # cat 9  '11110110000', train=142, val=20,  AP=0.000
+        9:  0.94,  # cat 10 '11110111100', train=427, val=88,  AP=0.004
+        # === Stuck but low train count --- moderate alpha ===
+        6:  0.92,  # cat 7  '11110010000', train=65,  val=91,  AP=0.000
+        16: 0.90,  # cat 17 '11110011110', train=26,  val=27,  AP=0.000
+        # === Marginal (0.05 < AP < 0.20) --- moderate boost ===
+        22: 0.92,  # cat 23 '11101111111', train=2000, val=249, AP=0.159
+        11: 0.92,  # cat 12 '11110110001', train=226,  val=68,  AP=0.095
+        # === Dominant (AP > 0.4) --- LOW alpha to improve suppression ===
+        10: 0.78,  # cat 11 '11110111110', train=1913, val=156, AP=0.807
+        7:  0.80,  # cat 8  '11110100000', train=1852, val=223, AP=0.704
+        12: 0.80,  # cat 13 '11110111101', train=1136, val=430, AP=0.676
+        17: 0.85,  # cat 18 '11110101110', train=1067, val=263, AP=0.433
+        # === Moderate performer --- slight low alpha ===
+        4:  0.88,  # cat 5  '10010110000', train=590,  val=246, AP=0.270
+        # === AP=1.0 artifact (no GT in 0.50 subset val) ===
+        21: 0.85,  # cat 22 '11101111110', train=561,  val=175, AP=1.000
+        # === Zero val GT (can't measure) --- default-adjacent ===
+        2:  0.88,  # cat 3  '10010010000', train=349, val=0
+        14: 0.88,  # cat 15 '11110101111', train=126, val=0
+        # Zero train GT (can't learn): idx 13/19/23 --- default
+        # Zero val GT (can't measure): idx 1/3/15 --- default
+    }
 GIOU_WEIGHT   = 2.0  # Doc 01 B.2: GIoU regression weight vs cls weight=1.0
 
 # Hard negative mining for detection FocalLoss (RF stage collapse fix)
@@ -901,11 +995,16 @@ PRESETS = {
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,  # Was 0.0 — re-enabled after std(correction=0) NaN fix
         'use_ldam_drw':             False,
-        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
-        # through shared FPN features. Required when running outside stage_manager
-        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
-        # stages with reinit_heads=True).
-        'detach_reg_fpn':           True,
+        # [FIX 2026-06-21 Opus v11 Q5] detach_reg_fpn=False for ALL non-reinit stages.
+        # These RF3–RF10 / paper_run stages are continuations, NOT reinit bootstraps:
+        # the regression head already carries good GIoU signal that SHOULD shape the
+        # shared FPN. detach=True severs the densest detection gradient from the trunk
+        # → features stay non-discriminative → cls sticks at the background equilibrium
+        # (the exact RF2 6-epoch plateau). The reg-loss warmup (REINIT_REG_WARMUP_STEPS)
+        # is the correct guard against any reinit gradient shock; detach is redundant
+        # overkill — matches stage_rf1 + the stage_manager recovery strategy (108–121).
+        # detach_psr_fpn is left True (PSR is a separate head, out of scope for v11).
+        'detach_reg_fpn':           False,
         'detach_psr_fpn':           True,
     },
     # =====================================================================
@@ -1022,11 +1121,12 @@ PRESETS = {
         'use_psr_order_prior':      False,
         'psr_sensitivity_weight':   0.0,
         'use_ldam_drw':             False,
-        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
-        # through shared FPN features. Required when running outside stage_manager
-        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
-        # stages with reinit_heads=True).
-        'detach_reg_fpn':           True,
+        # [FIX 2026-06-21] Was True (detached). RF2 is NOT a reinit stage — the
+        # regression head already has decent GIoU signal that SHOULD flow into FPN.
+        # detach=True cuts reg gradients (the strongest detection signal) from FPN,
+        # leaving only tiny cls gradient (norm=0.01) and head_pose to update features.
+        # False lets regression GIoU signal help FPN → cls escapes equilibrium.
+        'detach_reg_fpn':           False,
         'detach_psr_fpn':           True,
         # [FIX 2026-06-19 v2] RF2 reinit also needs pi=0.05 for same reason as RF1 —
         # default 0.01 (bias=-4.60) starts too cold; 0.05 (bias=-2.94) accelerates
@@ -1059,11 +1159,16 @@ PRESETS = {
         'use_psr_order_prior':      False,
         'psr_sensitivity_weight':   0.0,
         'use_ldam_drw':             False,
-        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
-        # through shared FPN features. Required when running outside stage_manager
-        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
-        # stages with reinit_heads=True).
-        'detach_reg_fpn':           True,
+        # [FIX 2026-06-21 Opus v11 Q5] detach_reg_fpn=False for ALL non-reinit stages.
+        # These RF3–RF10 / paper_run stages are continuations, NOT reinit bootstraps:
+        # the regression head already carries good GIoU signal that SHOULD shape the
+        # shared FPN. detach=True severs the densest detection gradient from the trunk
+        # → features stay non-discriminative → cls sticks at the background equilibrium
+        # (the exact RF2 6-epoch plateau). The reg-loss warmup (REINIT_REG_WARMUP_STEPS)
+        # is the correct guard against any reinit gradient shock; detach is redundant
+        # overkill — matches stage_rf1 + the stage_manager recovery strategy (108–121).
+        # detach_psr_fpn is left True (PSR is a separate head, out of scope for v11).
+        'detach_reg_fpn':           False,
         'detach_psr_fpn':           True,
     },
     'stage_rf4': {
@@ -1092,11 +1197,16 @@ PRESETS = {
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
-        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
-        # through shared FPN features. Required when running outside stage_manager
-        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
-        # stages with reinit_heads=True).
-        'detach_reg_fpn':           True,
+        # [FIX 2026-06-21 Opus v11 Q5] detach_reg_fpn=False for ALL non-reinit stages.
+        # These RF3–RF10 / paper_run stages are continuations, NOT reinit bootstraps:
+        # the regression head already carries good GIoU signal that SHOULD shape the
+        # shared FPN. detach=True severs the densest detection gradient from the trunk
+        # → features stay non-discriminative → cls sticks at the background equilibrium
+        # (the exact RF2 6-epoch plateau). The reg-loss warmup (REINIT_REG_WARMUP_STEPS)
+        # is the correct guard against any reinit gradient shock; detach is redundant
+        # overkill — matches stage_rf1 + the stage_manager recovery strategy (108–121).
+        # detach_psr_fpn is left True (PSR is a separate head, out of scope for v11).
+        'detach_reg_fpn':           False,
         'detach_psr_fpn':           True,
     },
     'stage_rf5': {
@@ -1125,11 +1235,16 @@ PRESETS = {
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
-        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
-        # through shared FPN features. Required when running outside stage_manager
-        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
-        # stages with reinit_heads=True).
-        'detach_reg_fpn':           True,
+        # [FIX 2026-06-21 Opus v11 Q5] detach_reg_fpn=False for ALL non-reinit stages.
+        # These RF3–RF10 / paper_run stages are continuations, NOT reinit bootstraps:
+        # the regression head already carries good GIoU signal that SHOULD shape the
+        # shared FPN. detach=True severs the densest detection gradient from the trunk
+        # → features stay non-discriminative → cls sticks at the background equilibrium
+        # (the exact RF2 6-epoch plateau). The reg-loss warmup (REINIT_REG_WARMUP_STEPS)
+        # is the correct guard against any reinit gradient shock; detach is redundant
+        # overkill — matches stage_rf1 + the stage_manager recovery strategy (108–121).
+        # detach_psr_fpn is left True (PSR is a separate head, out of scope for v11).
+        'detach_reg_fpn':           False,
         'detach_psr_fpn':           True,
     },
     'stage_rf6': {
@@ -1158,11 +1273,16 @@ PRESETS = {
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
-        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
-        # through shared FPN features. Required when running outside stage_manager
-        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
-        # stages with reinit_heads=True).
-        'detach_reg_fpn':           True,
+        # [FIX 2026-06-21 Opus v11 Q5] detach_reg_fpn=False for ALL non-reinit stages.
+        # These RF3–RF10 / paper_run stages are continuations, NOT reinit bootstraps:
+        # the regression head already carries good GIoU signal that SHOULD shape the
+        # shared FPN. detach=True severs the densest detection gradient from the trunk
+        # → features stay non-discriminative → cls sticks at the background equilibrium
+        # (the exact RF2 6-epoch plateau). The reg-loss warmup (REINIT_REG_WARMUP_STEPS)
+        # is the correct guard against any reinit gradient shock; detach is redundant
+        # overkill — matches stage_rf1 + the stage_manager recovery strategy (108–121).
+        # detach_psr_fpn is left True (PSR is a separate head, out of scope for v11).
+        'detach_reg_fpn':           False,
         'detach_psr_fpn':           True,
     },
     'stage_rf7': {
@@ -1191,11 +1311,16 @@ PRESETS = {
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
-        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
-        # through shared FPN features. Required when running outside stage_manager
-        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
-        # stages with reinit_heads=True).
-        'detach_reg_fpn':           True,
+        # [FIX 2026-06-21 Opus v11 Q5] detach_reg_fpn=False for ALL non-reinit stages.
+        # These RF3–RF10 / paper_run stages are continuations, NOT reinit bootstraps:
+        # the regression head already carries good GIoU signal that SHOULD shape the
+        # shared FPN. detach=True severs the densest detection gradient from the trunk
+        # → features stay non-discriminative → cls sticks at the background equilibrium
+        # (the exact RF2 6-epoch plateau). The reg-loss warmup (REINIT_REG_WARMUP_STEPS)
+        # is the correct guard against any reinit gradient shock; detach is redundant
+        # overkill — matches stage_rf1 + the stage_manager recovery strategy (108–121).
+        # detach_psr_fpn is left True (PSR is a separate head, out of scope for v11).
+        'detach_reg_fpn':           False,
         'detach_psr_fpn':           True,
     },
     'stage_rf8': {
@@ -1224,11 +1349,16 @@ PRESETS = {
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
-        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
-        # through shared FPN features. Required when running outside stage_manager
-        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
-        # stages with reinit_heads=True).
-        'detach_reg_fpn':           True,
+        # [FIX 2026-06-21 Opus v11 Q5] detach_reg_fpn=False for ALL non-reinit stages.
+        # These RF3–RF10 / paper_run stages are continuations, NOT reinit bootstraps:
+        # the regression head already carries good GIoU signal that SHOULD shape the
+        # shared FPN. detach=True severs the densest detection gradient from the trunk
+        # → features stay non-discriminative → cls sticks at the background equilibrium
+        # (the exact RF2 6-epoch plateau). The reg-loss warmup (REINIT_REG_WARMUP_STEPS)
+        # is the correct guard against any reinit gradient shock; detach is redundant
+        # overkill — matches stage_rf1 + the stage_manager recovery strategy (108–121).
+        # detach_psr_fpn is left True (PSR is a separate head, out of scope for v11).
+        'detach_reg_fpn':           False,
         'detach_psr_fpn':           True,
     },
     'stage_rf9': {
@@ -1257,11 +1387,16 @@ PRESETS = {
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
-        # [FIX D7] Detach FPN gradients to prevent regression/PSR gradient shock
-        # through shared FPN features. Required when running outside stage_manager
-        # (which otherwise only appends --detach-reg-fpn / --detach-psr-fpn for
-        # stages with reinit_heads=True).
-        'detach_reg_fpn':           True,
+        # [FIX 2026-06-21 Opus v11 Q5] detach_reg_fpn=False for ALL non-reinit stages.
+        # These RF3–RF10 / paper_run stages are continuations, NOT reinit bootstraps:
+        # the regression head already carries good GIoU signal that SHOULD shape the
+        # shared FPN. detach=True severs the densest detection gradient from the trunk
+        # → features stay non-discriminative → cls sticks at the background equilibrium
+        # (the exact RF2 6-epoch plateau). The reg-loss warmup (REINIT_REG_WARMUP_STEPS)
+        # is the correct guard against any reinit gradient shock; detach is redundant
+        # overkill — matches stage_rf1 + the stage_manager recovery strategy (108–121).
+        # detach_psr_fpn is left True (PSR is a separate head, out of scope for v11).
+        'detach_reg_fpn':           False,
         'detach_psr_fpn':           True,
     },
     'stage_rf10': {
@@ -1290,6 +1425,9 @@ PRESETS = {
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
+        # [FIX 2026-06-21 Opus v11 Q5] Was implicit (no key → module default). Make it
+        # explicit: non-reinit final stage → reg gradient SHOULD shape the FPN. See stage_rf2.
+        'detach_reg_fpn':           False,
     },
     # =====================================================================
     # [FIX 12] Image size presets — reduce IMG_SIZE for faster training
