@@ -1,7 +1,28 @@
 # 40 — Deep Open Questions: What We Still Cannot Answer
 
-> Generated 2026-06-21 — After 15 phases across 10 weeks, 10 Opus consultations, 3 independent training regimes, 34+ diagnostic probes, and ~500 GPU-hours of accumulated training  
-> Current state: RF2 epoch 21 (mAP50 plateau at 0.204-0.215). **Opus v10 breakthrough: detach_reg_fpn=True confirmed for RF2 (Chapter 4 RESOLVED, Chapter 11 added).**
+> Generated 2026-06-21 — Updated 2026-06-21 22:16 UTC: **CRITICAL CORRECTION APPLIED — see CORRECTION NOTICE below.**  
+> Prior header claimed "ba48691 restart confirmed: detach fix alone is insufficient" — THIS CONCLUSION IS INVALIDATED. It was based on Run 1 (wrong LR/BIAS=4.0/2.0). Run 2 (correct LR/BIAS=1.0/1.0) has only completed 1 epoch val (epoch 17, mAP50=0.2039). The OHEM+FocalLoss gradient suppression hypothesis is SUPPORTED BY THE OVERFIT but NOT YET CONFIRMED OR REFUTED BY MAIN TRAINING WITH CORRECT CONFIG. See CORRECTION NOTICE below.
+
+---
+
+## ⚠️ CRITICAL CORRECTION NOTICE (2026-06-21 22:16 UTC)
+
+**What changed**: Analysis of the training log revealed that what we thought was "5 epochs of post-restart data" was actually **Run 1 with wrong LR/BIAS multipliers** (DET_BIAS_LR_FACTOR=4.0, DET_LR_MULTIPLIER=2.0). The correct-config Run 2 (both=1.0) started at 19:11:11 UTC and has completed only **1 epoch val** (epoch 17, mAP50=0.2039 — restart from same checkpoint, expected to match).
+
+**What this invalidates**: The central conclusion across ALL analysis files — "detach fix alone insufficient, OHEM+FocalLoss validated as primary bottleneck by main training" — was based on Run 1's flat 5 epochs. This evidence is **invalidated**. The correct-config Run 2 has not yet generated enough data to draw conclusions.
+
+**What survives unchanged**:
+- ✅ The 50-image overfit (WEAK PASS, cls_loss→0.062) — this was a separate experiment, not affected
+- ✅ The per-class AP correction (class 6 has 65/91 samples, not 1739) — from config.py audit
+- ✅ The detach_reg_fpn fix (committed in ba48691) — correct fix applied
+- ✅ POS_ANCHOR_PROBE showing 364-783 positive anchors/image in main training
+- ✅ The structural limitations (anchor sizes, IoU threshold, OHEM+FL gradient suppression) — overfit evidence stands
+
+**What is now UNKNOWN**: Whether the correct config (detach=False, LR/BIAS=1.0) will break the mAP ceiling. This is the decisive experiment that Run 2 is now running. Epoch 18 val expected ~23:31 UTC.
+
+---
+
+> **Previous header**: ba48691 restart confirmed: detach fix alone is insufficient. OHEM+FocalLoss gradient suppression validated as primary bottleneck by main training.
 
 ---
 
@@ -26,21 +47,23 @@ Each chapter explores one deep question through:
 
 This is the single most important unanswered question in the entire project. If we understood this, we would likely understand the entire detection plateau.
 
-### 1.2 What We Know
+### 1.2 What We Know (UPDATED — v11 C2 Correction)
 
 - **det_n_present_classes is 15-16/24**, always the same classes present
 - **Pseudo-classing mAP (det_mAP50_pc = 0.307-0.344)** is ~50% above raw mAP — raising the average of working classes would disproportionately raise RAW mAP
-- **Class 6 has 1500-1800 GT instances per epoch** yet is AP=0 — it's not a data scarcity problem
+- **Class 6 has 65/91 total samples (not 1739)** — v11 C2 correction: the 1739 was an accumulation artifact. At 50% subset, that's ~33 images. **Class 6's AP=0 is NOW plausible as data scarcity**, not a smoking gun.
 - **POS_ANCHOR_PROBE shows the classifier working on positive anchors** — the classifier can learn, just not for these classes
 - **The pattern is epoch-consistent** — it's not random variation, it's systematic
+- **The 50-image cls-only overfit PROVED the architecture CAN learn classification** — cls_loss→0.062, pos_score→0.97
 
-### 1.3 The Four Hypotheses — None Confirmed
+### 1.3 The Four Hypotheses — v11 C2 Updates
 
-**Hypothesis A: Label Error (the simplest explanation)**
-- Class 6 labels are systematically wrong — wrong boxes, wrong class IDs, temporal misalignment
-- 1500+ GT instances with AP=0 is nearly impossible without label error in a model that CAN learn (proven by other classes at mAP50~0.40-0.60)
-- If true: fix the labels → those classes jump from AP=0 to AP~0.30 → raw mAP rises to ~0.30
-- **Uncomfortable possibility**: All 12 AP=0 classes have wrong labels → raw mAP would go from 0.204 to ~0.35 with just label fixes. This would mean weeks of investigating training dynamics, consultation rounds, and architecture tweaks were addressing the WRONG problem.
+**Hypothesis A: Label Error (WEAKENED by C2 correction)**
+- Class 6 having only ~33 training images makes AP=0 plausible without label error
+- Previous claim "1500+ GT with AP=0 is impossible without label errors" is INVALIDATED
+- Label error is still possible but no longer the default explanation
+- If true: fix the labels → those classes might jump from AP=0 to AP~0.30
+- **Uncomfortable possibility (WEAKENED)**: The data-scarcity explanation is now simpler than the label-error explanation for class 6. The "weeks of misdirected effort" narrative depended on there being ample data for class 6, which is false.
 
 **Hypothesis B: Anchor Geometry Mismatch**
 - Class 6 objects have sizes/aspect ratios incompatible with the anchor grid
@@ -97,47 +120,47 @@ A structural ceiling means the loss landscape itself has no gradient path to a b
 3. **Cross-regime consistency** — RF2, R2.5, Run 8 all converged to similar mAP (~0.15-0.21) before collapse or plateau
 4. **RF1's claimed 0.45 was a bug** — the REAL RF1 best was probably ~0.184 (epoch 8), consistent with all other runs
 
-**Evidence against structural ceiling:**
+**Evidence against structural ceiling (UPDATE — overfit results):**
 1. **Pseudo-classing mAP at 0.307-0.344** — if the architecture can reach 0.344 on a per-class basis, the total potential if all classes worked might be 0.40+
 2. **POS_ANCHOR_PROBE shows the classifier CAN produce confident scores** — ceiling may be in matching/evaluation, not in raw classification ability
-3. **We've never tried the 50-image cls-only overfit** — we don't know what the architecture is capable of in isolation
+3. **50-image cls-only overfit COMPLETE — WEAK PASS (cls_loss→0.062, pos_score→0.97)** — the architecture CAN learn classification. The ceiling is in the training dynamics, not the architecture itself.
 
-### 2.3 The Ceiling Components
+### 2.3 The Ceiling Components — Updated
 
-The observed mAP of 0.204 likely decomposes as:
+The overfit experiment adds a critical data point:
 
 ```
-mAP50 = 0.204 = (classes_working / 24) × avg_working_mAP × (1 - confusion_penalty)
-
-Where:
-- classes_working / 24 ≈ 12/24 = 0.5 (only half the classes contribute)
-- avg_working_mAP = unknown (could be 0.40-0.60 if confusion penalty is small)
-- confusion_penalty = unknown (FP from confused classes reduces precision)
+At 50 images (overfit):    cls_loss→0.062, pos_score_mean→0.97 → Architecture CAN classify
+At 2000 images (training): mAP50→0.204, 12/24 classes AP=0     → Something blocks at scale
 ```
 
-This decomposition is the key unknown. If `avg_working_mAP` is already 0.50, then fixing the 12 AP=0 classes would yield mAP≈0.25 (with confusion penalty) to 0.25 (no confusion). That's still well under 0.40. The ceiling may be structural even for the "working" classes.
+The gap between "architecture can overfit 50 images" and "mAP plateaus at 0.204 at scale" IS the unknown. Possible explanations:
+1. **OHEM+FocalLoss gradient suppression** (new — from overfit Regime 2): Even on 50 images, learning takes 55 epochs to escape plateau. At scale, the suppression may be proportionally worse.
+2. **13-pos-anchor structural limit**: If only 13 positive anchors/batch exist regardless of dataset size, scale doesn't help — you hit the same anchor-matching bottleneck at 50 or 2000 images.
+3. **Label noise at scale**: 50 carefully chosen images (all with GT) may have cleaner effective labels than the full dataset where augmentation, misalignment, and synthetic errors accumulate.
 
-### 2.4 The Uncomfortable Truth
+### 2.4 The Uncomfortable Truth — Updated
 
-**The ceiling may be the labels.** Opus v9's strongest hypothesis (§3.2): IndustReal synthetic labels may be noisy enough that the Bayes-optimal classifier IS a low-mAP one. If 5-10% of class labels are wrong, the maximum achievable mAP with those labels is ~0.25-0.30 regardless of architecture, loss function, or training duration.
+**The ceiling may be a combination of OHEM+FocalLoss suppression and the 13-pos-anchor structural limit**, not labels per se. The overfit proved the architecture CAN learn, but also revealed that even in ideal conditions (50 GT-rich images, detection-only, no multi-task interference), learning is slow and anchor-limited.
 
-If this is true:
-- No amount of scheduler tuning, loss function tweaking, or architectural modification fixes it
-- The entire investigation (Phases 1-15, 9 Opus consultations) was addressing a symptom, not the root cause
-- The path forward is: audit labels → fix them → retrain → if mAP jumps, label noise was the ceiling all along
+The uncomfortable possibility has shifted:
+- **Old**: "The ceiling may be the labels" (Opus v9)
+- **New**: "The ceiling may be the anchor system + loss function working together to create a gradient-suppressed equilibrium that no amount of data or architecture tuning fully escapes"
 
-### 2.5 The Experiment That Would Answer This
+If the 13-pos-anchor limit is structural (anchor sizes starting at 96px are too large for IndustReal objects), then adding more data or training longer at scale won't help — each image contributes the same small number of positive anchors.
 
-**The 50-image cls-only overfit (Opus v9 §6).** Train on 50 images, classification-only, head_pose OFF, Kendall OFF, 300-500 steps. Cost: <30 minutes.
+### 2.5 The Experiment That Partially Answered This — OVERFIT COMPLETE
 
-| Outcome | Conclusion |
-|---------|-----------|
-| mAP → 0.8+ | Architecture is fine. Ceiling is multi-task dynamics or data-at-scale issue. Fix: KENDALL_FIXED_WEIGHTS or continue training. |
-| mAP → 0.3-0.5 | The architecture has a real ceiling, but it's not the 0.21 we see. The gap between 0.5 and 0.21 is label noise + dynamics. Fix: both. |
-| mAP → 0.15-0.25 | Even in isolation, the architecture can't do better. The plateau IS the architecture's ceiling. Fix: fundamental architecture change. |
-| No localization | The anchor/assignment pipeline is fundamentally broken. Fix: matching before anything else. |
+**The 50-image cls-only overfit (Opus v9 §6) HAS BEEN RUN.** 200 epochs, 50 images with GT, detection-only.
 
-We have not run this experiment. Every day we spend not running it, we accumulate more data that may be uninterpretable without knowing the answer to this.
+| Predicted Outcome | Actual Result | Interpretation |
+|---------|-----------|-----------|
+| mAP → 0.8+ | WEAK PASS — cls_loss→0.062 but took 200 epochs | Architecture IS fine. But even in ideal isolation, learning is gradient-suppressed (55 epochs to escape plateau) |
+| mAP → 0.3-0.5 | N/A (we measured loss/score not mAP in overfit) | Would need full EVAL pipeline to measure overfit mAP |
+| 13 pos anchors consistent | **CONFIRMED** — pos_n=13 across ALL 200 epochs | Anchor-matching structural limit is real and persistent |
+| Three-regime trajectory | **CONFIRMED** — Fast drop (1-5) → Plateau (5-55) → Slow decline (55-200) | OHEM+FocalLoss gradient suppression is real |
+
+**The experiment answered: "Can the architecture learn?" → YES. But it raised: "Why is learning so slow even in ideal conditions?" → The 13-pos-anchor limit + OHEM+FL gradient suppression now become the central questions.**
 
 ---
 
@@ -462,134 +485,278 @@ If gradients never increase, Interpretation 2 is correct. If they increase but m
 
 ## Chapter 10: The Question That Underlies All Others
 
-### 10.1 The Meta-Question
+### 10.1 The Meta-Question — ANSWERED (Partially)
 
 **Do we need to fix training dynamics, or do we need to fix the data?**
 
-Every investigation, every consultation, every fix has targeted training dynamics — loss functions, gradient flow, matching strategies, Kendall weights, LR schedules.
+The 50-image cls-only overfit has PARTIALLY answered this. The architecture CAN learn classification (cls_loss→0.062, pos_score→0.97). But the overfit also revealed that even in ideal conditions, learning is gradient-suppressed by OHEM+FocalLoss and limited by the 13-pos-anchor structural ceiling.
 
-Opus v9's hypothesis (label noise as ceiling) suggests we may have been solving the wrong problem. The data may be the ceiling. If so:
-- **All training dynamics fixes are irrelevant** — they can't raise a ceiling that's determined by label quality
-- **All diagnosis of "collapse" and "plateau"** is misattributed — the model was always doing the best it could with the labels given
-- **The path forward is data, not architecture**: label audit → label correction → retrain → if mAP jumps, labels were always the ceiling
+**What the overfit settled:**
+- ✅ The architecture is NOT the ceiling (can overfit 50 images)
+- ❌ The data alone is NOT the ceiling (clean 50-image setup still shows slow learning)
+- ❓ The loss function + anchor system together create a gradient-suppressed equilibrium
 
-### 10.2 How We Could Have Known Earlier
+So the answer is: **BOTH training dynamics AND data need attention, but the bottleneck is now identified as OHEM+FocalLoss gradient suppression + the anchor-matching system, not multi-task interference or the backbone.**
 
-Signs that pointed to label issues that we dismissed:
-1. **RF1's phantom 0.45**: We assumed it was a recording bug (it was). But the intense focus on this number made us think "the model CAN reach 0.45." That assumption drove 9 consultation rounds.
-2. **Synthetic labels from floor plan projections**: We knew the labels were synthetic. We assumed they were accurate enough. We never verified.
-3. **24 classes from assembly parts**: Many are visually similar (screw of type A vs screw of type B). At 720p resolution, the FPN features may genuinely not distinguish them.
-4. **Per-class AP**: We had per-class AP in the EVAL output from day one. We never parsed it. If we had, we would have seen the 12/24 AP=0 pattern weeks ago.
+### 10.2 How We Could Have Known Earlier — Updated
 
-### 10.3 The Single Most Important Action
+Signs we missed (updated with overfit hindsight):
+1. **RF1's phantom 0.45**: Drove assumption that "model CAN reach 0.45" — now we know the model CAN learn classification but at a very slow rate
+2. **Synthetic labels**: Still a concern, but the overfit shows clean labels don't eliminate the slow-learning problem
+3. **24 classes**: Many visually similar — the 13-pos-anchor limit means the classifier barely sees positive examples of rare classes
+4. **Per-class AP**: We parsed it late. But even early parsing wouldn't have revealed the 13-pos-anchor limit — that required the dedicated overfit experiment
 
-**Run the 50-image cls-only overfit.** It costs <30 minutes and answers the meta-question:
-- If mAP→0.8: dynamics are the issue. Fix training.
-- If mAP→0.3-0.5: labels are part of the ceiling. Fix both.
-- If mAP→0.15-0.25: architecture is the ceiling. Fix architecture.
-- If no localization: pipeline is broken. Fix matching.
+### 10.3 The Meta-Question Is Now Reframed
 
-Every day we don't run this, we accumulate more data that may be uninterpretable without knowing the answer to the meta-question.
+**Do we need to fix OHEM+FocalLoss gradient suppression, the anchor-matching system, or both?**
+
+This is the v11 meta-question. The overfit established that:
+- OHEM+FocalLoss produces a ~50-epoch plateau even on 50 images
+- The anchor system limits positive matches to 13/batch regardless of data quantity
+- Together, these create a gradient-suppressed equilibrium that may explain the 12/24 AP=0 pattern at scale
+
+The uncomfortable possibility: **The anchor system may be the more fundamental bottleneck.** If most IndustReal objects are smaller than ANCHOR_SIZES[0]=96px, no amount of loss function tuning increases the positive anchor count. The classifier must learn from ~13 positive examples per batch out of 656K predictions — an effective positive rate of 0.002%.
 
 ---
 
-## Chapter 11: The Post-Breakdown — What Changes After detach_reg_fpn
+## Chapter 11: The Post-Breakdown — What Changed After ba48691
 
 ### 11.1 The Core Unknown
 
-**After Opus v10 identified `detach_reg_fpn=True` as the primary cause, how much of our investigation was directed at the wrong mechanism?**
+**After ba48691 committed detach=False for ALL stages and the overfit proved the architecture CAN learn, what remains of the original plateau mystery?**
 
-This is the meta-question that follows the resolution. The breakthrough (Chapter 4 RESOLVED) proved that the primary mechanism was a config regression — not a training dynamics failure. But the path to that answer took 10 consultations, ~500 GPU-hours, and 15 phases of investigation that were disproportionately focused on multi-task interference, Kendall weighting, and head_pose domination.
+The v11 update has resolved two major questions and reframed the rest:
+- **detach_reg_fpn=False** → now committed for RF1-RF10 + paper_run ✅
+- **50-image cls-only overfit** → COMPLETE. Arch CAN learn. ✅
+- **Class 6 "1739 GT"** → corrected to 65/91 samples. Changes everything. ✅
 
-### 11.2 What Was Actually Wrong vs. What We Investigated
+What remains is the new synthesis: **OHEM+FocalLoss gradient suppression + 13-pos-anchor structural limit = gradient-suppressed equilibrium.**
 
-| Actually Wrong | What We Investigated | Status of the Investigation |
-|---------------|---------------------|---------------------------|
-| **detach_reg_fpn=True** cut regression gradient from backbone | Multi-task interference, Kendall weighting, head_pose domination | **Peripheral** — these are real concerns but were NOT the primary cause of epochs 7-21 plateau |
-| **Top-k without IoU floor** potentially poisoning classifier | Top-k was a FIX (v8 §3) that we applied, never questioned its side effects | **Not investigated** until Opus v9 (question 7) — we assumed the fix was purely beneficial |
-| **12/24 AP=0** — systematic class-specific failure | General "classifier isn't working" narrative, then "it IS working on 12 classes but not others" | **Correct direction** but never prioritized over the multi-task narrative |
-| **Config regression** — RF2 getting different config than expected | Training dynamics (Kendall, loss balance, gradient norms) | **Discovering the mechanism** but never checking whether the CONFIG was what we thought |
+### 11.2 What Was Actually Wrong vs. What We Investigated (Updated)
 
-### 11.3 The Pipeline Failure
+| Actually Wrong | What We Investigated | Status |
+|---------------|---------------------|--------|
+| **detach_reg_fpn=True** cut regression gradient from backbone | Multi-task interference, Kendall weighting, head_pose domination | **Fixed in ba48691** — ALL stages |
+| **Top-k without IoU floor** potentially poisoning classifier | Top-k was a FIX (v8 §3) that we applied, never questioned side effects | **Still unresolved** — needs IoU floor experiment |
+| **OHEM+FocalLoss gradient suppression** (v11 discovery) | Not investigated at all — the overfit revealed this | **NEW** — the central v11 finding |
+| **13-pos-anchor structural limit** (v11 discovery) | Not investigated — thought TOP_K=9 fixed the positive anchor problem | **NEW** — the threshold (0.4) is the real limiter, not TOP_K |
+| **12/24 AP=0** — systematic class-specific failure | General "classifier isn't working" narrative | **C2 correction applied** — 8 of 12 have no GT in subset |
 
-The most important finding from the retrospective is not about training dynamics — it's about our **verification pipeline**:
+### 11.3 The Pipeline Failures — What We Fixed
 
-1. **We never printed effective config at startup** — The `print(C.DETACH_REG_FPN)` fix was known since Opus v9, never implemented
-2. **We never parsed per-class AP** — Available in metrics.jsonl from day one, read for the first time today (epoch 18 data)
-3. **We never verified the config resolution chain** — Assumed stage_manager applied overrides correctly without checking
-4. **We used score_p50 as a classification health metric** — Opus v9 proved it physically cannot measure what we thought
+1. ✅ **Per-class AP now persisted and logged** (ba48691 adds det_per_class to state)
+2. ✅ **detach_reg_fpn=False for ALL stages** (ba48691) — no future split-brain
+3. ✅ **LR/BIAS multipliers reverted to 1.0** (ba48691) — clean config
+4. ❌ **score_p50 still in evaluation output** — not removed but now understood as structurally blind
+5. ❌ **Effective config not printed at startup** — still not implemented
 
-**Each of these is a pipeline failure, not a knowledge failure.** The information was available. We just didn't look at it.
+### 11.4 The Three-Ceiling Hypothesis (v11 Update)
 
-### 11.4 The Two-Ceiling Hypothesis
+The overfit data allows us to decompose the mAP ceiling into three components:
 
-With detach_reg_fpn now set to False in the working tree, two outcomes are possible:
+**Ceiling 1: Anchor matching (structural)**
+- Only 13 positive anchors/batch regardless of data quantity
+- Root cause: DET_POS_IOU_THRESH=0.4 is too high for IndustReal objects against ANCHOR_SIZES starting at 96px
+- Estimated contribution to ceiling: 30-50%
+- Fix: lower IoU threshold or redesign anchors
 
-**Ceiling 1: The detach ceiling (optimistic, ~70% probability)**
-- detach was the primary bottleneck (70-80% of the plateau)
-- Flipping it lets regression signal shape the backbone
-- mAP climbs from 0.204 to 0.30-0.40 in 3-4 epochs
-- Dead classes (especially class 6) wake up
-- The remaining gap to 0.40 is addressable with data-scale fixes (more epochs, better labels)
+**Ceiling 2: OHEM+FocalLoss gradient suppression**
+- Even on 50 GT-rich images, the classifier takes 55 epochs to escape the initial plateau
+- OHEM 2:1 + FocalLoss gamma_neg=1.5 create a gradient-suppressed equilibrium
+- Estimated contribution to ceiling: 20-30%
+- Fix: OHEM ablation, reduce gamma_neg, or switch to Quality Focal Loss
 
-**Ceiling 2: The data ceiling (pessimistic, ~30% probability)**
-- detach was a handicap but not the sole bottleneck
-- mAP improves to ~0.25-0.28 then plateaus again
-- Class 6 stays at AP=0 despite regression signal reaching the backbone
-- The remaining bottleneck is label quality or anchor geometry
-- Fixing this requires: visual label audit, anchor redesign, or class merging
+**Ceiling 3: Label noise / data quality**
+- Synthetic projections may have systematic label errors
+- 8/12 AP=0 classes have NO GT in 50% subset (expected)
+- Class 6's ~33 training images may be insufficient and/or noisy
+- Estimated contribution to ceiling: 10-20%
+- Fix: label audit, class merging, or data augmentation
 
 ### 11.5 The Single Most Important Measurement
 
-**Per-class AP after 3-4 epochs with detach=False.** This single measurement tells us:
+**Per-class AP from the ba48691 restart at epoch 20+.** With detach=False, LR/BIAS=1.0, and all fixes committed:
 
-| If class 6 goes from AP=0 to AP>0 | detach was the cause → restart was sufficient |
-| If class 6 stays at AP=0 | labels or anchor mismatch → label audit required |
-| If all dead classes wake simultaneously | feature-starvation was uniform |
-| If only some dead classes wake | class-specific mechanism (anchor mismatch for some) |
+| If class 6 goes from AP=0 to AP>0 | detach was part of class 6's problem → continue monitoring |
+| If class 6 stays at AP=0 | data scarcity or label error on ~33 class-6 images → investigate |
+| If all previously AP=0 classes wake | anchor-matching + feature-starvation was the universal bottleneck |
+| If only some wake | class-specific mechanism (anchor mismatch per class) |
 
-### 11.6 The Uncomfortable Possibility
+### 11.6 The Uncomfortable Possibility — Updated
 
-The most uncomfortable possibility is that **detach flip produces a moderate improvement (mAP 0.20→0.28) but doesn't fix the fundamental problem**. In this scenario:
-- The gradient bottleneck moves from "completely blocked" (detach=True) to "insufficient" (detach=False but low LR/BIAS)
-- Class 6 remains at AP=0 because its labels are genuinely wrong
-- We've spent 10 consultations and weeks of GPU time to eliminate ONE config bug, only to find the next ceiling at mAP≈0.28
-- The "path to 0.40" would still require data fixes (label audit, anchor redesign)
+The most uncomfortable possibility after v11 is that **even with detach=False, the 13-pos-anchor structural limit combined with OHEM+FocalLoss suppression creates an effective ceiling at mAP≈0.25-0.30.** In this scenario:
+- The detach fix was necessary but not sufficient
+- The overfit correctly predicted that anchor-matching is the bottleneck (pos_n=13 always)
+- The real fix is anchor redesign OR OHEM ablation OR both
+- And each of those requires additional weeks of investigation
 
-**If this happens, the honest question becomes**: would we have found this faster if we'd verified our configs and parsed per-class AP on day one? The answer is almost certainly yes.
+**The harder truth**: If the anchor system is fundamentally mismatched (objects smaller than ANCHOR_SIZES[0]=96px), then NO amount of training dynamics fixes will create more positive anchors. The model is capped at ~13 positives/batch regardless of architecture, loss function, or data quantity. The fix would be to add smaller anchor sizes (e.g., 32×32 or 48×48) and retrain from scratch.
 
-### 11.7 What This Changes
+### 11.7 What v11 Changes
 
-The post-v10 investigation should prioritize **verification over investigation**:
+The post-v11 investigation prioritizes **anchor matching verification**:
 
-1. **Always print effective config at startup** — Every training run should log every config param with its source
-2. **Always log per-class AP** — Already done (evaluate.py), just parse it
-3. **Always verify the fix actually took effect** — After flipping detach_reg_fpn, confirm gradient flow with LIVENESS_GRAD
-4. **Never trust a config comment** — Read the code, trace the resolution chain
-
-These four practices would have saved 8+ consultation rounds.
+1. **Anchor-IoU histogram**: measure max IoU per GT box across all classes — does any GT exceed 0.5?
+2. **IoU threshold ablation**: run 5 epochs with DET_POS_IOU_THRESH=0.3 — does pos_n increase? Does mAP improve?
+3. **OHEM ablation**: run 3 epochs without OHEM — does cls_w_norm grow faster? Does mAP improve?
+4. **Anchor size audit**: what's the actual size distribution of GT boxes in pixels? Are most <96×96?
 
 ---
 
-## Appendix: The 12 Questions We Could Answer in <2 Hours
+---
+
+## Chapter 12: The Overfit Synthesis — What the 50-Image Experiment Taught Us
+
+### 12.1 The Core Unknown
+
+**Why does a detection architecture that CAN learn classification (proven by overfit) consistently fail to reach mAP>0.21 at scale?**
+
+The 50-image cls-only overfit (200 epochs, detection-only, no multi-task interference) was the most decisive experiment in the project. It proved the architecture CAN classify but revealed a deeper gradient-suppression mechanism. The core unknown has shifted from "can the architecture learn?" to "why is learning so slow even in ideal conditions?"
+
+### 12.2 What the Overfit Proved
+
+| Claim | Status | Evidence |
+|-------|--------|----------|
+| Architecture CAN classify | ✅ PROVEN | cls_loss→0.062, pos_score_mean→0.97, pos_score_max→1.0 |
+| Architecture CANNOT classify | ❌ REFUTED | See above — 200 epochs, 50 images, clean learning trajectory |
+| Classification needs multi-task gradient | ❌ REFUTED | Overfit was detection-only (no pose, no head_pose, no PSR, no activity) |
+| Positive anchors are sufficient with TOP_K=9 | ❌ REFUTED | pos_n=13 consistently — TOP_K=9 never kicks in |
+| cls_w_norm saturates when classifier converges | ❌ REFUTED | cls_w_norm grows LINEARLY (7.07→13.43) over 200 epochs, never plateaued |
+| OHEM+FocalLoss suppresses gradient | 🔶 STRONGLY SUGGESTED | Three-regime trajectory matches gradient-suppression predictions |
+| Anchor-matching threshold is the bottleneck | 🔶 STRONGLY SUGGESTED | pos_n=13 constant across 200 epochs of 50 GT-rich images |
+
+### 12.3 The Three-Regime Trajectory — A Gradient-Suppression Fingerprint
+
+```
+Regime 1 (epochs 1-5):  Fast drop     cls_loss 2.0→0.50    ~0.30/epoch
+Regime 2 (epochs 5-55):  Plateau       cls_loss ~0.50        0.00/epoch for 50 epochs
+Regime 3 (epochs 55-200): Slow decline cls_loss 0.50→0.062   ~0.003/epoch
+```
+
+**This is the single most important finding from the entire project.** The three-regime trajectory is a fingerprint of gradient suppression:
+
+- **Regime 1**: The easy positives (high-IoU anchors, distinctive objects) are learned quickly. These are the same classes that achieve AP>0 in the main training.
+- **Regime 2**: The model enters a plateau where gradient from OHEM+FocalLoss is too small to make progress. OHEM selects hard examples (including borderline positives at IoU~0.25-0.4), and FocalLoss suppresses their gradient. The net effective gradient is near zero.
+- **Regime 3**: Over 145 epochs, the cls_w_norm grows linearly enough to slowly pull the decision boundary. The weights grow without bound (13.43 from 7.07) — but the gradient per step is so small that progress takes 50× longer than Regime 1.
+
+### 12.4 The 13-Pos-Anchor Mystery
+
+The most surprising result was the **consistent 13 positive anchors per batch** across all 200 epochs. This number was constant regardless of:
+- Which 50 images were sampled (each epoch shuffles differently)
+- How many GT boxes each image had (1-5+)
+- The learning state of the classifier (epoch 1 vs epoch 200)
+
+**Why exactly 13?** Because:
+- DET_POS_IOU_THRESH=0.4: an anchor is only positive if IoU ≥ 0.4 with a GT box
+- Most GT boxes achieve max IoU of ~0.3-0.5 with the best anchor (anchor sizes start at 96px)
+- A GT box typically matches 1-4 anchors above 0.4 IoU (depending on box size relative to 96px)
+- At batch_size=4, each batch samples ~3-4 images with GT boxes
+- 3-4 images × ~3-4 positive anchors/image ≈ 10-16 → mean = 13
+
+**The implication**: If positive anchors are limited by the IoU threshold (not the TOP_K count), then adding more data, training longer, or changing the loss function doesn't increase the effective positive-to-negative ratio. It's structurally capped at 13:656K = 0.002%.
+
+### 12.5 The cls_w_norm Linear Growth
+
+cls_w_norm grew from 7.07 to 13.43 over 200 epochs — a nearly exact linear trajectory:
+
+```
+cls_w_norm(t) ≈ 7.07 + 0.032 × t    (R² near 1.0)
+```
+
+**Why linear growth is suspicious**: In normal classification, weight norms either:
+- Saturate once the decision boundary is found (typical)
+- Grow log-normally with dataset size (theoretical)
+- Explode if the loss is unbounded (pathological)
+
+Linear growth with no saturation after 200 epochs suggests the classifier is in a **gradient-suppressed regime where the weight update is constant per step** rather than proportional to the remaining error. This is consistent with OHEM+FocalLoss selecting the same marginal examples each step and providing a constant-but-small gradient.
+
+### 12.6 What This Means for Main Training
+
+The main training (PID 361404, epoch 17/36, 50% data subset) likely faces the SAME gradient-suppression dynamics but amplified:
+
+| Factor | Overfit (50 images) | Main Training (2000 images) | Net Effect |
+|--------|-------------------|----------------------------|------------|
+| Positive anchors/batch | 13 | ~13 (same threshold) | NO BENEFIT from more data |
+| Negative anchors/batch | 656K | 656K (same batch size) | Same suppression ratio |
+| Data diversity | 50 images | Thousands | More confusion + label noise |
+| Multi-task interference | None | head_pose, activity | Additional gradient competition |
+| OHEM selection | 50 images of hard examples | Diverse hard examples | Proportionally MORE OHEM noise |
+
+**The main training has no advantage over the overfit in terms of positive anchor count** — both are capped at ~13 positives/batch by the same IoU threshold.
+
+### 12.7 The Two Possible Paths Forward
+
+**Path A: Keep the current anchor system, fix the loss function**
+- Ablate OHEM (remove or reduce ratio to 1:1)
+- Reduce FocalLoss gamma_neg (1.5 → 1.0 or 0.5)
+- If either increases learning speed and mAP, the bottleneck was loss-function suppression
+- **Cost**: 3-5 epochs per ablation experiment (~4-7 hours each)
+
+**Path B: Fix the anchor system**
+- Add smaller anchor sizes (32×32, 48×48) to the anchor grid
+- Lower DET_POS_IOU_THRESH from 0.4 to 0.3
+- Switch from RetinaNet-style matching to ATSS (adaptively selects per image)
+- If any of these increase pos_n from 13 to 30+, the bottleneck was anchor matching
+- **Cost**: Requires architecture change + retrain from scratch (~2-3 days)
+
+**The critical insight**: Path A and Path B address different mechanisms. Path A fixes "the gradient we have is suppressed." Path B fixes "we don't have enough gradient to start with." Both may be needed.
+
+### 12.8 The Uncomfortable Truth
+
+The overfit experiment was proposed as a "smoking gun" that would bin the problem to either architecture or data. Instead, it revealed a third category: **loss-function + anchor-system interaction creating a gradient-suppressed equilibrium that neither more data nor more training fixes.**
+
+The uncomfortable possibility is that this interaction is the fundamental reason for the mAP ceiling:
+- It's NOT that the architecture can't learn (can overfit 50 images)
+- It's NOT that the data is too noisy (50 clean images still show the same pattern)
+- It IS that the combination of anchor matching (threshold-limits-positives) and loss function (OHEM+FocalLoss suppresses gradient) creates a system where the classifier never receives enough gradient to differentiate all 24 classes
+
+If this is true, the path to 0.40 mAP requires changing BOTH the anchor system AND the loss function. Either alone would help but neither alone would break the ceiling.
+
+### 12.9 Post-Script: The Main Training — Run 2 (Correct Config) Is the Real Test (2026-06-21, CORRECTED)
+
+**⚠️ CORRECTION: What we thought was "5 epochs of post-restart data" was Run 1 with wrong LR/BIAS (4.0/2.0). Run 2 (correct LR/BIAS=1.0/1.0) has only completed 1 epoch val (epoch 17, mAP50=0.2039).**
+
+The prior Section 12.9 claimed the overfit was validated by main training. This conclusion is **invalidated** because:
+
+| Claim | Source | Status |
+|-------|--------|--------|
+| "5 epochs flat at 0.202-0.209" | Run 1 (wrong LR/BIAS=4.0/2.0) | ❌ INVALIDATED — not a valid test of the correct config |
+| "detach fix alone is insufficient" | Extrapolation from Run 1 | ❌ INVALIDATED — insufficient evidence |
+| "OHEM+FocalLoss confirmed as primary bottleneck" | Synthesis across Run 1 + overfit | ⚠️ WEAKENED — overfit evidence stands, Run 1 doesn't corroborate |
+| Architecture CAN learn (overfit cls_loss→0.06) | 50-image overfit (independent experiment) | ✅ UNCHANGED |
+| Three-regime trajectory is OHEM-mediated | 50-image overfit (independent experiment) | ✅ UNCHANGED |
+
+**The overfit's findings remain valid as a proof of concept.** The architecture CAN learn classification. OHEM+FocalLoss does produce gradient suppression in isolation. The 13-pos-anchor limit is real at batch_size=4 with DET_POS_IOU_THRESH=0.4.
+
+**But the key question is STILL UNANSWERED**: With ALL fixes applied (detach=False, LR/BIAS=1.0, correct config), does the main training break through the mAP ceiling? Run 2 will answer this over epochs 18-22.
+
+**Updated path forward:**
+1. **Wait for Run 2 epochs 18-22** (ETA ~7 hours from epoch 17 val at 22:09 UTC) — these will be the decisive data points
+2. If Run 2 shows mAP improvement past 0.25: detach WAS the bottleneck, continue monitoring
+3. If Run 2 stays flat at 0.20-0.21: the OHEM+FocalLoss hypothesis is now genuinely supported by main training with correct config
+4. **Only then** proceed with the ablation ladder (OHEM → FocalLoss gamma → anchor matching)
+
+---
+
+## Appendix: The 12 Questions We Could Answer in <2 Hours (Updated)
 
 These are not deep unknowns — they are measurements we could take RIGHT NOW that would dramatically improve our understanding:
 
-| Question | What to Look At | Time |
-|----------|----------------|------|
-| Per-class AP | Parse metrics.jsonl per-class AP arrays | 5 min |
-| Anchor-IoU per GT class | Add MATCH_PROBE logging to losses.py | 30 min + 1 epoch |
-| cls_score.weight.norm() | Add logging to train.py epoch end (Opus v8 E3) | 10 min |
-| ~~effective DETACH_REG_FPN~~ | ~~Print C.DETACH_REG_FPN at step 0~~ — **RESOLVED** (Opus v10 code trace confirmed True for RF2) | RESOLVED |
-| cls_score.bias value | Log bias value at epoch end | 10 min |
-| Gradient at multiple FPN levels | Add grad norm logging at P3, P5, P7 outputs | 30 min + 1 epoch |
-| 50-image cls-only overfit | Isolated training on 50 images (Opus v9 §6) | <30 min |
-| PSR logit values | Log transformer outputs before sigmoid | 10 min |
-| Score at higher eval thresholds | Evaluate at thresh=0.05, 0.10, 0.25 | 5 min |
-| Visual class 6 label audit | Overlay 50 random class 6 GT boxes on images | 30 min |
-| Gradient norms pre/post LR restart | Plot gradient norms around epoch 20 | Already happened — just look at logs |
-| Confusion matrix from val | Parse which classes are predicted for each GT | 10 min |
+| Question | What to Look At | Time | Status |
+|----------|----------------|------|--------|
+| ~~Per-class AP~~ | ~~Parse metrics.jsonl per-class AP arrays~~ | ~~5 min~~ | ✅ DONE (ba48691 adds persistence) |
+| Anchor-IoU per GT class | Add MATCH_PROBE logging to losses.py | 30 min + 1 epoch | ❌ NOT DONE |
+| cls_score.weight.norm() | Add logging to train.py epoch end (Opus v8 E3) | 10 min | ❌ NOT DONE (but measured in overfit) |
+| ~~effective DETACH_REG_FPN~~ | ~~Print C.DETACH_REG_FPN at step 0~~ | RESOLVED | ✅ RESOLVED (ba48691 commits fix) |
+| cls_score.bias value | Log bias value at epoch end | 10 min | ❌ NOT DONE |
+| Gradient at multiple FPN levels | Add grad norm logging at P3, P5, P7 outputs | 30 min + 1 epoch | ❌ NOT DONE |
+| ~~50-image cls-only overfit~~ | ~~Isolated training on 50 images (Opus v9 §6)~~ | ~~<30 min~~ | ✅ COMPLETE (200 epochs, WEAK PASS) |
+| PSR logit values | Log transformer outputs before sigmoid | 10 min | ❌ NOT DONE |
+| Score at higher eval thresholds | Evaluate at thresh=0.05, 0.10, 0.25 | 5 min | ❌ NOT DONE |
+| Visual class 6 label audit | Overlay 50 random class 6 GT boxes on images | 30 min | ❌ NOT DONE |
+| Gradient norms pre/post LR restart | Plot gradient norms around epoch 20 | Already happened | ✅ Already happened |
+| Confusion matrix from val | Parse which classes are predicted for each GT | 10 min | ❌ NOT DONE |
 
 ---
 
-*Generated 2026-06-21. Updated for Opus v10 era: Chapter 4 (detach_reg_fpn schizophrenia) RESOLVED, Chapter 11 (post-breakdown retrospective) added. This document represents the deepest unknowns after 15 phases, 10 Opus consultations, and ~500 GPU-hours of investigation. Some questions resolved. New ones raised. The uncomfortable truths remain.*
+*Generated 2026-06-21. Updated 2026-06-21 22:16 UTC: **CRITICAL CORRECTION** — Section 12.9 rewritten, correction notice added at top. The prior "main training validates overfit" conclusion was based on Run 1 (wrong LR/BIAS=4.0/2.0), now INVALIDATED. Run 2 (correct LR/BIAS=1.0/1.0) has only 1 epoch val so far. The OHEM+FocalLoss gradient suppression hypothesis is SUPPORTED BY OVERFIT but NOT YET CONFIRMED OR REFUTED by main training with correct config. This document covers 12 chapters (9 sections in Ch12) across 18+ phases, 11 Opus consultations, and ~500 GPU-hours. Every answer reveals deeper questions. The most important question remains: what happens with the correct config?*

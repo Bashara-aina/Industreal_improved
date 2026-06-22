@@ -94,12 +94,27 @@ def build_model(device):
 def filter_detection_targets(batch, device):
     """Extract only detection targets from a dataset batch."""
     frames = batch['images']['rgb'].to(device).float().div(255.0)
-    targets = []
+    # Add batch dim if collate returned a single sample (3D → 4D)
+    if frames.dim() == 3:
+        frames = frames.unsqueeze(0)
     B = frames.size(0)
-    for i in range(B):
-        boxes = batch['gt_boxes']['rgb'][i].to(device)
-        labels = batch['gt_classes']['rgb'][i].to(device)
-        targets.append({'boxes': boxes, 'labels': labels})
+
+    gt_boxes = batch['gt_boxes']['rgb']
+    gt_classes = batch['gt_classes']['rgb']
+
+    targets = []
+    # Single-sample path: boxes is a [N,4] tensor (batch_size=1 collation)
+    if isinstance(gt_boxes, torch.Tensor) and gt_boxes.dim() == 2:
+        targets.append({'boxes': gt_boxes.to(device), 'labels': gt_classes.to(device)})
+    else:
+        # Multi-sample path: boxes is a list of tensors (or mixed)
+        for i in range(min(B, len(gt_boxes) if isinstance(gt_boxes, (list, tuple)) else 1)):
+            boxes = gt_boxes[i]
+            labels = gt_classes[i]
+            if isinstance(boxes, torch.Tensor):
+                boxes = boxes.to(device)
+                labels = labels.to(device)
+            targets.append({'boxes': boxes, 'labels': labels})
     return frames, targets
 
 
@@ -269,11 +284,17 @@ def run_overfit(args):
             with torch.no_grad():
                 anchors = outputs.get('anchors', None)
                 if anchors is not None and det_targets[0]['boxes'].shape[0] > 0:
+                    # Check model modules first, then loss_fn (FocalLoss lives in loss_fn.det_loss_fn)
                     focal_loss = None
                     for m in model.modules():
                         if isinstance(m, losses_module.FocalLoss):
                             focal_loss = m
                             break
+                    if focal_loss is None:
+                        for m in loss_fn.modules():
+                            if isinstance(m, losses_module.FocalLoss):
+                                focal_loss = m
+                                break
                     if focal_loss is not None:
                         _pos_n = 0
                         _pos_scores = []

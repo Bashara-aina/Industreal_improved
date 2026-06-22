@@ -1556,6 +1556,8 @@ class MultiTaskLoss(nn.Module):
             print(_msg, flush=True)
 
         # === Kendall weighting ===
+        # Init precision vars before branching so logging at line 1772 never hits UnboundLocalError.
+        prec_det = prec_hp = prec_act = prec_psr = torch.tensor(1.0, device=device)
         if self.use_kendall:
             # [FIX 2026-06-20 (Opus v8 §3 Fix 1)] Fixed-weight path for RF1-RF2.
             # Bypasses learned Kendall log_vars entirely; uses fixed lambda weights so
