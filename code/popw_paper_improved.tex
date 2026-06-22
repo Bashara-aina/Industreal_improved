@@ -90,6 +90,28 @@
 \maketitle
 
 % =====================================================================
+% ABSTRACT — result-free draft (every number is a \popwres placeholder; fill after eval)
+% =====================================================================
+\begin{abstract}
+Assembly understanding requires interpreting egocentric video across several levels
+simultaneously: which assembly state is present, where the worker's head is oriented, what
+action is performed, and which procedure step has completed. State-of-the-art systems address
+these with separate specialist models, incurring redundant computation and no shared
+representation. We present \popw{}, a unified architecture that performs assembly-state
+detection, head-pose estimation, activity recognition, and procedure-step recognition in a
+single forward pass over a shared ConvNeXt-Tiny\,+\,FPN backbone (\popwres{} parameters),
+with a two-stage FiLM mechanism that conditions high-level features on pose and gaze. To train
+heterogeneous tasks stably on commodity hardware (a single 12\,GB GPU), \popw{} routes
+temporal-head gradients away from the shared trunk and weights tasks with homoscedastic
+uncertainty. On IndustReal, \popw{} attains \popwres{} present-class detection mAP, \popwres{}
+activity Top-1, \popwres{} procedure-step F1, and \popwres{}$^\circ$ head-pose error, while
+using \popwres{} fewer parameters and a single backbone pass versus an ensemble of specialists.
+Ablations isolate the contribution of multi-task sharing and of FiLM conditioning. \popw{}
+shows that unified egocentric assembly understanding is feasible and efficient without
+catastrophic task interference. Code and configurations will be released.
+\end{abstract}
+
+% =====================================================================
 \section{Introduction}
 \label{sec:intro}
 
