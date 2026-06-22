@@ -1076,6 +1076,49 @@ def _save_confusion_matrix(cm, class_names, save_dir):
     logger.info(f'  Saved confusion matrix to {save_dir / "confusion_matrix.png"}')
 
 
+def _save_det_confusion_matrix(cm, class_names, save_dir):
+    """Save detection confusion matrix (24×24) as PNG."""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')
+        import matplotlib.pyplot as plt
+        import seaborn as sns
+    except ImportError:
+        logger.warning('matplotlib/seaborn not available, skipping detection confusion matrix')
+        return
+
+    save_dir = Path(save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    # Filter to classes with at least one GT match or prediction
+    gt_counts = cm.sum(axis=1)
+    pr_counts = cm.sum(axis=0)
+    keep = (gt_counts > 0) | (pr_counts > 0)
+    keep_indices = [i for i in range(len(class_names)) if keep[i]]
+    n_keep = len(keep_indices)
+
+    if n_keep > 1:
+        cm_filtered = cm[keep][:, keep]
+        labels_filtered = [class_names[i] for i in keep_indices]
+    else:
+        cm_filtered = cm
+        labels_filtered = class_names
+
+    fig_height = max(6, min(20, n_keep * 0.6))
+    fig, ax = plt.subplots(figsize=(fig_height + 2, fig_height))
+    sns.heatmap(cm_filtered, annot=n_keep <= 16, fmt='d', cmap='Blues',
+                xticklabels=labels_filtered, yticklabels=labels_filtered, ax=ax)
+    ax.set_xlabel('Predicted')
+    ax.set_ylabel('Ground Truth')
+    ax.set_title(f'Detection Confusion Matrix ({n_keep}/{len(class_names)} classes with data)')
+    plt.xticks(rotation=45, ha='right', fontsize=8)
+    plt.yticks(fontsize=8)
+    plt.tight_layout()
+    plt.savefig(save_dir / 'det_confusion_matrix.png', dpi=150)
+    plt.close()
+    logger.info(f'  Saved detection confusion matrix to {save_dir / "det_confusion_matrix.png"}')
+
+
 def _save_per_class_f1_csv(
     per_class_report: Dict,
     per_class_acc: List[float],
@@ -1647,6 +1690,58 @@ def compute_det_metrics_all_frames(
         'det_per_class_ap_all_frames': r50['per_class_ap'],
         '_det_allframes_protocol': 'coco_with_cr' if interpolation_mode == 'coco' else 'voc_with_cr',
     }
+
+
+def compute_det_confusion_matrix(
+    pred_boxes, pred_scores, pred_labels,
+    gt_boxes, gt_labels,
+    num_classes=C.NUM_DET_CLASSES,
+    iou_thresh=0.5,
+):
+    """
+    Build a 24×24 detection confusion matrix: rows = GT class, cols = predicted class.
+
+    Each GT box is matched to the highest-scoring prediction with IoU ≥ iou_thresh.
+    Unmatched GT boxes are recorded as GT→background (class 0) or simply omitted
+    from the matrix (they contribute to the 'miss' count per class).
+
+    Returns:
+        cm: np.ndarray [num_classes, num_classes] — counts of (gt_class, pred_class) matches
+        per_class_gt: dict[class_id] → total GT count
+        per_class_miss: dict[class_id] → unmatched GT count
+    """
+    cm = np.zeros((num_classes, num_classes), dtype=np.int64)
+    per_class_gt = defaultdict(int)
+    per_class_miss = defaultdict(int)
+
+    for idx in range(len(gt_boxes)):
+        gb = gt_boxes[idx]
+        gl = gt_labels[idx]
+        pb = pred_boxes[idx]
+        ps = pred_scores[idx]
+        pl = pred_labels[idx]
+
+        for j in range(len(gb)):
+            gt_c = int(gl[j])
+            per_class_gt[gt_c] += 1
+
+            if len(pb) == 0:
+                per_class_miss[gt_c] += 1
+                continue
+
+            # Compute IoU between this GT box and all predictions
+            gt_box = gb[j:j + 1]
+            ious = compute_iou_matrix(pb, gt_box)  # [N_pred, 1]
+            best_iou_idx = ious.argmax()
+            best_iou = ious[best_iou_idx, 0]
+
+            if best_iou >= iou_thresh:
+                pred_c = int(pl[best_iou_idx])
+                cm[gt_c, pred_c] += 1
+            else:
+                per_class_miss[gt_c] += 1
+
+    return cm, dict(per_class_gt), dict(per_class_miss)
 
 
 # =============================================================================
@@ -3717,6 +3812,24 @@ def evaluate_all(
             dg_boxes, dg_labels,
         )
         results.update(det_av_metrics)
+
+        # Detection confusion matrix: 24×24 (GT class × predicted class at IoU≥0.5)
+        det_cm, det_cm_gt, det_cm_miss = compute_det_confusion_matrix(
+            dp_boxes, dp_scores, dp_labels,
+            dg_boxes, dg_labels,
+        )
+        results['det_confusion_matrix'] = det_cm
+        results['det_cm_gt'] = det_cm_gt
+        results['det_cm_miss'] = det_cm_miss
+
+        # Save confusion matrix PNG if save_dir is set
+        if save_dir is not None and not getattr(C, 'SKIP_DET_CONFUSION_PLOT', False):
+            det_names = getattr(C, 'DET_CLASS_NAMES', {})
+            det_class_names = [det_names.get(c + 1, f'ch{c}') for c in range(C.NUM_DET_CLASSES)]
+            try:
+                _save_det_confusion_matrix(det_cm, det_class_names, save_dir)
+            except Exception as _exc:
+                logger.warning(f'  [DET_CM] Failed to save confusion matrix: {_exc}')
 
     logger.info(
         f'  ASD — mAP@0.5: {results.get("det_mAP50", float("nan")):.4f}  '
