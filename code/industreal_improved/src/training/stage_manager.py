@@ -105,7 +105,7 @@ RF_STAGES = [
         },
         # VALIDATION: metric floors (below these = FAIL)
         'validation': {
-            'det_mAP50_min': 0.25,            # absolute floor (not gate, but warning)
+            'det_mAP50_pc_min': 0.25,            # absolute floor (not gate, but warning)
             'max_pose_MAE': float('inf'),     # no pose yet
         },
         # STABILITY: training dynamics
@@ -152,7 +152,7 @@ RF_STAGES = [
             'min_improvement': 0.003,
         },
         'validation': {
-            'det_mAP50_min': 0.35,
+            'det_mAP50_pc_min': 0.35,
             'forward_angular_MAE_deg_max': 70.0,
         },
         'stability': {
@@ -185,7 +185,7 @@ RF_STAGES = [
             'min_improvement': 0.003,
         },
         'validation': {
-            'det_mAP50_min': 0.40,
+            'det_mAP50_pc_min': 0.40,
             'act_top1_min': 0.30,
             'forward_angular_MAE_deg_max': 65.0,
         },
@@ -222,7 +222,7 @@ RF_STAGES = [
             'min_improvement': 0.002,
         },
         'validation': {
-            'det_mAP50_min': 0.45,
+            'det_mAP50_pc_min': 0.45,
             'act_top1_min': 0.35,
             'psr_f1_min': 0.15,
             'forward_angular_MAE_deg_max': 60.0,
@@ -259,7 +259,7 @@ RF_STAGES = [
             'min_improvement': 0.002,
         },
         'validation': {
-            'det_mAP50_min': 0.50,
+            'det_mAP50_pc_min': 0.50,
             'act_top1_min': 0.40,
             'psr_f1_min': 0.20,
             'forward_angular_MAE_deg_max': 55.0,
@@ -296,7 +296,7 @@ RF_STAGES = [
             'min_improvement': 0.003,
         },
         'validation': {
-            'det_mAP50_min': 0.52,
+            'det_mAP50_pc_min': 0.52,
             'act_top1_min': 0.42,
             'psr_f1_min': 0.25,
             'forward_angular_MAE_deg_max': 50.0,
@@ -333,7 +333,7 @@ RF_STAGES = [
             'min_improvement': 0.003,
         },
         'validation': {
-            'det_mAP50_min': 0.55,
+            'det_mAP50_pc_min': 0.55,
             'act_top1_min': 0.45,
             'psr_f1_min': 0.30,
             'forward_angular_MAE_deg_max': 48.0,
@@ -370,7 +370,7 @@ RF_STAGES = [
             'min_improvement': 0.003,
         },
         'validation': {
-            'det_mAP50_min': 0.58,
+            'det_mAP50_pc_min': 0.58,
             'act_top1_min': 0.48,
             'psr_f1_min': 0.35,
             'forward_angular_MAE_deg_max': 45.0,
@@ -407,7 +407,7 @@ RF_STAGES = [
             'min_improvement': 0.003,
         },
         'validation': {
-            'det_mAP50_min': 0.62,
+            'det_mAP50_pc_min': 0.62,
             'act_top1_min': 0.50,
             'psr_f1_min': 0.38,
             'forward_angular_MAE_deg_max': 42.0,
@@ -444,7 +444,7 @@ RF_STAGES = [
             'min_improvement': 0.003,
         },
         'validation': {
-            'det_mAP50_min': 0.68,
+            'det_mAP50_pc_min': 0.68,
             'det_mAP50_95_min': 0.30,
             'act_top1_min': 0.55,
             'psr_f1_min': 0.45,
@@ -1843,8 +1843,10 @@ def evaluate_convergence(stage_cfg: Dict[str, Any], state: StageState,
         }
         return True, details
 
-    # Primary metric to track: det_mAP50 or combined
-    primary_metric = 'det_mAP50' if 'det_mAP50' in metrics else 'combined'
+    # Primary metric to track: det_mAP50_pc (honest present-class), fallback to det_mAP50 or combined
+    primary_metric = 'det_mAP50_pc' if 'det_mAP50_pc' in metrics else (
+        'det_mAP50' if 'det_mAP50' in metrics else 'combined'
+    )
     current_val = metrics.get(primary_metric, metrics.get('combined', 0.0))
     epoch = state.epoch
 
