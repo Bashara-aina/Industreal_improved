@@ -1578,6 +1578,28 @@ def compute_det_metrics_extended(
     per_class_ap_50 = result.get('per_class_ap', {})
     present_class_gt = result.get('present_class_gt', {})
     n_present = sum(1 for v in present_class_gt.values() if v > 0)
+    per_class_ap = {cls: per_class_ap_50.get(cls, {}).get(0.5, 0.0) for cls in range(num_classes)}
+    per_class_gt = {cls: int(present_class_gt.get(cls, 0)) for cls in range(num_classes)}
+
+    # [FIX 2026-06-21 Opus v11 C2] NAME-LABELED per-class summary. The bare
+    # det_per_class_ap / det_per_class_gt dicts are keyed by 0-indexed model CHANNEL.
+    # COCO category_id is 1-indexed (industreal_dataset.py:1135 maps raw_cat-1 → channel),
+    # so channel c ↔ DET_CLASS_NAMES[c+1]. Persisting an explicit {channel, category_id,
+    # name, gt, ap} record kills the channel-vs-category provenance confusion that made
+    # the v11 §5 table read "class 6 = 1739 GT" (a 20× index/source error). 'background'
+    # is channel 0 (category 1) — flagged so it can be excluded from honest mAP.
+    _names = getattr(C, 'DET_CLASS_NAMES', {})
+    det_per_class = [
+        {
+            'channel': cls,
+            'category_id': cls + 1,
+            'name': _names.get(cls + 1, f'ch{cls}'),
+            'gt': per_class_gt[cls],
+            'ap': per_class_ap[cls],
+            'is_background': (cls == 0),
+        }
+        for cls in range(num_classes)
+    ]
     return {
         'det_mAP50': mAP_per_thresh.get(0.5, 0.0),
         'det_mAP_50_95': float(np.mean(list(mAP_per_thresh.values()))) if mAP_per_thresh else 0.0,
@@ -1592,8 +1614,10 @@ def compute_det_metrics_extended(
         # The nested per_class_ap dict from compute_ap_multi_thresh has shape
         # {class_id: {iou_thresh: ap}}. The old code flattened this incorrectly, masking
         # which classes have any AP at all.
-        'det_per_class_ap': {cls: per_class_ap_50.get(cls, {}).get(0.5, 0.0) for cls in range(num_classes)},
-        'det_per_class_gt': {cls: int(present_class_gt.get(cls, 0)) for cls in range(num_classes)},
+        'det_per_class_ap': per_class_ap,
+        'det_per_class_gt': per_class_gt,
+        # [FIX 2026-06-21 Opus v11] Unambiguous name-labeled view of the two dicts above.
+        'det_per_class': det_per_class,
         '_det_ap_protocol': 'coco' if interpolation_mode == 'coco' else 'voc',
     }
 
