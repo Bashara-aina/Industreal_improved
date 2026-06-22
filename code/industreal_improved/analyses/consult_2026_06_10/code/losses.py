@@ -81,12 +81,16 @@ class FocalLoss(nn.Module):
     GIoU directly optimizes the IoU metric evaluated at mAP@0.5.
     """
     def __init__(self, alpha: float = 0.25, gamma: float = 2.0,
-                 pos_iou_thresh: float = 0.5, neg_iou_thresh: float = 0.4):
+                 pos_iou_thresh: float = 0.5, neg_iou_thresh: float = 0.4,
+                 class_alphas: Optional[Dict[int, float]] = None):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
         self.pos_iou_thresh = pos_iou_thresh
         self.neg_iou_thresh = neg_iou_thresh
+        # [FIX 2026-06-20] Per-class alpha for fine-grained detection classes.
+        # Stored as {class_id: alpha}. Applied at the alpha_t step in forward().
+        self.class_alphas = class_alphas or {}
 
     def _match_anchors(self, anchors: torch.Tensor, gt_boxes: torch.Tensor,
                       gt_labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -126,8 +130,27 @@ class FocalLoss(nn.Module):
         pos_mask = max_iou >= self.pos_iou_thresh
         labels[pos_mask] = gt_labels[max_idx[pos_mask]]
 
+        # [FIX 2026-06-20 (Opus v8 §3 Fix 2)] Top-k force-match per GT.
+        # Standard RetinaNet force-matches the single best anchor per GT (~1 pos/GT).
+        # For small assembly parts (h≈156px at 720p) at IoU≥0.4, most GT boxes only
+        # match 1-2 anchors above threshold. Top-k force-match gives ~6-10 pos/GT,
+        # fixing the supply-side root cause of gradient starvation at source.
+        _topk = int(getattr(C, 'DET_POS_IOU_TOP_K', 9))
+        _iou_floor = float(getattr(C, 'DET_POS_IOU_IOU_FLOOR', 0.0))
         for gi in range(gt_boxes.shape[0]):
-            labels[ious[:, gi].argmax()] = gt_labels[gi]
+            gi_ious = ious[:, gi]
+            # Always assign the best anchor (standard RetinaNet behavior, no floor)
+            labels[gi_ious.argmax()] = gt_labels[gi]
+            # Then assign top-k above IoU floor (minus the best, already assigned above)
+            # [OPUS v9 §R2] Without the IoU floor, top-k can label near-zero-IoU anchors
+            # as "positive", injecting label noise into the cls head. At 0.2, only anchors
+            # with ≥20% box overlap get positive labels from the force-match.
+            if _topk > 1 and gi_ious.numel() > _topk:
+                _, topk_idx = gi_ious.topk(min(_topk, gi_ious.numel()), largest=True)
+                for idx in topk_idx.tolist():
+                    if labels[idx] < 0:  # don't overwrite an already-positive anchor
+                        if _iou_floor <= 0 or gi_ious[idx].item() >= _iou_floor:
+                            labels[idx] = gt_labels[gi]
 
         return labels, matched_boxes
 
@@ -249,6 +272,25 @@ class FocalLoss(nn.Module):
             cls_pred = cls_preds[i][valid_mask]
             cls_target = torch.zeros_like(cls_pred)
 
+            # [OPUS v9 §R3] Positive-anchor score probe: log sigmoid scores of positive anchors
+            # to detect cls head collapse (scores → 0 despite force-match positives).
+            _pos_probe_every = int(getattr(C, 'DET_POS_ANCHOR_PROBE_EVERY', 0))
+            if _pos_probe_every > 0 and pos_mask.sum() > 0:
+                _ppc = self._probe_ctr = getattr(self, '_probe_ctr', 0) + 1
+                if _ppc % _pos_probe_every == 0:
+                    with torch.no_grad():
+                        _pp_iv = pos_mask[valid_mask]
+                        _pp_lab = matched_labels[valid_mask][_pp_iv]
+                        _pp_scores = torch.sigmoid(cls_pred[_pp_iv]).gather(1, _pp_lab.unsqueeze(1)).squeeze(1)
+                        _pp_msg = (f'[POS_ANCHOR_PROBE img={i} call={_ppc}] '
+                                   f'n_pos={int(pos_mask.sum().item())} '
+                                   f'mean={_pp_scores.mean().item():.4f} '
+                                   f'med={_pp_scores.median().item():.4f} '
+                                   f'max={_pp_scores.max().item():.4f} '
+                                   f'min={_pp_scores.min().item():.4f}')
+                        logger.warning(_pp_msg)
+                        print(_pp_msg, flush=True)
+
             if pos_mask.sum() > 0:
                 pos_in_valid = pos_mask[valid_mask]
                 pos_labels = matched_labels[valid_mask][pos_in_valid]
@@ -306,7 +348,19 @@ class FocalLoss(nn.Module):
             else:
                 gamma_eff = self.gamma
 
-            alpha_t = self.alpha * cls_target + (1 - self.alpha) * (1 - cls_target)
+            # [FIX 2026-06-20] Per-class alpha: override default alpha for specific classes
+            # to break gradient conflicts from fine-grained class ambiguity (e.g., class_6 vs class_7).
+            # alpha_per_class[class_id] when set, else self.alpha.
+            if self.class_alphas:
+                num_det_classes = cls_target.shape[1]
+                base_alpha_arr = torch.full((num_det_classes,), self.alpha, device=cls_target.device)
+                for cid, ca in self.class_alphas.items():
+                    if 0 <= cid < num_det_classes:
+                        base_alpha_arr[cid] = ca
+                base_alpha_arr = base_alpha_arr.unsqueeze(0)  # [1, 24]
+                alpha_t = base_alpha_arr * cls_target + (1 - base_alpha_arr) * (1 - cls_target)
+            else:
+                alpha_t = self.alpha * cls_target + (1 - self.alpha) * (1 - cls_target)
             total_cls = total_cls + (alpha_t * (1 - p_t) ** gamma_eff * ce).sum() / num_pos
 
             # C.1: GIoU loss replaces SmoothL1 — directly optimizes IoU metric
@@ -983,7 +1037,8 @@ class MultiTaskLoss(nn.Module):
         # Sub-losses
         self.det_loss_fn = FocalLoss(alpha=C.FOCAL_ALPHA, gamma=C.FOCAL_GAMMA,
                                       pos_iou_thresh=C.DET_POS_IOU_THRESH,
-                                      neg_iou_thresh=C.DET_NEG_IOU_THRESH)
+                                      neg_iou_thresh=C.DET_NEG_IOU_THRESH,
+                                      class_alphas=getattr(C, 'DET_CLASS_ALPHAS', {}))
         self.pose_loss_fn = PoseLoss(wing_omega=C.WING_OMEGA, wing_epsilon=C.WING_EPSILON)
 
         # C.2: LDAM-DRW or CB-Focal for activity
@@ -1501,122 +1556,165 @@ class MultiTaskLoss(nn.Module):
             print(_msg, flush=True)
 
         # === Kendall weighting ===
+        # Init precision vars before branching so logging at line 1772 never hits UnboundLocalError.
+        prec_det = prec_hp = prec_act = prec_psr = torch.tensor(1.0, device=device)
         if self.use_kendall:
-            # [FIX 2026-06-15] Per-task Kendall bounds to prevent multi-task collapse.
-            # Activity log_var FLOOR (min) prevents precision-boosting above exp(0)=1.0.
-            # PSR/pose log_var CEILING (max) prevents suppression below exp(0)=1.0.
-            # Matches _clamp_kendall_log_vars in train.py (parameter-level guard).
-            _act_min = float(getattr(C, 'KENDALL_LOG_VAR_MIN_ACT', -4.0))
-            _psr_max = float(getattr(C, 'KENDALL_LOG_VAR_MAX_PSR', 2.0))
-            _pose_max = float(getattr(C, 'KENDALL_LOG_VAR_MAX_POSE', 2.0))
-            lv_det = self.log_var_det.clamp(-4.0, 2.0)
-            lv_hp = self.log_var_pose.clamp(-4.0, _pose_max)
-            lv_act = self.log_var_act.clamp(_act_min, 2.0)
-            lv_psr = self.log_var_psr.clamp(-4.0, _psr_max)
+            # [FIX 2026-06-20 (Opus v8 §3 Fix 1)] Fixed-weight path for RF1-RF2.
+            # Bypasses learned Kendall log_vars entirely; uses fixed lambda weights so
+            # detection drives the backbone and head_pose just stabilizes it.
+            # Re-enable standard Kendall at RF3+ once detection is real.
+            if bool(getattr(C, 'KENDALL_FIXED_WEIGHTS', False)):
+                _hp_lambda = float(getattr(C, 'KENDALL_HP_FIXED_LAMBDA', 0.2))
+                total = torch.tensor(0.0, device=device)
+                if self.train_det:
+                    total = total + loss_det
+                if self.train_pose:
+                    loss_pose = loss_pose.clamp(min=0.0)
+                if self.train_act:
+                    loss_act = loss_act.clamp(min=0.0)
+                if self.train_pose or self.train_act:
+                    loss_head_pose = loss_head_pose.clamp(min=0.0)
+                    if self.train_pose and self.train_act:
+                        total = total + _hp_lambda * (loss_pose + loss_head_pose)
+                    elif self.train_pose:
+                        total = total + _hp_lambda * (loss_pose + loss_head_pose)
+                    else:
+                        total = total + _hp_lambda * loss_head_pose
+                if self.train_act:
+                    _act_w = float(getattr(C, 'ACTIVITY_LOSS_WEIGHT', 1.0))
+                    total = total + loss_act * _act_w
+                if self.train_psr:
+                    loss_psr = loss_psr.clamp(min=0.0)
+                    _psr_w = float(getattr(C, 'PSR_WEIGHT', 20.0))
+                    total = total + loss_psr * _psr_w
+                total = total.squeeze()
+            else:
+                # Standard Kendall precision-weighted path (activated when
+                # KENDALL_FIXED_WEIGHTS=False). Each task contributes
+                # prec_task * loss_task + lv_task.
+                # [FIX 2026-06-15] Per-task Kendall bounds to prevent multi-task collapse.
+                # Activity log_var FLOOR (min) prevents precision-boosting above exp(0)=1.0.
+                # PSR/pose log_var CEILING (max) prevents suppression below exp(0)=1.0.
+                # Matches _clamp_kendall_log_vars in train.py (parameter-level guard).
+                _act_min = float(getattr(C, 'KENDALL_LOG_VAR_MIN_ACT', -4.0))
+                _psr_max = float(getattr(C, 'KENDALL_LOG_VAR_MAX_PSR', 2.0))
+                _pose_max = float(getattr(C, 'KENDALL_LOG_VAR_MAX_POSE', 2.0))
+                lv_det = self.log_var_det.clamp(-4.0, 2.0)
+                lv_hp = self.log_var_pose.clamp(-4.0, _pose_max)
+                lv_act = self.log_var_act.clamp(_act_min, 2.0)
+                lv_psr = self.log_var_psr.clamp(-4.0, _psr_max)
 
-            prec_det = torch.exp(-lv_det)
-            prec_hp = torch.exp(-lv_hp)
-            prec_act = torch.exp(-lv_act)
-            prec_psr = torch.exp(-lv_psr)
+                # [FIX 2026-06-20 (Opus v8 §3 Fix 1)] Head-pose precision cap:
+                # head_pose precision can never exceed detection precision. Without this,
+                # head_pose (loss ≈ 0.01) gets Kendall-optimal precision ~54.6× while detection
+                # (loss ≈ 0.5) gets ~1.4×, and the shared backbone is optimized for head_pose.
+                # The `detach()` ensures detection's log_var is not affected by the asymmetry.
+                if bool(getattr(C, 'KENDALL_HP_PREC_CAP', True)):
+                    lv_hp = torch.maximum(lv_hp, lv_det.detach())
 
-            # Stage-aware Kendall: zero precision AND log_var of frozen tasks to prevent
-            # gradient corruption in their log_vars during staged training.
-            # Epoch 0: no staging (backward-compat for resumed runs).
-            # Epoch 1-5 (stage 1): detection + activity (ramped) only.
-            #   head_pose + psr frozen (zeroed).
-            # Epoch 6-15 (stage 2): detection + head_pose + activity (ramp completed).
-            #   psr frozen (zeroed).
-            # Epoch 16+ (stage 3): all tasks (psr ramped per PSR_WARMUP_EPOCHS).
-            #
-            # [USER-AUTH FIX 2026-06-05] Activity is now trained from epoch 0 via
-            # ACT_RAMP_EPOCHS ramp (mirrors prec_psr_ramp below). The log_var_act
-            # is preserved (not zeroed) so the learnable parameter can adapt to the
-            # ramping gradient magnitude. Zeroing lv_act would have starved log_var_act
-            # of all gradient signal.
-            if bool(getattr(C, 'STAGED_TRAINING', True)) and self._current_epoch >= 1:
-                stage = _get_kendall_stage(self._current_epoch)
-                # Activity ramp — applies in BOTH stage 1 and stage 2 (ramp completes
-                # by epoch ACT_RAMP_EPOCHS-1, so stage 2 sees ramp=1.0 unless config
-                # is changed). In stage 3 the ramp is naturally 1.0 and prec_act is
-                # left unchanged below.
-                act_ramp_epochs = int(getattr(C, 'ACT_RAMP_EPOCHS', 5))
-                if act_ramp_epochs > 0 and self._current_epoch < act_ramp_epochs:
-                    act_ramp = (self._current_epoch + 1) / act_ramp_epochs
-                else:
-                    act_ramp = 1.0
-                if stage == 1:
-                    # Detection-only stage: head_pose and psr frozen.
-                    prec_hp = prec_hp * 0
-                    lv_hp = lv_hp * 0
-                    prec_psr = prec_psr * 0
-                    lv_psr = lv_psr * 0
-                    # Activity ramps in (user-authorized; log_var preserved)
-                    prec_act = prec_act * act_ramp
-                elif stage == 2:
-                    # Det + head_pose + activity (ramp at 1.0 by epoch >= ACT_RAMP_EPOCHS)
-                    prec_psr = prec_psr * 0
-                    lv_psr = lv_psr * 0
-                    prec_act = prec_act * act_ramp
-                elif stage == 3:
-                    stage1_end = int(getattr(C, 'STAGE1_EPOCHS', 5))
-                    stage2_end = stage1_end + int(getattr(C, 'STAGE2_EPOCHS', 10))
-                    stage3_start = stage2_end + 1
-                    warmup_epochs = int(getattr(C, 'PSR_WARMUP_EPOCHS', 5))
-                    if warmup_epochs > 0:
-                        prec_psr_ramp = min(1.0, (self._current_epoch - stage3_start + 1) / warmup_epochs)
-                        prec_psr = prec_psr * prec_psr_ramp
+                prec_det = torch.exp(-lv_det)
+                prec_hp = torch.exp(-lv_hp)
+                prec_act = torch.exp(-lv_act)
+                prec_psr = torch.exp(-lv_psr)
 
-            total = torch.tensor(0.0, device=device)
-            if self.train_det:
-                total = total + prec_det * loss_det + lv_det
-            # Sanity floor: ensure no component loss is negative enough to cause
-            # Kendall divergence. Soft floor already applied to loss_det above, but
-            # add this as last-resort guard for all components.
-            if self.train_pose:
-                loss_pose = loss_pose.clamp(min=0.0)
-            if self.train_act:
-                loss_act = loss_act.clamp(min=0.0)
-            # Build Kendall total — each task adds its precision-weighted loss + log_var.
-            # NOTE: loss_pose (body keypoint Wing Loss) and loss_head_pose (head pose 9-DoF MSE)
-            # share log_var_pose (intentional per paper §Multi-Task Loss: both are pose tasks).
-            # lv_hp is included ONCE for pose+head_pose when EITHER branch runs, since they share log_var_pose.
-            if self.train_pose or self.train_act:
-                loss_head_pose = loss_head_pose.clamp(min=0.0)
-                pose_contribution = prec_hp * loss_pose + lv_hp if self.train_pose else prec_hp * loss_head_pose + lv_hp
-                if self.train_pose and self.train_act:
-                    pose_contribution = prec_hp * loss_pose + prec_hp * loss_head_pose + lv_hp  # both body+head, one lv_hp
-                elif self.train_pose:
-                    # [FIX 2026-06-17] Include loss_head_pose in Kendall total!
-                    # Bug: IndustReal has NO keypoint annotations → loss_pose is always ZERO,
-                    # making pose_contribution = lv_hp (just log_var reg, zero grad for head_pose_head).
-                    # Head pose (9-DoF MSE, ~1.7) was computed in forward pass but excluded from total loss,
-                    # neutralizing the entire train_head_pose=True fix (Opus RF1 prescription).
-                    pose_contribution = prec_hp * loss_pose + prec_hp * loss_head_pose + lv_hp
-                else:  # train_act only
-                    pose_contribution = prec_hp * loss_head_pose + lv_hp
-                total = total + pose_contribution
-            if self.train_act:
-                # [FIX 2026-06-15] ACTIVITY_LOSS_WEIGHT prevents activity from dominating
-                # the Kendall total. Activity loss is ~1-5 vs PSR loss ~0.01 — without
-                # this down-weight, activity dominates even when both heads have equal
-                # precision, and Kendall log_vars learn to suppress PSR/pose to compensate.
-                _act_w = float(getattr(C, 'ACTIVITY_LOSS_WEIGHT', 1.0))
-                total = total + prec_act * (loss_act * _act_w) + lv_act
-            if self.train_psr:
-                loss_psr = loss_psr.clamp(min=0.0)
-                # [INTERVENTION 2026-06-14] PSR_WEIGHT applied BEFORE Kendall precision
-                # so the learned s_psr (log_var) can still modulate the effective weight.
-                _psr_w = float(getattr(C, 'PSR_WEIGHT', 20.0))
-                # [FIX 2026-06-15] Step-based PSR warmup: extra precision multiplier that
-                # decays from PSR_WARMUP_INIT_MULT → 1.0 over PSR_WARMUP_STEPS.
-                # Gives PSR a gradient head start before activity loss dominates.
-                _psr_warmup_steps = int(getattr(C, 'PSR_WARMUP_STEPS', 0))
-                if _psr_warmup_steps > 0 and self._step_counter < _psr_warmup_steps:
-                    _psr_warmup_init = float(getattr(C, 'PSR_WARMUP_INIT_MULT', 3.0))
-                    _ramp = _psr_warmup_init + (1.0 - _psr_warmup_init) * self._step_counter / _psr_warmup_steps
-                    prec_psr = prec_psr * _ramp
-                total = total + prec_psr * (loss_psr * _psr_w) + lv_psr
-            total = total.squeeze()
+                # Stage-aware Kendall: zero precision AND log_var of frozen tasks to prevent
+                # gradient corruption in their log_vars during staged training.
+                # Epoch 0: no staging (backward-compat for resumed runs).
+                # Epoch 1-5 (stage 1): detection + activity (ramped) only.
+                #   head_pose + psr frozen (zeroed).
+                # Epoch 6-15 (stage 2): detection + head_pose + activity (ramp completed).
+                #   psr frozen (zeroed).
+                # Epoch 16+ (stage 3): all tasks (psr ramped per PSR_WARMUP_EPOCHS).
+                #
+                # [USER-AUTH FIX 2026-06-05] Activity is now trained from epoch 0 via
+                # ACT_RAMP_EPOCHS ramp (mirrors prec_psr_ramp below). The log_var_act
+                # is preserved (not zeroed) so the learnable parameter can adapt to the
+                # ramping gradient magnitude. Zeroing lv_act would have starved log_var_act
+                # of all gradient signal.
+                if bool(getattr(C, 'STAGED_TRAINING', True)) and self._current_epoch >= 1:
+                    stage = _get_kendall_stage(self._current_epoch)
+                    # Activity ramp — applies in BOTH stage 1 and stage 2 (ramp completes
+                    # by epoch ACT_RAMP_EPOCHS-1, so stage 2 sees ramp=1.0 unless config
+                    # is changed). In stage 3 the ramp is naturally 1.0 and prec_act is
+                    # left unchanged below.
+                    act_ramp_epochs = int(getattr(C, 'ACT_RAMP_EPOCHS', 5))
+                    if act_ramp_epochs > 0 and self._current_epoch < act_ramp_epochs:
+                        act_ramp = (self._current_epoch + 1) / act_ramp_epochs
+                    else:
+                        act_ramp = 1.0
+                    if stage == 1:
+                        # Detection-only stage: head_pose and psr frozen.
+                        prec_hp = prec_hp * 0
+                        lv_hp = lv_hp * 0
+                        prec_psr = prec_psr * 0
+                        lv_psr = lv_psr * 0
+                        # Activity ramps in (user-authorized; log_var preserved)
+                        prec_act = prec_act * act_ramp
+                    elif stage == 2:
+                        # Det + head_pose + activity (ramp at 1.0 by epoch >= ACT_RAMP_EPOCHS)
+                        prec_psr = prec_psr * 0
+                        lv_psr = lv_psr * 0
+                        prec_act = prec_act * act_ramp
+                    elif stage == 3:
+                        stage1_end = int(getattr(C, 'STAGE1_EPOCHS', 5))
+                        stage2_end = stage1_end + int(getattr(C, 'STAGE2_EPOCHS', 10))
+                        stage3_start = stage2_end + 1
+                        warmup_epochs = int(getattr(C, 'PSR_WARMUP_EPOCHS', 5))
+                        if warmup_epochs > 0:
+                            prec_psr_ramp = min(1.0, (self._current_epoch - stage3_start + 1) / warmup_epochs)
+                            prec_psr = prec_psr * prec_psr_ramp
+
+                total = torch.tensor(0.0, device=device)
+                if self.train_det:
+                    total = total + prec_det * loss_det + lv_det
+                # Sanity floor: ensure no component loss is negative enough to cause
+                # Kendall divergence. Soft floor already applied to loss_det above, but
+                # add this as last-resort guard for all components.
+                if self.train_pose:
+                    loss_pose = loss_pose.clamp(min=0.0)
+                if self.train_act:
+                    loss_act = loss_act.clamp(min=0.0)
+                # Build Kendall total — each task adds its precision-weighted loss + log_var.
+                # NOTE: loss_pose (body keypoint Wing Loss) and loss_head_pose (head pose 9-DoF MSE)
+                # share log_var_pose (intentional per paper §Multi-Task Loss: both are pose tasks).
+                # lv_hp is included ONCE for pose+head_pose when EITHER branch runs, since they share log_var_pose.
+                if self.train_pose or self.train_act:
+                    loss_head_pose = loss_head_pose.clamp(min=0.0)
+                    pose_contribution = prec_hp * loss_pose + lv_hp if self.train_pose else prec_hp * loss_head_pose + lv_hp
+                    if self.train_pose and self.train_act:
+                        pose_contribution = prec_hp * loss_pose + prec_hp * loss_head_pose + lv_hp  # both body+head, one lv_hp
+                    elif self.train_pose:
+                        # [FIX 2026-06-17] Include loss_head_pose in Kendall total!
+                        # Bug: IndustReal has NO keypoint annotations → loss_pose is always ZERO,
+                        # making pose_contribution = lv_hp (just log_var reg, zero grad for head_pose_head).
+                        # Head pose (9-DoF MSE, ~1.7) was computed in forward pass but excluded from total loss,
+                        # neutralizing the entire train_head_pose=True fix (Opus RF1 prescription).
+                        pose_contribution = prec_hp * loss_pose + prec_hp * loss_head_pose + lv_hp
+                    else:  # train_act only
+                        pose_contribution = prec_hp * loss_head_pose + lv_hp
+                    total = total + pose_contribution
+                if self.train_act:
+                    # [FIX 2026-06-15] ACTIVITY_LOSS_WEIGHT prevents activity from dominating
+                    # the Kendall total. Activity loss is ~1-5 vs PSR loss ~0.01 — without
+                    # this down-weight, activity dominates even when both heads have equal
+                    # precision, and Kendall log_vars learn to suppress PSR/pose to compensate.
+                    _act_w = float(getattr(C, 'ACTIVITY_LOSS_WEIGHT', 1.0))
+                    total = total + prec_act * (loss_act * _act_w) + lv_act
+                if self.train_psr:
+                    loss_psr = loss_psr.clamp(min=0.0)
+                    # [INTERVENTION 2026-06-14] PSR_WEIGHT applied BEFORE Kendall precision
+                    # so the learned s_psr (log_var) can still modulate the effective weight.
+                    _psr_w = float(getattr(C, 'PSR_WEIGHT', 20.0))
+                    # [FIX 2026-06-15] Step-based PSR warmup: extra precision multiplier that
+                    # decays from PSR_WARMUP_INIT_MULT → 1.0 over PSR_WARMUP_STEPS.
+                    # Gives PSR a gradient head start before activity loss dominates.
+                    _psr_warmup_steps = int(getattr(C, 'PSR_WARMUP_STEPS', 0))
+                    if _psr_warmup_steps > 0 and self._step_counter < _psr_warmup_steps:
+                        _psr_warmup_init = float(getattr(C, 'PSR_WARMUP_INIT_MULT', 3.0))
+                        _ramp = _psr_warmup_init + (1.0 - _psr_warmup_init) * self._step_counter / _psr_warmup_steps
+                        prec_psr = prec_psr * _ramp
+                    total = total + prec_psr * (loss_psr * _psr_w) + lv_psr
+                total = total.squeeze()
 
             # NaN guard in Kendall total — fires on inf/NaN only, not on negative
             # Handle both scalar and 1-element tensor cases

@@ -203,9 +203,15 @@ def _write_stage_heartbeat(
         if best_metric is not None:
             state['best_metric'] = best_metric
         if best_metrics is not None:
+            _prev_bm = state.get('best_metrics', {})
             state['best_metrics'] = {
-                'det_mAP50': best_metrics.get('det_mAP50', state.get('best_metrics', {}).get('det_mAP50')),
-                'forward_angular_MAE_deg': best_metrics.get('forward_angular_MAE_deg', state.get('best_metrics', {}).get('forward_angular_MAE_deg')),
+                'det_mAP50': best_metrics.get('det_mAP50', _prev_bm.get('det_mAP50')),
+                # [FIX 2026-06-21 Opus v11 §D] Also persist the present-class (un-diluted)
+                # mAP so the swarm/monitor sees the honest detection number, not just the
+                # COCO-24 mean that zero-GT channels drag down on sparse subset stages.
+                'det_mAP50_pc': best_metrics.get('det_mAP50_pc', _prev_bm.get('det_mAP50_pc')),
+                'det_n_present_classes': best_metrics.get('det_n_present_classes', _prev_bm.get('det_n_present_classes')),
+                'forward_angular_MAE_deg': best_metrics.get('forward_angular_MAE_deg', _prev_bm.get('forward_angular_MAE_deg')),
             }
         if batch is not None:
             state['batch'] = {'current': batch[0], 'total': batch[1]}
@@ -1764,45 +1770,95 @@ def train_one_epoch(
                         )
                 if ema is not None and (not staged_training or stage >= 3):
                     ema.update()
-                # [FIX4] Per-param detection head weight stats (every 100 steps, --reinit-heads only)
-                if _REINIT_HEADS_ACTIVE and step % 100 == 0:
-                    _det_named_params = {n: p for n, p in model.named_parameters()
-                                         if n.startswith('detection_head') and p.grad is not None}
-                    if _det_named_params:
-                        _det_parts = []
-                        # cls_score.weight grad norm
-                        _cw = _det_named_params.get('detection_head.cls_score.weight')
-                        if _cw is not None:
-                            _cg = _cw.grad.detach()
-                            _det_parts.append(
-                                f'cls_w_grad:norm={_cg.norm():.2e} '
-                                f'mean={_cg.mean():.2e} std={_cg.std():.2e}'
-                            )
-                        # cls_score.bias actual values (prior-determining)
-                        _cb = _det_named_params.get('detection_head.cls_score.bias')
-                        if _cb is not None:
-                            _cb_val = _cb.detach()
-                            _det_parts.append(
-                                f'cls_bias:val_mean={_cb_val.mean():.4f} '
-                                f'val_min={_cb_val.min():.4f} val_max={_cb_val.max():.4f}'
-                            )
-                        # reg_pred.weight grad norm
-                        _rw = _det_named_params.get('detection_head.reg_pred.weight')
-                        if _rw is not None:
-                            _rg = _rw.grad.detach()
-                            _det_parts.append(f'reg_w_grad:norm={_rg.norm():.2e}')
-                        # cls_subnet final layer (index 9) grad norm
-                        _csl = _det_named_params.get('detection_head.cls_subnet.9.weight')
-                        if _csl is not None:
-                            _cslg = _csl.grad.detach()
-                            _det_parts.append(f'cls_subnet_last_grad:norm={_cslg.norm():.2e}')
-                        # reg_subnet final layer (index 9) grad norm
-                        _rsl = _det_named_params.get('detection_head.reg_subnet.9.weight')
-                        if _rsl is not None:
-                            _rslg = _rsl.grad.detach()
-                            _det_parts.append(f'reg_subnet_last_grad:norm={_rslg.norm():.2e}')
-                        if _det_parts:
-                            logger.info(f'  [DET-DEBUG step={step}] ' + ' | '.join(_det_parts))
+                # [FIX4] Per-param detection head weight stats (every 100 optimizer steps).
+                # NOTE: this block is inside `if (step + 1) % accum_steps == 0:` (optimizer step
+                # boundary), so forward-step-based checks like `step % 100 == 0` will NEVER fire
+                # because the optimizer fires at step = 7, 15, 23, 31, ... which are never
+                # multiples of 100. Use `(step + 1) % (accum_steps * 100) == 0` instead.
+                _OPT_STEP = (step + 1) // accum_steps  # optimizer step count
+                if accum_steps >= 1 and (step + 1) % (accum_steps * 100) == 0:
+                    logger.info(f'  [E4-TEST step={step} opt_step={_OPT_STEP}] ENTERED')
+                    # [OPUS v8 E4] Unconditional per-head backbone gradient norms (every 100 steps).
+                    # Not gated behind _REINIT_HEADS_ACTIVE so we can monitor gradient balance
+                    # throughout training, not just during head reinitialization phases.
+                    # [OPUS v8 E4] Per-head backbone gradient norms — capture BEFORE optimizer step.
+                    # Collect per-head named params with gradients for cross-head comparison.
+                    _all_named_params = {n: p for n, p in model.named_parameters() if p.grad is not None}
+                    _backbone_grad_norm = 0.0
+                    _hp_head_grad_norm = 0.0
+                    _act_head_grad_norm = 0.0
+                    _psr_head_grad_norm = 0.0
+                    for _n, _p in _all_named_params.items():
+                        _gn = _p.grad.detach().norm().item()
+                        if _n.startswith('backbone') or _n.startswith('fpn'):
+                            _backbone_grad_norm += _gn ** 2
+                        elif _n.startswith('head_pose_head'):
+                            _hp_head_grad_norm += _gn ** 2
+                        elif _n.startswith('activity_head'):
+                            _act_head_grad_norm += _gn ** 2
+                        elif _n.startswith('psr_head'):
+                            _psr_head_grad_norm += _gn ** 2
+                    _backbone_grad_norm = math.sqrt(_backbone_grad_norm) if _backbone_grad_norm > 0 else 0.0
+                    _hp_head_grad_norm = math.sqrt(_hp_head_grad_norm) if _hp_head_grad_norm > 0 else 0.0
+                    _act_head_grad_norm = math.sqrt(_act_head_grad_norm) if _act_head_grad_norm > 0 else 0.0
+                    _psr_head_grad_norm = math.sqrt(_psr_head_grad_norm) if _psr_head_grad_norm > 0 else 0.0
+
+                    # DET-DEBUG: per-weight detection head stats (reinit-heads only, verbose)
+                    if _REINIT_HEADS_ACTIVE:
+                        _det_named_params = {n: p for n, p in model.named_parameters()
+                                             if n.startswith('detection_head') and p.grad is not None}
+                        if _det_named_params:
+                            _det_parts = []
+                            # cls_score.weight grad norm
+                            _cw = _det_named_params.get('detection_head.cls_score.weight')
+                            if _cw is not None:
+                                _cg = _cw.grad.detach()
+                                _det_parts.append(
+                                    f'cls_w_grad:norm={_cg.norm():.2e} '
+                                    f'mean={_cg.mean():.2e} std={_cg.std():.2e}'
+                                )
+                            # cls_score.bias actual values (prior-determining)
+                            _cb = _det_named_params.get('detection_head.cls_score.bias')
+                            if _cb is not None:
+                                _cb_val = _cb.detach()
+                                _det_parts.append(
+                                    f'cls_bias:val_mean={_cb_val.mean():.4f} '
+                                    f'val_min={_cb_val.min():.4f} val_max={_cb_val.max():.4f}'
+                                )
+                            # reg_pred.weight grad norm
+                            _rw = _det_named_params.get('detection_head.reg_pred.weight')
+                            if _rw is not None:
+                                _rg = _rw.grad.detach()
+                                _det_parts.append(f'reg_w_grad:norm={_rg.norm():.2e}')
+                            # cls_subnet final layer (index 9) grad norm
+                            _csl = _det_named_params.get('detection_head.cls_subnet.9.weight')
+                            if _csl is not None:
+                                _cslg = _csl.grad.detach()
+                                _det_parts.append(f'cls_subnet_last_grad:norm={_cslg.norm():.2e}')
+                            # reg_subnet final layer (index 9) grad norm
+                            _rsl = _det_named_params.get('detection_head.reg_subnet.9.weight')
+                            if _rsl is not None:
+                                _rslg = _rsl.grad.detach()
+                                _det_parts.append(f'reg_subnet_last_grad:norm={_rslg.norm():.2e}')
+                            if _det_parts:
+                                logger.info(f'  [DET-DEBUG step={step}] ' + ' | '.join(_det_parts))
+                    # [OPUS v8 E4] Per-head backbone grad norm summary (every 100 steps).
+                    # Uses _hp_head_grad_norm computed unconditionally above.
+                    # Re-collect detection head named params (defined in DET-DEBUG block which may not execute).
+                    _det_named_params_g = {n: p for n, p in model.named_parameters()
+                                           if n.startswith('detection_head') and p.grad is not None}
+                    _det_grad_norm = sum(
+                        _p.grad.detach().norm().item() ** 2
+                        for _p in _det_named_params_g.values()
+                    ) ** 0.5 if _det_named_params_g else 0.0
+                    logger.info(
+                        f'  [GRAD-NORM step={step}] '
+                        f'backbone={_backbone_grad_norm:.2e} '
+                        f'det={_det_grad_norm:.2e} '
+                        f'hp={_hp_head_grad_norm:.2e} '
+                        f'act={_act_head_grad_norm:.2e} '
+                        f'psr={_psr_head_grad_norm:.2e}'
+                    )
                 optimizer.zero_grad(set_to_none=True)
 
         # --- NaN/ZERO GUARD: zero per-component losses that are NaN before accumulating.
@@ -2914,6 +2970,24 @@ def main(args):
         f'USE_KENDALL={CFG_USE_KENDALL}'
     )
 
+    # [OPUS v9 §R5] Step-0 effective config dump — logs the key config parameters
+    # that define the current run so we know exactly what state training started with.
+    logger.info(
+        f'Config: DET_POS_IOU_THRESH={C.DET_POS_IOU_THRESH}  '
+        f'DET_POS_IOU_TOP_K={C.DET_POS_IOU_TOP_K}  '
+        f'DET_POS_IOU_IOU_FLOOR={C.DET_POS_IOU_IOU_FLOOR}  '
+        f'DET_OHEM_ENABLED={getattr(C, "DET_OHEM_ENABLED", False)}  '
+        f'DET_ASYMMETRIC_GAMMA={getattr(C, "DET_ASYMMETRIC_GAMMA", False)}  '
+        f'DET_BIAS_LR_FACTOR={C.DET_BIAS_LR_FACTOR}  '
+        f'DET_LR_MULTIPLIER={C.DET_LR_MULTIPLIER}  '
+        f'KENDALL_HP_PREC_CAP={bool(getattr(C, "KENDALL_HP_PREC_CAP", True))}  '
+        f'KENDALL_FIXED_WEIGHTS={bool(getattr(C, "KENDALL_FIXED_WEIGHTS", False))}  '
+        f'KENDALL_HP_FIXED_LAMBDA={float(getattr(C, "KENDALL_HP_FIXED_LAMBDA", 0.2))}  '
+        f'KENDALL_STAGED_TRAINING={bool(getattr(C, "KENDALL_STAGED_TRAINING", False))}  '
+        f'DET_POS_ANCHOR_PROBE_EVERY={getattr(C, "DET_POS_ANCHOR_PROBE_EVERY", 200)}  '
+        f'_STAGE_NAME={_stage_name}'
+    )
+
     # Debug mode overrides
     max_recordings_train = None
     max_recordings_val = None
@@ -3897,6 +3971,23 @@ def main(args):
                     return default
                 return val
 
+            # [OPUS v8 E2] Kendall precision ratio: head_pose ÷ detection.
+            # If prec_ratio >> 1 (e.g., ~30-40×), head_pose dominates the shared backbone.
+            # Each precision = exp(-log_var), clamped range: exp(-2)≈0.14 to exp(4)≈54.6.
+            _lv_det = _safe_log(train_metrics.get('log_var_det', 0.0), 'log_var_det', default=0.0)
+            _lv_hp = _safe_log(train_metrics.get('log_var_pose', 0.0), 'log_var_pose', default=0.0)
+            _prec_det = math.exp(-_lv_det) if math.isfinite(_lv_det) else 0.0
+            _prec_hp = math.exp(-_lv_hp) if math.isfinite(_lv_hp) else 0.0
+            _prec_ratio = (_prec_hp / _prec_det) if _prec_det > 1e-10 else float('inf')
+
+            # [OPUS v8 E3] cls_score.weight.norm() — tracks backbone feature health.
+            # Shrinking norm = backbone losing object-discriminative features (symptom chain).
+            _cls_w_norm = 0.0
+            _cls_w_iter = next((p for n, p in model.named_parameters()
+                                if n.endswith('detection_head.cls_score.weight')), None)
+            if _cls_w_iter is not None:
+                _cls_w_norm = _cls_w_iter.detach().norm().item()
+
             logger.info(
                 f'Train: loss={_safe_log(train_metrics["total"], "total"):.4f}  '
                 f'det={_safe_log(train_metrics["det"], "det"):.4f}  '
@@ -3904,8 +3995,10 @@ def main(args):
                 f'act={_safe_log(train_metrics["activity"], "activity"):.4f}  '
                 f'psr={_safe_log(train_metrics["psr"], "psr"):.4f}  '
                 f'lr={current_lr:.2e}  '
-                f'kd_d={_safe_log(train_metrics["log_var_det"], "log_var_det", default=0.0):+.3f}  '
-                f'kd_p={_safe_log(train_metrics["log_var_pose"], "log_var_pose", default=0.0):+.3f}  '
+                f'prec_d={_prec_det:.2f} prec_hp={_prec_hp:.2f} prec_r={_prec_ratio:.1f}  '
+                f'cls_w_n={_cls_w_norm:.4f}  '
+                f'kd_d={_lv_det:+.3f}  '
+                f'kd_p={_lv_hp:+.3f}  '
                 f'kd_a={_safe_log(train_metrics["log_var_act"], "log_var_act", default=0.0):+.3f}  '
                 f'kd_r={_safe_log(train_metrics["log_var_psr"], "log_var_psr", default=0.0):+.3f}'
                 f'{ema_decay_str}  '
@@ -4219,6 +4312,31 @@ def main(args):
                     _mae_pose = _s(_mae_pose_raw, alt=float('nan'))
                     # [FIX 2026-05-31] Use psr_f1_at_t (real ±3-frame F1) instead of psr_macro_f1 (= psr_overall_f1 = 0.0)
                     _f1_psr = _s(val_metrics.get('psr_f1_at_t', 0.0))
+
+                    # [FIX 2026-06-21 Opus v11 §D] Surface the HONEST detection metric.
+                    # det_mAP50 is the COCO-24 mean: it averages AP over ALL 24 channels,
+                    # including the background channel (0) and every channel with zero GT in
+                    # this val subset (each contributes AP=0). On sparse subset stages this
+                    # DILUTES the headline far below real per-present-class performance.
+                    # det_mAP50_pc averages only channels with GT>0 — the number to judge
+                    # subset-stage progress by. Logging-only; the gate still uses det_mAP50 for
+                    # paper-baseline comparability (see 44_OPUS_ANSWER_v11.md §D).
+                    _map50_pc = _s(val_metrics.get('det_mAP50_pc', 0.0))
+                    _n_present = int(val_metrics.get('det_n_present_classes', 0))
+                    _n_total = int(getattr(C, 'NUM_DET_CLASSES', 24))
+                    if _map50_pc > 0 or _map50 > 0:
+                        logger.info(
+                            f'  det_mAP50={_map50:.4f} (COCO-{_n_total}, diluted)  '
+                            f'det_mAP50_pc={_map50_pc:.4f} (present-class, honest)  '
+                            f'n_present={_n_present}/{_n_total}'
+                        )
+                        if (_map50_pc - _map50) >= 0.05:
+                            logger.warning(
+                                f'  [DILUTION] det_mAP50_pc exceeds det_mAP50 by '
+                                f'{_map50_pc - _map50:+.4f} — the headline is dragged down by '
+                                f'{_n_total - _n_present} zero-GT/background channels. '
+                                f'Judge subset-stage progress by det_mAP50_pc.'
+                            )
 
                     # [NaN Guard] Validate inputs before computing combined metric
                     # [FIX 2026-05-31] OR instead of AND — fire when ANY component is non-finite
