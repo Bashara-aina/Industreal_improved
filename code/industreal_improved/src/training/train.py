@@ -2967,13 +2967,41 @@ def main(args):
             ['git', 'rev-parse', 'HEAD'], stderr=subprocess.STDOUT, cwd=C.POPW_ROOT
         ).decode().strip()
         logger.info(f'Git commit: {_git_hash}')
-        # Also write to run dir if output_root is known
-        if hasattr(args, 'output_root') and args.output_root:
-            _git_file = Path(args.output_root) / 'git_commit.txt'
-            _git_file.parent.mkdir(parents=True, exist_ok=True)
-            _git_file.write_text(_git_hash + '\n')
+        _git_file = log_dir / 'git_commit.txt'
+        _git_file.parent.mkdir(parents=True, exist_ok=True)
+        _git_file.write_text(_git_hash + '\n')
     except Exception as _exc:
         logger.warning(f'Could not log git commit: {_exc}')
+
+    # [CHECKLIST 33] Log library versions for reproducibility
+    logger.info(f'Library versions: torch={torch.__version__}  '
+                f'torchvision={getattr(torch, "__version__", "?")}  '
+                f'CUDA={torch.version.cuda if torch.cuda.is_available() else "N/A"}  '
+                f'Python={sys.version.split()[0]}')
+    # Also write to run dir
+    try:
+        (_lib_file := log_dir / 'library_versions.txt').write_text(
+            f'torch={torch.__version__}\n'
+            f'torchvision={getattr(torch, "__version__", "?")}\n'
+            f'cuda={torch.version.cuda if torch.cuda.is_available() else "N/A"}\n'
+            f'python={sys.version.split()[0]}\n'
+        )
+    except Exception as _exc:
+        logger.warning(f'Could not write library versions: {_exc}')
+
+    # [CHECKLIST 34] Save command line and relevant environment variables to run dir
+    try:
+        _cmd = ' '.join(sys.argv)
+        _env_keys = ['CUDA_VISIBLE_DEVICES', 'DET_GT_FRAME_FRACTION', 'TRAIN_MAX_STEPS',
+                     'EVAL_MAX_BATCHES', 'OUTPUT_ROOT_OVERRIDE', 'POPW_ROOT']
+        _env_lines = '\n'.join(f'{k}={os.environ.get(k, "")}' for k in _env_keys)
+        (_cmd_file := log_dir / 'run_command.txt').write_text(
+            f'Command: {_cmd}\n\n'
+            f'Relevant env vars:\n{_env_lines}\n'
+        )
+        logger.info(f'[CHECKLIST 34] Command and env vars saved to {_cmd_file}')
+    except Exception as _exc:
+        logger.warning(f'Could not save run command: {_exc}')
 
     _apply_runtime_safety(device)
 
