@@ -196,12 +196,30 @@ class CacheDataset(Dataset):
         # Build index: list of (rec_id, start_frame) pairs
         self._index = []
         rec_ids = sorted(self.cache.recording_ids)
-        # Simple split: first 80% train, last 20% val
-        split_cut = int(len(rec_ids) * 0.8)
-        if split == 'train':
-            rec_ids = rec_ids[:split_cut]
+        # Use official train/val/test recording lists from config CSVs
+        split_csv = {
+            'train': C.TRAIN_CSV,
+            'val': C.VAL_CSV,
+            'test': C.TEST_CSV,
+        }.get(split)
+        if split_csv and split_csv.exists():
+            official_ids = set()
+            with open(split_csv, encoding='utf-8') as f:
+                for line in f:
+                    rid = line.strip().split(',')[0]
+                    if rid:
+                        official_ids.add(rid)
+            rec_ids = sorted(official_ids & set(rec_ids))
+            if not rec_ids:
+                logger.warning(f'[CacheDataset] No cached recordings match split {split}; '
+                               f'falling back to all recordings')
+                rec_ids = sorted(self.cache.recording_ids)
+            else:
+                logger.info(f'[CacheDataset] Filtered to {len(rec_ids)} recordings from '
+                            f'{split} split')
         else:
-            rec_ids = rec_ids[split_cut:]
+            logger.warning(f'[CacheDataset] Split CSV not found: {split_csv}; '
+                           f'using all recordings')
 
         for rec_id in rec_ids:
             data = self.cache.get_recording(rec_id)
@@ -459,7 +477,10 @@ def cache_embeddings(ckpt_path: str, output_dir: str, split: str = 'val',
     logger.info(f"[Cache] Processing {len(ds)} frames from {split} split...")
 
     with torch.no_grad():
-        for batch in tqdm(loader, total=max_batches or len(loader)):
+        for bi, batch in enumerate(tqdm(loader, total=max_batches or len(loader))):
+            if max_batches and bi >= max_batches:
+                break
+
             images = batch[0].to(device)
             targets = batch[1]
             clip_rgb = targets.get('clip_rgb')
@@ -469,10 +490,10 @@ def cache_embeddings(ckpt_path: str, output_dir: str, split: str = 'val',
             outputs = model(images, clip_rgb=clip_rgb)
 
             # Extract features to cache
-            proj_feat = outputs.get('activity_proj', outputs.get('proj_feat'))
+            proj_feat = outputs.get('proj_feat')
             det_conf = outputs.get('det_conf')
-            c5_gap = F.adaptive_avg_pool2d(outputs.get('c5_mod', torch.zeros(images.shape[0], 768, 1, 1, device=device)), 1).flatten(1)
-            p4_gap = F.adaptive_avg_pool2d(outputs.get('pyramid', {}).get('p4', torch.zeros(images.shape[0], 256, 1, 1, device=device)), 1).flatten(1)
+            c5_gap = F.adaptive_avg_pool2d(outputs.get('c5_mod'), 1).flatten(1)
+            p4_gap = F.adaptive_avg_pool2d(outputs.get('p4'), 1).flatten(1)
 
             for i in range(images.shape[0]):
                 meta = targets['metadata'][i]
@@ -485,9 +506,6 @@ def cache_embeddings(ckpt_path: str, output_dir: str, split: str = 'val',
                 cache.add_frame(rec_id, proj_feat[i], det_conf[i],
                                c5_gap[i], p4_gap[i],
                                activity, psr, frame_idx, camera)
-
-            if max_batches and (batch_idx := 1) > max_batches:
-                break
 
     cache.flush_all()
     cache.close()
