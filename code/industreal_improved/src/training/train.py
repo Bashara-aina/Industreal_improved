@@ -4432,12 +4432,22 @@ def main(args):
                             continue
                     finally:
                         IN_EVALUATION_PHASE = False
-                        # HARDENED: val_workers_rt=0, but call shutdown anyway to be safe.
-                        # With 0 workers the function returns immediately (no-op).
-                        _shutdown_loader_workers(val_loader, logger)
-                        del val_loader
-                        gc.collect()
-                        torch.cuda.empty_cache()
+                        # [CUDA-CRASH FIX 2026-06-30] Wrap cleanup in try/except.
+                        # Silent CUDA errors (e.g. from corrupted context after a failed
+                        # step-val) can crash the process during del/gc/empty_cache without
+                        # a Python traceback. Catching here prevents total training loss.
+                        try:
+                            if torch.cuda.is_available():
+                                torch.cuda.synchronize()
+                        except Exception:
+                            logger.error('[CUDA] Synchronize failed before eval cleanup — CUDA context may be corrupted')
+                        try:
+                            _shutdown_loader_workers(val_loader, logger)
+                            del val_loader
+                            gc.collect()
+                            torch.cuda.empty_cache()
+                        except Exception as _clean_exc:
+                            logger.error(f'[EVAL CLEANUP] Cleanup failed: {_clean_exc} — continuing')
                         logger.info('  [POST_EVAL] val_loader cleaned up, resuming train...')
 
                     # [DIAGNOSTIC] Log whether val succeeded and produced metrics

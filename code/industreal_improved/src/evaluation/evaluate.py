@@ -3643,10 +3643,11 @@ def evaluate_all(
         _sigmoid = 1 / (1 + np.exp(-_psr))
         _binary = (_sigmoid > 0.5).astype(np.int32)
         _unique_binary = np.unique(_binary, axis=0)
+    _sigmoid_min_str = f'{_sigmoid.min():.3f}' if _sigmoid.size > 0 else '0.000'
+    _sigmoid_max_str = f'{_sigmoid.max():.3f}' if _sigmoid.size > 0 else '0.000'
     logger.info(
         f'  [DEBUG] psr_logits range=[{_psr.min():.3f}, {_psr.max():.3f}]  '
-        f'sigmoid range=[{_sigmoid.min():.3f if _sigmoid.size > 0 else 0.0:.3f}, '
-        f'{_sigmoid.max():.3f if _sigmoid.size > 0 else 0.0:.3f}]  '
+        f'sigmoid range=[{_sigmoid_min_str}, {_sigmoid_max_str}]  '
         f'unique_binary_patterns={_unique_binary.shape[0]}  '
         f'total_frames={_psr.shape[0]}'
     )
