@@ -3,7 +3,7 @@
 # allowing PyTorch to extend existing segments instead of allocating new ones.
 # Must be set before any CUDA context is created (i.e. before `import torch`).
 import os
-os.environ['PYTORCH_ALLOC_CONF'] = 'expandable_segments:True'
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 # [CUDA-STABILITY] Set CUBLAS workspace config to prevent repeated
 # "Could not parse CUBLAS_WORKSPACE_CONFIG" warnings that indicate
 # potential CUDA context instability. Each cuBLAS operation re-parses
@@ -12,6 +12,7 @@ os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
 
 import faulthandler
 import signal
+import atexit
 faulthandler.enable()
 # Use correct Python 3.13 API (was register_signal_handler, now just register)
 faulthandler.register(signal.SIGUSR1)  # faulthandler.dump traceback on SIGUSR1
@@ -95,7 +96,7 @@ os.environ['MALLOC_ARENA_MAX']      = '4'
 # Required for deterministic GPU ops and hash-seed stability
 # Note: C not yet imported, using hardcoded seed; C.SEED used later after import
 os.environ['PYTHONHASHSEED']        = '42'
-os.environ['CUBLAS_WORKSPACE_CONFIG'] = '4096:8'
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 # CUDA_LAUNCH_BLOCKING=1 synchronises GPU operations for deterministic debugging
 # but destroys throughput (30-50% loss) by disabling GPU-CPU pipelining.
 # Only enable when DEBUG_MODE env var is set or when running a diagnostic script.
@@ -243,6 +244,16 @@ def _atomic_save(obj: Any, path: Path) -> None:
     Writes to a temporary path first, then renames atomically on POSIX.
     Prevents checkpoint corruption from mid-write crashes.
     """
+    # Check disk space before saving — warn if <1GB free
+    try:
+        import shutil
+        _usage = shutil.disk_usage(path.parent)
+        _free_gb = _usage.free / (1024**3)
+        if _free_gb < 1.0:
+            logger = logging.getLogger('train')
+            logger.warning(f'[DISK] Low disk space: {_free_gb:.1f}GB free on {path.parent} — checkpoint may fail')
+    except Exception:
+        pass
     tmp_path = path.parent / (path.name + '.tmp')
     try:
         torch.save(obj, tmp_path)
@@ -833,6 +844,7 @@ def _save_crash_recovery(tag: str = '') -> None:
                     'batch': 0,
                     'total_steps': 0,
                     'seq_steps': 0,
+                    'global_step': getattr(C, '_global_step', 0),
                     'model': model_state,
                     'optimizer': optimizer_state,
                     'scaler': scaler_state,
@@ -1014,8 +1026,13 @@ def train_one_epoch(
         _save_crash_recovery(f'fatal_signal_{sig_name}')
         # Always exit with 0 — crash recovery attempted, no further action possible
         sys.exit(0)
-    for _sig in (signal.SIGSEGV, signal.SIGABRT, signal.SIGBUS, signal.SIGFPE):
-        signal.signal(_sig, _sig_handler)
+    # [THREAD FIX 2026-06-29] signal.signal() raises ValueError from non-main thread.
+    # Wrap all registrations so eval-in-thread doesn't crash the process.
+    try:
+        for _sig in (signal.SIGSEGV, signal.SIGABRT, signal.SIGBUS, signal.SIGFPE):
+            signal.signal(_sig, _sig_handler)
+    except ValueError:
+        logger.warning('[SIGNAL] Cannot register fatal-signal handlers (not main thread)')
     # Also catch SIGTERM (timeout / external kill) and SIGINT (Ctrl+C)
     def _sig_term_handler(signum, frame):
         global IN_EVALUATION_PHASE
@@ -1029,8 +1046,11 @@ def train_one_epoch(
         # exit cleanly with code 0. The signal handler must NEVER crash or hang.
         _save_crash_recovery(f'signal_{sig_name}')
         sys.exit(0)
-    for _sig in (signal.SIGTERM, signal.SIGINT):
-        signal.signal(_sig, _sig_term_handler)
+    try:
+        for _sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(_sig, _sig_term_handler)
+    except ValueError:
+        logger.warning('[SIGNAL] Cannot register SIGTERM/SIGINT handlers (not main thread)')
     # -----------------------------------------------------------------
 
     # Save crash recovery checkpoint BEFORE first batch (epoch start)
@@ -1895,6 +1915,7 @@ def train_one_epoch(
             _gs = C._global_step
             if _gs > 0 and _gs % val_every_n_steps == 0:
                 logger.info(f'  [STEP VAL] global_step={_gs} — running gated validation ({_step_val_gate} batches)')
+                torch.cuda.empty_cache()  # Clear cached allocator memory before validation
                 model.eval()
                 try:
                     _svm = evaluate_all(
@@ -1913,6 +1934,7 @@ def train_one_epoch(
                     logger.warning(f'  [STEP VAL] gs={_gs} failed: {_sv_exc!r} — continuing training')
                 finally:
                     model.train()
+                    torch.cuda.empty_cache()  # Clear cached allocator memory after validation
 
         # Doc 2 §B.3: Loss component breakdown (logged every 50 steps)
         if (step + 1) % 50 == 0:
@@ -1929,9 +1951,10 @@ def train_one_epoch(
             refresh=True
         )
 
-        # --- CRASH RECOVERY only at epoch end (Bashara 2026-05-25: per-epoch saves, no per-batch) ---
+        # --- CRASH RECOVERY every 1000 steps (2026-06-29: mid-epoch saves prevent total epoch loss) ---
         # crash_recovery.pth is always overwritten — minimal storage, maximum safety.
-        # Named per-batch checkpoints removed — they are redundant with crash_recovery.
+        if (step + 1) % 1000 == 0:
+            _save_crash_recovery(f'epoch{epoch}_step{step+1}')
 
         # --- CPU RAM WATCHDOG every 50 batches (Bashara 2026-05-09) ---
         # Check host RAM before we risk OOM. Alert if < 2GB available.
@@ -2810,6 +2833,7 @@ def _compare_raw_vs_ema(
             0,          # HARDENED: always 0 — no worker management (matches val hardening)
             prefetch=1,
         )
+        torch.cuda.empty_cache()  # Clear cached allocator memory before raw validation
         raw_metrics = evaluate_all(
             model,
             criterion,
@@ -2959,6 +2983,46 @@ def main(args):
         logger.info(f'GPU : {torch.cuda.get_device_name()}')
         vram = torch.cuda.get_device_properties(0).total_memory / 1e9
         logger.info(f'VRAM: {vram:.1f} GB')
+
+    # ---- GPU OOM PREVENTION (Bashara 2026-06-29) ----
+    # Clear orphan CUDA contexts before any GPU work begins.
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    # PID lock file: prevent orphan processes from previous restarts piling up on the same GPU.
+    _lock_file = log_dir / '.train.pid'
+    if _lock_file.exists():
+        try:
+            _stale_pid = int(_lock_file.read_text().strip().split(',')[0])
+            try:
+                os.kill(_stale_pid, 0)  # Test if still alive
+                _proc_cmdline = f'/proc/{_stale_pid}/cmdline'
+                _proc_name = open(_proc_cmdline).read().replace('\x00', ' ')[:200] if os.path.exists(_proc_cmdline) else '?'
+                logger.warning(f'[LOCK] Stale PID {_stale_pid} still running: {_proc_name} — killing')
+                os.kill(_stale_pid, signal.SIGKILL)
+                time.sleep(0.5)
+                logger.info(f'[LOCK] Killed stale PID {_stale_pid}')
+            except (OSError, PermissionError):
+                logger.info(f'[LOCK] Stale lock from dead PID {_stale_pid} — cleaning up')
+        except Exception as _lock_exc:
+            logger.warning(f'[LOCK] Lock file error: {_lock_exc}')
+        _lock_file.unlink(missing_ok=True)
+    _gpu_idx = (device.index if device.type == 'cuda' and device.index is not None
+                else (torch.cuda.current_device() if torch.cuda.is_available() else -1))
+    _lock_file.write_text(f'{os.getpid()},{_gpu_idx}')
+    logger.info(f'[LOCK] PID lock acquired: PID={os.getpid()}, GPU={_gpu_idx}')
+    def _cleanup_resources():
+        try:
+            if _lock_file and _lock_file.exists():
+                _lock_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+        try:
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass
+    atexit.register(_cleanup_resources)
+    # ------------------------------------------------------------
 
     # [CHECKLIST 31] Log git commit hash for reproducibility
     try:
@@ -3226,6 +3290,28 @@ def main(args):
     # Tag model with PSR sequence length so forward knows how to reshape
     model._seq_len = getattr(C, 'PSR_SEQUENCE_LENGTH', 4) if C.USE_PSR_SEQUENCE_MODE else 1
     params = count_parameters(model)
+
+    # ---- VRAM CHECK (GPU OOM PREVENTION) ----
+    if torch.cuda.is_available():
+        try:
+            _total_vram = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+            _used_vram = torch.cuda.memory_allocated(0) / (1024**3)
+            _free_vram = _total_vram - _used_vram
+            _total_params = params.get('total_all', sum(p.numel() for p in model.parameters()))
+            _model_size_gb = _total_params * 4.0 / (1024**3)
+            _required_gb = max(_model_size_gb * 1.5, 2.0)
+            logger.info(f'[VRAM] Total={_total_vram:.2f}GB Used={_used_vram:.2f}GB '
+                       f'Free={_free_vram:.2f}GB Model={_model_size_gb:.2f}GB Need>={_required_gb:.2f}GB')
+            if _free_vram < _required_gb:
+                import subprocess as _sp
+                _proc_info = _sp.check_output(
+                    ['nvidia-smi', '--query-compute-apps=pid,used_memory,name',
+                     '--format=csv,noheader'], timeout=5).decode().strip()
+                logger.error(f'[VRAM] Insufficient VRAM ({_free_vram:.2f}GB < {_required_gb:.2f}GB).'
+                            f'\nProcesses holding GPU memory:\n{_proc_info}')
+                sys.exit(1)
+        except Exception as _vram_exc:
+            logger.warning(f'[VRAM] Check failed: {_vram_exc} -- continuing')
 
     USE_EMA = bool(getattr(C, 'USE_EMA', True))
     EMA_DECAY = float(getattr(C, 'EMA_DECAY', 0.999))
@@ -3557,6 +3643,15 @@ def main(args):
             best_metric = float(ckpt.get('best_metric', 0.0))
             patience_counter = int(ckpt.get('patience_counter', 0))
             logger.info(f'Resumed from epoch {start_epoch}, best={best_metric:.4f}')
+
+        # [CRASH-HARDEN 2026-06-29] Restore global step from checkpoint so
+        # step-based validation (VAL_EVERY_N_STEPS) fires at the right cadence.
+        _gs = int(ckpt.get('global_step', 0))
+        if _gs > 0:
+            if not hasattr(C, '_global_step'):
+                C._global_step = 0
+            C._global_step = _gs
+            logger.info(f'  Restored _global_step={_gs} from checkpoint (step-based val cadence)')
 
         # FIX: Mid-epoch resume — skip batches already processed in the partially-completed epoch.
         # batch > 0 means we crashed mid-epoch (not at epoch boundary). We need to resume from
@@ -3910,12 +4005,17 @@ def main(args):
                 ema.set_decay(_get_ema_decay(epoch))
 
             train_attempt = 0
+            _train_failed = False
             while True:
                 train_attempt += 1
                 if train_attempt > 6:
-                    raise RuntimeError(
-                        'Exceeded maximum train retry attempts (6) for this epoch.'
+                    logger.critical(
+                        'Exceeded maximum train retry attempts (6) for this epoch. '
+                        'Returning safe fallback metrics (all 0.0) to prevent training crash.'
                     )
+                    train_metrics = {}
+                    _train_failed = True
+                    break
                 try:
                     train_metrics = train_one_epoch(
                         model,
@@ -3997,6 +4097,14 @@ def main(args):
                         )
                         continue
                     raise
+
+            # [CRASH-HARDEN 2026-06-29] If all retries failed, skip the rest of
+            # the epoch (scheduler step, validation, checkpointing) and continue
+            # to the next epoch. Prevents total training loss from a single bad
+            # epoch (OOM, corrupted checkpoint, unfixable NaN).
+            if _train_failed:
+                logger.critical('[TRAIN_FAILED] Skipping scheduler step, validation, and checkpoint for this epoch.')
+                continue  # skip to next epoch in for loop
 
             scheduler.step()
             if videomae_warmup_state['active'] and videomae_warmup_state['epochs_remaining'] > 0:
@@ -4242,7 +4350,11 @@ def main(args):
                         persistent=False,
                     )
                     global IN_EVALUATION_PHASE
+                    # [CRASH-HARDEN 2026-06-29] Save pre-validation checkpoint so a
+                    # validation crash loses at most 50 batches instead of the full epoch.
+                    _save_crash_recovery('pre_val')
                     IN_EVALUATION_PHASE = True
+                    torch.cuda.empty_cache()  # Clear cached allocator memory before validation
                     try:
                         try:
                             val_metrics = evaluate_all(
@@ -4254,6 +4366,7 @@ def main(args):
                                 epoch=epoch,
                             )
                             _check_per_class_activity_sanity(val_metrics, epoch)
+                            torch.cuda.empty_cache()  # Clear cached allocator memory after validation success
                         except Exception as exc:
                             is_cpu_enomem = 'Cannot allocate memory' in str(exc)
                             is_cuda_oom_v = _is_cuda_oom(exc)
@@ -4516,6 +4629,7 @@ def main(args):
                             'best_metric':     best_metric,
                             'patience_counter': patience_counter,
                             'val_metrics':     val_metrics,
+                            'global_step':    getattr(C, '_global_step', 0),
                         }
                         if ema is not None:
                             # Apply EMA weights temporarily for saving
@@ -4605,6 +4719,7 @@ def main(args):
                     'log_var_act': criterion.log_var_act.data.clone(),
                     'log_var_psr': criterion.log_var_psr.data.clone(),
                 } if criterion is not None else {},
+                'global_step':   getattr(C, '_global_step', 0),
             }, ckpt_dir / 'latest.pth')
 
             # --- BASHARA 2026-05-25: Per-epoch crash recovery save (epoch end only) ---
@@ -4884,7 +4999,7 @@ if __name__ == '__main__':
         _override_start_epoch = args.start_epoch
         logger.info(f'[train] start_epoch override: {_override_start_epoch} (fresh init, no checkpoint)')
 
-    if args.debug:
+    if hasattr(args, 'debug') and args.debug:
         C.DEBUG_MODE = True
         C.DEBUG_MAX_VIDEOS = 5
         C.VAL_EVERY = 999

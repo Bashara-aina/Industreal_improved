@@ -1,44 +1,17 @@
 {
-  "current_stage": "rf2",
-  "stage_index": 1,
+  "current_stage": "rf4",
+  "stage_index": 3,
   "status": "running",
-  "training_pid": 361404,
-  "epoch": 21,
-  "best_metric": 0.4622134028185104,
+  "training_pid": 3573032,
+  "epoch": 2,
+  "best_metric": 0.41597024177578984,
   "best_metrics": {
-    "det_mAP50": 0.20690504380695737,
-    "det_mAP50_pc": 0.31035756571043605,
-    "det_n_present_classes": 16,
-    "forward_angular_MAE_deg": 9.209997177124023
+    "det_mAP50": 0.10584570667181063,
+    "det_mAP50_pc": 0.14942923294843855,
+    "det_n_present_classes": 17,
+    "forward_angular_MAE_deg": 8.341194152832031
   },
   "gate_passed": false,
-  "checklist_results": {
-    "gate": {
-      "passed": false,
-      "details": {}
-    },
-    "health": {
-      "passed": false,
-      "details": {}
-    },
-    "convergence": {
-      "passed": false,
-      "details": {}
-    },
-    "validation": {
-      "passed": false,
-      "details": {}
-    },
-    "stability": {
-      "passed": false,
-      "details": {}
-    }
-  },
-  "metric_history": [],
-  "retry_count": 0,
-  "current_strategy": "default",
-  "strategies_tried": [],
-  "det_health_history": [],
   "stage_history": [
     {
       "stage": "rf1",
@@ -49,17 +22,35 @@
         "det_mAP50": 0.184
       },
       "timestamp": "2026-06-20T00:13:40+00:00"
+    },
+    {
+      "stage": "rf2",
+      "status": "completed",
+      "epochs_completed": 2,
+      "best_metric": 0.31,
+      "best_metrics": {
+        "det_mAP50_pc": 0.31,
+        "forward_angular_MAE_deg": 9.21
+      },
+      "timestamp": "2026-06-28T13:00:00+00:00"
+    },
+    {
+      "stage": "rf3",
+      "status": "completed",
+      "epochs_completed": 2,
+      "best_metric": 0.2592,
+      "best_metrics": {
+        "act_top1": 0.125,
+        "det_mAP50_pc": 0.31,
+        "forward_angular_MAE_deg": 9.21
+      },
+      "timestamp": "2026-06-28T20:00:00+00:00"
     }
   ],
-  "issues_log": [],
-  "last_check_time": "2026-06-21T19:10:00+00:00",
-  "run_start_time": "2026-06-21T19:10:00+00:00",
-  "log_cursor": 0,
-  "cross_stage_memory": {},
-  "max_epochs": 36,
-  "last_heartbeat": "2026-06-22T01:55:13.894428+00:00",
+  "max_epochs": 20,
+  "last_heartbeat": "2026-06-29T13:27:04.132292+00:00",
   "batch": {
-    "current": 1100,
-    "total": 3302
+    "current": 350,
+    "total": 6580
   }
 }

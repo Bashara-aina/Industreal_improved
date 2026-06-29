@@ -1,6 +1,7 @@
 import sys
 import os
 import signal
+from collections import defaultdict
 from pathlib import Path
 import numpy as np
 
@@ -1776,6 +1777,7 @@ def compute_head_pose_metrics(
             'forward_x_MAE', 'forward_y_MAE', 'forward_z_MAE',
             'pos_x_MAE', 'pos_y_MAE', 'pos_z_MAE',
             'up_x_MAE', 'up_y_MAE', 'up_z_MAE',
+            'forward_angular_MAE_deg', 'up_angular_MAE_deg', 'position_MAE_mm',
         ]}
 
     abs_err = np.abs(pred - gt)  # [N, 9]
@@ -3488,29 +3490,42 @@ def evaluate_all(
             if all_act_logits is not None:
                 all_act_logits = all_act_logits[:_min_len]
             act_clip_ids = act_clip_ids[:_min_len]
-        act_metrics = compute_activity_metrics(
-            all_act_gt, all_act_pred, all_act_logits,
-            class_names=C.ACT_CLASS_NAMES,
-            save_dir=save_dir,
-            clip_ids=np.asarray(act_clip_ids) if act_clip_ids else None,
-            # [FIX 2026-06-15] pass frame indices so the 16-uniform-frame clip protocol
-            # actually engages (was dropped → fell back to plain majority vote). Now
-            # length-aligned with clip_ids via the act_valid filter above.
-            clip_frame_nums=np.asarray(act_clip_frame_nums) if act_clip_frame_nums else None,
-        )
+        try:
+            act_metrics = compute_activity_metrics(
+                all_act_gt, all_act_pred, all_act_logits,
+                class_names=C.ACT_CLASS_NAMES,
+                save_dir=save_dir,
+                clip_ids=np.asarray(act_clip_ids) if act_clip_ids else None,
+                # [FIX 2026-06-15] pass frame indices so the 16-uniform-frame clip protocol
+                # actually engages (was dropped -> fell back to plain majority vote). Now
+                # length-aligned with clip_ids via the act_valid filter above.
+                clip_frame_nums=np.asarray(act_clip_frame_nums) if act_clip_frame_nums else None,
+            )
+        except Exception as _act_exc:
+            logger.error(f'  Activity metrics FAILED: {_act_exc} -- using safe defaults')
+            act_metrics = {
+                'act_macro_f1': 0.0, 'act_top5_accuracy': 0.0, 'act_frame_accuracy': 0.0,
+                'act_accuracy': 0.0, 'act_clip_accuracy': 0.0, 'act_weighted_f1': 0.0,
+                'act_accuracy_no_na': 0.0, 'act_macro_recall': 0.0,
+                'act_mean_per_class_acc': 0.0,
+            }  # [OPUS v5] Include all Val-line keys to avoid cosmetic NaN
     else:
         act_metrics = {
             'act_macro_f1': 0.0, 'act_top5_accuracy': 0.0, 'act_frame_accuracy': 0.0,
             'act_accuracy': 0.0, 'act_clip_accuracy': 0.0, 'act_weighted_f1': 0.0,
             'act_accuracy_no_na': 0.0, 'act_macro_recall': 0.0,
+            'act_mean_per_class_acc': 0.0,
         }  # [OPUS v5] Include all Val-line keys to avoid cosmetic NaN
     results.update(act_metrics)
     if getattr(C, 'TRAIN_ACT', True):
-        report_per_class_accuracy(
-            act_metrics.get('act_confusion_matrix', []),
-            class_names=C.ACT_CLASS_NAMES,
-            k=5,
-    )
+        try:
+            report_per_class_accuracy(
+                act_metrics.get('act_confusion_matrix', []),
+                class_names=C.ACT_CLASS_NAMES,
+                k=5,
+            )
+        except Exception as _rpca_exc:
+            logger.warning(f'  Per-class accuracy FAILED: {_rpca_exc} -- skipping')
     if getattr(C, 'TRAIN_ACT', True):
         logger.info(
             f'  Activity — Acc: {results["act_accuracy"]:.4f}  '
@@ -3549,8 +3564,16 @@ def evaluate_all(
             raise _SegTimeoutExc(
                 f'[GAP-B] Segment metrics timed out after {_seg_timeout}s (CUDA kernel hang)'
             )
-        _old_handler = signal.signal(signal.SIGALRM, _seg_alarm)
-        signal.alarm(_seg_timeout)
+        # [THREAD FIX 2026-06-29] signal.signal() fails from non-main thread
+        # (e.g., when evaluate_all runs inside ThreadPoolExecutor for the
+        # training-loop validation timeout). Catch ValueError and skip alarm.
+        _seg_have_alarm = False
+        try:
+            _old_handler = signal.signal(signal.SIGALRM, _seg_alarm)
+            signal.alarm(_seg_timeout)
+            _seg_have_alarm = True
+        except ValueError:
+            logger.warning('[GAP-B] Cannot set SIGALRM timeout (not in main thread) — running without it')
         try:
             seg_metrics = compute_activity_segment_metrics(
                 model, loader.dataset, device, T=16,
@@ -3569,18 +3592,21 @@ def evaluate_all(
             results['act_seg_top5'] = 0.0
             results['act_seg_n'] = 0
         finally:
-            signal.alarm(0)
-            signal.signal(signal.SIGALRM, _old_handler)
+            if _seg_have_alarm:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, _old_handler)
     else:
         results['act_seg_top1'] = 0.0
         results['act_seg_top5'] = 0.0
         results['act_seg_n'] = 0
 
     # -------------------------------------------------------------------------
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()  # Clear fragmentation before head pose metrics
     # Head Pose Metrics
     # -------------------------------------------------------------------------
-    all_hp_pred = np.concatenate(head_pose_preds)
-    all_hp_gt = np.concatenate(head_pose_gts)
+    all_hp_pred = np.concatenate(head_pose_preds) if head_pose_preds else np.array([])
+    all_hp_gt = np.concatenate(head_pose_gts) if head_pose_gts else np.array([])
     del head_pose_preds, head_pose_gts
 
     hp_metrics = compute_head_pose_metrics(all_hp_pred, all_hp_gt)
@@ -3591,28 +3617,36 @@ def evaluate_all(
 
     logger.info(
         f'  Head Pose [{results.get("head_pose_status", "?")}] — '
-        f'Forward angular: {_fmt(results["forward_angular_MAE_deg"], "deg")}  '
-        f'Up angular: {_fmt(results["up_angular_MAE_deg"], "deg")}  '
-        f'Position: {_fmt(results["position_MAE_mm"], "mm")}  '
+        f'Forward angular: {_fmt(results.get("forward_angular_MAE_deg"), "deg")}  '
+        f'Up angular: {_fmt(results.get("up_angular_MAE_deg"), "deg")}  '
+        f'Position: {_fmt(results.get("position_MAE_mm"), "mm")}  '
         f'fwd_raw: {_fmt(results.get("forward_raw_MAE"), "L1")}  '
-        f'Overall raw: {results["head_pose_MAE"]:.4f}'
+        f'Overall raw: {results.get("head_pose_MAE", 0.0):.4f}'
     )
 
     # -------------------------------------------------------------------------
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()  # Clear fragmentation before PSR metrics
     # PSR Metrics
     # -------------------------------------------------------------------------
-    all_psr_logits = np.concatenate(psr_preds_logits)
-    all_psr_labels = np.concatenate(psr_labels)
-    del psr_preds_logits, psr_labels
+    all_psr_logits = np.concatenate(psr_preds_logits) if psr_preds_logits else np.array([])
+    all_psr_labels = np.concatenate(psr_labels) if psr_labels else np.array([])
 
     # [DEBUG] Print raw psr_logits statistics to diagnose assembly_state collapse
     _psr = all_psr_logits
-    _sigmoid = 1 / (1 + np.exp(-_psr))  # apply sigmoid like metric code does
-    _binary = (_sigmoid > 0.5).astype(np.int32)
-    _unique_binary = np.unique(_binary, axis=0)
+    if _psr.ndim < 2 or _psr.shape[0] == 0:
+        logger.info('  [DEBUG] psr_logits empty — skipping PSR debug print')
+        _unique_binary = np.zeros((0, 0), dtype=np.int32)
+        _sigmoid = np.array([])
+        _binary = np.zeros((0, 0), dtype=np.int32)
+    else:
+        _sigmoid = 1 / (1 + np.exp(-_psr))
+        _binary = (_sigmoid > 0.5).astype(np.int32)
+        _unique_binary = np.unique(_binary, axis=0)
     logger.info(
         f'  [DEBUG] psr_logits range=[{_psr.min():.3f}, {_psr.max():.3f}]  '
-        f'sigmoid range=[{_sigmoid.min():.3f}, {_sigmoid.max():.3f}]  '
+        f'sigmoid range=[{_sigmoid.min():.3f if _sigmoid.size > 0 else 0.0:.3f}, '
+        f'{_sigmoid.max():.3f if _sigmoid.size > 0 else 0.0:.3f}]  '
         f'unique_binary_patterns={_unique_binary.shape[0]}  '
         f'total_frames={_psr.shape[0]}'
     )
@@ -3632,50 +3666,56 @@ def evaluate_all(
     # [GAP-A2] When transition objective is active, decode via MonotonicDecoder
     # before scoring. Raw per-frame sigmoid logits don't reflect the monotone
     # state constraint — the decoder enforces fill-forward + procedure order.
-    if getattr(C, 'USE_PSR_TRANSITION', False):
-        logger.info('  [GAP-A2] Decoding PSR via MonotonicDecoder for transition F1/POS/Edit')
-        _psr_by_rec = {}
-        _gt_by_rec = {}
-        # Group per-recording using psr_rec_ids collected during eval
-        for _i, _psr_logit in enumerate(psr_preds_logits):
-            _rec = psr_rec_ids[_i] if _i < len(psr_rec_ids) else f'rec_{_i}'
-            if _rec not in _psr_by_rec:
-                _psr_by_rec[_rec] = []
-                _gt_by_rec[_rec] = []
-            _psr_by_rec[_rec].append(_psr_logit)
-            if _i < len(psr_labels):
-                _gt_by_rec[_rec].append(psr_labels[_i])
-        # Stack per-recording
-        _psr_rec_tensors = {}
-        _gt_rec_tensors = {}
-        for _rec in _psr_by_rec:
-            _psr_rec_tensors[_rec] = torch.as_tensor(np.stack(_psr_by_rec[_rec]))
-            if _rec in _gt_by_rec and _gt_by_rec[_rec]:
-                _gt_rec_tensors[_rec] = torch.as_tensor(np.stack(_gt_by_rec[_rec]))
-        _decoded = decode_and_score_psr(_psr_rec_tensors, _gt_rec_tensors)
-        if _decoded:
-            psr_metrics = {
-                'psr_f1': _decoded['psr_f1'], 'psr_pos': _decoded['psr_pos'],
-                'psr_edit': _decoded['psr_edit'],
-                'psr_f1_at_t': _decoded['psr_f1'], 'psr_f1_at_t5': _decoded['psr_f1'],
-                'psr_edit_score': _decoded['psr_edit'],
-                'psr_overall_f1': _decoded['psr_f1'],
-                'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
-                'psr_precision_at_t5': 0.0, 'psr_recall_at_t5': 0.0,
-                'psr_overall_f1_at5': _decoded['psr_f1'],
-            }
-        else:
-            # Decoder not available — fall back to standard path
+    try:
+        if getattr(C, 'USE_PSR_TRANSITION', False):
+            logger.info('  [GAP-A2] Decoding PSR via MonotonicDecoder for transition F1/POS/Edit')
+            _psr_by_rec = {}
+            _gt_by_rec = {}
+            for _i, _psr_logit in enumerate(psr_preds_logits):
+                _rec = psr_rec_ids[_i] if _i < len(psr_rec_ids) else f'rec_{_i}'
+                if _rec not in _psr_by_rec:
+                    _psr_by_rec[_rec] = []
+                    _gt_by_rec[_rec] = []
+                _psr_by_rec[_rec].append(_psr_logit)
+                if _i < len(psr_labels):
+                    _gt_by_rec[_rec].append(psr_labels[_i])
+            _psr_rec_tensors = {}
+            _gt_rec_tensors = {}
+            for _rec in _psr_by_rec:
+                _psr_rec_tensors[_rec] = torch.as_tensor(np.stack(_psr_by_rec[_rec]))
+                if _rec in _gt_by_rec and _gt_by_rec[_rec]:
+                    _gt_rec_tensors[_rec] = torch.as_tensor(np.stack(_gt_by_rec[_rec]))
+            _decoded = decode_and_score_psr(_psr_rec_tensors, _gt_rec_tensors)
+            if _decoded:
+                psr_metrics = {
+                    'psr_f1': _decoded['psr_f1'], 'psr_pos': _decoded['psr_pos'],
+                    'psr_edit': _decoded['psr_edit'],
+                    'psr_f1_at_t': _decoded['psr_f1'], 'psr_f1_at_t5': _decoded['psr_f1'],
+                    'psr_edit_score': _decoded['psr_edit'],
+                    'psr_overall_f1': _decoded['psr_f1'],
+                    'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
+                    'psr_precision_at_t5': 0.0, 'psr_recall_at_t5': 0.0,
+                    'psr_overall_f1_at5': _decoded['psr_f1'],
+                }
+            else:
+                psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
+        elif getattr(C, 'TRAIN_PSR', True):
             psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
-    elif getattr(C, 'TRAIN_PSR', True):
-        psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
-    else:
+        else:
+            psr_metrics = {
+                'psr_f1': 0.0, 'psr_edit': 0.0, 'psr_pos': 0.0,
+                'psr_f1_at_t': 0.0, 'psr_f1_at_t5': 0.0, 'psr_edit_score': 0.0,
+                'psr_overall_f1': 0.0, 'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
+                'psr_precision_at_t5': 0.0, 'psr_recall_at_t5': 0.0, 'psr_overall_f1_at5': 0.0,
+            }  # [OPUS v5] Include all Val-line keys to avoid cosmetic NaN
+    except Exception as _psr_exc:
+        logger.error(f'  [PSR METRICS] Failed: {_psr_exc} -- using safe defaults')
         psr_metrics = {
             'psr_f1': 0.0, 'psr_edit': 0.0, 'psr_pos': 0.0,
             'psr_f1_at_t': 0.0, 'psr_f1_at_t5': 0.0, 'psr_edit_score': 0.0,
             'psr_overall_f1': 0.0, 'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
             'psr_precision_at_t5': 0.0, 'psr_recall_at_t5': 0.0, 'psr_overall_f1_at5': 0.0,
-        }  # [OPUS v5] Include all Val-line keys to avoid cosmetic NaN
+        }
     results.update(psr_metrics)
     if getattr(C, 'TRAIN_PSR', True):
         results['psr_macro_f1'] = results.get('psr_overall_f1', 0.0)
@@ -3693,6 +3733,8 @@ def evaluate_all(
         )
 
     # -------------------------------------------------------------------------
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()  # Clear fragmentation before assembly state metrics
     # Assembly State Recognition Metrics (Paper 8 — IEEE RAL 2024)
     # -------------------------------------------------------------------------
     # [DEBUG] Print GT state vocabulary details before calling compute
@@ -3716,21 +3758,32 @@ def evaluate_all(
         _trans_frames_debug = np.where(_gt_rle_debug != 0)[0]
         logger.info(f'  [DEBUG] GT transitions at frames: {_trans_frames_debug[:20].tolist()}')
     # Now compute metrics
-    as_metrics = compute_assembly_state_metrics(all_psr_logits, all_psr_labels)
+    try:
+        as_metrics = compute_assembly_state_metrics(all_psr_logits, all_psr_labels)
+    except Exception as _as_exc:
+        logger.error(f'  Assembly state metrics FAILED: {_as_exc} — skipping')
+        as_metrics = {'as_f1': 0.0, 'as_top1_accuracy': 0.0, 'as_map_at_r': 0.0,
+                       'as_num_states': 0, 'as_num_transitions': 0}
     results.update(as_metrics)
 
     logger.info(
-        f'  Assembly State — F1@1: {results["as_f1"]:.4f}  '
-        f'Top-1 Acc: {results["as_top1_accuracy"]:.4f}  '
-        f'MAP@R(+): {results["as_map_at_r"]:.4f}  '
-        f'K={results["as_num_states"]}  '
-        f'Transitions={results["as_num_transitions"]}'
+        f'  Assembly State — F1@1: {results.get("as_f1", 0.0):.4f}  '
+        f'Top-1 Acc: {results.get("as_top1_accuracy", 0.0):.4f}  '
+        f'MAP@R(+): {results.get("as_map_at_r", 0.0):.4f}  '
+        f'K={results.get("as_num_states", 0)}  '
+        f'Transitions={results.get("as_num_transitions", 0)}'
     )
 
     # -------------------------------------------------------------------------
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()  # Clear fragmentation before error verification metrics
     # Error Verification Metrics (Paper 9 — ECCV VISION 2024)
     # -------------------------------------------------------------------------
-    ev_metrics = compute_error_verification_metrics(all_psr_logits, all_psr_labels)
+    try:
+        ev_metrics = compute_error_verification_metrics(all_psr_logits, all_psr_labels)
+    except Exception as _ev_exc:
+        logger.error(f'  Error verification metrics FAILED: {_ev_exc} — skipping')
+        ev_metrics = {'ev_ap': 0.0, 'ev_f1': 0.0, 'ev_precision': 0.0, 'ev_recall': 0.0}
     results.update(ev_metrics)
 
     logger.info(
@@ -3741,6 +3794,8 @@ def evaluate_all(
     )
 
     # -------------------------------------------------------------------------
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()  # Clear fragmentation before detection metrics
     # Detection Metrics
     # [FIX] Skip detection mAP computation if SKIP_DET_METRICS_EVAL=True.
     # compute_det_metrics_extended does 11×(24 classes × 35084 frames) nested loops
@@ -3859,6 +3914,8 @@ def evaluate_all(
             'pipeline_params_m': float('nan'),
             'pipeline_gflops': float('nan'),
             'pipeline_fps': float('nan'),
+            'eff_trainable_params_m': float('nan'),
+            'eff_resolution': 'N/A',
         }
     else:
         eff_metrics = compute_efficiency_metrics(

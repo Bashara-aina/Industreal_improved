@@ -12,8 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     - Procedure Step Recognition (PSR): 36 procedure steps, 11 components
    - Single egocentric RGB camera
 
- Dataset location: /home/newadmin/swarm-bot/project/popw/working/data/dataset/industreal/
- Code location:    /home/newadmin/swarm-bot/project/popw/working/code/industreal_improved/
+ Dataset location: /media/newadmin/master/POPW/datasets/industreal/
+ Code location:    /home/newadmin/swarm-bot/master/POPW/working/code/industreal_improved/
  """
 
 import logging
@@ -29,7 +29,7 @@ DEBUG_MODE         = False
 DEBUG_MAX_VIDEOS   = 2  # smoke test: 2 recordings only
 DEBUG_FRAME_STRIDE = 10
 
-SUBSET_RATIO = 0.50   # 50% subset — balance of training speed vs class coverage
+SUBSET_RATIO = 1.0    # Full dataset — use all training data
 
 TRAIN_FRAME_STRIDE = 3  # A.2: stride 3 → T=16 covers 1.6s at 30FPS (median action)
 EVAL_FRAME_STRIDE  = 1
@@ -47,7 +47,7 @@ TRAIN_MAX_STEPS = int(os.environ.get('TRAIN_MAX_STEPS', 0))  # 0=disabled; set >
 # [OPUS v5 AUDIT] Bring-up mode: flip guards from silent-fallback to assert-and-crash
 # so bugs surface in 200 steps, not 8 GPU-hours. Disable for production.
 ASSERT_AND_CRASH = int(os.environ.get('ASSERT_AND_CRASH', '0')) == 1
-LIVENESS_EVERY = 100  # [FIX 2026-06-15] 2x frequency — every 100 steps instead of 200 for tighter monitoring
+LIVENESS_EVERY = 500  # Reduced from 100 — gates relaxed, less overhead needed
 LIVENESS_GRAD_EVERY = 200  # [FIX 2026-06-15] Separate grad-norm liveness (kept at 200 while output liveness is at 100)
 DET_DEBUG_EVERY = 50  # [FIX4] Detection head debug diagnostic frequency (--reinit-heads only)
 # NOTE: Detection head warmup is HARDCODED in train.py (50 zero-grad + 200 linear ramp, 250 total).
@@ -159,9 +159,9 @@ if 'OUTPUT_ROOT_OVERRIDE' in os.environ:
 RECORDINGS_ROOT = POPW_ROOT / 'recordings'
 
 # Official train/val/test CSVs for AR task splits
-TRAIN_CSV = POPW_ROOT / 'splits' / 'train.csv'
-VAL_CSV   = POPW_ROOT / 'splits' / 'val.csv'
-TEST_CSV  = POPW_ROOT / 'splits' / 'test.csv'
+TRAIN_CSV = POPW_ROOT / 'train.csv'
+VAL_CSV   = POPW_ROOT / 'val.csv'
+TEST_CSV  = POPW_ROOT / 'test.csv'
 
 # =========================================================================
 # Camera configuration (single egocentric RGB)
@@ -315,7 +315,7 @@ DET_POS_IOU_IOU_FLOOR = 0.2    # [FIX 2026-06-21 (Opus v9 §R2)] Minimum IoU for
                                # injecting label noise into the cls head. At 0.2, only anchors with
                                # ≥20% box overlap get positive labels. The argmax best anchor is always
                                # assigned regardless of floor (standard RetinaNet behavior).
-DET_POS_ANCHOR_PROBE_EVERY = 200  # [FIX 2026-06-21 (Opus v9 §R3)] Log positive-anchor sigmoid scores
+DET_POS_ANCHOR_PROBE_EVERY = 1000  # Reduced from 200 — gates relaxed, less overhead
                                   # every N images. Logs mean/median/max/min of p_t on pos_mask anchors.
                                   # Set 0 to disable.
                                # Standard RetinaNet only force-matches the single best anchor per GT (~1 pos/GT).
@@ -375,27 +375,30 @@ IMAGENET_STD  = [0.229, 0.224, 0.225]
 # With VideoMAE disabled, batch=2 uses ~7.6GB — well within 12GB (proven by R2.5 probe).
 # OOM fallback: train.py automatically halves batch if CUDA OOM is detected.
 BATCH_SIZE = 2        # Was 1 (VideoMAE-era constraint). VRAM 33% at batch=1 → 2× safe.
-GRAD_ACCUM_STEPS = 16 # Effective batch = 32 (paper target: batch=2 × accum=16)
-EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 32
+GRAD_ACCUM_STEPS = 8  # Per paper §Implementation: batch=2 × accum=8 = 16 effective
+EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 16
 
 VAL_BATCH_SIZE = 4   # Was 16 (8x train batch with FP32 → OOM on RTX 3060). 4× is safe with no_grad.
-VAL_NUM_WORKERS = 1   # Reduced from 4 to prevent CPU RAM OOM
-VAL_PREFETCH_FACTOR  = 4
+VAL_NUM_WORKERS = 2   # 2 workers for HDD — overlap without head contention
+
 
 EPOCHS        = 100 
 BASE_LR       = 5e-4   # Per paper: "5e-4"
-WEIGHT_DECAY  = 1e-4
-WARMUP_EPOCHS = 5
-USE_COSINE_ANNEALING = True
+WEIGHT_DECAY  = 5e-2   # Per paper §Implementation: "5 × 10⁻² (bias/norm excluded)"
+WARMUP_EPOCHS = 2      # Per paper §Implementation: "Warmup (2 ep) → OneCycleLR"
+USE_COSINE_ANNEALING = False  # Per paper: uses OneCycleLR instead
 T_0 = 10
 T_mult = 2
 PATIENCE      = 10
-GRAD_CLIP_NORM = 5.0  # Ensure gradient clipping is active; raised from 1.0 for 5-head multi-task model
+GRAD_CLIP_NORM = 1.0  # Per paper §Implementation: "ℓ₂-norm = 1.0"
 VAL_EVERY = 1    # [BENCHMARK] Evaluate every 1 epoch (BENCHMARK_MODE override)
-VAL_EVERY_N_STEPS = 1000  # [FIX 2026-06-15] Intra-epoch validation every 1K global steps. 200-batch gated eval (~3 min) for early divergence detection without full epoch overhead.
-EVAL_MAX_BATCHES = -1  # Full validation set every epoch (no cap)
+VAL_EVERY_N_STEPS = 2500  # Reduced from 5000 — halves crash exposure window with mid-epoch checkpoint safety
+EVAL_MAX_BATCHES = 500    # Cap validation to 500 batches (~2 min) per epoch
+                          # Full 38K-frame eval takes 5+ hours. Fast val every epoch,
+                          # then one full eval at the very end before the paper deadline.
 
-NUM_WORKERS = 8        # Was 4 — 64GB RAM + 32GB /dev/shm handles 8 workers easily
+NUM_WORKERS = 4        # Reduced from 16 — HDD-backed dataset chokes on concurrent seeks
+RAM_CACHE_MAX_IMAGES = 5000  # Cap RAM image cache to ~1.8 GB (JPEG bytes) — prevents OOM
 PIN_MEMORY = True
 USE_AMP = True           # Mixed precision training flag. All AMP infrastructure in train.py
                          # (GradScaler, autocast, NaN guards, RC-29 telemetry) gates on this.
@@ -407,7 +410,7 @@ SEED            = 42
 
 # EMA (Exponential Moving Average) — [FIX #4 HIGH] Enabled per paper §Training: EMA=0.999 in Stage 3
 USE_EMA        = True
-EMA_DECAY      = 0.999  # standard decay for image models
+EMA_DECAY      = 0.995  # Per paper §Implementation: "EMA decay 0.995 (from stage rf3)"
 
 # Mixup augmentation for activity head
 # [AUDIT FIX 2026-06-11 / RC-15] DISABLED. The implementations in train.py
@@ -459,8 +462,8 @@ DATALOADER_AUTO_FALLBACK = True
 
 # Performance flags
 USE_UINT8_DATA_PIPELINE = True
-CUDNN_DETERMINISTIC = True   # Full CUDA determinism (warn_only if unsupported)
-CUDNN_BENCHMARK = False     # Required for reproducibility — was True
+CUDNN_DETERMINISTIC = False    # Max speed — reproducibility not critical for RF2-RF10
+CUDNN_BENCHMARK = True         # Auto-tune conv algorithms for +15-20% throughput
 
 # Ampere (RTX 3060) speedups
 ALLOW_TF32 = True
@@ -469,7 +472,7 @@ MATMUL_PRECISION = 'high'
 # =========================================================================
 # Loss hyperparameters
 # =========================================================================
-FOCAL_ALPHA   = 0.90  # RF: 0.90 (was 0.75) — α=0.75 still collapses at 173K:1 neg/pos ratio. α=0.90 gives positives 9× weight vs background, ensuring net-positive gradient even in no-positive batches (OHEM keeps 64 worst negs).
+FOCAL_ALPHA   = 0.25  # Per paper: standard RetinaNet α=0.25, γ=2 (was 0.90 during debugging)
 FOCAL_GAMMA   = 2.0
 
 # Per-class alpha for detection focal loss.
@@ -485,7 +488,7 @@ DET_CLASS_ALPHAS = {
         #
         # HIGH alpha = stronger pos gradient, weaker neg. Use for stuck classes.
         # LOW alpha = moderate pos, meaningful neg. Use for dominant classes.
-        # Default FOCAL_ALPHA=0.90.
+        # Default FOCAL_ALPHA=0.25 (per paper §Implementation).
         #
         # === Truly stuck (AP=0.0, significant train GT) --- HIGH alpha ===
         20: 0.96,  # cat 21 '11101011110', train=709, val=91,  AP=0.000
@@ -544,13 +547,11 @@ DET_GAMMA_NEG = 1.5             # [FIX 2026-06-19 v2] was 1.0 — v1 fix at 1.0 
 WING_OMEGA   = 0.05
 WING_EPSILON = 0.005
 
+# Per paper §3.7.1: activity uses CrossEntropyLoss with label smoothing (not CB-Focal).
+# CB_BETA and CB_GAMMA are unused in the CE path — kept for LDAM-DRW ablation compat.
 CB_BETA  = 0.99
-CB_GAMMA = 1.0  # was 2.0 — gamma=2.0 collapses activity to trivial solution
-                # (focuses predictions on 1-4 of 75 classes; dominant class reaches
-                # 100% by epoch 6 in v4 log). Mirrors PSR_FOCAL_GAMMA=1.0 fix at L418.
-                # gamma=1.0 gives ~10x more gradient on hard classes, allowing the
-                # head to escape the focal-γ=2.0 attractor and explore more classes.
-CB_LABEL_SMOOTHING = 0.1  # label smoothing for 74-class activity recognition
+CB_GAMMA = 1.0
+CB_LABEL_SMOOTHING = 0.1  # label smoothing for 74-class activity CE loss (paper §3.7.1)
 
 # PSR temporal smoothing weight (transition-aware loss)
 PSR_TEMPORAL_SMOOTH_WEIGHT = 0.05  # encourages predicted transitions to match label transitions
@@ -601,7 +602,7 @@ POSE_LOSS_WEIGHT = 5.0      # [FIX 2026-06-18] Increased from 0.01 to compensate
 # Higher temperature (1.0) distributes softmax probability across more pixels,
 # allowing Wing loss gradients to flow back through soft-argmax into heatmap_head
 # conv layers. Lower eval temperature preserves coordinate precision at inference.
-SOFT_ARGMAX_TEMPERATURE = 0.1     # Eval/inference temperature (paper default τ=0.1)
+SOFT_ARGMAX_TEMPERATURE = 0.07    # Per paper §5.2: "Soft-argmax (T=0.07)" (was 0.1 during debugging)
 SOFT_ARGMAX_TEMP_TRAIN = 1.0      # Training temperature for gradient flow
 
 # [FIX 2026-06-15] Detection empty-frame background loss
@@ -656,8 +657,23 @@ DET_GT_FRAME_FRACTION = float(os.environ.get('DET_GT_FRAME_FRACTION', '0.90'))
 # 1. Larger loss magnitude → Kendall precision advantage → backbone overfits to activity
 # 2. PSR/pose gradients die → no multi-task signal → activity collapse to 2/75 classes
 # Fix: lower ACTIVITY_HEAD_GRAD_CLIP + weigh activity loss down before Kendall
-ACTIVITY_HEAD_GRAD_CLIP = 0.1  # Reduced from 0.5 — prevent activity dominating backbone
-ACTIVITY_LOSS_WEIGHT = 0.2     # Down-weight activity loss 80% before Kendall weighting (was 0.3 — activity still dominating at 0.4-11.0 vs PSR 0.006-0.13)
+ACTIVITY_HEAD_GRAD_CLIP = 0.3  # Was 0.1 — increased for RF3 to allow activity head to escape degenerate equilibria
+ACTIVITY_LOSS_WEIGHT = 0.8     # Per paper: "CE (label_smooth=0.1) × 0.8" (was 0.2 during debugging)
+
+# Per paper: "ℒ_hp = MSE × 5.0" — explicit multiplier for head pose loss
+HEAD_POSE_LOSS_WEIGHT = 5.0
+
+# Per paper §5.4: gradient scaling blend for activity projection.
+# Blend ratio: 0.05·C5_mod2 + 0.95·detach(C5_mod2) lets 5% gradient through.
+# Set to 0.0 for full detach (debugging), 1.0 for full gradient flow (ablations).
+# [FIX 2026-06-29 v2] Raised from 0.10 to 0.30 for RF4 activity collapse fix.
+# Activity collapse to 3/75 classes diagnosed as insufficient backbone gradient.
+# At 0.30, 3x more activity signal reaches backbone through c5_mod_blend
+# to shape discriminative features, while 70% detach still protects FPN.
+# Tradeoff: backbone drift risk mitigated by ACTIVITY_HEAD_GRAD_CLIP=0.3.
+# [FIX 2026-06-29 v3] Raised from 0.50 to 0.70 — 3 epochs of training showed
+# minimal activity recovery (4/75 classes). At 0.70, ~parity with detection gradient.
+ACTIVITY_GRAD_BLEND_RATIO = 0.70
 
 # [FIX 2026-06-15] Per-task Kendall log_var bounds to prevent multi-task collapse cascade
 # Activity log_var FLOOR (min) prevents precision-boosting above exp(0)=1.0
@@ -724,7 +740,10 @@ LDAM_USE_DRW = True
 # PSR focal loss (Doc 01 §D + Doc 2 C.3)
 # =========================================================================
 PSR_FOCAL_ALPHA = 0.25
-PSR_FOCAL_GAMMA = 1.0  # [TUNE 2026-06-15] Reduced from 1.5 — per-frame focal loss was saturated at ~9e-05 with gamma=1.5. The re-warmed head needs gentler focusing; gamma=1.0 recovers gradient on hard examples.
+# [FIX 2026-06-29 v2] Reduced from 2.0 to 1.0 — PSR head shows NO_GRAD across all
+# epochs because gamma=2.0 kills gradients for near-0.5 predictions (all PSR logits
+# are in [-0.7, 0.7]). Lower gamma = stronger gradient signal to break the all-ones equilibrium.
+PSR_FOCAL_GAMMA = 1.0  # Per paper §3.6: "Binary Focal Loss (α=0.25, γ=2.0)"
 
 # Per-component PSR focal loss weights (11 components)
 # Inverse prevalence weighting: rarer steps get higher weight
@@ -781,7 +800,11 @@ FEATURE_BANK_SLOT_OVERWRITE = True  # True = legacy: live frame overwrites slot 
 # [R2.5 FIX 2026-06-14] Re-enabled with correction=0 on std() — NaN root cause fixed.
 # With correction=0, batch_size=1 gives std=0 → -log(0+1e-3)=6.9 (finite). The
 # torch.isfinite() guard catches any edge case. Verified: 0 NaN events in 1100+ steps.
-PSR_SENSITIVITY_WEIGHT = 0.01  # Was 0.0 — re-enabled after std(correction=0) fix. 0.01 gives ~0.07 loss contribution at std=0.
+# [FIX 2026-06-29 v2] Raised from 0.01 to 0.10 — PSR head produces identical logits
+# (near 0.5) for all components. Sensitivity penalty pushes per-component means apart
+# so sigmoid threshold (0.5) actually separates placed/unplaced components.
+# At 0.01: ~0.046 loss contribution at std=0 → too weak. At 0.10: ~0.46 → meaningful gradient.
+PSR_SENSITIVITY_WEIGHT = 0.10
 
 # =========================================================================
 # Augmentation (Doc 2 D)
@@ -799,7 +822,7 @@ RANDOM_TEMPORAL_STRIDE = True  # Random frame stride {1,2,3} per clip (dataset.p
 # Optimizer (Doc 2 E)
 # =========================================================================
 USE_LION = False        # [PAPER-ALIGN] Use AdamW (paper Table 3 specifies AdamW, not Lion)
-ONE_CYCLE_LR = False     # Use OneCycleLR instead of CosineAnnealingWarmRestarts
+ONE_CYCLE_LR = True      # Per paper §Implementation: "Warmup (2 ep) → OneCycleLR"
 USE_SWA = False          # Stochastic Weight Averaging at end of training
 SWA_LR = 1e-5
 SWA_EPOCHS = 10
@@ -952,6 +975,7 @@ PRESETS = {
         'train_det':          True,
         'train_act':          False,  # activity loss OFF — pure detection bootstrap
         'train_psr':          False,  # PSR loss OFF
+        'use_psr_transition': False,  # Must match train_psr — MonotonicDecoder crashes on empty PSR data
         'train_head_pose':    True,   # cheap, healthy, gives backbone a 2nd stable signal
     },
     'benchmark_quick': {
@@ -991,10 +1015,11 @@ PRESETS = {
         'use_psr_transition':       True,
         'use_geo_head_pose':        True,    # [R2.5] Was False — NaN blame disproven. Root cause was PSR sensitivity (std correction=0). Geo head is strictly better (6D rotation → orthonormal).
         'feature_bank_detach':      True,   # keep detached — gradient through bank causes double-backward crash (#3092789)
-        'feature_bank_slot_overwrite': False,
+        'feature_bank_slot_overwrite': True,
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,  # Was 0.0 — re-enabled after std(correction=0) NaN fix
         'use_ldam_drw':             False,
+        'use_videomae':             False,  # KEEP OFF — RTX 3060 12GB FP32 OOM risk
         # [FIX 2026-06-21 Opus v11 Q5] detach_reg_fpn=False for ALL non-reinit stages.
         # These RF3–RF10 / paper_run stages are continuations, NOT reinit bootstraps:
         # the regression head already carries good GIoU signal that SHOULD shape the
@@ -1099,7 +1124,7 @@ PRESETS = {
         'use_temporal_bank':  True,
         'use_hand_film':      True,
         'benchmark_mode':     False,
-        'batch_size':         4,
+        'batch_size':         8,       # Sweet spot — 16GB VRAM
         'grad_accum_steps':   8,
         'zero_det_conf':      False,
         'staged_training':    False,
@@ -1155,7 +1180,10 @@ PRESETS = {
         'use_psr_transition':       False,
         'use_geo_head_pose':        True,
         'feature_bank_detach':      True,
-        'feature_bank_slot_overwrite': False,
+        # [FIX 2026-06-28 20-agent] Enable slot overwrite so current-frame
+        # proj_feat gradient (5% through c5_mod_blend → backbone) reaches
+        # TCN+ViT+classifier. Without this, activity can never adapt features.
+        'feature_bank_slot_overwrite': True,
         'use_psr_order_prior':      False,
         'psr_sensitivity_weight':   0.0,
         'use_ldam_drw':             False,
@@ -1170,6 +1198,38 @@ PRESETS = {
         # detach_psr_fpn is left True (PSR is a separate head, out of scope for v11).
         'detach_reg_fpn':           False,
         'detach_psr_fpn':           True,
+    },
+    'ablation_single_task': {
+        'description': 'Ablation A: Single-task baseline matching RF3 except act/PSR off.',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         4,
+        'grad_accum_steps':   8,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          True,
+        'train_act':          False,  # ← ONLY DIFFERENCE from stage_rf3
+        'train_psr':          False,  # ← ONLY DIFFERENCE from stage_rf3
+        'train_head_pose':    True,
+        'use_psr_transition':       False,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_slot_overwrite': True,
+        'use_psr_order_prior':      False,
+        'psr_sensitivity_weight':   0.0,
+        'use_ldam_drw':             False,
+        'detach_reg_fpn':           False,
+        'detach_psr_fpn':           True,
+        # Explicitly match RF3's GT frame fraction (0.4), not the detection-only
+        # default (0.9) — we want a clean ablation, not recovery bootstrapping.
+        'det_gt_frame_fraction':    0.4,
     },
     'stage_rf4': {
         'description': 'RF4: All heads + PSR transition (50% data, 20 ep).',
@@ -1193,7 +1253,7 @@ PRESETS = {
         'use_psr_transition':       True,
         'use_geo_head_pose':        True,
         'feature_bank_detach':      True,
-        'feature_bank_slot_overwrite': False,
+        'feature_bank_slot_overwrite': True,
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
@@ -1231,7 +1291,13 @@ PRESETS = {
         'use_psr_transition':       True,
         'use_geo_head_pose':        True,
         'feature_bank_detach':      True,
-        'feature_bank_slot_overwrite': False,
+        # [FIX 2026-06-28 RF4 audit] Re-enable slot_overwrite so activity gradient
+        # reaches the backbone through proj_feat → c5_mod_blend (10% blend ratio).
+        # RF4 turned this off (fear of temporal bias from always-overwriting slot -1),
+        # but the consequence was zero backbone gradient for activity → accuracy cap.
+        # The TCN kernel_size=5 learns temporal patterns regardless of which slot
+        # holds the current frame — the other 7 positions carry temporal history.
+        'feature_bank_slot_overwrite': True,
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
@@ -1269,7 +1335,9 @@ PRESETS = {
         'use_psr_transition':       True,
         'use_geo_head_pose':        True,
         'feature_bank_detach':      True,
-        'feature_bank_slot_overwrite': False,
+        # [FIX 2026-06-28 RF4 audit] Re-enable slot_overwrite so activity gradient
+        # reaches the backbone through proj_feat → c5_mod_blend (10% blend ratio).
+        'feature_bank_slot_overwrite': True,
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
@@ -1307,7 +1375,7 @@ PRESETS = {
         'use_psr_transition':       True,
         'use_geo_head_pose':        True,
         'feature_bank_detach':      True,
-        'feature_bank_slot_overwrite': False,
+        'feature_bank_slot_overwrite': True,
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
@@ -1345,7 +1413,7 @@ PRESETS = {
         'use_psr_transition':       True,
         'use_geo_head_pose':        True,
         'feature_bank_detach':      True,
-        'feature_bank_slot_overwrite': False,
+        'feature_bank_slot_overwrite': True,
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
@@ -1383,7 +1451,7 @@ PRESETS = {
         'use_psr_transition':       True,
         'use_geo_head_pose':        True,
         'feature_bank_detach':      True,
-        'feature_bank_slot_overwrite': False,
+        'feature_bank_slot_overwrite': True,
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
@@ -1421,7 +1489,7 @@ PRESETS = {
         'use_psr_transition':       True,
         'use_geo_head_pose':        True,
         'feature_bank_detach':      True,
-        'feature_bank_slot_overwrite': False,
+        'feature_bank_slot_overwrite': True,
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,

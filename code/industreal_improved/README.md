@@ -17,6 +17,16 @@ Multi-task learning for assembly action recognition. Backbone: ConvNeXt-Tiny + F
 | **POPW (ours)** | `\popwres` | `\popwres` | `\popwres` | `\popwres` | This work |
 
 > **Note:** `\popwres` = placeholder awaiting actual POPW training runs. All other values are from the cited papers and must not be modified.
+>
+> **Planning GUIDEs** (comprehensive reference): `GUIDE_1_THE_REFRAME.md` through `GUIDE_8_THE_PAPER_TEX.md` are in the `analyses/consult_2026_06_10/` directory.
+> - GUIDE 1: Strategic reframe — why honest metrics matter
+> - GUIDE 2: Training all heads via decoupled A/B/C plan
+> - GUIDE 3: Metrics, benchmarks, and target numbers
+> - GUIDE 4: Paper framing and contribution
+> - GUIDE 5: Day-by-day runbook with exact commands
+> - GUIDE 6: 200-point verification checklist
+> - GUIDE 7: Audit answers and code verification
+> - GUIDE 8: Paper TeX guide for filling placeholders
 
 ---
 

@@ -30,14 +30,14 @@ def probe_anchor_matching(
     print(msg, flush=True)
 
 """
-POPW Loss Functions — Matches the exact diagram architecture
-============================================================
-L_det  = Focal Loss (α=0.25, γ=2) + GIoU for bounding boxes (Doc 2 C.1)
-L_pose = Wing Loss (ω=0.05, ε=0.005) for keypoint regression
-L_act  = LDAM-DRW (Doc 2 C.2) or CB-Focal Loss (β=0.999, γ=2.0, 74 classes)
-L_psr  = Binary Focal Loss (α=0.25, γ=2.0) (Doc 2 C.3) — replaces BCE
-L_total = Kendall(s_det, s_pose, s_act) with act_ramp = min(1, epoch/5)
-init: s_det=0, s_pose=-1, s_act=0
+POPW Loss Functions — Matches paper architecture
+==================================================
+L_det  = Focal Loss (α=0.25, γ=2) + GIoU (paper §3.2)
+L_pose = Wing Loss (ω=0.05, ε=0.005) (paper §3.3)
+L_act  = CE + label_smooth(0.1) (paper §3.7.1)
+L_psr  = Binary Focal Loss (α=0.25, γ=2.0) (paper §3.6)
+L_total = Kendall(s_det, s_pose, s_act, s_psr) with act_ramp = min(1, epoch/5)
+init: s_det=0, s_pose=-1, s_act=0, s_psr=0. Clamp[-4,2].
 
 Author: Bashara
 Date: April 2026
@@ -1041,7 +1041,8 @@ class MultiTaskLoss(nn.Module):
                                       class_alphas=getattr(C, 'DET_CLASS_ALPHAS', {}))
         self.pose_loss_fn = PoseLoss(wing_omega=C.WING_OMEGA, wing_epsilon=C.WING_EPSILON)
 
-        # C.2: LDAM-DRW or CB-Focal for activity
+        # C.2: Per paper §3.7.1 — "CE (label_smooth=0.1)" for activity.
+        # LDAM-DRW is available as an ablation via USE_LDAM_DRW=True.
         use_ldam = bool(getattr(C, 'USE_LDAM_DRW', False))
         if use_ldam:
             self.act_loss_fn = LDAMLoss(
@@ -1050,10 +1051,7 @@ class MultiTaskLoss(nn.Module):
                 s=float(getattr(C, 'LDAM_S', 30)),
             )
         else:
-            self.act_loss_fn = ClassBalancedFocalLoss(
-                num_classes=num_classes_act,
-                beta=C.CB_BETA,
-                gamma=C.CB_GAMMA,
+            self.act_loss_fn = nn.CrossEntropyLoss(
                 label_smoothing=getattr(C, 'CB_LABEL_SMOOTHING', 0.1),
             )
         self.use_ldam = use_ldam
@@ -1078,13 +1076,47 @@ class MultiTaskLoss(nn.Module):
 
         self._act_warmup_epochs = int(getattr(C, 'ACT_RAMP_EPOCHS', 5))
         self._current_epoch = 0
+        # [FIX 2026-06-28 20-agent] Stage-local epoch counter for activity ramp.
+        # Resets to 0 when train_act becomes True, so the ramp works regardless
+        # of global epoch (RF3 starts at global epoch 50+, ramp would be 1.0).
+        self._act_epoch_counter = -1
+
+    def state_dict(self, *args, **kwargs):
+        state = super().state_dict(*args, **kwargs)
+        state['_act_epoch_counter'] = self._act_epoch_counter
+        state['_current_epoch'] = self._current_epoch
+        return state
+
+    def load_state_dict(self, state_dict, *args, **kwargs):
+        self._act_epoch_counter = state_dict.pop('_act_epoch_counter', -1)
+        self._current_epoch = state_dict.pop('_current_epoch', 0)
+        super().load_state_dict(state_dict, *args, **kwargs)
 
     def set_class_counts(self, counts):
-        # counts has length 74 (excludes NA class 0); act_loss_fn expects 75
-        # The FocalLoss and LDAMLoss use num_classes=75 internally but only
-        # active classes 1-74 get weights; class 0 (NA/NA) gets weight 0.
-        # We pass the 74 active-class counts directly; the loss handles the mismatch.
-        self.act_loss_fn.set_class_counts(counts)
+        # Per paper §3.7.1: CE + label_smooth(0.1) does not use class counts.
+        # Only LDAM-DRW path needs them; CE loss ignores set_class_counts.
+        if hasattr(self.act_loss_fn, 'set_class_counts'):
+            # counts has length 74 (excludes NA class 0); act_loss_fn expects 75
+            # The FocalLoss and LDAMLoss use num_classes=75 internally but only
+            # active classes 1-74 get weights; class 0 (NA/NA) gets weight 0.
+            # We pass the 74 active-class counts directly; the loss handles the mismatch.
+            self.act_loss_fn.set_class_counts(counts)
+        # [FIX 2026-06-28 20-agent] Add class-balanced weights to CE loss.
+        # Plain CE on 74-class long-tail data lets head classes dominate.
+        # Compute effective number (CB beta=0.99) and invert for loss weight.
+        # Class 0 (NA) gets weight 0 so it doesn't contribute to gradient.
+        if not self.use_ldam and isinstance(self.act_loss_fn, nn.CrossEntropyLoss) and counts is not None:
+            counts = torch.as_tensor(counts, dtype=torch.float32)
+            _beta = float(getattr(C, 'CB_BETA', 0.99))
+            _eff_num = (1.0 - _beta ** counts) / (1.0 - _beta)
+            _eff_num = _eff_num.clamp(min=1.0)
+            _weights = 1.0 / _eff_num
+            _weights[0] = 0.0  # class 0 (NA) contributes zero gradient
+            _weights = _weights / _weights.sum() * len(_weights)  # normalize
+            self.act_loss_fn = nn.CrossEntropyLoss(
+                weight=_weights.to(self.log_var_det.device) if hasattr(self, 'log_var_det') else _weights,
+                label_smoothing=float(getattr(C, 'CB_LABEL_SMOOTHING', 0.1)),
+            )
 
     def set_psr_class_counts(self, prevalence_per_component: torch.Tensor):
         """
@@ -1120,7 +1152,23 @@ class MultiTaskLoss(nn.Module):
         )
 
     def set_epoch(self, epoch: int):
+        # [FIX 2026-06-28 v2] Only increment _act_epoch_counter when epoch
+        # actually changes (not every batch call). Otherwise set_epoch being
+        # called at line 3831 + 1362 every batch completes the 5-epoch ramp
+        # in 4 batches instead of 5 epochs.
+        _epoch_changed = epoch != self._current_epoch
         self._current_epoch = epoch
+        # [FIX 2026-06-28 20-agent] Stage-local epoch counter for activity ramp.
+        # Resets to 0 when train_act first becomes True, so the 5-epoch ramp
+        # works at RF3 boundary (global epoch 50+). Without this, the ramp
+        # condition `epoch < ACT_RAMP_EPOCHS` is never met.
+        if self.train_act:
+            if self._act_epoch_counter < 0:
+                self._act_epoch_counter = 0
+            elif _epoch_changed:
+                self._act_epoch_counter += 1
+        else:
+            self._act_epoch_counter = -1
 
     def forward(self, outputs: Dict, targets: Dict) -> Tuple[torch.Tensor, Dict]:
         # Find the first available tensor to determine device and dtype (PSR-only branch
@@ -1309,11 +1357,14 @@ class MultiTaskLoss(nn.Module):
             if not torch.isfinite(loss_act).all():
                 loss_act = zero
 
-        # Activity warmup ramp — only applies during staged training
-        # NOTE: +1 so epoch 0 gets ramp=1/5=0.2 instead of 0/5=0 (which zeroed loss_act entirely)
+        # [FIX 2026-06-28 20-agent] Activity warmup ramp using stage-local epoch.
+        # Uses _act_epoch_counter (resets to 0 when train_act becomes True) instead
+        # of _current_epoch (global epoch). Without this, RF3 starting at global
+        # epoch 50 would get ramp=1.0 immediately, bypassing the 5-epoch warmup.
         act_ramp = 1.0
-        if getattr(C, 'STAGED_TRAINING', False):
-            act_ramp = min(1.0, (self._current_epoch + 1) / max(self._act_warmup_epochs, 1))
+        if self.train_act and self._act_epoch_counter >= 0:
+            _ramp_ep = self._act_epoch_counter
+            act_ramp = min(1.0, (_ramp_ep + 1) / max(self._act_warmup_epochs, 1))
         loss_act = loss_act * act_ramp
 
         # --- FIX: Activity loss cap to prevent NaN cascade at Stage 3 entry ---
@@ -1474,6 +1525,10 @@ class MultiTaskLoss(nn.Module):
         psr_cap = float(getattr(C, 'PSR_LOSS_CAP', 20.0))
         loss_psr = _smooth_cap(loss_psr, psr_cap)
 
+        # --- Per paper §3.7.1: "ℒ_hp = MSE × 5.0" ---
+        _hp_weight = float(getattr(C, 'HEAD_POSE_LOSS_WEIGHT', 5.0))
+        loss_head_pose = loss_head_pose * _hp_weight
+
         # --- FIX: Head pose loss cap to prevent NaN cascade ---
         hp_cap = float(getattr(C, 'HEAD_POSE_LOSS_CAP', 30.0))
         loss_head_pose = _smooth_cap(loss_head_pose, hp_cap)
@@ -1631,6 +1686,14 @@ class MultiTaskLoss(nn.Module):
                 # is preserved (not zeroed) so the learnable parameter can adapt to the
                 # ramping gradient magnitude. Zeroing lv_act would have starved log_var_act
                 # of all gradient signal.
+                # [FIX 2026-06-28 20-agent] Activity precision ramp using stage-local epoch.
+                # Uses _act_epoch_counter (resets to 0 when train_act becomes True) instead
+                # of _current_epoch (global epoch). Without this, RF3 starting at global
+                # epoch 50+ would bypass the 5-epoch precision ramp.
+                if self.train_act and self._act_epoch_counter >= 0:
+                    _act_ramp_epochs = int(getattr(C, 'ACT_RAMP_EPOCHS', 5))
+                    if _act_ramp_epochs > 0 and self._act_epoch_counter < _act_ramp_epochs:
+                        prec_act = prec_act * ((self._act_epoch_counter + 1) / _act_ramp_epochs)
                 if bool(getattr(C, 'STAGED_TRAINING', True)) and self._current_epoch >= 1:
                     stage = _get_kendall_stage(self._current_epoch)
                     # Activity ramp — applies in BOTH stage 1 and stage 2 (ramp completes

@@ -114,8 +114,12 @@ class MonotonicDecoder(nn.Module):
         Returns:
             states: [B, T, C] — monotone binary state predictions
         """
-        B, T, C = transition_logits.shape
-        device = transition_logits.device
+        # [FIX 2026-06-29] Squeeze extra dims (e.g. [B, T, C, 1]) from eval pipeline
+        logits = transition_logits.squeeze()
+        if logits.dim() == 2:
+            logits = logits.unsqueeze(1)  # [B, C] → [B, 1, C]
+        B, T, C = logits.shape
+        device = logits.device
 
         # Initialize: all components start at 0
         states = torch.zeros(B, T, C, device=device)
@@ -123,7 +127,7 @@ class MonotonicDecoder(nn.Module):
 
         for t in range(T):
             # Get transition probabilities at frame t
-            trans_prob = transition_logits[:, t, :]  # [B, C]
+            trans_prob = logits[:, t, :]  # [B, C]
 
             # Components that haven't been placed yet
             can_transition = (current_state == 0)
