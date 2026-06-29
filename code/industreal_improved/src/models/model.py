@@ -18,7 +18,7 @@ FPN NECK:
 DETECTION HEAD (RetinaNet-style, P3-P7):
   Cls subnet: 4x Conv3x3+ReLU -> Conv(9x24)
   Reg subnet: 4x Conv3x3+ReLU -> Conv(9x4)
-  Anchors: 3 ratios x 3 scales = 9 per location, sizes (24,48,96,192,384)
+  Anchors: 3 ratios x 3 scales = 9 per location, sizes (96,160,256,384,512)
   Focal(alpha=0.25,gamma=2) + GIoU loss
 
 POSE HEAD (Body -- 17 keypoints):
@@ -26,11 +26,11 @@ POSE HEAD (Body -- 17 keypoints):
   ConvTranspose2d(k=4,s=2,p=1) + GroupNorm(32) + ReLU -> P3 resolution
   Conv1x1 -> heatmaps [B, 17, H, W]
   Soft-argmax(T=0.1) -> keypoints [B, 34] + confidence [B, 17]
-  Wing Loss (ω=0.05, ε=0.005) x 0.001
+  Wing Loss (ω=0.05, ε=0.005) x 5.0 (per paper §3.7: "ℒ_pose = Wing × 5.0")
 
 HEAD POSE HEAD (9-DoF):
   GAP(C4) ‖ GAP(C5) -> [B, 384+768=1152] -> MLP 1152->512->256->9
-  LayerNorm + GELU + Dropout. MSE x 0.001
+  LayerNorm + GELU + Dropout. MSE x 5.0 (per paper §3.7: "ℒ_hp = MSE × 5.0")
 
 POSEFILM MODULE:
   keypoints [B,34] ‖ confidence [B,17] -> [B,51]
@@ -51,8 +51,8 @@ ACTIVITY HEAD (Feature Bank + TCN + 2xViT):
   TCN: 1D Depthwise Conv(k=5, dilation=1) -- true depthwise per paper
   2x ViT blocks: CLS token, learnable pos embed, MHSA(8heads, d_k=64), FFN(512->2048->512)
   DropPath 0.10/0.15, pre-norm, attn_dropout=0.1
-  CLS readout -> Dropout(0.1) -> Linear(512->74)
-  LDAM-DRW
+  CLS readout -> Dropout(0.1) -> Linear(512->75)
+  CE + label_smooth(0.1)  # Per paper: cross-entropy with label smoothing (was LDAM-DRW)
 
 PSR HEAD:
   Multi-scale GAP(P3+P4+P5) -> concat -> MLP(768->256)
@@ -64,6 +64,7 @@ LOSSES:
   Kendall homoscedastic uncertainty: L = Σ_t exp(-s_t)·L_t·ramp_t + s_t
   init: s_det=0, s_pose=-1, s_act=0, s_psr=0. Clamp[-4,2].
   Activity ramp: min(1, epoch/5).
+  Fixed-weight path (KENDALL_FIXED_WEIGHTS): det λ=1.0, hp λ=0.2
 
 Author: Bashara
 Date: April 2026
@@ -1406,7 +1407,9 @@ class ActivityHead(nn.Module):
         elif self.use_videomae:
             feat = torch.cat([feat, torch.zeros_like(feat)], dim=-1)
 
-        feat = F.dropout(feat, p=0.1, training=self.training)
+        # [FIX 2026-06-28] Removed redundant dropout — self.activity_classifier
+        # already includes nn.Dropout(0.1) at line 1361. Double dropout at
+        # inference is identity but wastes compute at training.
         logits = self.activity_classifier(feat)
         return logits
 
@@ -1965,7 +1968,10 @@ class POPWMultiTaskModel(nn.Module):
 
         # [FIX] pose_film conditional on use_hand_film flag (ablation support)
         if self.use_hand_film and hasattr(self, 'pose_film'):
-            c5_mod = self.pose_film(c5, keypoints, pose_confidence)
+            # [FIX 2026-06-28 20-agent] Detach keypoints to prevent activity gradients
+            # from flowing backward through PoseFiLM → keypoints → pose_head → P3 → FPN,
+            # corrupting detection features. Confidence was already detached (line 696).
+            c5_mod = self.pose_film(c5, keypoints.detach(), pose_confidence)
         else:
             c5_mod = c5  # No hand-keypoint conditioning when USE_HAND_FILM=False
 
@@ -2093,13 +2099,14 @@ class POPWMultiTaskModel(nn.Module):
         else:
             head_pose = None
 
-        # [A1 FIX 2026-06-17] Detach backbone/FPN features before activity projection.
-        # Without stop_grad, activity loss gradients flow backward into C5 and P4,
-        # corrupting shared visual features and causing multi-task collapse (act_accuracy=0.0).
-        # det_conf already has stop_grad from the detection head — only c5_mod and p4 need isolation.
+        # Per paper §5.4: "Gradient scaling: blend_ratio·C5_mod2 + (1-blend_ratio)·detach(C5_mod2)"
+        # This lets a small gradient flow into C5_mod2 (and thus the FiLM/Pose heads)
+        # while mostly protecting upstream features from activity gradient corruption.
+        _blend = float(getattr(C, 'ACTIVITY_GRAD_BLEND_RATIO', 0.05))
+        c5_mod_blend = _blend * c5_mod + (1 - _blend) * c5_mod.detach()
         activity_proj = torch.cat([
             det_conf,
-            F.adaptive_avg_pool2d(c5_mod.detach(), 1).flatten(1),
+            F.adaptive_avg_pool2d(c5_mod_blend, 1).flatten(1),
             F.adaptive_avg_pool2d(pyramid['p4'].detach(), 1).flatten(1),
         ], dim=1)
 

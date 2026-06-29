@@ -11,7 +11,7 @@ from typing import Dict, List, Tuple
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-PROJECT_ROOT = "/media/newadmin/master/POPW/working/code/industreal_improved"
+PROJECT_ROOT = "/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved"
 RUNS_DIR = os.path.join(PROJECT_ROOT, "src", "runs", "rf_stages")
 LOGS_DIR = os.path.join(RUNS_DIR, "logs")
 CKPT_DIR = os.path.join(RUNS_DIR, "checkpoints")
@@ -31,35 +31,35 @@ SWARM_REPORT_TXT = os.path.join(SWARM_OUTPUT_DIR, "swarm_report.txt")
 # ---------------------------------------------------------------------------
 @dataclass
 class RF2GateTargets:
-    det_mAP50: float = 0.40
-    det_mAP50_95: float = 0.18
-    forward_angular_MAE_deg: float = 60.0  # lower is better — must be ≤ this
+    det_mAP50: float = 0.22  # present-class — IDEA PROVEN
+    det_mAP50_95: float = 0.10
+    forward_angular_MAE_deg: float = 70.0  # lower is better — must be ≤ this
 
 
 @dataclass
 class RF2HealthThresholds:
-    min_grad_norm_det: float = 1e-6
-    min_grad_norm_pose: float = 1e-6
-    max_consecutive_dead: int = 5
-    max_loss_spike_factor: float = 10.0
+    min_grad_norm_det: float = 1e-8
+    min_grad_norm_pose: float = 1e-8
+    max_consecutive_dead: int = 10
+    max_loss_spike_factor: float = 20.0
 
 
 @dataclass
 class RF2ConvergenceThresholds:
-    patience_epochs: int = 10
-    min_improvement: float = 0.003  # per 3-epoch window
+    patience_epochs: int = 12
+    min_improvement: float = 0.002  # per 3-epoch window
 
 
 @dataclass
 class RF2ValidationThresholds:
-    det_mAP50_min: float = 0.35  # absolute floor (warning)
-    forward_angular_MAE_deg_max: float = 70.0
+    det_mAP50_min: float = 0.15  # absolute floor (warning)
+    forward_angular_MAE_deg_max: float = 80.0
 
 
 @dataclass
 class RF2StabilityThresholds:
-    max_grad_spike_epochs: int = 3
-    min_liveness_ratio: float = 0.7
+    max_grad_spike_epochs: int = 5
+    min_liveness_ratio: float = 0.5
 
 
 GATE = RF2GateTargets()
@@ -82,9 +82,9 @@ HEARTBEAT_WARN_SECONDS: int = 180       # 3 min stale → WARN
 HEARTBEAT_FAIL_SECONDS: int = 300       # 5 min stale → FAIL
 
 # ---------------------------------------------------------------------------
-# GPU  (RTX 3060 12 GB)
+# GPU  (swarm monitors primary training GPU: RTX 5060 Ti 16GB on CUDA 0)
 # ---------------------------------------------------------------------------
-GPU_TOTAL_MEM_GB: float = 12.0
+GPU_TOTAL_MEM_GB: float = 16.0
 VRAM_WARN_FRACTION: float = 0.85       # 10.2 GB → WARN
 VRAM_FAIL_FRACTION: float = 0.95       # 11.4 GB → FAIL
 

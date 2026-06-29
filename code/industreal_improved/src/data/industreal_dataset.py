@@ -753,6 +753,39 @@ class IndustRealMultiTaskDataset(Dataset):
         # Scan recordings and build sample index
         self.samples = self._scan_and_index()
 
+        # [RAM CACHE 2026-06-28 v3] Cache JPEG bytes (compressed, ~350 KB avg per image)
+        # instead of decoded tensors (~2.8 MB). Capped at C.RAM_CACHE_MAX_IMAGES (default 5000)
+        # with LRU eviction. ~5,000 images × 350 KB ≈ 1.8 GB — fits in available RAM.
+        # Validation/test: cached too but with a tighter cap (min(max_cache, 2000)) since
+        # val sets are smaller and the bottleneck there is lower.
+        self._ram_cache: Dict[str, bytes] = {}
+        _max_cache = getattr(C, 'RAM_CACHE_MAX_IMAGES', 5000)
+        if _max_cache > 0:
+            if self.split != 'train':
+                _max_cache = min(_max_cache, 2000)
+            n = min(len(self.samples), _max_cache)
+            logger.info(f'[RAM_CACHE] Pre-loading {n} {self.split} images as JPEG bytes (cap={_max_cache})...')
+            t0 = time_module.time()
+            from collections import OrderedDict
+            self._ram_cache = OrderedDict()
+            for i, s in enumerate(self.samples):
+                if len(self._ram_cache) >= _max_cache:
+                    logger.info(f'[RAM_CACHE] Cap reached ({_max_cache}) — stopping cache fill')
+                    break
+                if i % 1000 == 0 and i > 0:
+                    elapsed = time_module.time() - t0
+                    logger.info(f'[RAM_CACHE] {i}/{n} scanned — {len(self._ram_cache)} cached, {elapsed:.0f}s')
+                try:
+                    with open(s['img_path'], 'rb') as _f:
+                        self._ram_cache[s['img_path']] = _f.read()
+                except Exception:
+                    pass  # skip unreadable — fallback to disk
+            total = time_module.time() - t0
+            mb = len(self._ram_cache) * 350 / 1024
+            logger.info(f'[RAM_CACHE] Done — {len(self._ram_cache)} images cached in {total:.0f}s (~{mb:.1f}MB estimated)')
+        else:
+            logger.info(f'[RAM_CACHE] Skipped — cap=0')
+
         # Activity IDs for class-balanced sampling
         self.activity_ids = np.array(
             [s['action_label'] for s in self.samples], dtype=np.int64
@@ -997,8 +1030,8 @@ class IndustRealMultiTaskDataset(Dataset):
     # Image Loading
     # =====================================================================
 
-    def _load_image(self, img_path: str) -> torch.Tensor:
-        """Load and resize RGB image to [3, H, W]."""
+    def _load_image_raw(self, img_path: str) -> torch.Tensor:
+        """Load and resize RGB image from disk to [3, H, W]."""
         try:
             img = Image.open(img_path).convert('RGB')
             img = img.resize((self.img_size[0], self.img_size[1]), _BILINEAR)
@@ -1008,6 +1041,19 @@ class IndustRealMultiTaskDataset(Dataset):
             img = np.zeros((self.img_size[1], self.img_size[0], 3), dtype=np.uint8)
 
         return torch.from_numpy(img).permute(2, 0, 1)  # (3, H, W)
+
+    def _load_image(self, img_path: str) -> torch.Tensor:
+        """Load image from RAM cache (JPEG bytes) or disk. Decode bytes ~2ms vs HDD ~50ms."""
+        cached = self._ram_cache.get(img_path) if self._ram_cache else None
+        if cached is not None:
+            try:
+                from io import BytesIO
+                img = Image.open(BytesIO(cached)).convert('RGB')
+                img = img.resize((self.img_size[0], self.img_size[1]), _BILINEAR)
+                return torch.from_numpy(np.array(img, dtype=np.uint8)).permute(2, 0, 1)
+            except Exception:
+                pass  # fall through to disk load
+        return self._load_image_raw(img_path)
 
     def _load_clip_frames(
         self, recording_id: str, target_frame: int

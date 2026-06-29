@@ -30,7 +30,7 @@ os.environ.setdefault('OPENBLAS_NUM_THREADS', '4')
 os.environ.setdefault('NUMEXPR_NUM_THREADS', '4')
 os.environ.setdefault('MALLOC_ARENA_MAX', '4')
 os.environ.setdefault('PYTHONHASHSEED', '42')
-os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', '4096:8')
+os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
 os.environ.setdefault('CUDA_LAUNCH_BLOCKING', '1')
 os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
 
