@@ -267,6 +267,58 @@ assert len(ACT_CLASS_NAMES) == NUM_CLASSES_ACT == 75, (
     f'invarianT to which IDs happen to appear on disk.'
 )
 
+# ===========================================================================
+# Activity class grouping (Opus Route A — file 75)
+# ===========================================================================
+# 74-class per-frame action recognition is bounded near zero macro-F1 by the
+# data (48/74 classes <10 frames, 7 singletons). Grouping the fine-grained
+# actions by their VERB (the first underscore token of the action name:
+# take_*, plug_*, tighten_*, loosen_*, …) collapses 75 raw ids into ~13 well-
+# supported groups (~100-400 frames each), which IS learnable from globally-
+# pooled features. The mapping is derived data-drivenly from ACT_CLASS_NAMES,
+# so no hand-coded table is needed.
+#
+#   ACT_CLASS_GROUPING = 'none'  -> identity (raw 75-class task, default; no change)
+#   ACT_CLASS_GROUPING = 'verb'  -> ~13 verb groups (Route A)
+#
+# Downstream wiring (all gated by NUM_ACT_OUTPUTS / ACT_ID_TO_GROUP):
+#   - dataset remaps each frame's action_label through ACT_ID_TO_GROUP
+#   - the activity head + activity loss are sized to NUM_ACT_OUTPUTS
+#   - eval reports group names (ACT_OUTPUT_NAMES); macro-F1's present-label
+#     filter already restricts the average to the groups that appear.
+ACT_CLASS_GROUPING = 'none'
+
+def _build_act_grouping(mode: str):
+    """Return (id_to_group[75], group_names, num_groups) for the given mode.
+    'none' -> identity. 'verb' -> group by first underscore token of the name."""
+    if str(mode).lower() != 'verb':
+        return list(range(NUM_CLASSES_ACT)), list(ACT_CLASS_NAMES), NUM_CLASSES_ACT
+    verb_to_gid = {}
+    group_names = []
+    id_to_group = [0] * NUM_CLASSES_ACT
+    for i, name in enumerate(ACT_CLASS_NAMES):
+        verb = (str(name).split('_')[0] if name else f'cls{i}') or f'cls{i}'
+        if verb not in verb_to_gid:
+            verb_to_gid[verb] = len(group_names)
+            group_names.append(verb)
+        id_to_group[i] = verb_to_gid[verb]
+    return id_to_group, group_names, len(group_names)
+
+ACT_ID_TO_GROUP, ACT_GROUP_NAMES, NUM_ACT_GROUPS = _build_act_grouping(ACT_CLASS_GROUPING)
+# Effective number of activity-head outputs and the names eval/report should use.
+NUM_ACT_OUTPUTS = NUM_ACT_GROUPS if str(ACT_CLASS_GROUPING).lower() == 'verb' else NUM_CLASSES_ACT
+ACT_OUTPUT_NAMES = ACT_GROUP_NAMES if str(ACT_CLASS_GROUPING).lower() == 'verb' else list(ACT_CLASS_NAMES)
+
+def remap_activity_label(raw):
+    """Map a raw action_id to its grouped output index. Preserves the -1
+    'no-annotation' sentinel. Identity when grouping is off."""
+    r = int(raw)
+    if r < 0:
+        return r
+    if r >= len(ACT_ID_TO_GROUP):
+        return r if r < NUM_ACT_OUTPUTS else (NUM_ACT_OUTPUTS - 1)
+    return int(ACT_ID_TO_GROUP[r])
+
 # --- Head pose ---
 NUM_KEYPOINTS = 17
 KEYPOINT_NAMES = [
@@ -556,6 +608,18 @@ WING_EPSILON = 0.005
 # CB_BETA and CB_GAMMA are unused in the CE path — kept for LDAM-DRW ablation compat.
 CB_BETA  = 0.99
 CB_GAMMA = 1.0
+# [FIX 2026-07-01 Opus consult] Activity sampler balancing mode.
+# 'cb' (legacy): CB effective-number weighting — only PARTIALLY balances; the 5 head
+#   classes keep ~4-5x the sampling mass of the tail, feeding the majority-class collapse.
+# 'balanced': true class balance for classes with >= ACT_SAMPLER_COUNT_FLOOR frames,
+#   with sub-floor classes scaled by count (avoids memorizing 1-7 frame singletons).
+# Use 'balanced' for CE-loss runs. With USE_CB_FOCAL_ACT=True the loss already
+# rebalances (beta=0.999, 50x cap), so keep 'cb' to avoid double-emphasis.
+ACT_SAMPLER_MODE = 'cb'
+ACT_SAMPLER_COUNT_FLOOR = 15.0
+# action_id 0 is the real action "take_short_brace" (63 frames), NOT background.
+# Set True only if a future label revision designates slot 0 as NA/background.
+ACT_CLASS0_IS_NA = False
 CB_LABEL_SMOOTHING = 0.1  # label smoothing for 74-class activity CE loss (paper §3.7.1)
 # [OPUS DECISION 2] Switch from CE+label_smoothing to class-balanced focal loss
 # when the simple head collapses (pred_distinct <= 3 at epoch 1).

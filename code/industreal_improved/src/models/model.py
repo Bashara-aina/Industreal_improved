@@ -1857,7 +1857,7 @@ class POPWMultiTaskModel(nn.Module):
             p4_channels=256,
             det_conf_size=C.NUM_DET_CLASSES,
             embed_dim=512,
-            num_classes=C.NUM_CLASSES_ACT,
+            num_classes=int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_CLASSES_ACT)),  # verb-grouping aware (file 75)
             dropout=0.1,  # [FIX #3 HIGH] attn_dropout=0.1 per paper
             window_size=16,
             use_vit=True,
