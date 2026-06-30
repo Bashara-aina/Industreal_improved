@@ -557,6 +557,12 @@ WING_EPSILON = 0.005
 CB_BETA  = 0.99
 CB_GAMMA = 1.0
 CB_LABEL_SMOOTHING = 0.1  # label smoothing for 74-class activity CE loss (paper §3.7.1)
+# [OPUS DECISION 2] Switch from CE+label_smoothing to class-balanced focal loss
+# when the simple head collapses (pred_distinct <= 3 at epoch 1).
+# ClassBalancedFocalLoss uses beta=0.999 effective number weighting + gamma=2.0 focal factor.
+USE_CB_FOCAL_ACT = True   # True = use ClassBalancedFocalLoss; False = CE+label_smooth
+CB_FOCAL_BETA = 0.999    # Effective number beta for CB-Focal (Cui et al., 2019)
+CB_FOCAL_GAMMA = 2.0     # Focal loss gamma for CB-Focal
 
 # PSR temporal smoothing weight (transition-aware loss)
 PSR_TEMPORAL_SMOOTH_WEIGHT = 0.05  # encourages predicted transitions to match label transitions
@@ -662,6 +668,7 @@ DET_GT_FRAME_FRACTION = float(os.environ.get('DET_GT_FRAME_FRACTION', '0.90'))
 # 1. Larger loss magnitude → Kendall precision advantage → backbone overfits to activity
 # 2. PSR/pose gradients die → no multi-task signal → activity collapse to 2/75 classes
 # Fix: lower ACTIVITY_HEAD_GRAD_CLIP + weigh activity loss down before Kendall
+ACTIVITY_HEAD_DROPOUT = 0.3    # [OPUS DECISION 2] Raised from default 0.2 — more regularization to combat collapse
 ACTIVITY_HEAD_GRAD_CLIP = 1.0  # [FIX 2026-06-30] Raised from 0.3 — gradient norm at 0.012 is well below even 0.3;
                                 # clip was not constraining anything. Raising to 1.0 removes the ceiling so
                                 # when activity does escape the degenerate equilibrium, it isn't capped.
@@ -903,6 +910,14 @@ SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP (~87 min/epoch) — s
 # (EVAL_MAX_BATCHES capped) on other epochs. 0 = eval every epoch (no skip).
 DET_METRICS_EVERY_N = int(os.environ.get('DET_METRICS_EVERY_N', '1'))  # Full mAP eval every N epochs; 0=every epoch
 GATE_EVAL_MAX_BATCHES = int(os.environ.get('GATE_EVAL_MAX_BATCHES', '200'))  # Max val batches on non-full-eval epochs
+
+# [OPUS DECISION 5] Use subprocess evaluation on GPU 0 (idle RTX 3060).
+# When True, validation forks a spawn child on CUDA_VISIBLE_DEVICES=0 that
+# loads latest.pth and runs evaluate_all. The parent can SIGKILL the child
+# on timeout without corrupting the training CUDA context. Requires a second
+# GPU (CUDA_VISIBLE_DEVICES=1 in parent) to keep training on GPU 1.
+USE_SUBPROCESS_EVAL = os.environ.get('USE_SUBPROCESS_EVAL', '').lower() in ('1', 'true', 'yes')
+SUBPROCESS_EVAL_TIMEOUT = int(os.environ.get('SUBPROCESS_EVAL_TIMEOUT', '900'))  # seconds before SIGKILL
 
 # Efficiency metrics: compute_efficiency_metrics does 35 forward passes each epoch.
 # Set to True to skip except when (epoch % LOG_EFFICIENCY_EVERY == 0).

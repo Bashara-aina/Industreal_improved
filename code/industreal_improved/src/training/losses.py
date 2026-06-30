@@ -1043,18 +1043,29 @@ class MultiTaskLoss(nn.Module):
 
         # C.2: Per paper §3.7.1 — "CE (label_smooth=0.1)" for activity.
         # LDAM-DRW is available as an ablation via USE_LDAM_DRW=True.
+        # [OPUS DECISION 2] USE_CB_FOCAL_ACT=True switches to class-balanced focal
+        # loss (Cui et al., 2019) for the activity head when CE collapses to 1 class.
         use_ldam = bool(getattr(C, 'USE_LDAM_DRW', False))
+        use_cb_focal = bool(getattr(C, 'USE_CB_FOCAL_ACT', False))
         if use_ldam:
             self.act_loss_fn = LDAMLoss(
                 num_classes=num_classes_act,
                 max_m=float(getattr(C, 'LDAM_MAX_M', 0.5)),
                 s=float(getattr(C, 'LDAM_S', 30)),
             )
+        elif use_cb_focal:
+            self.act_loss_fn = ClassBalancedFocalLoss(
+                num_classes=num_classes_act,
+                beta=float(getattr(C, 'CB_FOCAL_BETA', 0.999)),
+                gamma=float(getattr(C, 'CB_FOCAL_GAMMA', 2.0)),
+                label_smoothing=getattr(C, 'CB_LABEL_SMOOTHING', 0.1),
+            )
         else:
             self.act_loss_fn = nn.CrossEntropyLoss(
                 label_smoothing=getattr(C, 'CB_LABEL_SMOOTHING', 0.1),
             )
         self.use_ldam = use_ldam
+        self.use_cb_focal = use_cb_focal
 
         # C.3: Binary focal loss for PSR (instead of BCE)
         self.psr_loss_fn = nn.BCEWithLogitsLoss(reduction='mean')

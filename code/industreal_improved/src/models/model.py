@@ -1378,7 +1378,7 @@ class ActivityHead(nn.Module):
                 nn.LayerNorm(embed_dim),
                 nn.Linear(embed_dim, _hidden),
                 nn.GELU(),
-                nn.Dropout(max(dropout, 0.2)),
+                nn.Dropout(float(getattr(C, 'ACTIVITY_HEAD_DROPOUT', max(dropout, 0.2)))),
                 nn.Linear(_hidden, num_classes),
             )
             # Opus-recommended init: Xavier for hidden, small std + negative bias
