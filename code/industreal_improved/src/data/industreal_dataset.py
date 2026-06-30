@@ -786,13 +786,21 @@ class IndustRealMultiTaskDataset(Dataset):
         else:
             logger.info(f'[RAM_CACHE] Skipped — cap=0')
 
-        # Activity IDs for class-balanced sampling
-        self.activity_ids = np.array(
+        # Activity IDs for class-balanced sampling.
+        # [Route A — file 75] When ACT_CLASS_GROUPING='verb', remap raw action_id
+        # to its verb-group index so the sampler/counts operate in group space.
+        # Identity when grouping is off.
+        _raw_ids = np.array(
             [s['action_label'] for s in self.samples], dtype=np.int64
         )
+        _remap = getattr(C, 'remap_activity_label', None)
+        if _remap is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() == 'verb':
+            self.activity_ids = np.array([_remap(int(a)) for a in _raw_ids], dtype=np.int64)
+        else:
+            self.activity_ids = _raw_ids
         valid_ids = self.activity_ids[self.activity_ids >= 0]  # exclude -1 sentinel
         self.class_counts = np.bincount(
-            valid_ids, minlength=C.NUM_ACT_CLASSES
+            valid_ids, minlength=int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_ACT_CLASSES))
         )
 
         # Doc 01 §D.1: Build sequence sample index for PSR sequence training
@@ -890,10 +898,13 @@ class IndustRealMultiTaskDataset(Dataset):
         # Get annotation cache
         cache = self._anno_cache[recording_id]
 
-        # AR action label
-        action_label = torch.tensor(
-            sample['action_label'], dtype=torch.long
-        )
+        # AR action label. [Route A — file 75] Remap raw action_id to verb-group
+        # index when ACT_CLASS_GROUPING='verb' (identity otherwise). Preserves -1.
+        _raw_al = int(sample['action_label'])
+        _remap = getattr(C, 'remap_activity_label', None)
+        if _remap is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() == 'verb':
+            _raw_al = _remap(_raw_al)
+        action_label = torch.tensor(_raw_al, dtype=torch.long)
 
         # PSR per-frame labels
         psr_labels = torch.from_numpy(
@@ -1005,6 +1016,10 @@ class IndustRealMultiTaskDataset(Dataset):
         action_labels_per_frame = cache.ar_per_frame[frame_nums]
         unique, counts = np.unique(action_labels_per_frame, return_counts=True)
         most_common_action = int(unique[np.argmax(counts)])
+        # [Route A — file 75] Remap to verb-group index (identity when off). Preserves -1.
+        _remap = getattr(C, 'remap_activity_label', None)
+        if _remap is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() == 'verb':
+            most_common_action = _remap(most_common_action)
 
         # Detection: only for middle frame (for ASD task alignment)
         mid_frame = frame_nums[T // 2]
