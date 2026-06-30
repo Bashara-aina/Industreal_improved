@@ -1668,7 +1668,26 @@ def train_one_epoch(
             ).squeeze()
             logger.warning(f'  [GRAD_FN_DIAG] Created fallback loss with grad_fn={loss.grad_fn is not None}')
 
-        scaler.scale(loss).backward()
+        # [CUDA-CRASH HARDEN 2026-06-30] Surface any pending CUDA errors BEFORE
+        # backward, so they manifest as Python exceptions (with traceback) instead
+        # of silent process death during the GPU kernel launch.
+        if torch.cuda.is_available():
+            try:
+                torch.cuda.synchronize()
+            except Exception as _cu_sync_err:
+                logger.error(f'[CUDA] Pre-backward sync failed: {_cu_sync_err} — may indicate corrupted GPU state')
+        try:
+            scaler.scale(loss).backward()
+        except Exception as _bwd_err:
+            logger.critical(f'[CUDA] Backward pass FAILED at step {step}: {_bwd_err}')
+            # Try to surface CUDA error details
+            if torch.cuda.is_available():
+                try:
+                    torch.cuda.synchronize()
+                except Exception as _cu_err2:
+                    logger.critical(f'[CUDA] Post-backward sync also failed: {_cu_err2}')
+            # Re-raise so the outer retry loop can handle it
+            raise
 
         # Doc 2 §B.1: Kendall gradient sentinel — log gradient norms of log_var params
         log_kendall_every = int(getattr(C, 'LOG_KENDALL_GRAD_EVERY', 100))
@@ -1982,6 +2001,22 @@ def train_one_epoch(
                     )
             except Exception as exc:
                 logger.warning(f'  [CPU RAM] watchdog failed: {exc}')
+
+        # --- GPU HEARTBEAT every 100 steps (Bashara 2026-06-30) ---
+        # Writes a timestamp + GPU health to a file so we can detect when the process
+        # dies silently (no traceback). If heartbeat stops updating while the process
+        # should be running, we know the GPU/Kernel crashed the process.
+        if (step + 1) % 100 == 0:
+            try:
+                _hb_path = ckpt_dir / '.gpu_heartbeat'
+                with open(_hb_path, 'w') as _hb_f:
+                    _hb_f.write(f'{time.time()}|{step}|{epoch}|{os.getpid()}\n')
+                    if torch.cuda.is_available():
+                        _hb_alloc = torch.cuda.memory_allocated(device) / (1024**3)
+                        _hb_resv = torch.cuda.memory_reserved(device) / (1024**3)
+                        _hb_f.write(f'gpu_alloc={_hb_alloc:.2f}GB reserved={_hb_resv:.2f}GB\n')
+            except Exception:
+                pass  # Heartbeat is best-effort, never crash for it
 
         # --- DataLoader worker health check every 100 batches (Bashara 2026-05-09) ---
         # Catch DataLoader worker crashes (common cause of training death).
