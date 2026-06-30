@@ -790,16 +790,15 @@ USE_GEO_HEAD_POSE = True     # Was False — NaN blame disproven. Geometry-aware
 # but .detach() prevents gradient flow through bank entries. Slot -1 overwrite
 # further limits learning to the current frame only (#14-16).
 # Set False for R2 to allow temporal gradient through the bank.
-# [FIX 2026-06-30 v3] Set False to allow temporal gradient through the bank.
-# Activity head collapse to 3/75 classes after 9 validation checks at blend ratios
-# 0.10-0.70 proved that blend alone cannot fix it. The backbone has been shaped by
-# det+pose for ~50 epoch-equivalents while activity gets throttled gradient through
-# c5_mod_blend. FEATURE_BANK_DETACH=False allows the TCN/ViT temporal path to carry
-# gradient back to the backbone, giving activity a second gradient path into shared features.
-FEATURE_BANK_DETACH = False  # False = gradient flows through bank (enables temporal learning)
-FEATURE_BANK_DETACH_GRAD_ENTRIES_ONLY = False  # [E2] True = only detach stored bank entries (not current frame).
-                                                  #       Current frame keeps gradient; historical entries are detached.
-                                                  #       Intermediate between FEATURE_BANK_DETACH=True and False.
+# [FIX 2026-06-30 v4] Use DETACH_GRAD_ENTRIES_ONLY instead of FEATURE_BANK_DETACH=False.
+# False causes "backward through graph a second time" crash (#3092789) because bank
+# entries are shared across frames. The intermediate option detaches stored entries
+# but keeps gradient on the current frame, giving activity some temporal gradient path
+# without crashing.
+FEATURE_BANK_DETACH = True  # True = legacy behavior (no gradient through bank)
+FEATURE_BANK_DETACH_GRAD_ENTRIES_ONLY = True  # [FIX 2026-06-30] detach stored entries, keep current frame grad.
+                                                # E2: intermediate between FEATURE_BANK_DETACH=True and False.
+                                                # Current frame keeps gradient; historical entries are detached.
 FEATURE_BANK_SLOT_OVERWRITE = True  # True = legacy: live frame overwrites slot -1
                                      # False = bank accumulates without overwrite (#16)
 
@@ -1264,7 +1263,8 @@ PRESETS = {
         'train_head_pose':    True,
         'use_psr_transition':       True,
         'use_geo_head_pose':        True,
-        'feature_bank_detach':      False,
+        'feature_bank_detach':      True,
+        'feature_bank_detach_grad_entries_only': True,
         'feature_bank_slot_overwrite': True,
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.50,
