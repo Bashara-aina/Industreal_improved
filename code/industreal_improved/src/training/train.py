@@ -4392,26 +4392,29 @@ def main(args):
                     torch.cuda.empty_cache()  # Clear cached allocator memory before validation
                     try:
                         try:
-                            # [CUDA-HANG FIX 2026-06-30] SIGALRM timeout for evaluate_all.
-                            # CUDA kernel hangs (e.g. GroupNorm) do NOT raise Python exceptions
-                            # and block the thread forever. SIGALRM works from the main thread.
-                            _eval_timeout = int(getattr(C, 'EVAL_TIMEOUT_SECONDS', 900))  # 15 min
-                            def _eval_timeout_handler(sig, frm):
-                                raise TimeoutError(f'[EVAL TIMEOUT] evaluate_all exceeded {_eval_timeout}s')
-                            _eval_old_alarm = signal.signal(signal.SIGALRM, _eval_timeout_handler)
-                            signal.alarm(_eval_timeout)
+                            # [CUDA-HANG FIX 2026-06-30 v2] ThreadPoolExecutor timeout for evaluate_all.
+                            # SIGALRM cannot interrupt CUDA kernel hangs (signal handlers need the
+                            # Python interpreter to run). ThreadPoolExecutor with a timeout raises
+                            # TimeoutError when the thread doesn't finish — but the thread keeps
+                            # running (CUDA kernel stays alive). After timeout, we detach and create
+                            # a fresh executor for the retry. The zombie thread will be cleaned up
+                            # when it eventually finishes or when the process dies at epoch end.
+                            # [THREAD-SAFE] evaluate.py's signal.signal() calls are wrapped in
+                            # try/except ValueError so they gracefully degrade in threads.
+                            import concurrent.futures as _cf
+                            _eval_executor = _cf.ThreadPoolExecutor(max_workers=1)
+                            _eval_timeout = int(getattr(C, 'EVAL_TIMEOUT_SECONDS', 1200))  # 20 min
                             try:
-                                val_metrics = evaluate_all(
-                                    model,
-                                    criterion,
-                                    val_loader,
-                                    device,
-                                    max_batches=val_max_batches_rt,
-                                    epoch=epoch,
+                                _eval_future = _eval_executor.submit(
+                                    evaluate_all, model, criterion, val_loader, device,
+                                    max_batches=val_max_batches_rt, epoch=epoch,
                                 )
-                            finally:
-                                signal.alarm(0)
-                                signal.signal(signal.SIGALRM, _eval_old_alarm)
+                                val_metrics = _eval_future.result(timeout=_eval_timeout)
+                            except _cf.TimeoutError:
+                                _eval_executor.shutdown(wait=False)
+                                logger.error(f'[EVAL TIMEOUT] evaluate_all exceeded {_eval_timeout}s -- raising to retry')
+                                raise TimeoutError(f'[EVAL TIMEOUT] evaluate_all exceeded {_eval_timeout}s')
+                            _eval_executor.shutdown(wait=False)
                             _check_per_class_activity_sanity(val_metrics, epoch)
                             torch.cuda.empty_cache()  # Clear cached allocator memory after validation success
                         except Exception as exc:
