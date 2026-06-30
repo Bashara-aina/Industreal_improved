@@ -671,6 +671,19 @@ ACTIVITY_LR_MULTIPLIER = 20.0   # [FIX 2026-06-30 v3] Raised from 10.0 — even 
                                 # push the head out of the degenerate attractor.
 ACTIVITY_LOSS_WEIGHT = 0.8     # Per paper: "CE (label_smooth=0.1) × 0.8" (was 0.2 during debugging)
 
+# [FIX 2026-06-30 Opus consult] ACTIVITY_HEAD_SIMPLE — bypass the TCN+2xViT
+# temporal stack and classify the projected per-frame feature directly with a
+# small MLP. Root cause of the activity collapse: training uses a class-balanced
+# WeightedRandomSampler (per-frame, shuffled), so the FeatureBank ring buffer is
+# fed NON-CONSECUTIVE frames from random videos — there is no real temporal
+# signal. The 8.2M-param ViT+TCN head therefore (a) learns from noise, (b) adds
+# huge overfitting capacity on a 3.7k-frame dataset, and (c) makes the live frame
+# 1-of-17 tokens behind two self-attention blocks, attenuating its gradient. A
+# direct MLP gives a strong, short gradient path and ~150K params. Re-enable the
+# temporal stack only when training on true sequence batches (sequence_mode).
+ACTIVITY_HEAD_SIMPLE = True
+ACTIVITY_HEAD_SIMPLE_HIDDEN = 256  # hidden width of the simple MLP classifier
+
 # Per paper: "ℒ_hp = MSE × 5.0" — explicit multiplier for head pose loss
 HEAD_POSE_LOSS_WEIGHT = 5.0
 
