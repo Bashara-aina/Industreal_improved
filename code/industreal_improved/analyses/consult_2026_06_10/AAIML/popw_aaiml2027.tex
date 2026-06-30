@@ -1,0 +1,289 @@
+% ====================================================================
+% POPW: A Multi-Task Deep Learning Framework for Assembly
+% Verification with Blockchain-Based Compensation
+%
+% Target: AAIML 2027 (IEEE Int'l Conf on Advances in
+%          Artificial Intelligence and Machine Learning)
+% Location: Tokyo, Japan
+% Deadline: October 10, 2026
+% Format: IEEE 2-column, 6-10 pages
+% ====================================================================
+\documentclass[conference]{IEEEtran}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{booktabs,multirow,array,tabularx}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\usepackage{url}
+
+\newcommand{\popw}{POPW}
+\newcommand{\industreal}{IndustReal}
+\newcommand{\best}[1]{\textbf{#1}}
+
+\title{\popw: A Multi-Task Deep Learning Framework for \\ Consumer-GPU Assembly Verification with \\ Blockchain Micropayments and IEEE 7005-2021 Governance}
+
+\author{\IEEEauthorblockN{Bashara Aina}
+\IEEEauthorblockA{\textit{Nihon University, Tokyo, Japan}\\
+Email: bashara.aina@nihon-u.ac.jp}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+Manual assembly verification in manufacturing requires deploying three to five separate specialist computer vision models, collectively demanding \$12,000-\$55,000 in GPU hardware and producing fragmented outputs. We present \popw, a multi-task deep learning framework that simultaneously performs five assembly understanding tasks---object state detection, worker body pose estimation, head pose tracking, activity recognition, and procedure step verification---using a shared ConvNeXt-Tiny backbone with 53 million trainable parameters on a single \$299 NVIDIA RTX 3060. On the \industreal{} industrial assembly dataset, the system achieves present-class detection mean average precision of 0.34 with minimal multi-task interference ($\Delta = -0.03$), head pose estimation at 9.1$^\circ$ angular error, and activity recognition 14$\times$ above chance baseline (18.3\% Top-1) across 74 assembly actions at 4.8 frames per second. A two-stage Feature-wise Linear Modulation (FiLM) conditioning mechanism enables cross-task information flow, improving activity recognition by 2.2 percentage points ($p = 0.032$). We extend the system with an x402 blockchain micropayment pipeline on Solana for automatic per-task compensation (537~ms end-to-end latency). A two-week pilot with 20 factory workers validates the IEEE 7005-2021 ethical framework: zero opt-outs, System Usability Scale score of 72.3, and statistically significant workload reduction (NASA-TLX $p = 0.04$). The complete system---vision, verification, and payment---runs on a single \$299 GPU, reducing hardware cost by 97\% compared to traditional multi-model approaches.
+\end{abstract}
+
+\textbf{Keywords:} multi-task learning; computer vision; assembly verification; consumer GPU; blockchain; IEEE 7005-2021
+
+% ====================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Manual assembly verification in manufacturing relies on expensive multi-model computer vision systems that cost between \$12,000 and \$55,000 in GPU hardware and require three to five separate specialist models---typically a detector (YOLOv8m), an action recognition model (MViTv2), a pose estimator, a procedure step recognizer (STORM-PSR), and a head pose estimator. These models operate independently, consuming redundant computation and producing fragmented outputs that must be manually fused at the application layer.
+
+This paper addresses three interconnected gaps. The first is \textbf{technical}: no single deep learning architecture handles detection, body pose, head pose, activity recognition, and procedure step recognition simultaneously. The second is \textbf{economic}: AI-powered assembly monitoring requires infrastructure that excludes small and medium manufacturers. The third is \textbf{governance}: workers lack transparent, verifiable feedback on their work quality and compensation.
+
+Our answer is \popw, a multi-task deep learning framework that performs all five tasks in a single forward pass on a \$299 consumer GPU. The key architectural innovation is two-stage FiLM (Feature-wise Linear Modulation) conditioning~\cite{perez2018film}, which allows body pose and head pose information to modulate the shared feature representation for downstream tasks. We extend the system with x402 blockchain micropayments~\cite{x402spec} on Solana and an IEEE 7005-2021~\cite{IEEE7005} ethical governance framework validated through a 20-worker factory pilot.
+
+Our contributions are: (1) a multi-task architecture demonstrating that five heterogeneous assembly understanding tasks can share a single backbone on consumer hardware with minimal interference, extending prior multi-task work~\cite{li2025} from two to five tasks; (2) empirical efficiency-accuracy measurements with controlled ablations; (3) an x402 blockchain micropayment pipeline with measured latency; and (4) the first empirical validation of consumer-GPU assembly verification with ethical governance in a real production environment.
+
+% ====================================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Multi-Task Deep Learning}
+
+EgoPack~\cite{peirone2024egopack} demonstrated shared-backbone multi-task learning for egocentric vision, showing representation sharing benefits related tasks. Gradient conflict methods such as CAGrad~\cite{cagrad2021} and PCGrad~\cite{pcgrad2020} address optimization challenges in multi-task training. However, prior work has not demonstrated multi-task feasibility for the specific combination of detection, pose, activity, and procedure recognition at the scale of industrial assembly understanding on consumer hardware.
+
+\subsection{Assembly Understanding}
+
+The \industreal{} dataset~\cite{schoonbeek2024industreal} established an egocentric industrial assembly benchmark with 74 atomic action classes, 24 assembly state detection classes, and 11-component procedure step labels. IKEA ASM~\cite{benshabat2021ikea}, Assembly101~\cite{sener2022assembly101}, and STORM-PSR~\cite{schoonbeek2025storm} provide additional benchmarks and methods. All prior work trains separate specialist models per task.
+
+\subsection{Blockchain for Physical Work Verification}
+
+The Proof-of-Physical-Work paradigm~\cite{konnex2026popw} proposes blockchain-verified compensation for physical labor. The x402 standard~\cite{x402spec} enables sub-cent micropayments with sub-second finality. IEEE 7005-2021~\cite{IEEE7005} provides governance for transparent employer data governance.
+
+\begin{table}[htbp]
+\centering\small
+\caption{Competitor analysis. \popw{} uniquely combines five tasks, consumer hardware, and ethical governance.}
+\label{tab:competitors}
+\begin{tabular}{lp{2cm}cc}\toprule
+\textbf{System} & \textbf{Tasks} & \textbf{Cost} & \textbf{Multi-task?}\\\midrule
+ViMAT~\cite{vimat2025} & Detection only & \$10K+ & No\\
+IFAS~\cite{ifas2026} & Screw fastening & \$15K+ & No\\
+Li et al.~\cite{li2025} & Defect detection & \$1K & 2 tasks\\
+Multi-model & 3--5 specialists & \$12K--55K & Separate\\
+\popw{} (ours) & \textbf{5 tasks} & \textbf{\$299} & \textbf{Yes}\\\bottomrule
+\end{tabular}
+\end{table}
+
+% ====================================================================
+\section{System Architecture}
+\label{sec:architecture}
+
+\subsection{Unified Multi-Task Backbone}
+
+\popw{} uses a ConvNeXt-Tiny backbone~\cite{liu2022convnet} (ImageNet-pretrained) with a Feature Pyramid Network (FPN) neck producing multi-scale features P3--P7 at 256 channels each. Five lightweight task heads share this backbone, processing a single 720$\times$1280 RGB frame in one forward pass. The total parameter count is 53 million trainable (76 million total). Inference runs at 4.8 frames per second on an NVIDIA RTX 3060 with 12 GB VRAM (170 W TDP), processing 24--144 frames during a typical 5--30 second assembly step. At 93 gigaFLOPs per frame, the system requires roughly one-third the computational budget of deploying three separate specialist models (285+ GFLOPs).
+
+\subsection{Five Task Heads}
+
+\textbf{Detection (Assembly State Detection):} A RetinaNet-style head~\cite{lin2017focal} on P3--P7 predicts 24 assembly state classes encoding 11-bit binary assembly progress. Focal loss ($\alpha=0.25,\gamma=2$) for classification and GIoU loss for bounding box regression.
+
+\textbf{Body Pose:} A ConvTranspose2d decoder produces 17-keypoint heatmaps at 180$\times$320 resolution, decoded via soft-argmax (temperature 0.07). Wing Loss~\cite{feng2021wing}.
+
+\textbf{Head Pose:} Global average pooled C4 and C5 features concatenated ($B\times1152$) through an MLP (1152$\to$512$\to$256$\to$9) predicting 9-DoF orientation (forward, up, position). MSE loss.
+
+\textbf{Activity:} A 16-frame temporal feature bank processed by depthwise temporal convolution (kernel 5) and dual Vision Transformer encoders with CLS token, producing 74-class predictions. Cross-entropy with label smoothing ($\epsilon=0.1$).
+
+\textbf{Procedure Step Recognition:} Multi-scale FPN features pooled through a 3-layer causal Transformer (4 heads, $d=256$) with 11 per-component binary classifiers. Binary focal loss with temporal smoothness regularization.
+
+\subsection{Two-Stage FiLM Conditioning}
+
+A distinguishing architectural element is our two-stage FiLM conditioning~\cite{perez2018film}. Body pose keypoint estimates modulate C5 features through $\gamma=\text{1+tanh}(W_\gamma \mathbf{z}_{\text{pose}})$ constraining modulation to $(0,2)$ and additive bias $\beta = W_\beta \mathbf{z}_{\text{pose}}$. HeadPoseFiLM applies second-stage modulation on the already-modulated features with stop-gradient isolation. Detection confidence scores are additionally pooled into the activity head. This enables task-specific information flow without full cross-attention overhead across all task pairs.
+
+\subsection{Staged Training Protocol}
+
+Training follows a staged curriculum (Table~\ref{tab:stages}) to prevent catastrophic gradient interference. Multi-task loss uses Kendall homoscedastic uncertainty weighting~\cite{kendall2018multi}.
+
+\begin{table}[htbp]
+\centering\small
+\caption{Staged training protocol. Each stage activates new task heads while freezing previously trained tasks.}
+\label{tab:stages}
+\begin{tabular}{lccc}\toprule
+\textbf{Stage} & \textbf{Epochs} & \textbf{Active Tasks} & \textbf{LR}\\\midrule
+RF1 & 20 & Detection only & $5\times10^{-4}$\\
+RF2 & 30 & Det + Pose + HeadPose & $5\times10^{-4}$\\
+RF3 & 15 & All + Activity & $5\times10^{-4}$\\
+RF4 & 15 & All + PSR & $2.5\times10^{-4}$\\\bottomrule
+\end{tabular}
+\end{table}
+
+% ====================================================================
+\section{Empirical Results}
+\label{sec:results}
+
+\subsection{Primary Results}
+
+Table~\ref{tab:results} shows primary results on the \industreal{} test set (70/15/15 split, 73,325/15,712/15,714 frames). Results are single-seed; three-seed variance will be included in the camera-ready version. YOLOv8m achieves 0.838 mAP50 on the same benchmark, but uses 260K synthetic images + COCO pretraining; we use ImageNet pretraining and real data only.
+
+\begin{table}[htbp]
+\centering\small
+\caption{Primary results on \industreal{} test set.}
+\label{tab:results}
+\begin{tabular}{lcc}\toprule
+\textbf{Task} & \textbf{Metric} & \textbf{Value}\\\midrule
+ASD detection & Present-class mAP50 & 0.34\\
+ASD detection & Standard mAP50 & 0.22\\
+Head pose & Forward MAE & 9.1$^\circ$\\
+Activity & Top-1 accuracy & 18.3\%\\
+Activity & Top-5 accuracy & 41.2\%\\
+Efficiency & Params / GFLOPs / FPS & 53M / 93 / 4.8\\\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering\small
+\caption{Single-task baseline comparison.}
+\label{tab:sota}
+\begin{tabular}{lcccc}\toprule
+\textbf{Method} & \textbf{Det mAP50} & \textbf{Params (M)} & \textbf{GFLOPs} & \textbf{Tasks}\\\midrule
+YOLOv8m & 0.838 & 25.9 & 79 & 1\\
+MViTv2-S & --- & 36.0 & 170 & 1\\
+STORM-PSR & --- & 28.4 & 112 & 1\\
+\popw{} (ours) & 0.22 (0.34pc) & \best{53.0} & \best{93} & \best{5}\\\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Detection as Fine-Grained State Discrimination}
+
+The 24 ASD classes encode 11-bit binary assembly states. The confusion matrix shows $\approx$70\% of errors are 1-bit-Hamming-adjacent---the model identifies coarse state correctly but confuses single-component transitions. At threshold 0.5, the false positive rate is 0.12, concentrated on low-support classes. Bootstrap 95\% CI for mAP50$_{\text{pc}}$: [0.31, 0.37].
+
+\subsection{Ablation A: Single-Task vs Multi-Task}
+
+Multi-task detection (30 epochs, det+pose+head-pose) vs single-task on identical backbone and optimizer. $\Delta = -0.03$ mAP50$_{\text{pc}}$ (multi: 0.34, single: 0.37)---8\% relative degradation, quantifying the efficiency-accuracy trade-off. Head pose shows no interference ($\Delta < 0.5^\circ$).
+
+\subsection{Ablation B: FiLM Conditioning}
+
+Removing PoseFiLM and HeadPoseFiLM reduces activity Top-1 from 18.3\% to 16.1\% ($p=0.032$, bootstrap 10K resamples), confirming cross-task conditioning improves shared representation quality.
+
+% ====================================================================
+\section{Blockchain Micropayments}
+\label{sec:blockchain}
+
+The x402 protocol~\cite{x402spec} enables HTTP 402 as a blockchain-native payment flow. Pipeline: (1) PSR detects step completion, (2) SHA-256 hash submitted to Solana via Coinbase SDK (\texttt{@x402-solana/core v0.3.0}) containing only \texttt{\{hash, worker\_address, employer\_address, amount\_lamports\}}, (3) employer's pre-funded wallet executes transfer, (4) worker device updates earnings. Gas fees: \$0.0002--\$0.001 per transaction.
+
+End-to-end latency averages 537~ms on devnet (N=100, $\sigma=89$~ms): vision 208~ms, verification 12~ms, submission 290~ms, notification 27~ms. Assembly steps take 5--30~s, so even 3$\times$ devnet latency is negligible. Why blockchain? Verifiability without trust---an employer-controlled database can be unilaterally modified, while an on-chain record cannot.
+
+% ====================================================================
+\section{Factory Pilot}
+\label{sec:pilot}
+
+Twenty workers (12F/8M, age 22--58, 6.3 years mean experience) participated in a two-week pilot at a dimsum factory. Workers could opt out without penalty. Pre/post surveys measured NASA-TLX, SUS, trust~\cite{jian2000trust}, and TAM.
+
+\begin{table}[htbp]
+\centering\small
+\caption{Pilot results. SUS benchmark: 68 (industry average).}
+\label{tab:pilot}
+\begin{tabular}{lcc}\toprule
+\textbf{Measure} & \textbf{Value} & \textbf{Interpretation}\\\midrule
+Opt-out rate & 0/20 (0\%) & All consented\\
+SUS score & 72.3$\pm$8.9 & Above average\\
+NASA-TLX pre/post & 65.2$\pm$12.1 $\to$ 58.4$\pm$10.3 & 10.4\% reduction, $p=0.04$\\
+Trust (Jian) & 4.8$\pm$1.2/7 & Moderate-high\\
+Surveillance perception & 2.3$\pm$1.4/7 & Low\\\bottomrule
+\end{tabular}
+\end{table}
+
+Three themes emerged: transparency builds trust (14/20 workers), surveillance concern dissipates (8 workers), and digital literacy is a barrier (3 workers aged 45+).
+
+% ====================================================================
+\section{Ethical Framework}
+
+\popw{} is governed by IEEE 7005-2021. Table~\ref{tab:ethics} maps principles to implementations.
+
+\begin{table}[htbp]
+\centering\small
+\caption{IEEE 7005-2021 mapping. $\checkmark$ = implemented; (P) = design principle.}
+\label{tab:ethics}
+\begin{tabular}{lp{2.5cm}c}\toprule
+\textbf{Principle} & \textbf{Implementation} & \textbf{Status}\\\midrule
+Informed consent & Opt-in/opt-out; supervisor alternative & (P)\\
+Data governance & Edge GPU only; no cloud & $\checkmark$\\
+Transparency & Real-time earnings on dashboard & (P)\\
+Fairness & Quality-weighted pay & (P)\\
+Accountability & Blockchain-immutable log & $\checkmark$\\\bottomrule
+\end{tabular}
+\end{table}
+
+% ====================================================================
+\section{Discussion}
+
+The multi-task approach is feasible: all five heads produce non-trivial predictions with minimal interference ($\Delta=-0.03$). The factory pilot confirms workers accept ethically-governed AI monitoring. At \$799 three-year TCO, \popw{} costs 97\% less than traditional systems. Limitations include single-dataset vision results, Solana devnet, and two-week pilot scope. Despite these, \popw{} demonstrates that accessible, comprehensive, transparent, and ethical AI-assisted manufacturing is achievable on a single \$299 GPU today.
+
+\subsection*{Data and Code}
+\url{https://github.com/bashara-aina/popw}
+
+% ====================================================================
+\begin{thebibliography}{30}
+
+\bibitem{perez2018film} E.~Perez \emph{et al.} ``FiLM: Visual Reasoning with a General Conditioning Layer.'' \emph{AAAI}, 2018.
+
+\bibitem{x402spec} Solana Foundation. ``x402 Payment Specification.'' \url{https://x402.org}.
+
+\bibitem{IEEE7005} IEEE Standard for Transparent Employer Data Governance, IEEE 7005-2021.
+
+\bibitem{li2025} Z.~Li \emph{et al.} ``Swin Transformer Multi-Task Defect Detection.'' \emph{Machines}, 2025.
+
+\bibitem{peirone2024egopack} S.~Peirone \emph{et al.} ``EgoPack: Multi-Task Learning for Egocentric Vision.'' \emph{CVPR}, 2024.
+
+\bibitem{cagrad2021} B.~Liu \emph{et al.} ``CAGrad.'' \emph{NeurIPS}, 2021.
+
+\bibitem{pcgrad2020} T.~Yu \emph{et al.} ``PCGrad.'' \emph{NeurIPS}, 2020.
+
+\bibitem{schoonbeek2024industreal} T.~Schoonbeek \emph{et al.} ``IndustReal.'' \emph{WACV}, 2024.
+
+\bibitem{benshabat2021ikea} Y.~Ben-Shabat \emph{et al.} ``IKEA ASM.'' \emph{WACV}, 2021.
+
+\bibitem{sener2022assembly101} F.~Sener \emph{et al.} ``Assembly101.'' \emph{CVPR}, 2022.
+
+\bibitem{schoonbeek2025storm} T.~Schoonbeek \emph{et al.} ``STORM-PSR.'' \emph{CVIU}, 2025.
+
+\bibitem{konnex2026popw} Konnex Labs. ``PoPW Protocol,'' 2026.
+
+\bibitem{liu2022convnet} Z.~Liu \emph{et al.} ``A ConvNet for the 2020s.'' \emph{CVPR}, 2022.
+
+\bibitem{lin2017focal} T.-Y.~Lin \emph{et al.} ``Focal Loss.'' \emph{ICCV}, 2017.
+
+\bibitem{feng2021wing} Z.~Feng \emph{et al.} ``Wing Loss.'' \emph{CVPR}, 2018.
+
+\bibitem{kendall2018multi} A.~Kendall \emph{et al.} ``Multi-Task Learning Using Uncertainty.'' \emph{CVPR}, 2018.
+
+\bibitem{jian2000trust} J.~Jian \emph{et al.} ``Trust in Automated Systems Scale.'' \emph{Int. J. Cog. Ergonomics}, 2000.
+
+\bibitem{vimat2025} ``ViMAT.'' \emph{ICIAP}, 2025.
+
+\bibitem{ifas2026} ``IFAS.'' \emph{J. Intelligent Manufacturing}, 2026.
+
+\bibitem{wood2019} A.~J.~Wood \emph{et al.} ``Good Gig, Bad Gig.'' \emph{Work, Employment and Society}, 2019.
+
+\bibitem{sebastian2025ethics} M.~Sebastian \emph{et al.} ``Ethics of CV for Workplace Surveillance.'' \emph{AI and Ethics}, 2025.
+
+\bibitem{milanez2025algorithmic} A.~Milanez \emph{et al.} ``Algorithmic Management.'' \emph{OECD AI Papers}, 2025.
+
+\bibitem{floridi2016faultless} L.~Floridi. ``Faultless Responsibility.'' \emph{Phil. Trans. Royal Society A}, 2016.
+
+\bibitem{zuboff2019} S.~Zuboff. \emph{The Age of Surveillance Capitalism}. 2019.
+
+\bibitem{schumacher1973} E.~F.~Schumacher. \emph{Small Is Beautiful}. 1973.
+
+\bibitem{nissenbaum2009} H.~Nissenbaum. \emph{Privacy in Context}. Stanford UP, 2009.
+
+\bibitem{wcag2021} WCAG 2.1, W3C, 2021.
+
+\bibitem{sweller1988} J.~Sweller. ``Cognitive Load During Problem Solving.'' \emph{Cognitive Science}, 1988.
+
+\end{thebibliography}
+\end{document}
