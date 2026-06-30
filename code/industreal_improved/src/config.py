@@ -556,6 +556,18 @@ WING_EPSILON = 0.005
 # CB_BETA and CB_GAMMA are unused in the CE path — kept for LDAM-DRW ablation compat.
 CB_BETA  = 0.99
 CB_GAMMA = 1.0
+# [FIX 2026-07-01 Opus consult] Activity sampler balancing mode.
+# 'cb' (legacy): CB effective-number weighting — only PARTIALLY balances; the 5 head
+#   classes keep ~4-5x the sampling mass of the tail, feeding the majority-class collapse.
+# 'balanced': true class balance for classes with >= ACT_SAMPLER_COUNT_FLOOR frames,
+#   with sub-floor classes scaled by count (avoids memorizing 1-7 frame singletons).
+# Use 'balanced' for CE-loss runs. With USE_CB_FOCAL_ACT=True the loss already
+# rebalances (beta=0.999, 50x cap), so keep 'cb' to avoid double-emphasis.
+ACT_SAMPLER_MODE = 'cb'
+ACT_SAMPLER_COUNT_FLOOR = 15.0
+# action_id 0 is the real action "take_short_brace" (63 frames), NOT background.
+# Set True only if a future label revision designates slot 0 as NA/background.
+ACT_CLASS0_IS_NA = False
 CB_LABEL_SMOOTHING = 0.1  # label smoothing for 74-class activity CE loss (paper §3.7.1)
 # [OPUS DECISION 2] Switch from CE+label_smoothing to class-balanced focal loss
 # when the simple head collapses (pred_distinct <= 3 at epoch 1).

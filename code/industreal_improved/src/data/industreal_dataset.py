@@ -1397,14 +1397,30 @@ class IndustRealMultiTaskDataset(Dataset):
         Class-balanced WeightedRandomSampler for AR action classes.
         Uses sqrt(counts) smoothing (effective number of samples) with beta=C.CB_BETA.
         """
-        beta = C.CB_BETA
         counts = self.class_counts.astype(np.float64)
-        effective = np.where(
-            counts > 0,
-            (1.0 - np.power(beta, counts)) / (1.0 - beta),
-            1.0,
-        )
-        class_weights = 1.0 / np.maximum(effective, 1e-8)
+        # [FIX 2026-07-01 Opus consult] ACT_SAMPLER_MODE — the legacy 'cb' path uses
+        # CB effective-number weighting (beta=0.99). Its per-class sampling MASS is
+        # proportional to n/effective(n), which for n >> 1/(1-beta) grows ~linearly
+        # with n — so the 5 head classes still get ~4-5x the mass of the tail. The
+        # 'balanced' mode gives every class with >= COUNT_FLOOR frames EQUAL mass
+        # (weight = 1/max(n, floor)) while classes below the floor get mass
+        # proportional to their count (so 1-7 frame singletons are NOT repeated
+        # ~50x/epoch and memorized). Use 'balanced' for CE runs / when the loss is
+        # NOT already class-balanced; with CB-Focal (beta=0.999, 50x cap) the loss
+        # already rebalances, so leave this on 'cb' to avoid double-emphasis.
+        _mode = str(getattr(C, 'ACT_SAMPLER_MODE', 'cb')).lower()
+        if _mode == 'balanced':
+            _floor = float(getattr(C, 'ACT_SAMPLER_COUNT_FLOOR', 15.0))
+            _eff = np.maximum(counts, _floor)
+            class_weights = np.where(counts > 0, 1.0 / _eff, 0.0)
+        else:
+            beta = C.CB_BETA
+            effective = np.where(
+                counts > 0,
+                (1.0 - np.power(beta, counts)) / (1.0 - beta),
+                1.0,
+            )
+            class_weights = 1.0 / np.maximum(effective, 1e-8)
         class_weights /= class_weights.sum()
         sample_weights = np.array(
             [class_weights[aid] if aid >= 0 else 0.0 for aid in self.activity_ids],
