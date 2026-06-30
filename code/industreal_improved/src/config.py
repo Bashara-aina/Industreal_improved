@@ -401,7 +401,9 @@ NUM_WORKERS = 0          # [FIX 2026-06-30] Set from 4 to 0 — eliminate DataLo
                         # that hung training 3 times in 12 hours. No workers = single-process
                         # loading, ~25% slower but stable. CUDA + multiprocessing deadlocks
                         # on Python 3.13 + PyTorch 2.12 have no other reliable fix.
-RAM_CACHE_MAX_IMAGES = 5000  # Cap RAM image cache to ~1.8 GB (JPEG bytes) — prevents OOM
+RAM_CACHE_MAX_IMAGES = 8000  # [FIX 2026-06-30] Raised from 5000 to 8000 — full dataset
+                                # (3,667 train + 1,928 val = 5,595 frames) fits in RAM at
+                                # ~2.2 GB. Eliminates HDD bottleneck without SSD.
 PIN_MEMORY = True
 USE_AMP = True           # Mixed precision training flag. All AMP infrastructure in train.py
                          # (GradScaler, autocast, NaN guards, RC-29 telemetry) gates on this.
