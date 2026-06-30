@@ -1362,6 +1362,25 @@ class ActivityHead(nn.Module):
             nn.Linear(classifier_input_dim, num_classes),
         )
 
+        # [FIX 2026-06-30 Opus consult] Simple per-frame MLP head. See config
+        # ACTIVITY_HEAD_SIMPLE: under the class-balanced WeightedRandomSampler the
+        # temporal bank carries no real temporal signal, so the TCN+ViT stack is
+        # pure overfitting capacity with an attenuated gradient path. When enabled,
+        # forward() classifies proj_feat directly through this small MLP and the
+        # temporal modules are left unused (no gradient flows to them).
+        self.simple = bool(getattr(C, 'ACTIVITY_HEAD_SIMPLE', False))
+        if self.simple:
+            _hidden = int(getattr(C, 'ACTIVITY_HEAD_SIMPLE_HIDDEN', 256))
+            self.simple_classifier = nn.Sequential(
+                nn.LayerNorm(embed_dim),
+                nn.Linear(embed_dim, _hidden),
+                nn.GELU(),
+                nn.Dropout(max(dropout, 0.2)),
+                nn.Linear(_hidden, num_classes),
+            )
+        else:
+            self.simple_classifier = None
+
     def forward(self, proj_feat: torch.Tensor,
                 temporal_bank: Optional[torch.Tensor] = None,
                 videomae_feat: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -1374,6 +1393,12 @@ class ActivityHead(nn.Module):
             act_logits: [B, num_classes]
         """
         B = proj_feat.shape[0]
+
+        # [FIX 2026-06-30 Opus consult] Simple per-frame path — bypass TCN+ViT.
+        # Classifies the projected feature directly; gives a strong, short gradient
+        # path and avoids learning from the non-temporal (shuffled) feature bank.
+        if getattr(self, 'simple', False) and self.simple_classifier is not None:
+            return self.simple_classifier(proj_feat)
 
         if temporal_bank is not None:
             bank_seq = temporal_bank.clone()
