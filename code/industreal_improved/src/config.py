@@ -379,7 +379,7 @@ GRAD_ACCUM_STEPS = 8  # Per paper §Implementation: batch=2 × accum=8 = 16 effe
 EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 16
 
 VAL_BATCH_SIZE = 4   # Was 16 (8x train batch with FP32 → OOM on RTX 3060). 4× is safe with no_grad.
-VAL_NUM_WORKERS = 2   # 2 workers for HDD — overlap without head contention
+VAL_NUM_WORKERS = 0      # [FIX 2026-06-30] 0 workers — match NUM_WORKERS to avoid CUDA hangs
 
 
 EPOCHS        = 100 
@@ -397,7 +397,10 @@ EVAL_MAX_BATCHES = 500    # Cap validation to 500 batches (~2 min) per epoch
                           # Full 38K-frame eval takes 5+ hours. Fast val every epoch,
                           # then one full eval at the very end before the paper deadline.
 
-NUM_WORKERS = 4        # Reduced from 16 — HDD-backed dataset chokes on concurrent seeks
+NUM_WORKERS = 0          # [FIX 2026-06-30] Set from 4 to 0 — eliminate DataLoader worker deadlocks
+                        # that hung training 3 times in 12 hours. No workers = single-process
+                        # loading, ~25% slower but stable. CUDA + multiprocessing deadlocks
+                        # on Python 3.13 + PyTorch 2.12 have no other reliable fix.
 RAM_CACHE_MAX_IMAGES = 5000  # Cap RAM image cache to ~1.8 GB (JPEG bytes) — prevents OOM
 PIN_MEMORY = True
 USE_AMP = True           # Mixed precision training flag. All AMP infrastructure in train.py
@@ -657,7 +660,15 @@ DET_GT_FRAME_FRACTION = float(os.environ.get('DET_GT_FRAME_FRACTION', '0.90'))
 # 1. Larger loss magnitude → Kendall precision advantage → backbone overfits to activity
 # 2. PSR/pose gradients die → no multi-task signal → activity collapse to 2/75 classes
 # Fix: lower ACTIVITY_HEAD_GRAD_CLIP + weigh activity loss down before Kendall
-ACTIVITY_HEAD_GRAD_CLIP = 0.3  # Was 0.1 — increased for RF3 to allow activity head to escape degenerate equilibria
+ACTIVITY_HEAD_GRAD_CLIP = 1.0  # [FIX 2026-06-30] Raised from 0.3 — gradient norm at 0.012 is well below even 0.3;
+                                # clip was not constraining anything. Raising to 1.0 removes the ceiling so
+                                # when activity does escape the degenerate equilibrium, it isn't capped.
+ACTIVITY_LR_MULTIPLIER = 20.0   # [FIX 2026-06-30 v3] Raised from 10.0 — even 10x with gradient
+                                # centralization didn't break the 1/75 class degenerate equilibrium
+                                # because the gradient norm is too small (0.01). At 20x, 1.0e-2 lr ×
+                                # 0.01 = 1.0e-4 update/step. Combined with reinitialized classifier
+                                # weights and gradient centralization, this should be sufficient to
+                                # push the head out of the degenerate attractor.
 ACTIVITY_LOSS_WEIGHT = 0.8     # Per paper: "CE (label_smooth=0.1) × 0.8" (was 0.2 during debugging)
 
 # Per paper: "ℒ_hp = MSE × 5.0" — explicit multiplier for head pose loss
@@ -670,10 +681,15 @@ HEAD_POSE_LOSS_WEIGHT = 5.0
 # Activity collapse to 3/75 classes diagnosed as insufficient backbone gradient.
 # At 0.30, 3x more activity signal reaches backbone through c5_mod_blend
 # to shape discriminative features, while 70% detach still protects FPN.
-# Tradeoff: backbone drift risk mitigated by ACTIVITY_HEAD_GRAD_CLIP=0.3.
+# Tradeoff: backbone drift risk mitigated by ACTIVITY_HEAD_GRAD_CLIP=1.0.
 # [FIX 2026-06-29 v3] Raised from 0.50 to 0.70 — 3 epochs of training showed
 # minimal activity recovery (4/75 classes). At 0.70, ~parity with detection gradient.
-ACTIVITY_GRAD_BLEND_RATIO = 0.70
+# [FIX 2026-06-30] Raised from 0.70 to 1.0 — 3 epochs of RF4 showed activity
+# gradient still 0.012 (30x below detection). At 1.0, full gradient flows through
+# c5_mod_blend into the backbone, giving activity the strongest possible signal
+# to shape discriminative features. Risk of backbone drift is managed by
+# ACTIVITY_HEAD_GRAD_CLIP=1.0 and ACTIVITY_LR_MULTIPLIER=3.0 (head-level, not backbone).
+ACTIVITY_GRAD_BLEND_RATIO = 1.00
 
 # [FIX 2026-06-15] Per-task Kendall log_var bounds to prevent multi-task collapse cascade
 # Activity log_var FLOOR (min) prevents precision-boosting above exp(0)=1.0
