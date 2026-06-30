@@ -743,7 +743,10 @@ PSR_FOCAL_ALPHA = 0.25
 # [FIX 2026-06-29 v2] Reduced from 2.0 to 1.0 — PSR head shows NO_GRAD across all
 # epochs because gamma=2.0 kills gradients for near-0.5 predictions (all PSR logits
 # are in [-0.7, 0.7]). Lower gamma = stronger gradient signal to break the all-ones equilibrium.
-PSR_FOCAL_GAMMA = 1.0  # Per paper §3.6: "Binary Focal Loss (α=0.25, γ=2.0)"
+# [FIX 2026-06-30 v3] Reduced from 1.0 to 0.5 — PSR head still shows zero F1.
+# Gamma=1.0 was insufficient to break the all-ones/zero-gradient equilibrium.
+# At gamma=0.5, gradient magnitude roughly doubles for near-0.5 predictions.
+PSR_FOCAL_GAMMA = 0.5  # Per paper §3.6: "Binary Focal Loss (α=0.25, γ=2.0)"
 
 # Per-component PSR focal loss weights (11 components)
 # Inverse prevalence weighting: rarer steps get higher weight
@@ -787,8 +790,13 @@ USE_GEO_HEAD_POSE = True     # Was False — NaN blame disproven. Geometry-aware
 # but .detach() prevents gradient flow through bank entries. Slot -1 overwrite
 # further limits learning to the current frame only (#14-16).
 # Set False for R2 to allow temporal gradient through the bank.
-FEATURE_BANK_DETACH = True   # True = legacy behavior (no gradient through bank)
-                              # False = gradient flows through bank (enables temporal learning)
+# [FIX 2026-06-30 v3] Set False to allow temporal gradient through the bank.
+# Activity head collapse to 3/75 classes after 9 validation checks at blend ratios
+# 0.10-0.70 proved that blend alone cannot fix it. The backbone has been shaped by
+# det+pose for ~50 epoch-equivalents while activity gets throttled gradient through
+# c5_mod_blend. FEATURE_BANK_DETACH=False allows the TCN/ViT temporal path to carry
+# gradient back to the backbone, giving activity a second gradient path into shared features.
+FEATURE_BANK_DETACH = False  # False = gradient flows through bank (enables temporal learning)
 FEATURE_BANK_DETACH_GRAD_ENTRIES_ONLY = False  # [E2] True = only detach stored bank entries (not current frame).
                                                   #       Current frame keeps gradient; historical entries are detached.
                                                   #       Intermediate between FEATURE_BANK_DETACH=True and False.
@@ -804,7 +812,11 @@ FEATURE_BANK_SLOT_OVERWRITE = True  # True = legacy: live frame overwrites slot 
 # (near 0.5) for all components. Sensitivity penalty pushes per-component means apart
 # so sigmoid threshold (0.5) actually separates placed/unplaced components.
 # At 0.01: ~0.046 loss contribution at std=0 → too weak. At 0.10: ~0.46 → meaningful gradient.
-PSR_SENSITIVITY_WEIGHT = 0.10
+# [FIX 2026-06-30 v3] Raised from 0.10 to 0.50 — still zero PSR F1 at 0.10.
+# Need stronger penalty to push per-component logits apart from the near-0.5 equilibrium.
+# At 0.50, the sensitivity penalty (~0.46 standard dev loss) becomes a significant
+# gradient signal that actively drives component logits toward opposite sigmoid extremes.
+PSR_SENSITIVITY_WEIGHT = 0.50
 
 # =========================================================================
 # Augmentation (Doc 2 D)
@@ -1252,10 +1264,10 @@ PRESETS = {
         'train_head_pose':    True,
         'use_psr_transition':       True,
         'use_geo_head_pose':        True,
-        'feature_bank_detach':      True,
+        'feature_bank_detach':      False,
         'feature_bank_slot_overwrite': True,
         'use_psr_order_prior':      True,
-        'psr_sensitivity_weight':   0.01,
+        'psr_sensitivity_weight':   0.50,
         'use_ldam_drw':             False,
         # [FIX 2026-06-21 Opus v11 Q5] detach_reg_fpn=False for ALL non-reinit stages.
         # These RF3–RF10 / paper_run stages are continuations, NOT reinit bootstraps:
