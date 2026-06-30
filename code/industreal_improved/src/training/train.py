@@ -107,6 +107,7 @@ import model as _popw_model_module
 from src.training import losses as _losses_module
 from src.training.distillation import DistillationLoss
 import evaluate as _evaluate_module
+from subprocess_eval import run_val_subprocess
 import data as _ds_module
 from src import config as C
 
@@ -157,6 +158,8 @@ CFG_USE_KENDALL     = bool(getattr(C, 'USE_KENDALL', True))
 CFG_VAL_NUM_WORKERS = int(getattr(C, 'VAL_NUM_WORKERS', C.NUM_WORKERS))
 CFG_VAL_BATCH_SIZE  = int(getattr(C, 'VAL_BATCH_SIZE', C.BATCH_SIZE))
 CFG_EVAL_MAX_BATCHES = int(getattr(C, 'EVAL_MAX_BATCHES', 0))
+CFG_USE_SUBPROCESS_EVAL = bool(getattr(C, 'USE_SUBPROCESS_EVAL', False))
+CFG_SUBPROCESS_EVAL_TIMEOUT = int(getattr(C, 'SUBPROCESS_EVAL_TIMEOUT', 900))
 
 # --- SHARED EVALUATION PHASE FLAG (Bashara 2026-05-23) ---
 # Prevents signal handlers from killing DDP ranks during validation.
@@ -227,6 +230,7 @@ def _refresh_runtime_cfg() -> None:
     global CFG_TRAIN_DET, CFG_TRAIN_HEAD_POSE, CFG_TRAIN_ACT
     global CFG_TRAIN_PSR, CFG_USE_KENDALL
     global CFG_VAL_NUM_WORKERS, CFG_VAL_BATCH_SIZE, CFG_EVAL_MAX_BATCHES
+    global CFG_USE_SUBPROCESS_EVAL, CFG_SUBPROCESS_EVAL_TIMEOUT
 
     CFG_TRAIN_DET       = bool(getattr(C, 'TRAIN_DET', True))
     CFG_TRAIN_HEAD_POSE = bool(getattr(C, 'TRAIN_HEAD_POSE', True))
@@ -236,6 +240,8 @@ def _refresh_runtime_cfg() -> None:
     CFG_VAL_NUM_WORKERS = int(getattr(C, 'VAL_NUM_WORKERS', C.NUM_WORKERS))
     CFG_VAL_BATCH_SIZE  = int(getattr(C, 'VAL_BATCH_SIZE', C.BATCH_SIZE))
     CFG_EVAL_MAX_BATCHES = int(getattr(C, 'EVAL_MAX_BATCHES', 0))
+    CFG_USE_SUBPROCESS_EVAL = bool(getattr(C, 'USE_SUBPROCESS_EVAL', False))
+    CFG_SUBPROCESS_EVAL_TIMEOUT = int(getattr(C, 'SUBPROCESS_EVAL_TIMEOUT', 900))
 
 
 def _atomic_save(obj: Any, path: Path) -> None:
@@ -3130,7 +3136,8 @@ def main(args):
     try:
         _cmd = ' '.join(sys.argv)
         _env_keys = ['CUDA_VISIBLE_DEVICES', 'DET_GT_FRAME_FRACTION', 'TRAIN_MAX_STEPS',
-                     'EVAL_MAX_BATCHES', 'OUTPUT_ROOT_OVERRIDE', 'POPW_ROOT']
+                     'EVAL_MAX_BATCHES', 'OUTPUT_ROOT_OVERRIDE', 'POPW_ROOT',
+                     'USE_SUBPROCESS_EVAL', 'SUBPROCESS_EVAL_TIMEOUT']
         _env_lines = '\n'.join(f'{k}={os.environ.get(k, "")}' for k in _env_keys)
         (_cmd_file := log_dir / 'run_command.txt').write_text(
             f'Command: {_cmd}\n\n'
@@ -3629,6 +3636,31 @@ def main(args):
         'warmup_epochs': int(getattr(C, 'STAGE3_WARMUP_EPOCHS', 3)),
         'epochs_remaining': 0,
     }
+
+    # [OPUS DECISION 6] Auto-load crash_recovery.pth if no --resume is given and
+    # crash_recovery.pth exists with mtime newer than latest.pth.
+    # crash_recovery.pth is post-training/pre-validation — safe for resuming
+    # optimization, but never promoted to best.pth (unvalidated weights).
+    if not args.resume:
+        _cr_path = ckpt_dir / 'crash_recovery.pth'
+        _latest_path = ckpt_dir / 'latest.pth'
+        if _cr_path.exists():
+            _cr_mtime = _cr_path.stat().st_mtime
+            _lt_mtime = _latest_path.stat().st_mtime if _latest_path.exists() else 0
+            if _cr_mtime > _lt_mtime:
+                logger.warning(
+                    '[AUTO-RESUME] crash_recovery.pth (mtime=%s) is newer than '
+                    'latest.pth (mtime=%s) — auto-loading for resume. '
+                    'Use --resume latest.pth to ignore crash_recovery.',
+                    datetime.fromtimestamp(_cr_mtime).isoformat(),
+                    datetime.fromtimestamp(_lt_mtime).isoformat(),
+                )
+                args.resume = str(_cr_path)
+            else:
+                logger.info(
+                    '[AUTO-RESUME] crash_recovery.pth exists but is older than '
+                    'latest.pth — skipping auto-load.'
+                )
 
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
@@ -4451,6 +4483,12 @@ def main(args):
                 elif ema is not None:
                     logger.info('  [EMA] Skipping EMA swap — shadow not yet updated (stage<3, staged=%s)' % _ema_staged)
 
+                # [OPUS DECISION 5] Save subprocess checkpoint (post-EMA-swap) so the
+                # subprocess eval worker on GPU 0 picks up EMA-smoothed weights.
+                if CFG_USE_SUBPROCESS_EVAL:
+                    _atomic_save({'model': model.state_dict()}, ckpt_dir / 'val_subprocess.pth')
+                    logger.info('  [SUB] Saved val_subprocess.pth (post-EMA-swap) for subprocess eval')
+
                 val_batch_size_rt = CFG_VAL_BATCH_SIZE
                 val_workers_rt = 0          # HARDENED: always 0 — no worker management
                 val_prefetch_rt = 1
@@ -4490,29 +4528,53 @@ def main(args):
                     torch.cuda.empty_cache()  # Clear cached allocator memory before validation
                     try:
                         try:
-                            # [CUDA-HANG FIX 2026-06-30 v2] ThreadPoolExecutor timeout for evaluate_all.
-                            # SIGALRM cannot interrupt CUDA kernel hangs (signal handlers need the
-                            # Python interpreter to run). ThreadPoolExecutor with a timeout raises
-                            # TimeoutError when the thread doesn't finish — but the thread keeps
-                            # running (CUDA kernel stays alive). After timeout, we detach and create
-                            # a fresh executor for the retry. The zombie thread will be cleaned up
-                            # when it eventually finishes or when the process dies at epoch end.
-                            # [THREAD-SAFE] evaluate.py's signal.signal() calls are wrapped in
-                            # try/except ValueError so they gracefully degrade in threads.
-                            import concurrent.futures as _cf
-                            _eval_executor = _cf.ThreadPoolExecutor(max_workers=1)
-                            _eval_timeout = int(getattr(C, 'EVAL_TIMEOUT_SECONDS', 1200))  # 20 min
-                            try:
-                                _eval_future = _eval_executor.submit(
-                                    evaluate_all, model, criterion, val_loader, device,
-                                    max_batches=val_max_batches_rt, epoch=epoch,
+                            # [OPUS DECISION 5] Subprocess eval (GPU 0, SIGKILL-safe) OR
+                            # ThreadPoolExecutor (backward compat). The subprocess runs
+                            # evaluate_all in a separate process on CUDA_VISIBLE_DEVICES=0,
+                            # so a CUDA kernel hang can be SIGKILL'd without corrupting the
+                            # training CUDA context on GPU 1.
+                            _eval_timeout = CFG_SUBPROCESS_EVAL_TIMEOUT if CFG_USE_SUBPROCESS_EVAL else int(getattr(C, 'EVAL_TIMEOUT_SECONDS', 1200))
+                            if CFG_USE_SUBPROCESS_EVAL:
+                                _out_path = ckpt_dir / f'val_results_epoch{epoch}.json'
+                                _sub_ckpt = ckpt_dir / 'val_subprocess.pth'
+                                if not _sub_ckpt.exists():
+                                    _sub_ckpt = ckpt_dir / 'latest.pth'
+                                val_metrics = run_val_subprocess(
+                                    ckpt_path=_sub_ckpt,
+                                    out_path=_out_path,
+                                    overrides={
+                                        'EVAL_MAX_BATCHES': val_max_batches_rt,
+                                        'VAL_BATCH_SIZE': val_batch_size_rt,
+                                        'epoch': epoch,
+                                    },
+                                    timeout=_eval_timeout,
                                 )
-                                val_metrics = _eval_future.result(timeout=_eval_timeout)
-                            except _cf.TimeoutError:
+                                if not val_metrics:
+                                    logger.error(f'[SUB EVAL TIMEOUT] evaluate_all exceeded {_eval_timeout}s -- raising to retry')
+                                    raise TimeoutError(f'[SUB EVAL TIMEOUT] evaluate_all exceeded {_eval_timeout}s')
+                            else:
+                                # [CUDA-HANG FIX 2026-06-30 v2] ThreadPoolExecutor timeout for evaluate_all.
+                                # SIGALRM cannot interrupt CUDA kernel hangs (signal handlers need the
+                                # Python interpreter to run). ThreadPoolExecutor with a timeout raises
+                                # TimeoutError when the thread doesn't finish — but the thread keeps
+                                # running (CUDA kernel stays alive). After timeout, we detach and create
+                                # a fresh executor for the retry. The zombie thread will be cleaned up
+                                # when it eventually finishes or when the process dies at epoch end.
+                                # [THREAD-SAFE] evaluate.py's signal.signal() calls are wrapped in
+                                # try/except ValueError so they gracefully degrade in threads.
+                                import concurrent.futures as _cf
+                                _eval_executor = _cf.ThreadPoolExecutor(max_workers=1)
+                                try:
+                                    _eval_future = _eval_executor.submit(
+                                        evaluate_all, model, criterion, val_loader, device,
+                                        max_batches=val_max_batches_rt, epoch=epoch,
+                                    )
+                                    val_metrics = _eval_future.result(timeout=_eval_timeout)
+                                except _cf.TimeoutError:
+                                    _eval_executor.shutdown(wait=False)
+                                    logger.error(f'[EVAL TIMEOUT] evaluate_all exceeded {_eval_timeout}s -- raising to retry')
+                                    raise TimeoutError(f'[EVAL TIMEOUT] evaluate_all exceeded {_eval_timeout}s')
                                 _eval_executor.shutdown(wait=False)
-                                logger.error(f'[EVAL TIMEOUT] evaluate_all exceeded {_eval_timeout}s -- raising to retry')
-                                raise TimeoutError(f'[EVAL TIMEOUT] evaluate_all exceeded {_eval_timeout}s')
-                            _eval_executor.shutdown(wait=False)
                             _check_per_class_activity_sanity(val_metrics, epoch)
                             torch.cuda.empty_cache()  # Clear cached allocator memory after validation success
                         except Exception as exc:
@@ -4879,6 +4941,41 @@ def main(args):
                 } if criterion is not None else {},
                 'global_step':   getattr(C, '_global_step', 0),
             }, ckpt_dir / 'latest.pth')
+
+            # --- PER-EPOCH CHECKPOINT (Bashara 2026-06-30) ---
+            # Save a named checkpoint for this epoch so we can roll back to any
+            # epoch's state. Only keep the last 23 (RF4 default) to avoid filling disk.
+            # Each checkpoint is ~500 MB; 23 × 500 MB ≈ 11.5 GB, fine on 1.3 TB free.
+            _atomic_save({
+                'epoch':            epoch,
+                'model':           model.state_dict(),
+                'optimizer':       optimizer.state_dict(),
+                'scheduler':       scheduler.state_dict(),
+                'scaler':          scaler.state_dict(),
+                'best_metric':     best_metric,
+                'patience_counter': patience_counter,
+                'ema_shadow':      {k: v.clone() for k, v in ema.shadow.items()} if ema is not None else {},
+                'criterion': {
+                    'log_var_det': criterion.log_var_det.data.clone(),
+                    'log_var_pose': criterion.log_var_pose.data.clone(),
+                    'log_var_act': criterion.log_var_act.data.clone(),
+                    'log_var_psr': criterion.log_var_psr.data.clone(),
+                } if criterion is not None else {},
+                'global_step':   getattr(C, '_global_step', 0),
+            }, ckpt_dir / f'epoch_{epoch}.pth')
+            logger.info(f'  [EPOCH_CKPT] Saved epoch_{epoch}.pth')
+
+            # [DISK-GUARD] Prune epoch checkpoints older than 30 epochs back
+            # to prevent filling disk during long runs (23 epochs × 500 MB ≈ 11.5 GB).
+            # Keep at most 30 so we have enough rollback points for paper ablations.
+            try:
+                _epoch_ckpts = sorted(ckpt_dir.glob('epoch_*.pth'), key=lambda p: p.stat().st_mtime)
+                while len(_epoch_ckpts) > 30:
+                    _old = _epoch_ckpts.pop(0)
+                    _old.unlink(missing_ok=True)
+                    logger.info(f'  [EPOCH_CKPT] Pruned old checkpoint: {_old.name}')
+            except Exception:
+                pass  # non-critical
 
             # --- BASHARA 2026-05-25: Per-epoch crash recovery save (epoch end only) ---
             _save_crash_recovery(f'epoch_{epoch}_end')
