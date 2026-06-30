@@ -1,5 +1,21 @@
 # 61: Overview Prompt for Opus [2026-06-30]
 
+## Companion Files (56-60) — Read These First for Full Context
+
+This overview is a high-level summary. The detailed analysis lives in 5 companion files that must be read alongside this one:
+
+| # | File | What It Covers |
+|:-|------|----------------|
+| **56** | `56_ACTIVITY_HEAD_COLLAPSE_ROOT_CAUSE.md` | Deep root cause of the activity head collapse — 6 failed fix attempts, invariant gradient norm (0.010), architecture graph, gradient path tracing through ViT → TCN → feature_bank, 8 diagnostic questions for Opus |
+| **57** | `57_MULTI_TASK_GRADIENT_IMBALANCE.md` | The 312x gradient gap between PSR and activity heads, head-by-head gradient ratios, Kendall weighting limits, PSR oscillation (500-step DEAD/ALIVE cycle), per-head architecture analysis, data long-tail (46/72 classes with <1%), 7 questions |
+| **58** | `58_INFRASTRUCTURE_STABILITY_AND_VALIDATION.md` | 5 process crashes in 12 hours, all 6 safety fixes deployed, remaining CUDA hang vulnerability (ThreadPoolExecutor cannot interrupt kernels), GPU 0 (RTX 3060) completely idle at 0% util, HDD bottleneck at 1.2 batch/s, 8 questions |
+| **59** | `59_MASTER_PROMPT_V12_FOR_OPUS.md` | The master prompt: complete structured context including all hyperparameter changes, stage history, gate targets, paper target gaps, training state, and what we need from Opus |
+| **60** | `60_STRUCTURAL_QUESTIONS_FOR_OPUS.md` | **31 questions across 4 domains**: (1-12) activity head collapse, (13-19) multi-task architecture, (20-25) infrastructure, (26-31) paper targets and feasibility |
+
+**Reading order for Opus:** Start with this overview (61), then 56 (root cause), 57 (gradient imbalance), 58 (infrastructure), 59 (master prompt), and conclude with the 31 questions in 60.
+
+---
+
 ## Who We Are
 
 Training a multi-task assembly verification model on the IndustReal dataset for an AHFE 2026 Hawaii paper. 5 tasks (detection, activity recognition, PSR, head pose, body pose) on a single ConvNeXt-Tiny backbone with FPN, running on consumer GPUs (RTX 3060 + RTX 5060 Ti).
