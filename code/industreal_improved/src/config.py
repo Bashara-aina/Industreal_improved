@@ -401,7 +401,9 @@ NUM_WORKERS = 0          # [FIX 2026-06-30] Set from 4 to 0 — eliminate DataLo
                         # that hung training 3 times in 12 hours. No workers = single-process
                         # loading, ~25% slower but stable. CUDA + multiprocessing deadlocks
                         # on Python 3.13 + PyTorch 2.12 have no other reliable fix.
-RAM_CACHE_MAX_IMAGES = 5000  # Cap RAM image cache to ~1.8 GB (JPEG bytes) — prevents OOM
+RAM_CACHE_MAX_IMAGES = 8000  # [FIX 2026-06-30] Raised from 5000 to 8000 — full dataset
+                                # (3,667 train + 1,928 val = 5,595 frames) fits in RAM at
+                                # ~2.2 GB. Eliminates HDD bottleneck without SSD.
 PIN_MEMORY = True
 USE_AMP = True           # Mixed precision training flag. All AMP infrastructure in train.py
                          # (GradScaler, autocast, NaN guards, RC-29 telemetry) gates on this.
@@ -555,6 +557,12 @@ WING_EPSILON = 0.005
 CB_BETA  = 0.99
 CB_GAMMA = 1.0
 CB_LABEL_SMOOTHING = 0.1  # label smoothing for 74-class activity CE loss (paper §3.7.1)
+# [OPUS DECISION 2] Switch from CE+label_smoothing to class-balanced focal loss
+# when the simple head collapses (pred_distinct <= 3 at epoch 1).
+# ClassBalancedFocalLoss uses beta=0.999 effective number weighting + gamma=2.0 focal factor.
+USE_CB_FOCAL_ACT = True   # True = use ClassBalancedFocalLoss; False = CE+label_smooth
+CB_FOCAL_BETA = 0.999    # Effective number beta for CB-Focal (Cui et al., 2019)
+CB_FOCAL_GAMMA = 2.0     # Focal loss gamma for CB-Focal
 
 # PSR temporal smoothing weight (transition-aware loss)
 PSR_TEMPORAL_SMOOTH_WEIGHT = 0.05  # encourages predicted transitions to match label transitions
@@ -660,15 +668,17 @@ DET_GT_FRAME_FRACTION = float(os.environ.get('DET_GT_FRAME_FRACTION', '0.90'))
 # 1. Larger loss magnitude → Kendall precision advantage → backbone overfits to activity
 # 2. PSR/pose gradients die → no multi-task signal → activity collapse to 2/75 classes
 # Fix: lower ACTIVITY_HEAD_GRAD_CLIP + weigh activity loss down before Kendall
+ACTIVITY_HEAD_DROPOUT = 0.3    # [OPUS DECISION 2] Raised from default 0.2 — more regularization to combat collapse
 ACTIVITY_HEAD_GRAD_CLIP = 1.0  # [FIX 2026-06-30] Raised from 0.3 — gradient norm at 0.012 is well below even 0.3;
                                 # clip was not constraining anything. Raising to 1.0 removes the ceiling so
                                 # when activity does escape the degenerate equilibrium, it isn't capped.
-ACTIVITY_LR_MULTIPLIER = 20.0   # [FIX 2026-06-30 v3] Raised from 10.0 — even 10x with gradient
-                                # centralization didn't break the 1/75 class degenerate equilibrium
-                                # because the gradient norm is too small (0.01). At 20x, 1.0e-2 lr ×
-                                # 0.01 = 1.0e-4 update/step. Combined with reinitialized classifier
-                                # weights and gradient centralization, this should be sufficient to
-                                # push the head out of the degenerate attractor.
+ACTIVITY_LR_MULTIPLIER = 1.0    # [FIX 2026-06-30 v4] RESET TO 1.0 after root cause fix.
+                                # The gradient starvation was caused by in-place tensor assignments
+                                # in FeatureBank and ActivityHead (model.py, lines 1240-1241 and 1384)
+                            # which prevented gradient from flowing through proj_feat.
+                            # With the fix, activity gradient should be ~0.48 (comparable to detection),
+                            # so 20x LR would cause gradient explosion. Standard head_lr (5e-4) is
+                            # sufficient for a healthy gradient path.
 ACTIVITY_LOSS_WEIGHT = 0.8     # Per paper: "CE (label_smooth=0.1) × 0.8" (was 0.2 during debugging)
 
 # [FIX 2026-06-30 Opus consult] ACTIVITY_HEAD_SIMPLE — bypass the TCN+2xViT
@@ -900,6 +910,14 @@ SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP (~87 min/epoch) — s
 # (EVAL_MAX_BATCHES capped) on other epochs. 0 = eval every epoch (no skip).
 DET_METRICS_EVERY_N = int(os.environ.get('DET_METRICS_EVERY_N', '1'))  # Full mAP eval every N epochs; 0=every epoch
 GATE_EVAL_MAX_BATCHES = int(os.environ.get('GATE_EVAL_MAX_BATCHES', '200'))  # Max val batches on non-full-eval epochs
+
+# [OPUS DECISION 5] Use subprocess evaluation on GPU 0 (idle RTX 3060).
+# When True, validation forks a spawn child on CUDA_VISIBLE_DEVICES=0 that
+# loads latest.pth and runs evaluate_all. The parent can SIGKILL the child
+# on timeout without corrupting the training CUDA context. Requires a second
+# GPU (CUDA_VISIBLE_DEVICES=1 in parent) to keep training on GPU 1.
+USE_SUBPROCESS_EVAL = os.environ.get('USE_SUBPROCESS_EVAL', '').lower() in ('1', 'true', 'yes')
+SUBPROCESS_EVAL_TIMEOUT = int(os.environ.get('SUBPROCESS_EVAL_TIMEOUT', '900'))  # seconds before SIGKILL
 
 # Efficiency metrics: compute_efficiency_metrics does 35 forward passes each epoch.
 # Set to True to skip except when (epoch % LOG_EFFICIENCY_EVERY == 0).

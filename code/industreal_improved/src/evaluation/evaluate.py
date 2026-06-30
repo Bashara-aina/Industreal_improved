@@ -3473,6 +3473,18 @@ def evaluate_all(
                 f'(top-1 class={_top1} with {_top1_freq*100:.1f}% of frames). '
                 f'act_macro_f1=0 is a model collapse, not an eval bug.'
             )
+        # [OPUS DECISION 2] Diversity/entropy instrumentation for simple head go/no-go.
+        # Logged every epoch so the user/monitor can track prediction diversity as an
+        # early indicator of collapse or recovery. Using np.ma.log to safely handle
+        # zero-probability classes (log(0) = 0, masked).
+        _distinct_classes = num_cls - _pr_missing
+        _pred_probs = _pr_hist.astype(np.float64) / max(_n, 1)
+        _entropy = -float(np.sum(_pred_probs * np.ma.log(_pred_probs).filled(0)))
+        logger.info(
+            f'  [DIVERSITY] pred_distinct={_distinct_classes}/{num_cls}  '
+            f'entropy={_entropy:.3f} nats  '
+            f'gt_distinct={num_cls - _gt_missing}/{num_cls}'
+        )
     if getattr(C, 'TRAIN_ACT', True):
         # [OPUS V5 FIX] Validate act_clip_ids vs all_act_gt length before passing
         # to compute_activity_metrics. Mismatch causes IndexError that kills eval.
