@@ -1234,11 +1234,14 @@ class FeatureBank(nn.Module):
                 seq = [pad_feat] + seq
             seq = seq[-self.window_size:]
 
-            bank_i = torch.stack(seq)  # [T, 512]
+            bank_i = torch.stack(seq)  # [T, 512], all detached
             if _bank_detach_grad_only:
-                # [E2] Replace last position (current frame) with live feat_i to allow gradient flow
-                bank_i = bank_i.clone()
-                bank_i[-1] = feat_i
+                # [FIX 2026-06-30 v4] ROOT CAUSE FIX: The old code used in-place
+                # assignment (bank_i[-1] = feat_i) which does NOT propagate gradients
+                # because bank_i (from torch.stack of detached tensors) has
+                # requires_grad=False. Use torch.cat to build a new tensor where
+                # the last position carries feat_i's gradient.
+                bank_i = torch.cat([bank_i[:-1].detach(), feat_i.unsqueeze(0)], dim=0)
             outputs.append(bank_i)
 
         return torch.stack(outputs)  # [B, T, 512]
@@ -1376,12 +1379,30 @@ class ActivityHead(nn.Module):
         B = proj_feat.shape[0]
 
         if temporal_bank is not None:
-            bank_seq = temporal_bank.clone()
-            # [OPUS v5 AUDIT] Slot -1 overwrite: when FEATURE_BANK_SLOT_OVERWRITE=False,
-            # the bank accumulates naturally without the live frame replacing the last position.
-            # This enables all T positions to contribute to temporal learning (#16).
-            if getattr(C, 'FEATURE_BANK_SLOT_OVERWRITE', True):
-                bank_seq[:, -1, :] = proj_feat
+            # [FIX 2026-06-30 v4] ROOT CAUSE FIX: Gradient severing in feature bank.
+            # The old code used in-place assignment: bank_seq[:, -1, :] = proj_feat.
+            # This DOES NOT propagate gradients because temporal_bank from FeatureBank
+            # has requires_grad=False (FeatureBank stores detached features).
+            # The correct approach: use torch.cat to build a new tensor where the last
+            # position carries proj_feat's gradient, while earlier positions use the
+            # bank's (detached) history.
+            _slot_overwrite = bool(getattr(C, 'FEATURE_BANK_SLOT_OVERWRITE', True))
+            if _slot_overwrite:
+                # Build bank: history from temporal_bank[:-1], last from proj_feat
+                _bank_history = temporal_bank[:, :-1, :]  # [B, T-1, 512], detached
+                bank_seq = torch.cat([_bank_history, proj_feat.unsqueeze(1)], dim=1)
+            else:
+                bank_seq = temporal_bank
+                # Without slot overwrite, the entire bank output is detached.
+                # This means NO gradient flows through the bank path.
+                # Log this as a warning once per run.
+                if not hasattr(self, '_warned_no_slot_grad'):
+                    self._warned_no_slot_grad = True
+                    import logging
+                    logging.getLogger('model').warning(
+                        '[ACT-GRAD] FEATURE_BANK_SLOT_OVERWRITE=False — NO gradient flows '
+                        'through temporal bank. Activity gradient is entirely from bank history.'
+                    )
         elif self.use_vit:
             bank_seq = proj_feat.unsqueeze(1).expand(-1, self.window_size, -1)
         else:
@@ -2117,7 +2138,23 @@ class POPWMultiTaskModel(nn.Module):
         if not torch.isfinite(proj_feat).all():
             proj_feat = torch.zeros_like(proj_feat)
 
-        bank_output = self.feature_bank(proj_feat, video_ids, None)
+        # [FIX 2026-06-30 v4] ROOT CAUSE FIX: Bypass feature bank when NOT staging.
+        # When STAGED_TRAINING=False (all RF4-RF10 stages), the feature bank produces
+        # T=8 frames where only the last position carries gradient (the history is
+        # detached). The ViT+TCN then processes 7 zero-gradient + 1 gradient position,
+        # attenuating the signal by ~99% (observed gradient norm: 0.010 vs expected ~0.48).
+        #
+        # The correct path for non-staged training is the "expand" path in ActivityHead:
+        # proj_feat.unsqueeze(1).expand(-1, window_size, -1) → creates T=16 identical
+        # copies, ALL with gradient, giving the ViT+TCN a full gradient signal.
+        #
+        # When staging IS enabled, use the feature bank for real temporal accumulation.
+        _staging_enabled = bool(getattr(C, 'STAGED_TRAINING', False))
+        if _staging_enabled:
+            bank_output = self.feature_bank(proj_feat, video_ids, None)
+        else:
+            # Pass None → ActivityHead uses expand path: proj_feat.unsqueeze(1).expand(...)
+            bank_output = None
 
         videomae_feat = None
         if self.use_videomae and clip_rgb is not None and hasattr(self, 'videomae_stream'):

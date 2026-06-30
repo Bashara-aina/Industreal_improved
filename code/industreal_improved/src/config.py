@@ -663,12 +663,13 @@ DET_GT_FRAME_FRACTION = float(os.environ.get('DET_GT_FRAME_FRACTION', '0.90'))
 ACTIVITY_HEAD_GRAD_CLIP = 1.0  # [FIX 2026-06-30] Raised from 0.3 — gradient norm at 0.012 is well below even 0.3;
                                 # clip was not constraining anything. Raising to 1.0 removes the ceiling so
                                 # when activity does escape the degenerate equilibrium, it isn't capped.
-ACTIVITY_LR_MULTIPLIER = 20.0   # [FIX 2026-06-30 v3] Raised from 10.0 — even 10x with gradient
-                                # centralization didn't break the 1/75 class degenerate equilibrium
-                                # because the gradient norm is too small (0.01). At 20x, 1.0e-2 lr ×
-                                # 0.01 = 1.0e-4 update/step. Combined with reinitialized classifier
-                                # weights and gradient centralization, this should be sufficient to
-                                # push the head out of the degenerate attractor.
+ACTIVITY_LR_MULTIPLIER = 1.0    # [FIX 2026-06-30 v4] RESET TO 1.0 after root cause fix.
+                                # The gradient starvation was caused by in-place tensor assignments
+                                # in FeatureBank and ActivityHead (model.py, lines 1240-1241 and 1384)
+                            # which prevented gradient from flowing through proj_feat.
+                            # With the fix, activity gradient should be ~0.48 (comparable to detection),
+                            # so 20x LR would cause gradient explosion. Standard head_lr (5e-4) is
+                            # sufficient for a healthy gradient path.
 ACTIVITY_LOSS_WEIGHT = 0.8     # Per paper: "CE (label_smooth=0.1) × 0.8" (was 0.2 during debugging)
 
 # Per paper: "ℒ_hp = MSE × 5.0" — explicit multiplier for head pose loss
