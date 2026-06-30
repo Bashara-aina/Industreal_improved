@@ -1,10 +1,11 @@
-# 68: Master Prompt — Final Push to RF10 and AHFE Paper [2026-06-30]
+# 68: Master Prompt — Final Push to RF10 and AAIML Paper [2026-06-30]
 
 ## Who We Are
 
 Training a multi-task assembly verification model (5 tasks, ConvNeXt-Tiny backbone,
-FPN neck) on the IndustReal dataset for an AHFE 2026 Hawaii paper. Running on
-RTX 5060 Ti 16GB (GPU 1) with a second RTX 3060 12GB (GPU 0) sitting idle.
+FPN neck) on the IndustReal dataset for an AAIML 2027 Tokyo paper (IEEE Xplore,
+deadline Oct 10, 2026). Running on RTX 5060 Ti 16GB (GPU 1) with a second
+RTX 3060 12GB (GPU 0) sitting idle.
 
 ## What's Changed Since v12 (File 59)
 
@@ -102,7 +103,7 @@ structure. We need Opus to validate the new framing before we write.
    Model uses 6GB on GPU 1. GPU 0 has 12GB free.
 
 ### Paper (8-10)
-8. **Does the reframed abstract in file 66 work for AHFE EIC track?** The ethics
+8. **Does the reframed abstract in file 66 work for AAIML EIC/PC track?** The ML
    hook is: consumer GPU → on-device processing → no cloud dependency → worker
    privacy (IEEE 7005-2021). Is that sufficient for the EIC track?
 9. **Head pose disclosure:** If normalization validates 8.71°, do we need to
@@ -119,7 +120,7 @@ Read this one first (68), then the specific file for each problem:
 |------|-------|---------------|
 | 64 | Subprocess evaluation design | Design the SIGKILL architecture |
 | 65 | Head pose data normalization | Verify the fix approach |
-| 66 | Paper reframing for AHFE | Validate abstract + structure |
+| 66 | Paper reframing for AAIML | Validate abstract + structure |
 | 67 | RF10 training roadmap | 10 strategic decisions on schedule/tuning |
 | **68 (this)** | Master prompt | All of the above |
 
