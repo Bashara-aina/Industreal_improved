@@ -4427,12 +4427,17 @@ def main(args):
                                 # Non-OOM exception: check if it has "empty batch" or "act_preds" in message
                                 # These are often recoverable if we reduce eval scope
                                 exc_str = str(exc)
+                                is_recoverable = False
                                 if 'empty' in exc_str.lower() and ('act_preds' in exc_str or 'batch' in exc_str.lower()):
+                                    is_recoverable = True
+                                if 'timeout' in exc_str.lower() or 'timed out' in exc_str.lower() or isinstance(exc, TimeoutError):
+                                    is_recoverable = True
                                     logger.warning(
-                                        f'Validation non-OOM exception (possibly recoverable): {exc_str[:200]}'
+                                        f'[EVAL TIMEOUT] evaluate_all timed out — reducing scope and retrying: {exc_str[:200]}'
                                     )
-                                    # Reduce scope and retry, but only once — don't loop 4x
-                                    if val_attempt == 1:
+                                if is_recoverable:
+                                    # Reduce scope and retry until we exhaust attempts
+                                    if val_attempt <= 2:
                                         val_batch_size_rt = max(1, val_batch_size_rt // 2)
                                         val_workers_rt = 0  # HARDENED: workers only used on retried OOM path
                                         val_prefetch_rt = 1
@@ -4509,12 +4514,7 @@ def main(args):
                     else:
                         logger.warning(
                             f'  [VAL_EMPTY] epoch {epoch} val_metrics is EMPTY — '
-                            f'this will cause double-eval. Raising to retry.'
-                        )
-                        raise RuntimeError(
-                            f'VAL_EMPTY: evaluate_all(epoch={epoch}) returned empty metrics. '
-                            f'Expected non-empty dict, got {val_metrics}. '
-                            f'Raising to trigger epoch retry loop.'
+                            f'skipping checkpoint and patience update.'
                         )
 
                     if ema_warmed:
