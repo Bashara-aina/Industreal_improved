@@ -4392,14 +4392,26 @@ def main(args):
                     torch.cuda.empty_cache()  # Clear cached allocator memory before validation
                     try:
                         try:
-                            val_metrics = evaluate_all(
-                                model,
-                                criterion,
-                                val_loader,
-                                device,
-                                max_batches=val_max_batches_rt,
-                                epoch=epoch,
-                            )
+                            # [CUDA-HANG FIX 2026-06-30] SIGALRM timeout for evaluate_all.
+                            # CUDA kernel hangs (e.g. GroupNorm) do NOT raise Python exceptions
+                            # and block the thread forever. SIGALRM works from the main thread.
+                            _eval_timeout = int(getattr(C, 'EVAL_TIMEOUT_SECONDS', 900))  # 15 min
+                            def _eval_timeout_handler(sig, frm):
+                                raise TimeoutError(f'[EVAL TIMEOUT] evaluate_all exceeded {_eval_timeout}s')
+                            _eval_old_alarm = signal.signal(signal.SIGALRM, _eval_timeout_handler)
+                            signal.alarm(_eval_timeout)
+                            try:
+                                val_metrics = evaluate_all(
+                                    model,
+                                    criterion,
+                                    val_loader,
+                                    device,
+                                    max_batches=val_max_batches_rt,
+                                    epoch=epoch,
+                                )
+                            finally:
+                                signal.alarm(0)
+                                signal.signal(signal.SIGALRM, _eval_old_alarm)
                             _check_per_class_activity_sanity(val_metrics, epoch)
                             torch.cuda.empty_cache()  # Clear cached allocator memory after validation success
                         except Exception as exc:
