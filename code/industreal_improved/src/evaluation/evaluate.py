@@ -3446,7 +3446,7 @@ def evaluate_all(
         _correct = int((_ap == _ag).sum()) if _ap.shape[0] == _n else -1
         _na_gt = int((_ag == 0).sum())          # class 0 == NA
         _na_pred = int((_ap == 0).sum())
-        num_cls = int(getattr(C, 'NUM_CLASSES_ACT', max(int(_ag.max()), int(_ap.max())) + 1))
+        num_cls = int(getattr(C, 'NUM_ACT_OUTPUTS', getattr(C, 'NUM_CLASSES_ACT', max(int(_ag.max()), int(_ap.max())) + 1)))
         logger.info(
             f'  [DEBUG] activity: n={_n}  '
             f'frame_acc={_correct}/{_n}={_correct/max(_n,1):.4f}  '
@@ -3505,7 +3505,7 @@ def evaluate_all(
         try:
             act_metrics = compute_activity_metrics(
                 all_act_gt, all_act_pred, all_act_logits,
-                class_names=C.ACT_CLASS_NAMES,
+                class_names=getattr(C, 'ACT_OUTPUT_NAMES', C.ACT_CLASS_NAMES),  # verb-grouping aware (file 75)
                 save_dir=save_dir,
                 clip_ids=np.asarray(act_clip_ids) if act_clip_ids else None,
                 # [FIX 2026-06-15] pass frame indices so the 16-uniform-frame clip protocol
@@ -3533,7 +3533,7 @@ def evaluate_all(
         try:
             report_per_class_accuracy(
                 act_metrics.get('act_confusion_matrix', []),
-                class_names=C.ACT_CLASS_NAMES,
+                class_names=getattr(C, 'ACT_OUTPUT_NAMES', C.ACT_CLASS_NAMES),  # verb-grouping aware (file 75)
                 k=5,
             )
         except Exception as _rpca_exc:
@@ -4400,7 +4400,7 @@ Examples:
             Path(save_dir).mkdir(parents=True, exist_ok=True)
 
             criterion = MultiTaskLoss(
-                num_classes_act=C.NUM_CLASSES_ACT,
+                num_classes_act=int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_CLASSES_ACT)),  # verb-grouping aware (file 75)
                 num_psr_components=C.NUM_PSR_COMPONENTS,
             ).to(device)
 
@@ -4448,21 +4448,22 @@ Examples:
 
                 # Doc 03 Phase 3: Per-class F1 CSV + top-k/bottom-k plots
                 if 'act_per_class_report' in results and 'act_per_class_acc' in results:
+                    _act_names = getattr(C, 'ACT_OUTPUT_NAMES', C.ACT_CLASS_NAMES)  # verb-grouping aware (file 75)
                     _save_per_class_f1_csv(
                         results['act_per_class_report'],
                         results['act_per_class_acc'],
-                        C.ACT_CLASS_NAMES,
+                        _act_names,
                         Path(save_dir),
                         split=args.split,
                     )
                     act_f1 = np.array([
-                        results['act_per_class_report'].get(C.ACT_CLASS_NAMES[i], {}).get('f1-score', float('nan'))
-                        for i in range(len(C.ACT_CLASS_NAMES))
+                        results['act_per_class_report'].get(_act_names[i], {}).get('f1-score', float('nan'))
+                        for i in range(len(_act_names))
                     ])
                     if not np.all(np.isnan(act_f1)):
                         _plot_topk_bottomk_classes(
                             act_f1,
-                            C.ACT_CLASS_NAMES,
+                            _act_names,
                             'Activity_F1',
                             Path(save_dir),
                             k=5,

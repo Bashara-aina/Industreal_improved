@@ -3413,7 +3413,7 @@ def main(args):
             logger.info(f'  {k:15s}: {v:>10,}')
 
     criterion = MultiTaskLoss(
-        num_classes_act=C.NUM_CLASSES_ACT,  # ActivityHead outputs 75 classes (indices 0-74; class 0=NA, classes 1-74 map to AR actions)
+        num_classes_act=int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_CLASSES_ACT)),  # verb-grouping aware (file 75); 75 raw or ~13 verb groups
         num_psr_components=C.NUM_PSR_COMPONENTS,
         train_det=CFG_TRAIN_DET,
         train_pose=CFG_TRAIN_HEAD_POSE,
