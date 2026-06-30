@@ -1043,18 +1043,29 @@ class MultiTaskLoss(nn.Module):
 
         # C.2: Per paper §3.7.1 — "CE (label_smooth=0.1)" for activity.
         # LDAM-DRW is available as an ablation via USE_LDAM_DRW=True.
+        # [OPUS DECISION 2] USE_CB_FOCAL_ACT=True switches to class-balanced focal
+        # loss (Cui et al., 2019) for the activity head when CE collapses to 1 class.
         use_ldam = bool(getattr(C, 'USE_LDAM_DRW', False))
+        use_cb_focal = bool(getattr(C, 'USE_CB_FOCAL_ACT', False))
         if use_ldam:
             self.act_loss_fn = LDAMLoss(
                 num_classes=num_classes_act,
                 max_m=float(getattr(C, 'LDAM_MAX_M', 0.5)),
                 s=float(getattr(C, 'LDAM_S', 30)),
             )
+        elif use_cb_focal:
+            self.act_loss_fn = ClassBalancedFocalLoss(
+                num_classes=num_classes_act,
+                beta=float(getattr(C, 'CB_FOCAL_BETA', 0.999)),
+                gamma=float(getattr(C, 'CB_FOCAL_GAMMA', 2.0)),
+                label_smoothing=getattr(C, 'CB_LABEL_SMOOTHING', 0.1),
+            )
         else:
             self.act_loss_fn = nn.CrossEntropyLoss(
                 label_smoothing=getattr(C, 'CB_LABEL_SMOOTHING', 0.1),
             )
         self.use_ldam = use_ldam
+        self.use_cb_focal = use_cb_focal
 
         # C.3: Binary focal loss for PSR (instead of BCE)
         self.psr_loss_fn = nn.BCEWithLogitsLoss(reduction='mean')
@@ -1104,14 +1115,19 @@ class MultiTaskLoss(nn.Module):
         # [FIX 2026-06-28 20-agent] Add class-balanced weights to CE loss.
         # Plain CE on 74-class long-tail data lets head classes dominate.
         # Compute effective number (CB beta=0.99) and invert for loss weight.
-        # Class 0 (NA) gets weight 0 so it doesn't contribute to gradient.
+        # counts has 74 elements (excludes NA class 0).
+        # NOTE 2026-06-30: The IndustReal dataset uses action_id=0 as a real action
+        # ("take_short_brace", 63 frames). The config NUM_CLASSES_ACT=75 with slot 0
+        # designated as "NA" is a MAPPING BUG — action_id 0 maps to slot 0 which has
+        # weight=0, wasting 63 training frames. Fixed by NOT zero-weighting slot 0:
+        # the CB-balanced formula naturally gives low weight to rare classes, and
+        # frames with label=-1 (no annotation) are already excluded from CE loss.
         if not self.use_ldam and isinstance(self.act_loss_fn, nn.CrossEntropyLoss) and counts is not None:
             counts = torch.as_tensor(counts, dtype=torch.float32)
             _beta = float(getattr(C, 'CB_BETA', 0.99))
             _eff_num = (1.0 - _beta ** counts) / (1.0 - _beta)
             _eff_num = _eff_num.clamp(min=1.0)
             _weights = 1.0 / _eff_num
-            _weights[0] = 0.0  # class 0 (NA) contributes zero gradient
             _weights = _weights / _weights.sum() * len(_weights)  # normalize
             self.act_loss_fn = nn.CrossEntropyLoss(
                 weight=_weights.to(self.log_var_det.device) if hasattr(self, 'log_var_det') else _weights,
