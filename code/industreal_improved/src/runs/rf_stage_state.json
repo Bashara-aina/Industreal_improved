@@ -1,17 +1,44 @@
 {
   "current_stage": "rf4",
   "stage_index": 3,
-  "status": "running",
-  "training_pid": 3573032,
-  "epoch": 2,
-  "best_metric": 0.41597024177578984,
+  "status": "idle",
+  "training_pid": null,
+  "epoch": 3,
+  "best_metric": 0.44498860323233125,
   "best_metrics": {
-    "det_mAP50": 0.10584570667181063,
-    "det_mAP50_pc": 0.14942923294843855,
-    "det_n_present_classes": 17,
-    "forward_angular_MAE_deg": 8.341194152832031
+    "det_mAP50": 0.145280089736508,
+    "det_mAP50_pc": 0.193706786315344,
+    "det_n_present_classes": 18,
+    "forward_angular_MAE_deg": 9.475595474243164
   },
   "gate_passed": false,
+  "checklist_results": {
+    "gate": {
+      "passed": false,
+      "details": {}
+    },
+    "health": {
+      "passed": false,
+      "details": {}
+    },
+    "convergence": {
+      "passed": false,
+      "details": {}
+    },
+    "validation": {
+      "passed": false,
+      "details": {}
+    },
+    "stability": {
+      "passed": false,
+      "details": {}
+    }
+  },
+  "metric_history": [],
+  "retry_count": 0,
+  "current_strategy": "default",
+  "strategies_tried": [],
+  "det_health_history": [],
   "stage_history": [
     {
       "stage": "rf1",
@@ -47,10 +74,16 @@
       "timestamp": "2026-06-28T20:00:00+00:00"
     }
   ],
-  "max_epochs": 20,
-  "last_heartbeat": "2026-06-29T13:27:04.132292+00:00",
+  "issues_log": [],
+  "last_check_time": null,
+  "run_start_time": "2026-06-30T10:49:18.671037+00:00",
+  "log_cursor": 13061580,
+  "cross_stage_memory": {},
+  "max_epochs": 23,
+  "last_heartbeat": "2026-06-30T10:58:50.891273+00:00",
   "batch": {
-    "current": 350,
-    "total": 6580
-  }
+    "current": 500,
+    "total": 3469
+  },
+  "_last_supervisor_run": 0
 }
