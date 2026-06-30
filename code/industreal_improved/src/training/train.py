@@ -2606,6 +2606,25 @@ def _reinit_dead_heads(model, reinit_pi=0.01):
                     nn.init.zeros_(m.bias)
             init_count['act'] += 1
             logger.info('  [REINIT] act.activity_classifier: std=0.01 + bias=-0.5')
+        if getattr(ah, 'simple_classifier', None) is not None:
+            _linears = [m for m in ah.simple_classifier.modules() if isinstance(m, nn.Linear)]
+            for i, m in enumerate(_linears):
+                # Last Linear is the logit layer: small std + negative bias to keep
+                # initial logits low and avoid the majority-class collapse attractor.
+                if i == len(_linears) - 1:
+                    nn.init.normal_(m.weight, std=0.01)
+                    if m.bias is not None:
+                        nn.init.constant_(m.bias, -0.5)
+                else:
+                    nn.init.xavier_uniform_(m.weight)
+                    if m.bias is not None:
+                        nn.init.zeros_(m.bias)
+            for m in ah.simple_classifier.modules():
+                if isinstance(m, nn.LayerNorm):
+                    nn.init.ones_(m.weight)
+                    nn.init.zeros_(m.bias)
+            init_count['act'] += 1
+            logger.info('  [REINIT] act.simple_classifier: hidden Xavier + logit std=0.01 bias=-0.5')
         if hasattr(ah, 'tcn'):
             for m in ah.tcn.modules():
                 if isinstance(m, nn.Conv1d):
