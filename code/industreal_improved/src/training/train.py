@@ -1272,6 +1272,16 @@ def train_one_epoch(
                             _act_grad_norm = 0.0
                     else:
                         _act_grad_norm = 0.0
+                    # [GC 2026-06-30] Gradient centralization for activity head — removes the
+                    # common-mode gradient that drives all weights toward the same degenerate
+                    # class (predicting 1/75 classes). For each param, subtract the mean across
+                    # its output dimension so the remaining gradient is purely discriminative.
+                    for _n, _p in model.named_parameters():
+                        if _n.startswith('activity_head') and _p.grad is not None:
+                            if _p.dim() > 1:
+                                _p.grad.sub_(_p.grad.mean(dim=tuple(range(1, _p.dim())), keepdim=True))
+                            else:
+                                _p.grad.sub_(_p.grad.mean())
                     _total_grad_norm = torch.nn.utils.clip_grad_norm_(
                         list(model.parameters()) + list(criterion.parameters()),
                         C.GRAD_CLIP_NORM,
@@ -1716,6 +1726,14 @@ def train_one_epoch(
                 _act_params = [p for n, p in model.named_parameters() if n.startswith('activity_head') and p.grad is not None]
                 if _act_params:
                     torch.nn.utils.clip_grad_norm_(_act_params, _act_gc)
+            # [GC 2026-06-30] Gradient centralization for activity head — removes the
+            # common-mode gradient that drives all weights toward the same degenerate class.
+            for _n, _p in model.named_parameters():
+                if _n.startswith('activity_head') and _p.grad is not None:
+                    if _p.dim() > 1:
+                        _p.grad.sub_(_p.grad.mean(dim=tuple(range(1, _p.dim())), keepdim=True))
+                    else:
+                        _p.grad.sub_(_p.grad.mean())
             # [REINIT-HEADS] Detection head gradient warmup after reinit
             # Proper fix: ZERO detection head gradients on frames with NO GT boxes.
             # 99.3% of RF1 frames have zero GT boxes, producing exclusively negative
@@ -2017,6 +2035,7 @@ def train_one_epoch(
                         _hb_f.write(f'gpu_alloc={_hb_alloc:.2f}GB reserved={_hb_resv:.2f}GB\n')
             except Exception:
                 pass  # Heartbeat is best-effort, never crash for it
+
 
         # --- DataLoader worker health check every 100 batches (Bashara 2026-05-09) ---
         # Catch DataLoader worker crashes (common cause of training death).
@@ -3219,8 +3238,8 @@ def main(args):
         import pandas as pd
         train_csv_path = C.TRAIN_CSV
         val_csv_path = C.VAL_CSV
-        train_df = pd.read_csv(train_csv_path)
-        val_df = pd.read_csv(val_csv_path)
+        train_df = pd.read_csv(train_csv_path, names=['recording_id', 'state_id', 'activity', 'start_frame', 'end_frame'])
+        val_df = pd.read_csv(val_csv_path, names=['recording_id', 'state_id', 'activity', 'start_frame', 'end_frame'])
         n_train_recs = train_df['recording_id'].nunique()
         n_val_recs = val_df['recording_id'].nunique()
         max_recordings_train = max(4, int(n_train_recs * subset_ratio))
@@ -3393,7 +3412,7 @@ def main(args):
         _teacher_cache_dir = getattr(C, 'TEACHER_CACHE_DIR', 'runs/teacher_preds')
         distill_loss_fn.set_teacher_cache(_teacher_cache_dir)
 
-    backbone_params, det_head_params, head_params, activity_psr_params, det_head_bias_params, bias_params = [], [], [], [], [], []
+    backbone_params, det_head_params, head_params, activity_params, psr_params, det_head_bias_params, bias_params = [], [], [], [], [], [], []
     videomae_params = []
     loss_params = list(criterion.parameters())
     for name, param in model.named_parameters():
@@ -3419,12 +3438,10 @@ def main(args):
         elif 'bias' in name:
             # Doc 03: bias params get 0.3× head LR to prevent collapse from locked EMA
             bias_params.append(param)
-        elif 'activity_head' in name or 'psr_head' in name:
-            # [FIX] STAGE3_WARMUP_EPOCHS ramp from config.py:378
-            # Split activity_head + psr_head into a separate param group so the
-            # Stage 3 warmup ramp can scale their LR independently from
-            # already-warm det / head_pose heads.
-            activity_psr_params.append(param)
+        elif 'activity_head' in name:
+            activity_params.append(param)
+        elif 'psr_head' in name:
+            psr_params.append(param)
         elif name.startswith('detection_head'):
             # Separate param group with DET_LR_MULTIPLIER to escape near-zero regime
             det_head_params.append(param)
@@ -3459,6 +3476,7 @@ def main(args):
     det_head_lr = head_lr * float(getattr(C, 'DET_LR_MULTIPLIER', 5.0))
     det_head_bias_lr = head_lr * DET_BIAS_LR_FACTOR
     bias_lr = head_lr * BIAS_LR_FACTOR
+    activity_head_lr = head_lr * float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0))
 
     try:
         from lion_pytorch import Lion
@@ -3474,7 +3492,8 @@ def main(args):
             {'params': backbone_params,        'lr': backbone_lr * 0.3},
             {'params': det_head_params,         'lr': det_head_lr},
             {'params': head_params,             'lr': head_lr},
-            {'params': activity_psr_params,     'lr': head_lr},
+            {'params': activity_params,         'lr': activity_head_lr},
+            {'params': psr_params,              'lr': head_lr},
             {'params': det_head_bias_params,    'lr': det_head_bias_lr},
             {'params': bias_params,             'lr': bias_lr},
             {'params': videomae_params,         'lr': 0.0},  # [OPUS FIX #3] pre-registered frozen; lr toggled at unfreeze
@@ -3483,13 +3502,14 @@ def main(args):
             param_groups.append({'params': loss_params, 'lr': head_lr})
         _effective_wd = C.WEIGHT_DECAY * 3  # constant — NOT scaled by _stage_lr_mult
         optimizer = Lion(param_groups, weight_decay=_effective_wd)
-        logger.info('Optimizer: Lion (backbone=0.1x, det_head=%gx, heads=1x, act/psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g)' % (C.DET_LR_MULTIPLIER, DET_BIAS_LR_FACTOR, _effective_wd))
+        logger.info('Optimizer: Lion (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)), DET_BIAS_LR_FACTOR, _effective_wd))
     else:
         param_groups = [
             {'params': backbone_params,        'lr': backbone_lr},
             {'params': det_head_params,         'lr': det_head_lr},
             {'params': head_params,             'lr': head_lr},
-            {'params': activity_psr_params,     'lr': head_lr},
+            {'params': activity_params,         'lr': activity_head_lr},
+            {'params': psr_params,              'lr': head_lr},
             {'params': det_head_bias_params,    'lr': det_head_bias_lr},
             {'params': bias_params,             'lr': bias_lr},
             {'params': videomae_params,         'lr': 0.0},  # [OPUS FIX #3] pre-registered frozen; lr toggled at unfreeze
@@ -3498,16 +3518,17 @@ def main(args):
             param_groups.append({'params': loss_params, 'lr': head_lr})
         _effective_wd = C.WEIGHT_DECAY  # constant — NOT scaled by _stage_lr_mult
         optimizer = torch.optim.AdamW(param_groups, weight_decay=_effective_wd)
-        logger.info('Optimizer: AdamW with differential LR (backbone=0.1x, det_head=%gx, heads=1x, act/psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g)' % (C.DET_LR_MULTIPLIER, DET_BIAS_LR_FACTOR, _effective_wd))
+        logger.info('Optimizer: AdamW with differential LR (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)), DET_BIAS_LR_FACTOR, _effective_wd))
 
     # Snapshot initial param-group LRs so --reset-scheduler can restore them after
     # optimizer.load_state_dict overwrites them with checkpoint values.
     _init_pg_lrs = [pg['lr'] for pg in optimizer.param_groups]
 
     # Param-group index map (used by Stage 3 warmup ramp + videomae unfreeze toggle):
-    #   0 = backbone, 1 = det_head, 2 = head, 3 = activity_psr, 4 = det_head_bias, 5 = bias, 6 = videomae, [7 = loss if loss_params]
-    ACTIVITY_PSR_PARAM_GROUP_IDX = 3
-    VIDEOMAE_PARAM_GROUP_IDX = 6
+    #   0 = backbone, 1 = det_head, 2 = head, 3 = activity, 4 = psr, 5 = det_head_bias, 6 = bias, 7 = videomae, [8 = loss if loss_params]
+    ACTIVITY_PARAM_GROUP_IDX = 3
+    PSR_PARAM_GROUP_IDX = 4
+    VIDEOMAE_PARAM_GROUP_IDX = 7
 
     _stage_warmup_mult = float(os.environ.get('_STAGE_WARMUP_MULT', 1.0))
     _stage_warmup_epochs = int(C.WARMUP_EPOCHS * _stage_warmup_mult)
@@ -3530,13 +3551,14 @@ def main(args):
             backbone_lr_local * 0.5,  # idx 0: backbone
             head_lr_local * 0.5 * C.DET_LR_MULTIPLIER,  # idx 1: det_head
             head_lr_local * 0.5,      # idx 2: head
-            head_lr_local * 0.5,      # idx 3: activity_psr
-            det_head_bias_lr_local * 0.5,  # idx 4: det_head_bias (NEW)
-            bias_lr_local * 0.5,      # idx 5: bias
-            0.0,                      # idx 6: videomae (frozen at start, toggled at unfreeze)
+            head_lr_local * 0.5 * float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)),  # idx 3: activity
+            head_lr_local * 0.5,      # idx 4: psr
+            det_head_bias_lr_local * 0.5,  # idx 5: det_head_bias
+            bias_lr_local * 0.5,      # idx 6: bias
+            0.0,                      # idx 7: videomae (frozen at start, toggled at unfreeze)
         ]
         if loss_params:
-            max_lr.append(head_lr_local * 0.5)  # idx 7 (if present): loss
+            max_lr.append(head_lr_local * 0.5)  # idx 8 (if present): loss
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=max_lr,
@@ -3582,7 +3604,7 @@ def main(args):
     # newly-unfrozen heads don't blow up gradient magnitude right after Stage 2.
     stage3_warmup_state = {
         'active': False,
-        'param_group_idx': ACTIVITY_PSR_PARAM_GROUP_IDX,
+        'param_group_idx': ACTIVITY_PARAM_GROUP_IDX,
         'base_lr': head_lr,
         'start_epoch': -1,
         'warmup_epochs': int(getattr(C, 'STAGE3_WARMUP_EPOCHS', 3)),
@@ -3901,6 +3923,38 @@ def main(args):
     # fast-forward the DataLoader iterator without re-computing forward passes.
     # _resume_batch_info is set in the resume block above.
     _resume_batch = _resume_batch_info[0] if '_resume_batch_info' in dir() and _resume_batch_info[0] > 0 else 0
+
+    # --- TRAINING WATCHDOG THREAD (Bashara 2026-06-30) ---
+    # Monitors the GPU heartbeat file in a separate daemon thread. If the heartbeat
+    # stops updating for > 600 seconds (10 min), the training has hung in a CUDA
+    # kernel or DataLoader deadlock. Kills the process so the supervisor can restart.
+    # The pre-val checkpoint ensures no epoch progress is lost.
+    # Fixed: only kill if the heartbeat PID matches OUR PID (avoids killing on stale
+    # heartbeat from a previous process that wrote to the same directory).
+    _watchdog_ckpt_dir = ckpt_dir
+    _watchdog_active = True
+    _watchdog_pid = os.getpid()
+    def _watchdog_loop():
+        while _watchdog_active:
+            _hb_path = _watchdog_ckpt_dir / '.gpu_heartbeat'
+            if _hb_path.exists():
+                try:
+                    _hb_content = _hb_path.read_text().strip()
+                    if _hb_content:
+                        _hb_parts = _hb_content.split('\n')[0].split('|')
+                        _hb_ts = float(_hb_parts[0])
+                        _hb_pid = int(_hb_parts[3]) if len(_hb_parts) > 3 else -1
+                        if _hb_pid == _watchdog_pid:
+                            _hb_age = time.time() - _hb_ts
+                            if _hb_age > 600:
+                                msg = f'[WATCHDOG] GPU heartbeat stale ({_hb_age:.0f}s > 600s, pid={_hb_pid}) — killing process'
+                                print(msg, flush=True)
+                                os._exit(1)
+                except Exception:
+                    pass
+            time.sleep(30)
+    _watchdog_thread = threading.Thread(target=_watchdog_loop, daemon=True)
+    _watchdog_thread.start()
 
     try:
         _train_start_epoch = _override_start_epoch if _override_start_epoch is not None else start_epoch
@@ -4320,6 +4374,31 @@ def main(args):
                 f'batches={train_metrics["num_batches"]}, loss={train_metrics["total"]:.4f}'
             )
             _write_stage_heartbeat(epoch, training_pid=os.getpid())
+
+            # --- PRE-VAL CHECKPOINT (Bashara 2026-06-30) ---
+            # Save latest.pth immediately after training completes, before validation
+            # runs. If validation crashes, the next resume restores the post-training
+            # state instead of going back an epoch. crash_recovery.pth also exists but
+            # is not loaded automatically on resume — this ensures latest.pth tracks
+            # the latest trained (not validated) epoch.
+            _atomic_save({
+                'epoch':            epoch,
+                'model':           model.state_dict(),
+                'optimizer':       optimizer.state_dict(),
+                'scheduler':       scheduler.state_dict(),
+                'scaler':          scaler.state_dict(),
+                'best_metric':     best_metric,
+                'patience_counter': patience_counter,
+                'ema_shadow':      {k: v.clone() for k, v in ema.shadow.items()} if ema is not None else {},
+                'criterion': {
+                    'log_var_det': criterion.log_var_det.data.clone(),
+                    'log_var_pose': criterion.log_var_pose.data.clone(),
+                    'log_var_act': criterion.log_var_act.data.clone(),
+                    'log_var_psr': criterion.log_var_psr.data.clone(),
+                } if criterion is not None else {},
+                'global_step':   getattr(C, '_global_step', 0),
+            }, ckpt_dir / 'latest.pth')
+            logger.info(f'  [PRE_VAL_CKPT] latest.pth updated with epoch {epoch} post-training state')
 
             val_metrics = {}
             if (epoch + 1) % C.VAL_EVERY == 0:
@@ -4817,8 +4896,10 @@ def main(args):
 
             log_file.write(json.dumps(_sanitize(record), default=str) + '\n')
             log_file.flush()
+        _watchdog_active = False
 
     finally:
+        _watchdog_active = False
         log_file.close()
 
     # =========================================================================
