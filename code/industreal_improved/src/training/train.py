@@ -1457,6 +1457,19 @@ def train_one_epoch(
                     f'mean={_hcs.mean():.6f} std={_hcs.std():.6f} '
                     f'near_zero={_h_nz:.4f}'
                 )
+                # [FIX 2026-07-01 agent audit] Log GT-bearing batch fraction.
+                # Counts how many frames in this batch have >0 GT boxes.
+                _gt_frames = sum(
+                    1 for t in targets.get('detection', [])
+                    if t.get('boxes') is not None and t['boxes'].shape[0] > 0
+                )
+                _total_frames = len(targets.get('detection', []))
+                if _total_frames > 0:
+                    logger.info(
+                        f'  [DET-HEALTH step={step}] det_gt_fraction: '
+                        f'{_gt_frames}/{_total_frames}={_gt_frames/max(_total_frames,1):.2f} '
+                        f'  (target DET_GT_FRAME_FRACTION={getattr(C, "DET_GT_FRAME_FRACTION", 0.40):.2f})'
+                    )
 
         # [DIAGNOSTIC] Verify loss tensor is connected to computation graph
         if step == 0 and not loss.requires_grad and loss.grad_fn is None:
@@ -3582,15 +3595,15 @@ def main(args):
             {'params': head_params,             'lr': head_lr},
             {'params': activity_params,         'lr': activity_head_lr},
             {'params': psr_params,              'lr': head_lr},
-            {'params': det_head_bias_params,    'lr': det_head_bias_lr},
-            {'params': bias_params,             'lr': bias_lr},
+            {'params': det_head_bias_params,    'lr': det_head_bias_lr,  'weight_decay': 0.0},
+            {'params': bias_params,             'lr': bias_lr,           'weight_decay': 0.0},
             {'params': videomae_params,         'lr': 0.0},  # [OPUS FIX #3] pre-registered frozen; lr toggled at unfreeze
         ]
         if loss_params:
             param_groups.append({'params': loss_params, 'lr': head_lr})
         _effective_wd = C.WEIGHT_DECAY  # constant — NOT scaled by _stage_lr_mult
         optimizer = torch.optim.AdamW(param_groups, weight_decay=_effective_wd)
-        logger.info('Optimizer: AdamW with differential LR (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)), DET_BIAS_LR_FACTOR, _effective_wd))
+        logger.info('Optimizer: AdamW with differential LR (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g, bias/norm WD=0)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)), DET_BIAS_LR_FACTOR, _effective_wd))
 
     # Snapshot initial param-group LRs so --reset-scheduler can restore them after
     # optimizer.load_state_dict overwrites them with checkpoint values.
@@ -3631,17 +3644,23 @@ def main(args):
         ]
         if loss_params:
             max_lr.append(head_lr_local * 0.5)  # idx 8 (if present): loss
+        # [FIX 2026-07-01 agent audit] OneCycleLR was built with steps_per_epoch=len(train_loader)//accum_steps
+        # (~800) but scheduler.step() is called ONCE per epoch (line 4290), not per optimizer step.
+        # Result: OneCycleLR received only ~100 total steps vs expected ~80,000 — stayed in warmup phase
+        # for the entire training run, never reaching peak LR or cosine decay. Fix: steps_per_epoch=1
+        # so the scheduler's internal math (total_steps = epochs * steps_per_epoch = 100) matches
+        # the epoch-level stepping cadence. pct_start=0.1 gives 10 warmup epochs, 90 cosine-decay epochs.
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=max_lr,
             epochs=C.EPOCHS,
-            steps_per_epoch=len(train_loader) // train_accum_steps,
+            steps_per_epoch=1,
             pct_start=0.1,
             anneal_strategy='cos',
         )
         scheduler = SequentialLR(optimizer, [warmup, scheduler],
                                milestones=[_stage_warmup_epochs])
-        logger.info('Scheduler: OneCycleLR (pct_start=0.1, max_lr=[5e-5, 5e-4])')
+        logger.info('Scheduler: OneCycleLR (pct_start=0.1, steps_per_epoch=1, max_lr=[5e-5, 5e-4])')
     elif C.USE_COSINE_ANNEALING:
         cosine = CosineAnnealingWarmRestarts(
             optimizer, T_0=C.T_0, T_mult=C.T_mult, eta_min=1e-6
