@@ -68,25 +68,22 @@ KENDALL_STAGED_TRAINING = False  # Double curriculum disabled
 
 When True, losses.py had its own epoch-based curriculum (STAGE1_EPOCHS=5, STAGE2_EPOCHS=10) that duplicated the RF stage manager. Setting False makes the loss's staged_training a no-op — the RF stage manager is the sole curriculum. **Critical**: verify `apply_preset()` correctly sets `train_act`, `train_det`, `train_pose`, `train_psr` for each stage.
 
-### 1.6 Log-Var Device Management (losses.py:1206-1210)
+### 1.6 Log-Var Device Management (losses.py:1206-1210) — SAFE (not a bug)
 ```python
 if self.log_var_det.device != device:
     self.log_var_det.data = self.log_var_det.data.to(device)
     # ... same for log_var_pose, log_var_act, log_var_psr
 ```
 
-Log-var parameters are initialized on CPU and moved to GPU on first forward. This avoids GPU OOM at construction time. **Critical**: the `.data` assignment means the optimizer still holds the old CPU parameter — but since `to(device)` returns a new tensor, the optimizer's param group is stale. **Check**: does the optimizer reconstruct param groups after this device move? If not, the log-var gradients on CPU are never consumed.
+**This is NOT a bug.** The optimizer construction order in train.py ensures all log-var parameters are on GPU before optimizer creation:
 
-#### Opus must address this device-move bug specifically
+1. **train.py:3469**: `criterion = MultiTaskLoss(...).to(device)` — criterion AND all its parameters (including log_vars) moved to GPU inline at construction
+2. **train.py:3489**: `loss_params = list(criterion.parameters())` — captured AFTER `.to(device)`, so GPU-based
+3. **train.py:3592**: `optimizer = torch.optim.AdamW(param_groups, ...)` — optimizer built with already-on-GPU params
 
-The standard pattern is:
-```python
-self.log_var_det = nn.Parameter(torch.zeros(1).to(device))
-```
+The `.data` guard in losses.py:1206-1210 is **dead code** — it never fires because parameters are already on GPU by the time `forward()` is called. Even if it did fire, `nn.Parameter.data.to(device)` correctly updates the Parameter's storage in-place; the optimizer holds a reference to the `nn.Parameter` object, not a snapshot of its data pointer.
 
-The current code moves `.data` but the `nn.Parameter` wrapper stays on CPU. The optimizer (built before first forward) registered the CPU parameter. After the device move, the optimizer updates the OLD CPU tensor (which is detached from the computation graph because `.data` was used). **This means log-var never learns.**
-
-**Fix**: move the 4 log_var parameters to the correct device BEFORE optimizer construction, or rebuild the optimizer's param groups after the device move.
+**No fix needed. The log-var parameters learn correctly.**
 
 ---
 
@@ -246,7 +243,7 @@ At training step 0, 200, 400, etc., the training loop logs:
 
 | Risk | Likelihood | Mitigation |
 |------|-----------|------------|
-| **CRITICAL**: log-var device move bug (losses.py:1206-1210) — log-var parameters on CPU, optimizer registered CPU params, `.data` assignment leaves optimizer stale | **HIGH** | Fix: move log_var parameters to device BEFORE optimizer creation, or rebuild optimizer after first forward. See breakdown in §1.6 above. |
+| log-var device management (losses.py:1206-1210) — `.data` guard is dead code (params already on GPU via `criterion.to(device)` before optimizer build) | None | `criterion.to(device)` at train.py:3469 moves all params to GPU. The `.data` guard never fires. See §1.6 for full trace. |
 | KENDALL_HP_PREC_CAP prevents head pose from contributing at all | Medium | If head pose grad norm is 0.0 at step 200, the precision cap may be too aggressive. Check `exp(-s_head_pose)` and `exp(-s_det)` ratio. |
 | Without staged training, detection never gets a head start | Medium | Detection is designed for the fully multi-task setting (OHEM, detach, empty-frame sampling all assume other heads are active). If epoch-5 detection mAP is <0.01, consider 5-epoch detection-only warmup. |
 | PSR detached from backbone (DETACH_PSR_FPN=True) means backbone never learns PSR-relevant features | Low | PSR on per-frame data doesn't need backbone gradient. If PSR accuracy plateaus early, consider enabling gradient for PSR mid-training. |
@@ -276,4 +273,4 @@ At training step 0, 200, 400, etc., the training loop logs:
 - **Head pose forward-gaze MAE**: 8.71° (or better) — this is the established baseline
 - **Head pose position MAE**: < 20mm
 
-**If multiple heads fail simultaneously**: the issue is likely the log-var device bug (§1.6) or a gradient flow problem in the shared backbone. Run one diagnostic epoch with `SIMPLIFY_LOSS=True` and `ASSERT_AND_CRASH=True` to surface any NaN/inf issues early.
+**If multiple heads fail simultaneously**: the issue is likely a gradient flow problem in the shared backbone (not the log-var device — §1.6 confirmed safe). Run one diagnostic epoch with `SIMPLIFY_LOSS=True` and `ASSERT_AND_CRASH=True` to surface any NaN/inf issues early.

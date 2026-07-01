@@ -68,12 +68,17 @@ reg_loss = reg_loss * _reg_ramp
 ```
 At step 0: 0.01 × reg_loss (negligible). Step 500: ~0.5 ×. Step 1000: 1.0 ×.
 
-**Fix 2: Detach Reg from FPN (config.py:879-880)**
+**Fix 2: Detach Reg from FPN (config.py:888-890) — NOTE: ALL RF PRESETS OVERRIDE TO False**
 ```python
-DETACH_REG_FPN = True
+DETACH_REG_FPN = True   # Global default (no-preset runs)
+# BUT every RF stage preset overrides to False:
+# RF1: 'detach_reg_fpn': False  — regression gradient MUST reach FPN during bootstrap
+#     (reg warmup, not detach, is the correct gradient shock guard)
+# RF2-RF10: all set 'detach_reg_fpn': False
+# See config.py apply_preset() lines 1296-1305 for RF1's explicit rationale.
 ```
 
-When True, `reg_subnet` receives `feat.detach()` — regression gradients do NOT flow into shared FPN features. This is the root fix. Set True for RF1 (--reinit-heads), False for converged stages.
+After Opus v11 (2026-06-21), the reg-detach was disabled for ALL stages based on evidence that regression gradient signal is necessary for the FPN to escape background equilibrium. The `REINIT_REG_WARMUP_STEPS=1000` with `INIT_MULT=0.01` (Fix 1) provides sufficient gradient shock protection without severing the FPN gradient path.
 
 **Fix 3: GIoU Negative Floor (losses.py:1236-1246)**
 ```python
@@ -183,7 +188,7 @@ At `--reinit-heads`, every 50 steps logs `cls_mean`, `pos_mask`, `bestIoU_max`, 
 |------|-----------|------------|
 | Detection head converges to mAP50=0.05-0.10 (barely above chance) | Medium | This is the detection death-spiral recovery floor. If stuck here, train for 10+ epochs — slow improvement is normal for small-object detection on sparse GT. |
 | DET_OHEM_RATIO=2.0 too aggressive in low-pos batches (only 1-2 positives → only 2-4 negatives) | Low | The `DET_OHEM_MIN_NEG=32` floor guarantees at least 32 negatives even when positives are scarce. |
-| Detach_Reg_FPN=True in late stages prevents regression from improving FPN features | Low | Set `DETACH_REG_FPN=False` for RF5+ (after regression warmup period). `apply_preset()` should handle this. |
+| Detach_Reg_FPN=False in all stages — reg gradient reaches FPN, warmup is the guard | Low | Regression gradient flows into FPN in all stages. The warmup protects against shock during the first 1000 steps after --reinit-heads. No action needed. |
 | GIoU negative values (loss < 0) produce gradient that pushes Kendall log_var in wrong direction | Low | The zero floor at losses.py:1242 prevents negative loss_det from reaching Kendall. |
 | DET_CLASS_ALPHAS have wrong model indices after config rename | Low | Verify each class alpha maps to its model index. Index 20 (class 21) at alpha=0.96 is the most stuck class (train=709, AP=0.0) — if this is mis-indexed, that class never learns. |
 
@@ -194,7 +199,7 @@ At `--reinit-heads`, every 50 steps logs `cls_mean`, `pos_mask`, `bestIoU_max`, 
 | Epoch | Expected mAP50 | Notes |
 |-------|---------------|-------|
 | 0-2 | 0.0-0.005 | Warmup + OHEM stabilizing |
-| 3-5 | 0.01-0.05 | Positive gradient building, detach_reg prevents regression shock |
+| 3-5 | 0.01-0.05 | Positive gradient building, reg warmup prevents regression shock |
 | 6-10 | 0.05-0.15 | Stable training, slow climb |
 | 11-20 | 0.15-0.35 | Main improvement phase |
 | 21-50 | 0.35-0.55 | Convergence, diminishing returns |
@@ -216,4 +221,4 @@ At `--reinit-heads`, every 50 steps logs `cls_mean`, `pos_mask`, `bestIoU_max`, 
 
 **If all pass at epoch 5**: detection is on a healthy trajectory. Continue to convergence.
 
-**If fail (mAP50 < 0.005 at epoch 5)**: the death spiral is not broken. Increase `DET_GT_FRAME_FRACTION` to 0.95, decrease `DET_OHEM_RATIO` to 1.0, and verify `detach_reg_fpn=True` is active.
+**If fail (mAP50 < 0.005 at epoch 5)**: the death spiral is not broken. Increase `DET_GT_FRAME_FRACTION` to 0.95, decrease `DET_OHEM_RATIO` to 1.0.
