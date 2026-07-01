@@ -1509,7 +1509,7 @@ PRESETS = {
         'use_temporal_bank':  True,
         'use_hand_film':      True,
         'benchmark_mode':     False,
-        'batch_size':         4,
+        'batch_size':         2,
         'grad_accum_steps':   8,
         'zero_det_conf':      False,
         'staged_training':    False,

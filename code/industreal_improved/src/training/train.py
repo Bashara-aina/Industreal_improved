@@ -293,22 +293,19 @@ def seed_everything(seed: int = C.SEED) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    # [CRASH-HARDEN v2] Force CUDNN_DETERMINISTIC=True and disable benchmark
-    # to prevent nondeterministic CUDA kernel crashes (the root cause of the
-    # 2026-07-01 SIGABRT at epoch 6). cuDNN benchmark picks the fastest kernel
-    # at runtime, but some implementations have race conditions that trigger
-    # illegal-memory-access on Ampere+ architectures with expandable_segments.
-    # The ~5% perf loss from deterministic mode is dwarfed by a 100% crash rate.
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    # [CRASH-HARDEN v3] Keep cuDNN benchmark enabled so cuBLAS selects fast
+    # kernels for the large multiplies in the detection head at 720×1280
+    # resolution. CUDNN_DETERMINISTIC=True forced slow deterministic kernels
+    # that triggered repeated cudaErrorLaunchTimeout (kernel watchdog).
+    # Crash protection comes from CUDA_LAUNCH_BLOCKING=1 (set before torch
+    # import) which catches async errors as Python exceptions, and the
+    # BaseException retry loop. cuDNN non-determinism is acceptable in
+    # exchange for not timing out on every forward pass.
+    torch.backends.cudnn.deterministic = bool(getattr(C, 'CUDNN_DETERMINISTIC', False))
+    torch.backends.cudnn.benchmark = bool(getattr(C, 'CUDNN_BENCHMARK', True))
     if torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = bool(getattr(C, 'ALLOW_TF32', True))
         torch.backends.cudnn.allow_tf32 = bool(getattr(C, 'ALLOW_TF32', True))
-
-    try:
-        torch.use_deterministic_algorithms(True, warn_only=True)
-    except (AttributeError, TypeError):
-        pass
 
 
 def _prepare_images(images: torch.Tensor, device: torch.device, training: bool = True) -> torch.Tensor:
