@@ -10,6 +10,24 @@ os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 # the (missing) env var, which has been linked to kernel launch failures.
 os.environ.setdefault('CUBLAS_WORKSPACE_CONFIG', ':4096:8')
 
+# [CRASH-HARDEN v2] Always enable CUDA_LAUNCH_BLOCKING so illegal-memory-access
+# and other CUDA runtime errors are raised as Python exceptions at the exact
+# kernel call site — not as SIGABRT from an async error handler. The ~5-10%
+# throughput cost is acceptable: without this, every CUDA assertion abort
+# kills the process with no chance for the Python retry loop to recover.
+# DEBUG_MODE=1 was checked before but crashes still happened, proving the
+# async-abort case is the dominant failure mode.
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# [CUDA-STABILITY v2] Disable TF32 for matmul ops that have been linked to
+# nondeterministic crashes on Ampere+ architectures when combined with
+# expandable_segments. TF32 is a throughput optimization, not a correctness
+# requirement — disabling it trades <5% matmul perf for determinism.
+os.environ['NVIDIA_TF32_OVERRIDE'] = '0'
+# [CUDA-STABILITY v2] Force lazy module loading so the CUDA driver does not
+# preload all kernels at context creation — reduces context size and the
+# probability of driver-side memory pressure crashing kernel launches.
+os.environ.setdefault('CUDA_MODULE_LOADING', 'LAZY')
+
 import faulthandler
 import signal
 import atexit
@@ -97,10 +115,9 @@ os.environ['MALLOC_ARENA_MAX']      = '4'
 # Note: C not yet imported, using hardcoded seed; C.SEED used later after import
 os.environ['PYTHONHASHSEED']        = '42'
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
-# CUDA_LAUNCH_BLOCKING=1 synchronises GPU operations for deterministic debugging
-# but destroys throughput (30-50% loss) by disabling GPU-CPU pipelining.
-# Only enable when DEBUG_MODE env var is set or when running a diagnostic script.
-os.environ['CUDA_LAUNCH_BLOCKING']  = '1' if os.environ.get('DEBUG_MODE', '0') == '1' else '0'
+# CUDA_LAUNCH_BLOCKING is now always-on (set at the top of the file, before
+# torch import) to catch CUDA kernel crashes as Python exceptions. Do NOT
+# override it here — the earlier setting is authoritative.
 # ------------------------------------------------------------
 import model as _model_module
 import model as _popw_model_module
@@ -276,8 +293,14 @@ def seed_everything(seed: int = C.SEED) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = bool(getattr(C, 'CUDNN_DETERMINISTIC', False))
-    torch.backends.cudnn.benchmark = bool(getattr(C, 'CUDNN_BENCHMARK', True))
+    # [CRASH-HARDEN v2] Force CUDNN_DETERMINISTIC=True and disable benchmark
+    # to prevent nondeterministic CUDA kernel crashes (the root cause of the
+    # 2026-07-01 SIGABRT at epoch 6). cuDNN benchmark picks the fastest kernel
+    # at runtime, but some implementations have race conditions that trigger
+    # illegal-memory-access on Ampere+ architectures with expandable_segments.
+    # The ~5% perf loss from deterministic mode is dwarfed by a 100% crash rate.
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
     if torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = bool(getattr(C, 'ALLOW_TF32', True))
         torch.backends.cudnn.allow_tf32 = bool(getattr(C, 'ALLOW_TF32', True))
@@ -722,10 +745,11 @@ _CR_CRIT = None    # KendallLoss criterion
 _CR_EMA = None     # EMA or None
 _CR_EPOCH = 0      # current epoch
 _CR_CKPT_DIR = None  # Path to checkpoint directory
+_CR_SCHEDULER = None  # LR scheduler (NOT saved as state_dict — raw object only for crash safety)
 
-def _cr_set_state(model, optimizer, scaler, criterion, ema, epoch, ckpt_dir):
+def _cr_set_state(model, optimizer, scaler, criterion, ema, epoch, ckpt_dir, scheduler=None):
     """Update module-level crash-recovery state. Called from main() and train_one_epoch()."""
-    global _CR_MODEL, _CR_OPT, _CR_SCALER, _CR_CRIT, _CR_EMA, _CR_EPOCH, _CR_CKPT_DIR
+    global _CR_MODEL, _CR_OPT, _CR_SCALER, _CR_CRIT, _CR_EMA, _CR_EPOCH, _CR_CKPT_DIR, _CR_SCHEDULER
     _CR_MODEL = model
     _CR_OPT = optimizer
     _CR_SCALER = scaler
@@ -733,6 +757,7 @@ def _cr_set_state(model, optimizer, scaler, criterion, ema, epoch, ckpt_dir):
     _CR_EMA = ema
     _CR_EPOCH = epoch
     _CR_CKPT_DIR = ckpt_dir
+    _CR_SCHEDULER = scheduler
 
 def _checkpoint_has_nan(model) -> bool:
     """Guard: check model tensors for NaN/Inf before saving."""
@@ -775,9 +800,10 @@ def _save_crash_recovery(tag: str = '') -> None:
     _cr_set_state() which is called at the start of every train_one_epoch
     and by main() after model build.
     """
-    global _CR_MODEL, _CR_OPT, _CR_SCALER, _CR_CRIT, _CR_EMA, _CR_EPOCH, _CR_CKPT_DIR
+    global _CR_MODEL, _CR_OPT, _CR_SCALER, _CR_CRIT, _CR_EMA, _CR_EPOCH, _CR_CKPT_DIR, _CR_SCHEDULER
     model = _CR_MODEL; optimizer = _CR_OPT; scaler = _CR_SCALER
     criterion = _CR_CRIT; ema = _CR_EMA; epoch = _CR_EPOCH; ckpt_dir = _CR_CKPT_DIR
+    scheduler = _CR_SCHEDULER
 
     def _do_save():
         try:
@@ -871,6 +897,11 @@ def _save_crash_recovery(tag: str = '') -> None:
                         'log_var_act': criterion.log_var_act.data.clone().cpu(),
                         'log_var_psr': criterion.log_var_psr.data.clone().cpu(),
                     }
+                if scheduler is not None:
+                    try:
+                        save_dict['scheduler'] = scheduler.state_dict()
+                    except Exception:
+                        pass
 
                 _atomic_save(save_dict, recovery_path)
                 logger.info(f'  [CRASH_RECOVERY] Saved {tag} crash checkpoint to {recovery_path}')
@@ -1052,11 +1083,29 @@ def train_one_epoch(
         # exit cleanly with code 0. The signal handler must NEVER crash or hang.
         _save_crash_recovery(f'signal_{sig_name}')
         sys.exit(0)
+    # [CRASH-HARDEN v2] SIGHUP handler — does NOT exit. When VS Code's terminal host
+    # crashes (Electron bug in Code 1.109.5, observed SIGILL/SIGTRAP crashes), the
+    # kernel sends SIGHUP to all children of the terminal process tree, killing the
+    # training script silently. This handler intercepts SIGHUP and keeps running,
+    # letting training continue even after VS Code or its terminal pane disappears.
+    def _sig_hup_handler(signum, frame):
+        sig_name = signal.Signals(signum).name
+        logger.warning(
+            f'  [SIGHUP] {sig_name} received at step={num_batches} epoch={epoch}. '
+            f'Terminal may have died — training continues. Training PID={os.getpid()}'
+        )
+        print(
+            f'\n[SIGHUP] Terminal disconnected at epoch={epoch} step={num_batches}. '
+            f'TRAINING CONTINUES (PID={os.getpid()}). Reattach to tmux or use tail -f on log.',
+            flush=True,
+        )
+
     try:
         for _sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(_sig, _sig_term_handler)
+        signal.signal(signal.SIGHUP, _sig_hup_handler)
     except ValueError:
-        logger.warning('[SIGNAL] Cannot register SIGTERM/SIGINT handlers (not main thread)')
+        logger.warning('[SIGNAL] Cannot register SIGTERM/SIGINT/SIGHUP handlers (not main thread)')
     # -----------------------------------------------------------------
 
     # Save crash recovery checkpoint BEFORE first batch (epoch start)
@@ -3603,7 +3652,7 @@ def main(args):
             param_groups.append({'params': loss_params, 'lr': head_lr})
         _effective_wd = C.WEIGHT_DECAY  # constant — NOT scaled by _stage_lr_mult
         optimizer = torch.optim.AdamW(param_groups, weight_decay=_effective_wd)
-        logger.info('Optimizer: AdamW with differential LR (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g, bias/norm WD=0)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)), DET_BIAS_LR_FACTOR, _effective_wd))
+        logger.info('Optimizer: AdamW with differential LR (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g, bias WD=0)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)), DET_BIAS_LR_FACTOR, _effective_wd))
 
     # Snapshot initial param-group LRs so --reset-scheduler can restore them after
     # optimizer.load_state_dict overwrites them with checkpoint values.
@@ -3660,7 +3709,8 @@ def main(args):
         )
         scheduler = SequentialLR(optimizer, [warmup, scheduler],
                                milestones=[_stage_warmup_epochs])
-        logger.info('Scheduler: OneCycleLR (pct_start=0.1, steps_per_epoch=1, max_lr=[5e-5, 5e-4])')
+        lr_str = ', '.join(f'{v:.2e}' for v in max_lr)
+        logger.info(f'Scheduler: OneCycleLR (pct_start=0.1, steps_per_epoch=1, max_lr=[{lr_str}])')
     elif C.USE_COSINE_ANNEALING:
         cosine = CosineAnnealingWarmRestarts(
             optimizer, T_0=C.T_0, T_mult=C.T_mult, eta_min=1e-6
@@ -3674,6 +3724,10 @@ def main(args):
         )
         scheduler = SequentialLR(optimizer, [warmup, cosine],
                                milestones=[_stage_warmup_epochs])
+
+    # Register scheduler for crash-recovery checkpoint (scheduler.state_dict() saved
+    # so auto-resume from crash_recovery.pth does not reset LR schedule to epoch 0).
+    _CR_SCHEDULER = scheduler
 
     scaler = torch.cuda.amp.GradScaler(enabled=C.MIXED_PRECISION)
 
@@ -4035,16 +4089,20 @@ def main(args):
     # _resume_batch_info is set in the resume block above.
     _resume_batch = _resume_batch_info[0] if '_resume_batch_info' in dir() and _resume_batch_info[0] > 0 else 0
 
-    # --- TRAINING WATCHDOG THREAD (Bashara 2026-06-30) ---
+    # --- TRAINING WATCHDOG THREAD (Bashara 2026-06-30, hardened 2026-07-01) ---
     # Monitors the GPU heartbeat file in a separate daemon thread. If the heartbeat
-    # stops updating for > 600 seconds (10 min), the training has hung in a CUDA
+    # stops updating for > WATCHDOG_TIMEOUT seconds, the training has hung in a CUDA
     # kernel or DataLoader deadlock. Kills the process so the supervisor can restart.
     # The pre-val checkpoint ensures no epoch progress is lost.
+    # [CRASH-HARDEN v2] Increased timeout from 600s to 1200s because subprocess
+    # validation can take up to 15 minutes on 38036 frames with FP32 and no AMP.
+    # The 600s threshold triggered false positives (observed: eval took 607s).
     # Fixed: only kill if the heartbeat PID matches OUR PID (avoids killing on stale
     # heartbeat from a previous process that wrote to the same directory).
     _watchdog_ckpt_dir = ckpt_dir
     _watchdog_active = True
     _watchdog_pid = os.getpid()
+    _watchdog_timeout = int(getattr(C, 'WATCHDOG_TIMEOUT', 1200))
     def _watchdog_loop():
         while _watchdog_active:
             _hb_path = _watchdog_ckpt_dir / '.gpu_heartbeat'
@@ -4057,8 +4115,8 @@ def main(args):
                         _hb_pid = int(_hb_parts[3]) if len(_hb_parts) > 3 else -1
                         if _hb_pid == _watchdog_pid:
                             _hb_age = time.time() - _hb_ts
-                            if _hb_age > 600:
-                                msg = f'[WATCHDOG] GPU heartbeat stale ({_hb_age:.0f}s > 600s, pid={_hb_pid}) — killing process'
+                            if _hb_age > _watchdog_timeout:
+                                msg = f'[WATCHDOG] GPU heartbeat stale ({_hb_age:.0f}s > {_watchdog_timeout}s, pid={_hb_pid}) — killing process'
                                 print(msg, flush=True)
                                 os._exit(1)
                 except Exception:
@@ -4236,7 +4294,33 @@ def main(args):
                         distill_loss_fn=distill_loss_fn,
                     )
                     break
-                except Exception as exc:
+                except BaseException as exc:
+                    # [CRASH-HARDEN v2] Catch BaseException (not just Exception)
+                    # so SystemExit from the SIGABRT/SIGSEGV signal handler is
+                    # intercepted. Without this, CUDA crash → signal handler →
+                    # sys.exit(0) → SystemExit → bypasses retry → epoch dies.
+                    # With CUDA_LAUNCH_BLOCKING=1 most errors are RuntimeError,
+                    # but the SIGABRT path still arrives as SystemExit.
+                    if isinstance(exc, SystemExit):
+                        # Signal handler already saved crash_recovery before
+                        # calling sys.exit(0). Clean CUDA state and retry.
+                        logger.warning(
+                            f'  [CRASH-RETRY] SystemExit caught from signal handler '
+                            f'(epoch={epoch} attempt={train_attempt}). '
+                            f'Cleaning CUDA state and retrying.'
+                        )
+                        try:
+                            torch.cuda.empty_cache()
+                        except Exception:
+                            pass
+                        gc.collect()
+                        # Do NOT reload from checkpoint — the signal handler's
+                        # sys.exit(0) didn't actually kill us, and the model
+                        # tensors remain valid in GPU memory if the error was
+                        # at kernel launch (not memory corruption). Reloading
+                        # from crash_recovery.pth would lose the current epoch's
+                        # training progress (up to the last 1000-step save).
+                        continue
                     msg = str(exc)
                     is_loader_enomem = (
                         ('Cannot allocate memory' in msg

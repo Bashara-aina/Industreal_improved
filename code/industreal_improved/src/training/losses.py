@@ -1233,17 +1233,11 @@ class MultiTaskLoss(nn.Module):
                 _reg_ramp = _reinit_reg_wm + (1.0 - _reinit_reg_wm) * float(self._step_counter) / _reinit_reg_ws
                 reg_loss = reg_loss * _reg_ramp
             loss_det = cls_loss + giou_weight * reg_loss
-            # --- FIX: Floor loss_det at zero to prevent GIoU negative values
-            # causing Kendall divergence. reg_loss can be negative (GIoU ∈ [-1,1]),
-            # and with Kendall prec = exp(-lv_det) up to ~54.6, a loss_det of -1.5
-            # multiplied by prec=54.6 gives ~-82 per detection step → divergence.
-            # Full zero-floor: GIoU<0 gets 0 gradient (no negative signal to log_var).
-            # [FIX 2026-07-01 agent audit] Changed from NEG_SLOPE=0.0 to 0.01. Zero-floor killed
-            # regression gradient for non-overlapping boxes — GIoU < 0 means box has zero overlap
-            # with GT, which is exactly when regression needs gradient signal. NEG_SLOPE=0.01 preserves
-            # 1% of the informative negative gradient while still protecting Kendall from large
-            # negative loss_det * prec_det products. Worst case: loss_det=-1.0 * prec=54.6 → -54.6,
-            # floor to -0.546 — well within stable range.
+            # --- Historical note: NEG_SLOPE was designed to prevent a Kendall divergence
+            # scenario where GIoU < 0 (poor box overlap) combined with large loss_det *
+            # prec_det products. In practice generalized_box_iou_loss returns 1-GIoU
+            # (always >= 0), so loss_det >= 0 always and NEG_SLOPE never fires. The
+            # code is retained as a safety floor in case a future loss component changes.
             NEG_SLOPE = 0.01
             loss_det = torch.where(
                 loss_det < 0,
