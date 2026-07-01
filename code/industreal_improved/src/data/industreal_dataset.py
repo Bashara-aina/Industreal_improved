@@ -1510,6 +1510,33 @@ class IndustRealMultiTaskDataset(Dataset):
                     100.0 * det_frac, 100.0 * n_gt / max(n_total, 1),
                 )
 
+        # [DIAG 2026-07-01 Opus round-4 Q1] Effective per-class sampling rate.
+        # DET_GT_FRAME_FRACTION + task-aware boosts distort the activity-balanced
+        # weights: a class whose frames rarely co-occur with detection GT is pushed
+        # into the (1-det_frac) non-GT pool, while a class that co-occurs with GT
+        # draws from both pools. Log the realized per-class mass so the distortion
+        # is visible before a 100-epoch run (answers the "confirm or log" ask).
+        try:
+            _no = int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_ACT_CLASSES))
+            _mass = np.zeros(_no, dtype=np.float64)
+            for _i, _aid in enumerate(self.activity_ids):
+                if 0 <= _aid < _no:
+                    _mass[_aid] += sample_weights[_i]
+            _present = _mass[_mass > 0]
+            if _present.size > 0:
+                _uniform = 1.0 / _present.size
+                _ratio = float(_present.max() / max(_present.min(), 1e-12))
+                _topk = np.argsort(_mass)[::-1][:5]
+                logger.info(
+                    '[get_sampler] effective per-class sampling mass: %d classes present, '
+                    'max/min ratio=%.1fx (uniform would be 1.0x), max=%.4f vs uniform=%.4f. '
+                    'Top-5 sampled class ids=%s. Ratio >> 1 means DET_GT/task-aware reweighting '
+                    'is distorting activity balance.',
+                    _present.size, _ratio, float(_present.max()), _uniform, _topk.tolist(),
+                )
+        except Exception as _diag_exc:  # never let diagnostics break sampler build
+            logger.debug('[get_sampler] per-class mass diag skipped: %s', _diag_exc)
+
         return WeightedRandomSampler(
             weights=torch.as_tensor(sample_weights, dtype=torch.double),
             num_samples=len(sample_weights),
