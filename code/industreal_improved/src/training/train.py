@@ -3858,19 +3858,14 @@ def main(args):
         # Stored momentum (exp_avg/exp_avg_sq) from old checkpoint is incompatible with
         # freshly reinitialized weights, causing catastrophic optimizer steps that collapse
         # detection head within ~1000 steps (cls_mean -2.4 → -14.8).
-        # NOTE: zero tensors in-place rather than popping or deleting entries —
-        #   PyTorch 2.5+ AdamW expects state keys to exist (step as tensor, not int),
-        #   and _init_group only creates them if len(state)==0.
+        # NOTE: Delete state entries (not zero_) so PyTorch recreates with correct shapes
+        # when head dimensions have changed (e.g., verb-grouping: 11→10 classes).
         _opt_head_prefixes = ('det_head.', 'detection_head.', 'activity_head.',
                               'psr_head.', 'fpn.')
         _optim_reset = 0
         for _n, _p in model.named_parameters():
             if any(_n.startswith(pf) for pf in _opt_head_prefixes) and _p in optimizer.state:
-                _state = optimizer.state[_p]
-                if 'exp_avg' in _state:
-                    _state['exp_avg'].zero_()
-                if 'exp_avg_sq' in _state:
-                    _state['exp_avg_sq'].zero_()
+                optimizer.state.pop(_p)  # delete stale shape state; PyTorch recreates
                 _optim_reset += 1
         if _optim_reset > 0:
             logger.warning(
