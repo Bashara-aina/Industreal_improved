@@ -794,7 +794,8 @@ class IndustRealMultiTaskDataset(Dataset):
             [s['action_label'] for s in self.samples], dtype=np.int64
         )
         _remap = getattr(C, 'remap_activity_label', None)
-        if _remap is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() == 'verb':
+        _mode = str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower()
+        if _remap is not None and _mode in ('verb', 'hybrid'):
             self.activity_ids = np.array([_remap(int(a)) for a in _raw_ids], dtype=np.int64)
         else:
             self.activity_ids = _raw_ids
@@ -902,7 +903,7 @@ class IndustRealMultiTaskDataset(Dataset):
         # index when ACT_CLASS_GROUPING='verb' (identity otherwise). Preserves -1.
         _raw_al = int(sample['action_label'])
         _remap = getattr(C, 'remap_activity_label', None)
-        if _remap is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() == 'verb':
+        if _remap is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() in ('verb', 'hybrid'):
             _raw_al = _remap(_raw_al)
         action_label = torch.tensor(_raw_al, dtype=torch.long)
 
@@ -1018,7 +1019,7 @@ class IndustRealMultiTaskDataset(Dataset):
         most_common_action = int(unique[np.argmax(counts)])
         # [Route A — file 75] Remap to verb-group index (identity when off). Preserves -1.
         _remap = getattr(C, 'remap_activity_label', None)
-        if _remap is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() == 'verb':
+        if _remap is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() in ('verb', 'hybrid'):
             most_common_action = _remap(most_common_action)
 
         # Detection: only for middle frame (for ASD task alignment)
