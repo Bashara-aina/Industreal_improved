@@ -536,10 +536,10 @@ RAM_CACHE_MAX_IMAGES = 8000  # [FIX 2026-06-30] Raised from 5000 to 8000 — ful
                                 # (3,667 train + 1,928 val = 5,595 frames) fits in RAM at
                                 # ~2.2 GB. Eliminates HDD bottleneck without SSD.
 PIN_MEMORY = True
-USE_AMP = True           # Mixed precision training flag. All AMP infrastructure in train.py
-                         # (GradScaler, autocast, NaN guards, RC-29 telemetry) gates on this.
-MIXED_PRECISION = False  # Disable AMP — PSR seq loss spikes corrupt GradScaler
-                         # losses over 1100+ steps). AMP with GradScaler gives ~2x training
+USE_AMP = True           # [OBSOLETE] Not referenced in train.py — kept for backward compat.
+                         # All AMP infrastructure (GradScaler, autocast) gates on MIXED_PRECISION instead.
+MIXED_PRECISION = False  # Controls AMP. False = full FP32 (PSR seq loss spikes corrupt GradScaler
+                         # losses over 1100+ steps). True = AMP with GradScaler gives ~2x training
                          # speedup. Keep the existing NaN/isfinite guards and RC-29 telemetry
                          # for detection of any future AMP-related gradient overflow.
 SEED            = 42
@@ -733,7 +733,10 @@ STAGE1_EPOCHS = 5    # Detection-only warmup
 STAGE2_EPOCHS = 10   # Add pose + head pose
 STAGE3_EPOCHS = 85   # Full multi-task with EMA — 5+10+85=100 total — was 35
 ACT_RAMP_EPOCHS = 5  # Activity loss ramp-up
-ACTIVITY_LOSS_CAP = 80.0  # Cap activity loss to prevent NaN cascade at Stage 3 entry (epoch 16). 80 allows LDAM losses (~55) to pass without capping while still protecting against extreme spikes. Gradient = cap/loss at saturation: 80/400=0.2 (vs 40/400=0.1 with old cap).
+ACTIVITY_LOSS_CAP = 80.0  # Cap activity loss to prevent NaN cascade at Stage 3 entry (epoch 16).
+                         # Active loss is CE+label_smooth(0.1) — init ln(75)≈4.3, never nears 80.
+                         # Cap is a safety net against extreme spikes, not a binding constraint.
+                         # Gradient = cap/loss at saturation: 80/400=0.2 (vs 40/400=0.1 with old cap).
 # Smooth loss caps: x if x<=cap, cap*(1+log(x/cap)) if x>cap. Gradient=1 below cap, cap/x above cap (never zero).
 DET_LOSS_CAP = 50.0      # Detection: GIoU + Focal cls loss cap
 POSE_LOSS_CAP = 30.0     # Body keypoint Wing Loss cap
@@ -858,7 +861,7 @@ HEAD_POSE_LOSS_WEIGHT = 5.0
 # gradient still 0.012 (30x below detection). At 1.0, full gradient flows through
 # c5_mod_blend into the backbone, giving activity the strongest possible signal
 # to shape discriminative features. Risk of backbone drift is managed by
-# ACTIVITY_HEAD_GRAD_CLIP=1.0 and ACTIVITY_LR_MULTIPLIER=3.0 (head-level, not backbone).
+# ACTIVITY_HEAD_GRAD_CLIP=1.0 and ACTIVITY_LR_MULTIPLIER=1.0 (head-level, not backbone).
 ACTIVITY_GRAD_BLEND_RATIO = 1.00
 
 # [FIX 2026-06-15] Per-task Kendall log_var bounds to prevent multi-task collapse cascade

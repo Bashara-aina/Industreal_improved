@@ -84,13 +84,13 @@ PSR receives detached FPN features — its gradients don't corrupt detection fea
 
 ## 2. PSR Loss Configuration
 
-### 2.1 Base Loss (losses.py:1070-1081)
+### 2.1 Base Loss (losses.py:1071-1081)
 ```python
-self.psr_loss_fn = nn.BCEWithLogitsLoss(reduction='mean')  # Standard BCE, not focal
-self._psr_temporal_smooth_weight = float(getattr(C, 'PSR_TEMPORAL_SMOOTH_WEIGHT', 0.05))
+self.psr_loss_fn = nn.BCEWithLogitsLoss(reduction='mean')  # Fallback if focal disabled
+self.use_psr_focal = bool(getattr(C, 'PSR_FOCAL_GAMMA', 0) > 0)  # True when gamma=0.5
 ```
 
-**Important**: `use_psr_focal` is False by default (config `PSR_FOCAL_GAMMA` defaults to 0, disabling focal). PSR uses plain BCEWithLogitsLoss. The per-component weighting is handled separately via `_psr_comp_weights`.
+**Important**: PSR uses **binary focal loss** with gamma=0.5 (alpha=0.25), not plain BCE. The `nn.BCEWithLogitsLoss` at line 1071 is dead code under the current config (PSR_FOCAL_GAMMA=0.5 > 0, so `use_psr_focal=True`). The focal path at losses.py:1458-1461 calls `binary_focal_loss()` with per-component alpha from `set_psr_class_counts` and per-component weights from `_psr_comp_weights`. Both weighting mechanisms are simultaneously active — the focal alpha controls positive-vs-negative asymmetry within each component, while `comp_weights` provide uniform per-component scaling.
 
 ### 2.2 Per-Component Prevalence Weighting (losses.py:1137-1168)
 ```python
@@ -222,7 +222,7 @@ In the current setup (`STAGED_TRAINING=False`, class-balanced sampler shuffles a
 | PSR is evaluated per-frame but claimed as temporal detection | Medium | Check the paper: does it claim transition detection or component state recognition? Fix the claim to match the setup. |
 | PSR_WARMUP_EPOCHS=0 means no step-based ramp — PSR starts at full loss from epoch 1 | Medium | If PSR spikes at early epochs, set `PSR_WARMUP_EPOCHS=3` for a gradual ramp. The LR warmup (`STAGE3_WARMUP`) handles this only for staged training, not the `STAGED_TRAINING=False` path. |
 | DETACH_PSR_FPN=True prevents PSR from shaping backbone features for component recognition | Low | PSR on per-frame shuffled data doesn't need backbone gradient anyway. Enable backbone gradient for PSR when sequence mode is active. |
-| PSR comp_weights and per-component alpha both applied → double-balancing | Low | Check losses.py: the comp_weights multiply the BCE loss elementwise, while `set_psr_class_counts` sets alpha for focal (which is disabled). With focal off, the alpha is unused — so only `_psr_comp_weights` is active. Verify both aren't simultaneously applied. |
+| PSR comp_weights and per-component alpha both applied → double-balancing | Low | Focal alpha controls positive-vs-negative asymmetry per component; comp_weights provide uniform per-component scaling. They serve different purposes and can safely coexist. Verify alpha_t = alpha_c * target + (1-alpha_c)*(1-target) for correctness — the max=1.0 clamp in binary_focal_loss (losses.py:878) prevents extreme values. |
 
 ---
 
