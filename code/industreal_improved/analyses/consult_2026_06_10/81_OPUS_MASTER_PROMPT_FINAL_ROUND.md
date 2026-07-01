@@ -1,6 +1,6 @@
 # 81 — Opus Master Prompt: Final Verification Round [2026-07-01]
 
-**Goal:** Confirm the training pipeline is ready for a 100-epoch run with meaningful metrics across all 4 heads. The previous rounds diagnosed and fixed specific bugs (gradient starvation, class collapse, detection death spiral). This round is the final verification — you need to confirm that the fixes are complete, the config is coherent, and no hidden issues remain.
+**Goal:** Confirm the training pipeline is ready for a 100-epoch run with meaningful metrics across all 4 tasks (detection, activity, PSR, head pose). The previous rounds diagnosed and fixed specific bugs (gradient starvation, class collapse, detection death spiral). This round is the final verification — you need to confirm that the fixes are complete, the config is coherent, and no hidden issues remain.
 
 ---
 
@@ -28,6 +28,16 @@ This directory (`analyses/consult_2026_06_10/`) contains the complete audit trai
 | `training/train.py` | Training loop: dual paths (seq + non-seq), optimizer build: ~3592, class_counts: 3365-3386 | Training orchestration |
 | `data/industreal_dataset.py` | Sampler: 1412-1520, Label remap: 789-805, 897-908, 1020-1028 | Data loading and activity label mapping |
 | `evaluation/evaluate.py` | Activity metrics: 886-1018, Diversity monitor: 3440-3495, Segment eval: 851-884 (has label-mismatch bug — see below) | Evaluation |
+
+**Clarification: what "pose" means in this codebase**
+
+The code uses "pose" for three different things. Keeping them straight is essential:
+
+1. **Head pose** (REAL GT from `pose.csv`, 9-DoF): Trained via `HeadPoseHead` under `TRAIN_HEAD_POSE`. **Novel task** — IndustReal provides the sensor data but has NO official benchmark for head pose. You're establishing the first baseline.
+2. **Body keypoints** (pseudo, no GT): 17 COCO-style keypoints generated from detection boxes (`model.py:1972-1976`). No real annotations exist. `loss_pose ≈ 0` always. Dead code in practice.
+3. **Hand-FiLM** (feature enhancer): Hand tracking from `hands.csv` → FiLM modulation on C5 features. Not a standalone task with metrics.
+
+The 4 Kendall task groups are: **detection, activity, PSR, head pose**. Body pose shares `log_var_pose` with head pose but produces no gradient (no keypoint targets).
 
 ---
 
@@ -108,6 +118,8 @@ STAGED_TRAINING: False  (all heads active from epoch 0)
 WEIGHT_DECAY: 1e-3  (was 5e-2)
 GRAD_CLIP_NORM: 5.0  (was 1.0)
 ```
+
+**Pose clarification**: The code's "pose" refers to 3 different things. (1) **Head pose** (real GT from pose.csv, 9-DoF) -- NO IndustReal baseline, you establish the first. (2) **Body keypoints** (17 COCO) -- pseudo from detection boxes, no real annotations, loss_pose approx 0. (3) **Hand-FiLM** -- feature enhancer from hands.csv, not a task. The 4 real tasks are: detection, activity, PSR, head pose.
 
 ---
 

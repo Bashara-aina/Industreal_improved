@@ -38,10 +38,16 @@ USE_SPATIAL_AUG = True           # Enable spatial augmentation (flip, crop)
 # Ablation flags
 # =========================================================================
 TRAIN_DET       = True
-TRAIN_HEAD_POSE = True    # Train 9-DoF head pose head with Kendall uncertainty (was False — headpose_film was untrained)
+TRAIN_HEAD_POSE = True    # Train 9-DoF head pose from pose.csv (real HL2 sensor data, NOT pseudo-keypoints).
+                           # IndustReal provides no head pose benchmark — this is a novel multi-task addition.
+                           # The 8.71° forward-gaze target is our own baseline, not from the paper.
 TRAIN_ACT       = True
 TRAIN_PSR       = True
-USE_KENDALL     = True   # Kendall weighting active for 4 tasks (det, act, psr, head_pose 9-DoF MSE)
+USE_KENDALL     = True   # Kendall weighting active for 4 tasks (det, act, psr, head_pose).
+                           # NOTE: body pose (17 COCO keypoints) shares log_var_pose with head_pose
+                           # but has NO real annotations — keypoints are pseudo-generated from detection boxes.
+                           # The Wing Loss body-pose branch is effectively dead code (loss_pose ≈ 0 always).
+                           # Head pose 9-DoF MSE is the real task under log_var_pose.
 TRAIN_MAX_STEPS = int(os.environ.get('TRAIN_MAX_STEPS', 0))  # 0=disabled; set >0 to stop after N batches
 
 # [OPUS v5 AUDIT] Bring-up mode: flip guards from silent-fallback to assert-and-crash
@@ -94,7 +100,11 @@ KENDALL_HP_FIXED_LAMBDA = 0.2
 # Enable for production, disable for diagnosis (with ASSERT_AND_CRASH).
 SIMPLIFY_LOSS = int(os.environ.get('SIMPLIFY_LOSS', '0')) == 1  # 1 = no ramps/caps (diagnosis)
 
-# Hand-FiLM conditioning (hand keypoints → FiLM modulation on activity features)
+# Hand-FiLM conditioning (hand tracking from HL2 hands.csv → FiLM modulation on activity features)
+# NOTE: This is NOT a separate task with metrics. Hand keypoints from HoloLens 2 hand tracking
+# modulate the C5 features to improve activity recognition. No benchmark exists for hand pose.
+# The 'hand' in PoseFiLM uses 17 COCO-style pseudo-keypoints (from detection boxes), not real
+# hand annotations — only HEAD POSE (pose.csv) has real sensor ground truth.
 USE_HAND_FILM   = True
 HAND_FILM_CHANNELS = 768   # ConvNeXt C5 channel count
 
@@ -393,6 +403,12 @@ def _build_act_grouping(mode: str):
     return id_to_group, group_names, len(group_names)
 
 # --- Head pose ---
+# NOTE: These 17 COCO-style keypoints are NOT annotated in IndustReal.
+# They are pseudo-generated from the detection head's bounding boxes
+# (model.py:1972-1976). The Wing Loss trains against these pseudo-keypoints,
+# but there is no ground truth to validate against. The TRUE pose task is
+# head pose (9-DoF from pose.csv, NUM_HEAD_POSE_DOF below).
+# These keypoints exist only as conditioning input to PoseFiLM for activity features.
 NUM_KEYPOINTS = 17
 KEYPOINT_NAMES = [
     'nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear',
@@ -730,7 +746,7 @@ PRETRAIN_HFLIP_PROB  = 0.5   # probability of random horizontal flip
 STAGED_TRAINING = False  # Full production: all 5 heads active from epoch 0
 REINIT_PI = 0.01  # cls_score bias prior for reinit (RF1 uses 0.05)
 STAGE1_EPOCHS = 5    # Detection-only warmup
-STAGE2_EPOCHS = 10   # Add pose + head pose
+STAGE2_EPOCHS = 10   # Add head pose (9-DoF from pose.csv, real GT) + body keypoints (pseudo, no real GT)
 STAGE3_EPOCHS = 85   # Full multi-task with EMA — 5+10+85=100 total — was 35
 ACT_RAMP_EPOCHS = 5  # Activity loss ramp-up
 ACTIVITY_LOSS_CAP = 80.0  # Cap activity loss to prevent NaN cascade at Stage 3 entry (epoch 16).
@@ -744,8 +760,9 @@ PSR_LOSS_CAP = 20.0      # PSR focal loss + temporal smooth cap
 HEAD_POSE_LOSS_CAP = 30.0  # Head pose 9-DoF MSE cap
 HEAD_POSE_POS_SCALE = 100.0  # Standardizes raw position (~110 in CSV) to O(1); also fixes mm/cm unit ambiguity
 
-# [INTERVENTION 2026-06-14] PSR and pose weight multipliers
-# Audit verdict: PSR and hand pose heads produce DEAD backbone gradients.
+# [INTERVENTION 2026-06-14] PSR and body-pose weight multipliers
+# Audit verdict: PSR and body-pose pseudo-keypoints produce DEAD backbone gradients.
+# (Body pose has no real annotations — keypoints are pseudo-generated from det boxes.)
 # PSR_WEIGHT amplifies the PSR loss BEFORE Kendall weighting (applied at Kendall
 # assembly in losses.py). POSE_LOSS_WEIGHT replaces the old *0.001 fixed multiplier.
 PSR_WEIGHT = 10.0       # Reduce PSR weight to prevent backbone disruption
