@@ -29,7 +29,7 @@ DEBUG_MODE         = False
 DEBUG_MAX_VIDEOS   = 2  # smoke test: 2 recordings only
 DEBUG_FRAME_STRIDE = 10
 
-SUBSET_RATIO = 1.0    # Full dataset — use all training data
+SUBSET_RATIO = float(os.environ.get('SUBSET_RATIO', '1.0'))  # Full dataset — use all training data
 
 TRAIN_FRAME_STRIDE = 3  # A.2: stride 3 → T=16 covers 1.6s at 30FPS (median action)
 EVAL_FRAME_STRIDE  = 1
@@ -278,15 +278,15 @@ assert len(ACT_CLASS_NAMES) == NUM_CLASSES_ACT == 75, (
 # pooled features. The mapping is derived data-drivenly from ACT_CLASS_NAMES,
 # so no hand-coded table is needed.
 #
-#   ACT_CLASS_GROUPING = 'none'  -> identity (raw 75-class task, default; no change)
-#   ACT_CLASS_GROUPING = 'verb'  -> ~13 verb groups (Route A)
+#   ACT_CLASS_GROUPING = os.environ.get('ACT_CLASS_GROUPING', 'verb')  -> identity (raw 75-class task, default; no change)
+#   ACT_CLASS_GROUPING = os.environ.get('ACT_CLASS_GROUPING', 'verb')  -> ~13 verb groups (Route A)
 #
 # Downstream wiring (all gated by NUM_ACT_OUTPUTS / ACT_ID_TO_GROUP):
 #   - dataset remaps each frame's action_label through ACT_ID_TO_GROUP
 #   - the activity head + activity loss are sized to NUM_ACT_OUTPUTS
 #   - eval reports group names (ACT_OUTPUT_NAMES); macro-F1's present-label
 #     filter already restricts the average to the groups that appear.
-ACT_CLASS_GROUPING = 'none'
+ACT_CLASS_GROUPING = os.environ.get('ACT_CLASS_GROUPING', 'verb')
 
 def _build_act_grouping(mode: str):
     """Return (id_to_group[75], group_names, num_groups) for the given mode.
@@ -615,7 +615,7 @@ CB_GAMMA = 1.0
 #   with sub-floor classes scaled by count (avoids memorizing 1-7 frame singletons).
 # Use 'balanced' for CE-loss runs. With USE_CB_FOCAL_ACT=True the loss already
 # rebalances (beta=0.999, 50x cap), so keep 'cb' to avoid double-emphasis.
-ACT_SAMPLER_MODE = 'cb'
+ACT_SAMPLER_MODE = 'balanced'
 ACT_SAMPLER_COUNT_FLOOR = 15.0
 # action_id 0 is the real action "take_short_brace" (63 frames), NOT background.
 # Set True only if a future label revision designates slot 0 as NA/background.
@@ -624,7 +624,7 @@ CB_LABEL_SMOOTHING = 0.1  # label smoothing for 74-class activity CE loss (paper
 # [OPUS DECISION 2] Switch from CE+label_smoothing to class-balanced focal loss
 # when the simple head collapses (pred_distinct <= 3 at epoch 1).
 # ClassBalancedFocalLoss uses beta=0.999 effective number weighting + gamma=2.0 focal factor.
-USE_CB_FOCAL_ACT = True   # True = use ClassBalancedFocalLoss; False = CE+label_smooth
+USE_CB_FOCAL_ACT = False   # True = use ClassBalancedFocalLoss; False = CE+label_smooth
 CB_FOCAL_BETA = 0.999    # Effective number beta for CB-Focal (Cui et al., 2019)
 CB_FOCAL_GAMMA = 2.0     # Focal loss gamma for CB-Focal
 
@@ -1354,7 +1354,7 @@ PRESETS = {
         'det_gt_frame_fraction':    0.4,
     },
     'stage_rf4': {
-        'description': 'RF4: All heads + PSR transition (50% data, 20 ep).',
+        'description': 'RF4: All heads + PSR transition (100% data, 20 ep, verb-grouping).',
         'dataset_mode':       'manual_only',
         'backbone':           'convnext_tiny',
         'use_tma_cell':       True,

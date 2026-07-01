@@ -1,0 +1,65 @@
+{
+  "current_stage": "rf2",
+  "stage_index": 1,
+  "status": "running",
+  "training_pid": 361404,
+  "epoch": 21,
+  "best_metric": 0.4622134028185104,
+  "best_metrics": {
+    "det_mAP50": 0.20690504380695737,
+    "det_mAP50_pc": 0.31035756571043605,
+    "det_n_present_classes": 16,
+    "forward_angular_MAE_deg": 9.209997177124023
+  },
+  "gate_passed": false,
+  "checklist_results": {
+    "gate": {
+      "passed": false,
+      "details": {}
+    },
+    "health": {
+      "passed": false,
+      "details": {}
+    },
+    "convergence": {
+      "passed": false,
+      "details": {}
+    },
+    "validation": {
+      "passed": false,
+      "details": {}
+    },
+    "stability": {
+      "passed": false,
+      "details": {}
+    }
+  },
+  "metric_history": [],
+  "retry_count": 0,
+  "current_strategy": "default",
+  "strategies_tried": [],
+  "det_health_history": [],
+  "stage_history": [
+    {
+      "stage": "rf1",
+      "status": "completed",
+      "epochs_completed": 10,
+      "best_metric": 0.184,
+      "best_metrics": {
+        "det_mAP50": 0.184
+      },
+      "timestamp": "2026-06-20T00:13:40+00:00"
+    }
+  ],
+  "issues_log": [],
+  "last_check_time": "2026-06-21T19:10:00+00:00",
+  "run_start_time": "2026-06-21T19:10:00+00:00",
+  "log_cursor": 0,
+  "cross_stage_memory": {},
+  "max_epochs": 36,
+  "last_heartbeat": "2026-06-22T01:55:13.894428+00:00",
+  "batch": {
+    "current": 1100,
+    "total": 3302
+  }
+}

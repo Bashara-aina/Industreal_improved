@@ -1,0 +1,1471 @@
+{
+  "cycle": 1,
+  "timestamp": "2026-06-27T04:17:53.040122",
+  "summary": {
+    "total_agents": 20,
+    "total_checks": 118,
+    "fail": 12,
+    "warn": 11,
+    "agents_with_errors": 0
+  },
+  "datastore_snapshot": {
+    "epoch": 0,
+    "step": null,
+    "pid_alive": false,
+    "best_metric": 0.4622134028185104,
+    "gpu_util": -1,
+    "gpu_mem_gb": -1.0,
+    "e4_grad_norms": {}
+  },
+  "alerts": [
+    {
+      "agent": "blocker_assessment",
+      "check": "p0_blockers",
+      "verdict": "CRIT",
+      "summary": "P0 blockers: 1 \u2014 []",
+      "detail": "P0 = training cannot continue without intervention",
+      "timestamp": "2026-06-27T04:17:53.038716"
+    },
+    {
+      "agent": "blocker_assessment",
+      "check": "overall_health",
+      "verdict": "CRIT",
+      "summary": "Training health: CRITICAL (epoch 0, best=0.462, gate=0.4)",
+      "detail": "P0=1, P1=0, P2=0, P3=0",
+      "timestamp": "2026-06-27T04:17:53.038726"
+    },
+    {
+      "agent": "checkpoint",
+      "check": "latest_ckpt_age",
+      "verdict": "WARN",
+      "summary": "No checkpoint files found",
+      "detail": "Checkpoints may not be saving",
+      "timestamp": "2026-06-27T04:17:53.038729"
+    },
+    {
+      "agent": "convergence",
+      "check": "learning_rate",
+      "verdict": "WARN",
+      "summary": "No LR mentioned in log tail",
+      "detail": "",
+      "timestamp": "2026-06-27T04:17:53.038733"
+    },
+    {
+      "agent": "cuda_health",
+      "check": "gpu_visibility",
+      "verdict": "FAIL",
+      "summary": "nvidia-smi failed: could not convert string to float: '132.36\\n34'",
+      "detail": "GPU monitoring unavailable \u2014 check drivers",
+      "timestamp": "2026-06-27T04:17:53.038735"
+    },
+    {
+      "agent": "data_pipeline",
+      "check": "augmentation_active",
+      "verdict": "WARN",
+      "summary": "Augmentation log lines: 0",
+      "detail": "Missing augmentation lines may mean no augmentation applied",
+      "timestamp": "2026-06-27T04:17:53.038737"
+    },
+    {
+      "agent": "data_pipeline",
+      "check": "data_freshness",
+      "verdict": "WARN",
+      "summary": "No metrics data available",
+      "detail": "",
+      "timestamp": "2026-06-27T04:17:53.038739"
+    },
+    {
+      "agent": "epoch_tracker",
+      "check": "epoch_progress",
+      "verdict": "WARN",
+      "summary": "Epoch data not available",
+      "detail": "",
+      "timestamp": "2026-06-27T04:17:53.038740"
+    },
+    {
+      "agent": "gate_tracker",
+      "check": "gate_passed",
+      "verdict": "WARN",
+      "summary": "Gate passed: False",
+      "detail": "gate_passed flag from rf_stage_state.json",
+      "timestamp": "2026-06-27T04:17:53.038742"
+    },
+    {
+      "agent": "gate_tracker",
+      "check": "best_det_mAP50_vs_gate",
+      "verdict": "FAIL",
+      "summary": "best_mAP50=0.207, target=0.4, gap=0.193",
+      "detail": "Need 0.4 to pass gate, currently +0.193 away",
+      "timestamp": "2026-06-27T04:17:53.038743"
+    },
+    {
+      "agent": "gate_tracker",
+      "check": "best_mAP50_95_vs_gate",
+      "verdict": "WARN",
+      "summary": "mAP50_95 not tracked in state yet",
+      "detail": "State JSON missing best_map50_95 field",
+      "timestamp": "2026-06-27T04:17:53.038744"
+    },
+    {
+      "agent": "gate_tracker",
+      "check": "val_activity",
+      "verdict": "WARN",
+      "summary": "No validation log lines in tail",
+      "detail": "Validation may not be running",
+      "timestamp": "2026-06-27T04:17:53.038746"
+    },
+    {
+      "agent": "gpu_resource",
+      "check": "gpu_query",
+      "verdict": "FAIL",
+      "summary": "nvidia-smi failed: could not convert string to float: '132.36\\n34'",
+      "detail": "GPU monitoring unavailable",
+      "timestamp": "2026-06-27T04:17:53.038747"
+    },
+    {
+      "agent": "head_recovery",
+      "check": "optimizer_active",
+      "verdict": "WARN",
+      "summary": "No optimizer references in log tail",
+      "detail": "",
+      "timestamp": "2026-06-27T04:17:53.038750"
+    },
+    {
+      "agent": "log_anomaly",
+      "check": "log_silence",
+      "verdict": "FAIL",
+      "summary": "No active training signals in last log lines",
+      "detail": "Log may be stalled or training frozen",
+      "timestamp": "2026-06-27T04:17:53.038751"
+    },
+    {
+      "agent": "log_anomaly",
+      "check": "log_activity_rate",
+      "verdict": "WARN",
+      "summary": "No LIVENESS lines \u2014 log format may have changed",
+      "detail": "",
+      "timestamp": "2026-06-27T04:17:53.038752"
+    },
+    {
+      "agent": "metrics_logger",
+      "check": "metrics_data_available",
+      "verdict": "FAIL",
+      "summary": "No metrics.jsonl entries found",
+      "detail": "Metrics logging may not be active",
+      "timestamp": "2026-06-27T04:17:53.038754"
+    },
+    {
+      "agent": "process_health",
+      "check": "pid_alive",
+      "verdict": "CRIT",
+      "summary": "PID 361404: DEAD",
+      "detail": "Checked via /proc/361404",
+      "timestamp": "2026-06-27T04:17:53.038756"
+    },
+    {
+      "agent": "process_health",
+      "check": "heartbeat_freshness",
+      "verdict": "WARN",
+      "summary": "No heartbeat timestamp in state",
+      "detail": "State file may not include heartbeat field",
+      "timestamp": "2026-06-27T04:17:53.038757"
+    },
+    {
+      "agent": "process_health",
+      "check": "training_activity",
+      "verdict": "FAIL",
+      "summary": "No training activity (only 1 log lines)",
+      "detail": "Training process may be stalled or not producing output",
+      "timestamp": "2026-06-27T04:17:53.038758"
+    },
+    {
+      "agent": "summary",
+      "check": "recommended_actions",
+      "verdict": "CRIT",
+      "summary": "4 action items: MAE gate already met (9.2\u00b0 \u2264 60.0\u00b0); CRITICAL: Training process is dead \u2014 restart immediately; Moderate gate gap (0.193) \u2014 review LR schedule and head balance; DET head gradient near zero (0.00e+00) \u2014",
+      "detail": "MAE gate already met (9.2\u00b0 \u2264 60.0\u00b0); CRITICAL: Training process is dead \u2014 restart immediately; Moderate gate gap (0.193) \u2014 review LR schedule and head balance; DET head gradient near zero (0.00e+00) \u2014 head may be dead",
+      "timestamp": "2026-06-27T04:17:53.038759"
+    },
+    {
+      "agent": "summary",
+      "check": "executive_health_score",
+      "verdict": "CRIT",
+      "summary": "Health score: 0/100 (epoch 0, best=0.207, gate=0.4)",
+      "detail": "Score components: metric_ratio=0.52, MAE=met, pid_alive=False, epoch_ratio=0.00",
+      "timestamp": "2026-06-27T04:17:53.038760"
+    },
+    {
+      "agent": "validation",
+      "check": "validation_active",
+      "verdict": "FAIL",
+      "summary": "No validation log lines",
+      "detail": "Validation may not be scheduled or the eval loop isn't running",
+      "timestamp": "2026-06-27T04:17:53.038761"
+    }
+  ],
+  "deltas": [],
+  "agents": [
+    {
+      "agent": "blocker_assessment",
+      "elapsed_s": 0.0,
+      "worst": "CRIT",
+      "passed": false,
+      "error": null,
+      "num_checks": 3,
+      "checks": [
+        {
+          "name": "p0_blockers",
+          "verdict": "CRIT",
+          "summary": "P0 blockers: 1 \u2014 []",
+          "detail": "P0 = training cannot continue without intervention",
+          "metric": 1.0,
+          "threshold": 0,
+          "dimension": "p0_blockers"
+        },
+        {
+          "name": "blocker_summary",
+          "verdict": "PASS",
+          "summary": "P1=0, P2=0, P3=0 (total=0)",
+          "detail": "Cross-cutting issue classification across all log sources",
+          "metric": 0.0,
+          "threshold": 0,
+          "dimension": "blockers_total"
+        },
+        {
+          "name": "overall_health",
+          "verdict": "CRIT",
+          "summary": "Training health: CRITICAL (epoch 0, best=0.462, gate=0.4)",
+          "detail": "P0=1, P1=0, P2=0, P3=0",
+          "metric": null,
+          "threshold": null,
+          "dimension": "overall_health"
+        }
+      ]
+    },
+    {
+      "agent": "checkpoint",
+      "elapsed_s": 0.0,
+      "worst": "WARN",
+      "passed": false,
+      "error": null,
+      "num_checks": 9,
+      "checks": [
+        {
+          "name": "latest_ckpt_age",
+          "verdict": "WARN",
+          "summary": "No checkpoint files found",
+          "detail": "Checkpoints may not be saving",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "ckpt_disk_usage",
+          "verdict": "SKIP",
+          "summary": "No checkpoint data",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "ckpt_cleanup_needed",
+          "verdict": "PASS",
+          "summary": "0 checkpoints, no cleanup needed",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "partial_checkpoints",
+          "verdict": "PASS",
+          "summary": "No partial checkpoint files",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "ckpt_size_consistency",
+          "verdict": "SKIP",
+          "summary": "Only 0 checkpoints",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "free_disk_space",
+          "verdict": "SKIP",
+          "summary": "Could not get disk space",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "best_ckpt_saved",
+          "verdict": "SKIP",
+          "summary": "best_epoch not in state",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "resume_file",
+          "verdict": "SKIP",
+          "summary": "No resume file (ok for fresh training)",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "ckpt_save_interval",
+          "verdict": "SKIP",
+          "summary": "Not enough checkpoints",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "config_validator",
+      "elapsed_s": 0.0,
+      "worst": "SKIP",
+      "passed": true,
+      "error": null,
+      "num_checks": 7,
+      "checks": [
+        {
+          "name": "effective_batch_size",
+          "verdict": "SKIP",
+          "summary": "batch_size or accum_steps not found",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "learning_rate_sanity",
+          "verdict": "SKIP",
+          "summary": "LR not found in log",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "active_heads_config",
+          "verdict": "SKIP",
+          "summary": "active_heads not in state",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "subset_ratio",
+          "verdict": "SKIP",
+          "summary": "subset_ratio not in log",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "backbone_config",
+          "verdict": "SKIP",
+          "summary": "No backbone config in log",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "training_precision",
+          "verdict": "SKIP",
+          "summary": "No precision info in log",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "max_epochs_config",
+          "verdict": "SKIP",
+          "summary": "max_epochs not found",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "convergence",
+      "elapsed_s": 0.0,
+      "worst": "WARN",
+      "passed": false,
+      "error": null,
+      "num_checks": 6,
+      "checks": [
+        {
+          "name": "metric_stagnation",
+          "verdict": "SKIP",
+          "summary": "Need \u226510 history entries",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "metric_oscillation",
+          "verdict": "SKIP",
+          "summary": "Need \u22655 history entries for oscillation detection",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "convergence_velocity",
+          "verdict": "SKIP",
+          "summary": "Need \u22653 entries",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "above_baseline",
+          "verdict": "PASS",
+          "summary": "Best=0.4622 vs baseline=0.01",
+          "detail": "Model is learning if significantly above random baseline",
+          "metric": 0.4622134028185104,
+          "threshold": 0.01,
+          "dimension": "above_baseline"
+        },
+        {
+          "name": "loss_plateau_log",
+          "verdict": "SKIP",
+          "summary": "Only 0 loss entries",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "learning_rate",
+          "verdict": "WARN",
+          "summary": "No LR mentioned in log tail",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "cuda_health",
+      "elapsed_s": 0.0,
+      "worst": "FAIL",
+      "passed": false,
+      "error": null,
+      "num_checks": 6,
+      "checks": [
+        {
+          "name": "cuda_errors",
+          "verdict": "PASS",
+          "summary": "No CUDA errors",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "oom_events",
+          "verdict": "PASS",
+          "summary": "No OOM events",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "nccl_errors",
+          "verdict": "PASS",
+          "summary": "No NCCL errors (single-GPU OK)",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "gpu_visibility",
+          "verdict": "FAIL",
+          "summary": "nvidia-smi failed: could not convert string to float: '132.36\\n34'",
+          "detail": "GPU monitoring unavailable \u2014 check drivers",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "cuda_version",
+          "verdict": "SKIP",
+          "summary": "CUDA version not in log",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "cudnn_status",
+          "verdict": "SKIP",
+          "summary": "cuDNN not mentioned in log",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "data_pipeline",
+      "elapsed_s": 0.0,
+      "worst": "WARN",
+      "passed": false,
+      "error": null,
+      "num_checks": 10,
+      "checks": [
+        {
+          "name": "dataloader_errors",
+          "verdict": "PASS",
+          "summary": "No DataLoader errors",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "dataset_size",
+          "verdict": "SKIP",
+          "summary": "No dataset size info in log",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "batch_timing",
+          "verdict": "SKIP",
+          "summary": "No batch timing info in log",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "subprocess_health",
+          "verdict": "PASS",
+          "summary": "No subprocess errors",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "batch_size",
+          "verdict": "SKIP",
+          "summary": "No batch_size in log",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "data_memory_usage",
+          "verdict": "SKIP",
+          "summary": "GPU data not available",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "image_load_errors",
+          "verdict": "PASS",
+          "summary": "No image loading errors",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "checkpoint_disk_usage",
+          "verdict": "SKIP",
+          "summary": "No checkpoint data",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "augmentation_active",
+          "verdict": "WARN",
+          "summary": "Augmentation log lines: 0",
+          "detail": "Missing augmentation lines may mean no augmentation applied",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "data_freshness",
+          "verdict": "WARN",
+          "summary": "No metrics data available",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "epoch_tracker",
+      "elapsed_s": 0.0,
+      "worst": "WARN",
+      "passed": false,
+      "error": null,
+      "num_checks": 5,
+      "checks": [
+        {
+          "name": "epoch_progress",
+          "verdict": "WARN",
+          "summary": "Epoch data not available",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "epoch_duration",
+          "verdict": "SKIP",
+          "summary": "Epoch timing not available",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "training_eta",
+          "verdict": "SKIP",
+          "summary": "Cannot compute ETA",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "batch_throughput",
+          "verdict": "SKIP",
+          "summary": "Cannot compute throughput",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "step_consistency",
+          "verdict": "SKIP",
+          "summary": "Not enough metrics",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "gate_predictor",
+      "elapsed_s": 0.0,
+      "worst": "SKIP",
+      "passed": true,
+      "error": null,
+      "num_checks": 6,
+      "checks": [
+        {
+          "name": "gate_eta_prediction",
+          "verdict": "SKIP",
+          "summary": "Need 3 val points, have 0",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "gate_confidence",
+          "verdict": "SKIP",
+          "summary": "Insufficient data",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "mae_gate_prediction",
+          "verdict": "SKIP",
+          "summary": "MAE data not available",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "map50_95_gate_eta",
+          "verdict": "SKIP",
+          "summary": "Insufficient mAP50_95 data",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "required_improvement_rate",
+          "verdict": "SKIP",
+          "summary": "Insufficient data",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "trend_direction",
+          "verdict": "SKIP",
+          "summary": "Need \u22654 data points, have 0",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "gate_tracker",
+      "elapsed_s": 0.0,
+      "worst": "FAIL",
+      "passed": false,
+      "error": null,
+      "num_checks": 10,
+      "checks": [
+        {
+          "name": "gate_passed",
+          "verdict": "WARN",
+          "summary": "Gate passed: False",
+          "detail": "gate_passed flag from rf_stage_state.json",
+          "metric": 0.0,
+          "threshold": 1.0,
+          "dimension": "gate_passed"
+        },
+        {
+          "name": "best_det_mAP50_vs_gate",
+          "verdict": "FAIL",
+          "summary": "best_mAP50=0.207, target=0.4, gap=0.193",
+          "detail": "Need 0.4 to pass gate, currently +0.193 away",
+          "metric": 0.20690504380695737,
+          "threshold": 0.4,
+          "dimension": "det_mAP50"
+        },
+        {
+          "name": "current_det_mAP50",
+          "verdict": "SKIP",
+          "summary": "No val metrics available",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "best_mAP50_95_vs_gate",
+          "verdict": "WARN",
+          "summary": "mAP50_95 not tracked in state yet",
+          "detail": "State JSON missing best_map50_95 field",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "best_MAE_vs_gate",
+          "verdict": "PASS",
+          "summary": "best_MAE=9.2\u00b0, target\u226460.0\u00b0",
+          "detail": "",
+          "metric": 9.209997177124023,
+          "threshold": 60.0,
+          "dimension": "MAE"
+        },
+        {
+          "name": "best_vs_current_gap",
+          "verdict": "PASS",
+          "summary": "regression=0.000 (best=0.207, current=0.207)",
+          "detail": "Large gap between best and current = training instability",
+          "metric": 0.0,
+          "threshold": 0.02,
+          "dimension": "regression_gap"
+        },
+        {
+          "name": "progress_rate",
+          "verdict": "SKIP",
+          "summary": "Not enough data for rate estimation",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "epoch_budget",
+          "verdict": "PASS",
+          "summary": "Epoch 0/36 (0%)",
+          "detail": "At 0% of max epoch budget",
+          "metric": 0.0,
+          "threshold": 0.75,
+          "dimension": "epoch_ratio"
+        },
+        {
+          "name": "val_activity",
+          "verdict": "WARN",
+          "summary": "No validation log lines in tail",
+          "detail": "Validation may not be running",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "gate_gap_trend",
+          "verdict": "SKIP",
+          "summary": "Gate gap trend: unknown",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": "gap_trend"
+        }
+      ]
+    },
+    {
+      "agent": "gpu_resource",
+      "elapsed_s": 0.0,
+      "worst": "FAIL",
+      "passed": false,
+      "error": null,
+      "num_checks": 1,
+      "checks": [
+        {
+          "name": "gpu_query",
+          "verdict": "FAIL",
+          "summary": "nvidia-smi failed: could not convert string to float: '132.36\\n34'",
+          "detail": "GPU monitoring unavailable",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "head_health",
+      "elapsed_s": 0.0,
+      "worst": "SKIP",
+      "passed": true,
+      "error": null,
+      "num_checks": 10,
+      "checks": [
+        {
+          "name": "det_head_grad_norm",
+          "verdict": "SKIP",
+          "summary": "No E4 grad norm data for DET head",
+          "detail": "E4 diagnostics may not be enabled in training loop",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "hp_head_grad_norm",
+          "verdict": "SKIP",
+          "summary": "No HP grad norm data",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "act_head_grad_norm",
+          "verdict": "SKIP",
+          "summary": "No activity head grad norm",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "psr_head_grad_norm",
+          "verdict": "SKIP",
+          "summary": "No PSR head grad norm",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "backbone_grad_norm",
+          "verdict": "SKIP",
+          "summary": "No backbone grad norm",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "head_grad_balance",
+          "verdict": "SKIP",
+          "summary": "Insufficient data for head balance",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "nan_gradients",
+          "verdict": "PASS",
+          "summary": "No NaN gradients detected",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "det_head_liveness",
+          "verdict": "SKIP",
+          "summary": "det_health not in state",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "consecutive_dead_epochs",
+          "verdict": "SKIP",
+          "summary": "det_health_history not available",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "kendall_precision_cap",
+          "verdict": "SKIP",
+          "summary": "Kendall cap status unknown",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "head_recovery",
+      "elapsed_s": 0.0,
+      "worst": "WARN",
+      "passed": false,
+      "error": null,
+      "num_checks": 9,
+      "checks": [
+        {
+          "name": "head_freeze_events",
+          "verdict": "PASS",
+          "summary": "No head freeze/unfreeze events",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "head_reinit_events",
+          "verdict": "PASS",
+          "summary": "No head reinitializations",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "lr_changes",
+          "verdict": "SKIP",
+          "summary": "No LR change events",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "dead_head_recovery",
+          "verdict": "PASS",
+          "summary": "No dead head recovery needed",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "grad_clipping",
+          "verdict": "PASS",
+          "summary": "No gradient clipping events",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "det_health_state",
+          "verdict": "SKIP",
+          "summary": "DET health not in state",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "headpose_health_state",
+          "verdict": "SKIP",
+          "summary": "HeadPose health not in state",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "psr_health_state",
+          "verdict": "SKIP",
+          "summary": "PSR health not in state",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "optimizer_active",
+          "verdict": "WARN",
+          "summary": "No optimizer references in log tail",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "log_anomaly",
+      "elapsed_s": 0.0,
+      "worst": "FAIL",
+      "passed": false,
+      "error": null,
+      "num_checks": 6,
+      "checks": [
+        {
+          "name": "error_frequency",
+          "verdict": "PASS",
+          "summary": "No ERROR/CRITICAL lines in log tail",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "warning_frequency",
+          "verdict": "PASS",
+          "summary": "0 warning-pattern lines in 1 log lines",
+          "detail": "",
+          "metric": 0.0,
+          "threshold": 10,
+          "dimension": "warning_frequency"
+        },
+        {
+          "name": "log_silence",
+          "verdict": "FAIL",
+          "summary": "No active training signals in last log lines",
+          "detail": "Log may be stalled or training frozen",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "nan_propagation",
+          "verdict": "PASS",
+          "summary": "No NaN propagation detected",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "training_interruptions",
+          "verdict": "PASS",
+          "summary": "No training interruptions",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "log_activity_rate",
+          "verdict": "WARN",
+          "summary": "No LIVENESS lines \u2014 log format may have changed",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "loss_health",
+      "elapsed_s": 0.0,
+      "worst": "SKIP",
+      "passed": true,
+      "error": null,
+      "num_checks": 7,
+      "checks": [
+        {
+          "name": "det_cls_loss",
+          "verdict": "SKIP",
+          "summary": "det_cls loss not in log tail",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "det_box_loss",
+          "verdict": "SKIP",
+          "summary": "det_box loss not in log tail",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "total_loss",
+          "verdict": "SKIP",
+          "summary": "Total loss not in log tail",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "loss_plateau",
+          "verdict": "SKIP",
+          "summary": "Only 0 loss records, need 5",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "loss_divergence",
+          "verdict": "SKIP",
+          "summary": "Need \u22653 total loss samples",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "metric_loss_valid",
+          "verdict": "SKIP",
+          "summary": "No metrics available",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "loss_head_balance",
+          "verdict": "SKIP",
+          "summary": "Insufficient data",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "metrics_logger",
+      "elapsed_s": 0.0,
+      "worst": "FAIL",
+      "passed": false,
+      "error": null,
+      "num_checks": 1,
+      "checks": [
+        {
+          "name": "metrics_data_available",
+          "verdict": "FAIL",
+          "summary": "No metrics.jsonl entries found",
+          "detail": "Metrics logging may not be active",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "nan_detector",
+      "elapsed_s": 0.0,
+      "worst": "PASS",
+      "passed": true,
+      "error": null,
+      "num_checks": 4,
+      "checks": [
+        {
+          "name": "nan_in_log",
+          "verdict": "PASS",
+          "summary": "No NaN/Inf in log tail",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "nan_in_metrics",
+          "verdict": "PASS",
+          "summary": "No NaN/Inf in metrics.jsonl",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "nan_in_validation",
+          "verdict": "PASS",
+          "summary": "No NaN/Inf in validation",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "nan_gradient_norms",
+          "verdict": "PASS",
+          "summary": "All 0 grad norms finite",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "probe_analyzer",
+      "elapsed_s": 0.0,
+      "worst": "SKIP",
+      "passed": true,
+      "error": null,
+      "num_checks": 5,
+      "checks": [
+        {
+          "name": "val_mAP50",
+          "verdict": "SKIP",
+          "summary": "No val det_mAP50 in metrics.jsonl",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "val_trend_3epoch",
+          "verdict": "SKIP",
+          "summary": "Only 0 val mAP entries, need 3",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "class_level_APs",
+          "verdict": "SKIP",
+          "summary": "No per-class AP in metrics.jsonl",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "probe_statistics",
+          "verdict": "SKIP",
+          "summary": "No DET_PROBE lines parsed",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "probe_consistency",
+          "verdict": "SKIP",
+          "summary": "Need \u22653 probe samples for std",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "process_health",
+      "elapsed_s": 0.0,
+      "worst": "CRIT",
+      "passed": false,
+      "error": null,
+      "num_checks": 3,
+      "checks": [
+        {
+          "name": "pid_alive",
+          "verdict": "CRIT",
+          "summary": "PID 361404: DEAD",
+          "detail": "Checked via /proc/361404",
+          "metric": null,
+          "threshold": null,
+          "dimension": "pid_alive"
+        },
+        {
+          "name": "heartbeat_freshness",
+          "verdict": "WARN",
+          "summary": "No heartbeat timestamp in state",
+          "detail": "State file may not include heartbeat field",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "training_activity",
+          "verdict": "FAIL",
+          "summary": "No training activity (only 1 log lines)",
+          "detail": "Training process may be stalled or not producing output",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    },
+    {
+      "agent": "summary",
+      "elapsed_s": 0.0,
+      "worst": "CRIT",
+      "passed": false,
+      "error": null,
+      "num_checks": 3,
+      "checks": [
+        {
+          "name": "trend_direction",
+          "verdict": "SKIP",
+          "summary": "Trend: INSUFFICIENT_DATA",
+          "detail": "Recent metric history: []",
+          "metric": null,
+          "threshold": null,
+          "dimension": "trend_direction"
+        },
+        {
+          "name": "recommended_actions",
+          "verdict": "CRIT",
+          "summary": "4 action items: MAE gate already met (9.2\u00b0 \u2264 60.0\u00b0); CRITICAL: Training process is dead \u2014 restart immediately; Moderate gate gap (0.193) \u2014 review LR schedule and head balance; DET head gradient near zero (0.00e+00) \u2014",
+          "detail": "MAE gate already met (9.2\u00b0 \u2264 60.0\u00b0); CRITICAL: Training process is dead \u2014 restart immediately; Moderate gate gap (0.193) \u2014 review LR schedule and head balance; DET head gradient near zero (0.00e+00) \u2014 head may be dead",
+          "metric": null,
+          "threshold": null,
+          "dimension": "actions"
+        },
+        {
+          "name": "executive_health_score",
+          "verdict": "CRIT",
+          "summary": "Health score: 0/100 (epoch 0, best=0.207, gate=0.4)",
+          "detail": "Score components: metric_ratio=0.52, MAE=met, pid_alive=False, epoch_ratio=0.00",
+          "metric": 0.0,
+          "threshold": 40,
+          "dimension": "health_score"
+        }
+      ]
+    },
+    {
+      "agent": "validation",
+      "elapsed_s": 0.0,
+      "worst": "FAIL",
+      "passed": false,
+      "error": null,
+      "num_checks": 7,
+      "checks": [
+        {
+          "name": "validation_active",
+          "verdict": "FAIL",
+          "summary": "No validation log lines",
+          "detail": "Validation may not be scheduled or the eval loop isn't running",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "val_metrics_nonzero",
+          "verdict": "SKIP",
+          "summary": "No metrics data",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "val_frequency",
+          "verdict": "SKIP",
+          "summary": "Only 0 val epochs, need 2",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "val_metric_consistency",
+          "verdict": "SKIP",
+          "summary": "Need \u22653 val measurements, have 0",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "val_nan_metrics",
+          "verdict": "PASS",
+          "summary": "No NaN/Inf in val metrics",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "val_step_count",
+          "verdict": "SKIP",
+          "summary": "Val step count not found",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        },
+        {
+          "name": "val_gate_eta",
+          "verdict": "SKIP",
+          "summary": "Insufficient data",
+          "detail": "",
+          "metric": null,
+          "threshold": null,
+          "dimension": ""
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,172 @@
+========================================================================
+RF2 SWARM REPORT  —  Cycle #1  —  2026-06-27 04:17:53 UTC
+========================================================================
+
+Epoch:     0
+Step:      None
+PID alive: False
+Best mAP50: 0.4622134028185104
+GPU util:  -1%
+GPU mem:   -1.0 GB
+E4 grad:   {}
+
+────────────────────────────────────────  ALERTS  ────────────────────────────────────────
+  [CRIT] blocker_assessment/p0_blockers: P0 blockers: 1 — []
+  [CRIT] blocker_assessment/overall_health: Training health: CRITICAL (epoch 0, best=0.462, gate=0.4)
+  [WARN] checkpoint/latest_ckpt_age: No checkpoint files found
+  [WARN] convergence/learning_rate: No LR mentioned in log tail
+  [FAIL] cuda_health/gpu_visibility: nvidia-smi failed: could not convert string to float: '132.36\n34'
+  [WARN] data_pipeline/augmentation_active: Augmentation log lines: 0
+  [WARN] data_pipeline/data_freshness: No metrics data available
+  [WARN] epoch_tracker/epoch_progress: Epoch data not available
+  [WARN] gate_tracker/gate_passed: Gate passed: False
+  [FAIL] gate_tracker/best_det_mAP50_vs_gate: best_mAP50=0.207, target=0.4, gap=0.193
+  [WARN] gate_tracker/best_mAP50_95_vs_gate: mAP50_95 not tracked in state yet
+  [WARN] gate_tracker/val_activity: No validation log lines in tail
+  [FAIL] gpu_resource/gpu_query: nvidia-smi failed: could not convert string to float: '132.36\n34'
+  [WARN] head_recovery/optimizer_active: No optimizer references in log tail
+  [FAIL] log_anomaly/log_silence: No active training signals in last log lines
+  [WARN] log_anomaly/log_activity_rate: No LIVENESS lines — log format may have changed
+  [FAIL] metrics_logger/metrics_data_available: No metrics.jsonl entries found
+  [CRIT] process_health/pid_alive: PID 361404: DEAD
+  [WARN] process_health/heartbeat_freshness: No heartbeat timestamp in state
+  [FAIL] process_health/training_activity: No training activity (only 1 log lines)
+  [CRIT] summary/recommended_actions: 4 action items: MAE gate already met (9.2° ≤ 60.0°); CRITICAL: Training process is dead — restart immediately; Moderate gate gap (0.193) — review LR schedule and head balance; DET head gradient near zero (0.00e+00) —
+  [CRIT] summary/executive_health_score: Health score: 0/100 (epoch 0, best=0.207, gate=0.4)
+  [FAIL] validation/validation_active: No validation log lines
+
+────────────────────────────────────────  AGENT RESULTS  ────────────────────────────────────────
+  blocker_assessment: 3 checks, worst=CRIT, 0.0s
+    [CRIT] p0_blockers: P0 blockers: 1 — []
+    [CRIT] overall_health: Training health: CRITICAL (epoch 0, best=0.462, gate=0.4)
+
+  checkpoint: 9 checks, worst=WARN, 0.0s
+    [WARN] latest_ckpt_age: No checkpoint files found
+    [SKIP] ckpt_disk_usage: No checkpoint data
+    [SKIP] ckpt_size_consistency: Only 0 checkpoints
+    [SKIP] free_disk_space: Could not get disk space
+    [SKIP] best_ckpt_saved: best_epoch not in state
+    [SKIP] resume_file: No resume file (ok for fresh training)
+    [SKIP] ckpt_save_interval: Not enough checkpoints
+
+  config_validator: 7 checks, worst=SKIP, 0.0s
+    [SKIP] effective_batch_size: batch_size or accum_steps not found
+    [SKIP] learning_rate_sanity: LR not found in log
+    [SKIP] active_heads_config: active_heads not in state
+    [SKIP] subset_ratio: subset_ratio not in log
+    [SKIP] backbone_config: No backbone config in log
+    [SKIP] training_precision: No precision info in log
+    [SKIP] max_epochs_config: max_epochs not found
+
+  convergence: 6 checks, worst=WARN, 0.0s
+    [SKIP] metric_stagnation: Need ≥10 history entries
+    [SKIP] metric_oscillation: Need ≥5 history entries for oscillation detection
+    [SKIP] convergence_velocity: Need ≥3 entries
+    [SKIP] loss_plateau_log: Only 0 loss entries
+    [WARN] learning_rate: No LR mentioned in log tail
+
+  cuda_health: 6 checks, worst=FAIL, 0.0s
+    [FAIL] gpu_visibility: nvidia-smi failed: could not convert string to float: '132.36\n34'
+    [SKIP] cuda_version: CUDA version not in log
+    [SKIP] cudnn_status: cuDNN not mentioned in log
+
+  data_pipeline: 10 checks, worst=WARN, 0.0s
+    [SKIP] dataset_size: No dataset size info in log
+    [SKIP] batch_timing: No batch timing info in log
+    [SKIP] batch_size: No batch_size in log
+    [SKIP] data_memory_usage: GPU data not available
+    [SKIP] checkpoint_disk_usage: No checkpoint data
+    [WARN] augmentation_active: Augmentation log lines: 0
+    [WARN] data_freshness: No metrics data available
+
+  epoch_tracker: 5 checks, worst=WARN, 0.0s
+    [WARN] epoch_progress: Epoch data not available
+    [SKIP] epoch_duration: Epoch timing not available
+    [SKIP] training_eta: Cannot compute ETA
+    [SKIP] batch_throughput: Cannot compute throughput
+    [SKIP] step_consistency: Not enough metrics
+
+  gate_predictor: 6 checks, worst=SKIP, 0.0s
+    [SKIP] gate_eta_prediction: Need 3 val points, have 0
+    [SKIP] gate_confidence: Insufficient data
+    [SKIP] mae_gate_prediction: MAE data not available
+    [SKIP] map50_95_gate_eta: Insufficient mAP50_95 data
+    [SKIP] required_improvement_rate: Insufficient data
+    [SKIP] trend_direction: Need ≥4 data points, have 0
+
+  gate_tracker: 10 checks, worst=FAIL, 0.0s
+    [WARN] gate_passed: Gate passed: False
+    [FAIL] best_det_mAP50_vs_gate: best_mAP50=0.207, target=0.4, gap=0.193
+    [SKIP] current_det_mAP50: No val metrics available
+    [WARN] best_mAP50_95_vs_gate: mAP50_95 not tracked in state yet
+    [SKIP] progress_rate: Not enough data for rate estimation
+    [WARN] val_activity: No validation log lines in tail
+    [SKIP] gate_gap_trend: Gate gap trend: unknown
+
+  gpu_resource: 1 checks, worst=FAIL, 0.0s
+    [FAIL] gpu_query: nvidia-smi failed: could not convert string to float: '132.36\n34'
+
+  head_health: 10 checks, worst=SKIP, 0.0s
+    [SKIP] det_head_grad_norm: No E4 grad norm data for DET head
+    [SKIP] hp_head_grad_norm: No HP grad norm data
+    [SKIP] act_head_grad_norm: No activity head grad norm
+    [SKIP] psr_head_grad_norm: No PSR head grad norm
+    [SKIP] backbone_grad_norm: No backbone grad norm
+    [SKIP] head_grad_balance: Insufficient data for head balance
+    [SKIP] det_head_liveness: det_health not in state
+    [SKIP] consecutive_dead_epochs: det_health_history not available
+    [SKIP] kendall_precision_cap: Kendall cap status unknown
+
+  head_recovery: 9 checks, worst=WARN, 0.0s
+    [SKIP] lr_changes: No LR change events
+    [SKIP] det_health_state: DET health not in state
+    [SKIP] headpose_health_state: HeadPose health not in state
+    [SKIP] psr_health_state: PSR health not in state
+    [WARN] optimizer_active: No optimizer references in log tail
+
+  log_anomaly: 6 checks, worst=FAIL, 0.0s
+    [FAIL] log_silence: No active training signals in last log lines
+    [WARN] log_activity_rate: No LIVENESS lines — log format may have changed
+
+  loss_health: 7 checks, worst=SKIP, 0.0s
+    [SKIP] det_cls_loss: det_cls loss not in log tail
+    [SKIP] det_box_loss: det_box loss not in log tail
+    [SKIP] total_loss: Total loss not in log tail
+    [SKIP] loss_plateau: Only 0 loss records, need 5
+    [SKIP] loss_divergence: Need ≥3 total loss samples
+    [SKIP] metric_loss_valid: No metrics available
+    [SKIP] loss_head_balance: Insufficient data
+
+  metrics_logger: 1 checks, worst=FAIL, 0.0s
+    [FAIL] metrics_data_available: No metrics.jsonl entries found
+
+  nan_detector: 4 checks, worst=PASS, 0.0s
+
+  probe_analyzer: 5 checks, worst=SKIP, 0.0s
+    [SKIP] val_mAP50: No val det_mAP50 in metrics.jsonl
+    [SKIP] val_trend_3epoch: Only 0 val mAP entries, need 3
+    [SKIP] class_level_APs: No per-class AP in metrics.jsonl
+    [SKIP] probe_statistics: No DET_PROBE lines parsed
+    [SKIP] probe_consistency: Need ≥3 probe samples for std
+
+  process_health: 3 checks, worst=CRIT, 0.0s
+    [CRIT] pid_alive: PID 361404: DEAD
+    [WARN] heartbeat_freshness: No heartbeat timestamp in state
+    [FAIL] training_activity: No training activity (only 1 log lines)
+
+  summary: 3 checks, worst=CRIT, 0.0s
+    [SKIP] trend_direction: Trend: INSUFFICIENT_DATA
+    [CRIT] recommended_actions: 4 action items: MAE gate already met (9.2° ≤ 60.0°); CRITICAL: Training process is dead — restart immediately; Moderate gate gap (0.193) — review LR schedule and head balance; DET head gradient near zero (0.00e+00) —
+    [CRIT] executive_health_score: Health score: 0/100 (epoch 0, best=0.207, gate=0.4)
+
+  validation: 7 checks, worst=FAIL, 0.0s
+    [FAIL] validation_active: No validation log lines
+    [SKIP] val_metrics_nonzero: No metrics data
+    [SKIP] val_frequency: Only 0 val epochs, need 2
+    [SKIP] val_metric_consistency: Need ≥3 val measurements, have 0
+    [SKIP] val_step_count: Val step count not found
+    [SKIP] val_gate_eta: Insufficient data
+
+────────────────────────────────────────────────────────────────────────
+Total: 118  |  PASS: 27  |  WARN: 11  |  FAIL: 12  |  SKIP: 68
+========================================================================
