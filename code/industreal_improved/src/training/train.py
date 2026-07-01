@@ -3338,6 +3338,15 @@ def main(args):
         )
 
     class_counts = train_ds.class_counts  # full 75-element bincount (indices 0-74 for action_ids 0-74); set_class_counts handles the shift via counts[1:]
+    # Remap to group space when grouping is active (loss expects NUM_ACT_OUTPUTS-length weights)
+    _m = str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower()
+    if _m != 'none':
+        _grouped = [0] * int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_CLASSES_ACT))
+        for _raw_id, _cnt in enumerate(class_counts):
+            _gid = C.remap_activity_label(_raw_id)
+            if _gid >= 0 and _gid < len(_grouped):
+                _grouped[_gid] += _cnt
+        class_counts = _grouped
 
     logger.info(f'Training samples  : {len(train_ds):,}')
     logger.info(f'Validation samples: {len(val_ds):,}')
