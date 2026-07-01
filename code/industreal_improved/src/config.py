@@ -278,41 +278,46 @@ assert len(ACT_CLASS_NAMES) == NUM_CLASSES_ACT == 75, (
 # pooled features. The mapping is derived data-drivenly from ACT_CLASS_NAMES,
 # so no hand-coded table is needed.
 #
-#   ACT_CLASS_GROUPING = os.environ.get('ACT_CLASS_GROUPING', 'verb')  -> identity (raw 75-class task, default; no change)
-#   ACT_CLASS_GROUPING = os.environ.get('ACT_CLASS_GROUPING', 'verb')  -> ~13 verb groups (Route A)
+#   ACT_CLASS_GROUPING = 'none'     -> raw 75-class task (identity)
+#   ACT_CLASS_GROUPING = 'verb'     -> pure verb groups (~10-13)
+#   ACT_CLASS_GROUPING = 'hybrid'   -> standalone for well-supported, verb for tail
 #
 # Downstream wiring (all gated by NUM_ACT_OUTPUTS / ACT_ID_TO_GROUP):
 #   - dataset remaps each frame's action_label through ACT_ID_TO_GROUP
 #   - the activity head + activity loss are sized to NUM_ACT_OUTPUTS
 #   - eval reports group names (ACT_OUTPUT_NAMES); macro-F1's present-label
 #     filter already restricts the average to the groups that appear.
-ACT_CLASS_GROUPING = os.environ.get('ACT_CLASS_GROUPING', 'verb')
+#
+# For 'hybrid' mode: classes with >= ACT_HYBRID_THRESHOLD frames are kept
+# standalone; the rest are verb-grouped (by first underscore token).
+ACT_CLASS_GROUPING = os.environ.get('ACT_CLASS_GROUPING', 'hybrid')
+ACT_HYBRID_THRESHOLD = 100  # classes with >=100 frames stay standalone in hybrid mode
 
-def _build_act_grouping(mode: str):
-    """Return (id_to_group[75], group_names, num_groups) for the given mode.
-    'none' -> identity. 'verb' -> group by first underscore token of the name.
-    Verbs with 'unknown' are folded into group 0 (has 0 training frames)."""
-    if str(mode).lower() != 'verb':
-        return list(range(NUM_CLASSES_ACT)), list(ACT_CLASS_NAMES), NUM_CLASSES_ACT
-    verb_to_gid = {}
-    group_names = []
-    id_to_group = [0] * NUM_CLASSES_ACT
-    for i, name in enumerate(ACT_CLASS_NAMES):
-        verb = (str(name).split('_')[0] if name else f'cls{i}') or f'cls{i}'
-        # Fold 'unknown' into group 0 (has 0 training frames as its own group)
-        if verb == 'unknown':
-            id_to_group[i] = 0
-            continue
-        if verb not in verb_to_gid:
-            verb_to_gid[verb] = len(group_names)
-            group_names.append(verb)
-        id_to_group[i] = verb_to_gid[verb]
-    return id_to_group, group_names, len(group_names)
+# Lazy resolution via get_act_grouping() — avoids circular import at module level.
+# Consumers should use get_act_grouping() or the public helpers below.
+_ACT_GROUPING_CACHE = None  # (id_to_group, group_names, num_groups)
 
-ACT_ID_TO_GROUP, ACT_GROUP_NAMES, NUM_ACT_GROUPS = _build_act_grouping(ACT_CLASS_GROUPING)
-# Effective number of activity-head outputs and the names eval/report should use.
-NUM_ACT_OUTPUTS = NUM_ACT_GROUPS if str(ACT_CLASS_GROUPING).lower() == 'verb' else NUM_CLASSES_ACT
-ACT_OUTPUT_NAMES = ACT_GROUP_NAMES if str(ACT_CLASS_GROUPING).lower() == 'verb' else list(ACT_CLASS_NAMES)
+def _act_grouping():
+    """Return cached (id_to_group, group_names, num_groups), building on first call."""
+    global _ACT_GROUPING_CACHE
+    if _ACT_GROUPING_CACHE is None:
+        _ACT_GROUPING_CACHE = _build_act_grouping(ACT_CLASS_GROUPING)
+    return _ACT_GROUPING_CACHE
+
+def get_act_id_to_group():
+    return _act_grouping()[0]
+
+def get_act_group_names():
+    return _act_grouping()[1]
+
+def get_num_act_outputs():
+    return _act_grouping()[2]
+
+def get_act_output_names():
+    """Return output names matching the current grouping mode."""
+    if str(ACT_CLASS_GROUPING).lower() == 'none':
+        return list(ACT_CLASS_NAMES)
+    return get_act_group_names()
 
 def remap_activity_label(raw):
     """Map a raw action_id to its grouped output index. Preserves the -1
@@ -320,9 +325,72 @@ def remap_activity_label(raw):
     r = int(raw)
     if r < 0:
         return r
-    if r >= len(ACT_ID_TO_GROUP):
-        return r if r < NUM_ACT_OUTPUTS else (NUM_ACT_OUTPUTS - 1)
-    return int(ACT_ID_TO_GROUP[r])
+    id_to_group = get_act_id_to_group()
+    num_out = get_num_act_outputs()
+    if r >= len(id_to_group):
+        return r if r < num_out else (num_out - 1)
+    return int(id_to_group[r])
+
+def _build_act_grouping(mode: str):
+    """Return (id_to_group[75], group_names, num_groups) for the given mode.
+    'none' -> identity. 'verb' -> group by first underscore token.
+    'hybrid' -> standalone for classes >= ACT_HYBRID_THRESHOLD, verb-group for tail.
+    Unknown verbs are folded into the nearest real verb group."""
+    m = str(mode).lower()
+    if m == 'none':
+        return list(range(NUM_CLASSES_ACT)), list(ACT_CLASS_NAMES), NUM_CLASSES_ACT
+
+    # Load per-FRAME counts for hybrid mode directly from the dataset samples.
+    # The dataset is loaded lazily inside this function (safe — circular import
+    # has resolved by the time this function is actually called).
+    frame_counts = None
+    if m == 'hybrid':
+        try:
+            from src.data.industreal_dataset import IndustRealMultiTaskDataset
+            from collections import Counter
+            _ds = IndustRealMultiTaskDataset(split='train')
+            _raw_counts = Counter(int(s['action_label']) for s in _ds.samples)
+            frame_counts = [_raw_counts.get(i, 0) for i in range(NUM_CLASSES_ACT)]
+            print(f'[config] hybrid mode: loaded {sum(frame_counts)} labeled frames from dataset')
+        except Exception as _exc:
+            print(f'[config] hybrid mode: cannot load dataset ({_exc}), falling back to pure verb')
+            m = 'verb'
+
+    id_to_group = [0] * NUM_CLASSES_ACT
+    standalone_gid = {}  # verb -> group index for well-supported classes
+    tail_gid = {}        # verb -> group index for tail classes
+    group_names = []
+    # group 0 always reserved for fold-in (unknown, etc.)
+    group_names.append('other')  # index 0
+
+    for i, name in enumerate(ACT_CLASS_NAMES):
+        verb = (str(name).split('_')[0] if name else f'cls{i}') or f'cls{i}'
+
+        # Fold unknown / zero-frame into 'other' (index 0)
+        fc = frame_counts[i] if frame_counts else 0
+        if verb == 'unknown' or (m == 'hybrid' and frame_counts is not None and fc == 0):
+            id_to_group[i] = 0
+            continue
+
+        # Hybrid: classes above threshold keep their own fine-grained identity
+        if m == 'hybrid' and frame_counts is not None and fc >= ACT_HYBRID_THRESHOLD:
+            if name not in group_names:
+                group_names.append(name)
+            id_to_group[i] = group_names.index(name)
+            continue
+
+        # Tail or pure verb mode: group by verb
+        if verb not in tail_gid:
+            # Reuse existing fine-grained entry if this verb has one
+            existing = [j for j, gn in enumerate(group_names) if gn == verb or gn.startswith(verb + '_') and gn != f'{verb}_tail']
+            if existing:
+                tail_gid[verb] = existing[0]
+            else:
+                group_names.append(verb)
+                tail_gid[verb] = len(group_names) - 1
+        id_to_group[i] = tail_gid[verb]
+
+    return id_to_group, group_names, len(group_names)
 
 # --- Head pose ---
 NUM_KEYPOINTS = 17
@@ -1847,3 +1915,16 @@ _cfg_logger.info(f'[config] USE_TMA_CELL={USE_TMA_CELL}, USE_TEMPORAL_BANK={USE_
 # [FIX 2026-06-17] PSR_WEIGHT moved from line 1362 into the loss-weights section.
 # PSR_WEIGHT = 10.0 was previously declared after the INITIALIZATION block,
 # creating a module-level constant that could silently override config values.
+
+# =========================================================================
+# Activity grouping — lazy module-level attributes
+# =========================================================================
+# These are set here (after INITIALIZATION) so that circular imports between
+# config -> dataset -> config resolve cleanly. During first import, get_act_grouping()
+# triggers dataset loading; after it completes, these attributes become available
+# to all downstream modules.
+_act_g = _act_grouping()
+NUM_ACT_OUTPUTS = _act_g[2]  # effective head width (= 75 for 'none', ~10 for 'verb', ~47 for 'hybrid')
+ACT_OUTPUT_NAMES = _act_g[1] if str(ACT_CLASS_GROUPING).lower() != 'none' else list(ACT_CLASS_NAMES)
+ACT_ID_TO_GROUP = _act_g[0]  # raw_id -> output_index mapping (length 75)
+ACT_GROUP_NAMES = _act_g[1]  # names of all output groups
