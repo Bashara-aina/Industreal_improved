@@ -2013,11 +2013,36 @@ def train_one_epoch(
                 avail_gb = avail_kb / 1024 / 1024
                 buffers_kb = int(meminfo.get('Buffers', '0').split()[0])
                 cached_kb = int(meminfo.get('Cached', '0').split()[0])
-                if avail_gb < 2.0:
+                if avail_gb < 1.5:
+                    logger.critical(
+                        f'  [CPU RAM CRITICAL] Available={avail_gb:.1f}GB -- '
+                        f'killing training to prevent system freeze!'
+                    )
+                    # Immediate exit — do not let OOM killer take desktop processes.
+                    # os._exit is used (not sys.exit) to bypass all exception handlers
+                    # and cleanup — when the system is this memory-starved, any
+                    # cleanup effort (gc, cuda sync, checkpoint writes) will make
+                    # things worse by touching memory pages that trigger OOM kill.
+                    os._exit(42)
+                elif avail_gb < 3.0:
                     logger.error(
                         f'  [CPU RAM WARNING] Available={avail_gb:.1f}GB -- '
-                        f'OOM risk! Consider reducing VAL_NUM_WORKERS or NUM_WORKERS'
+                        f'freeing memory proactively'
                     )
+                    # Proactive memory relief: force GC + CUDA cache clear before
+                    # pressure reaches critical. torch.cuda.empty_cache() releases
+                    # cached allocator memory back to the OS; gc.collect() frees
+                    # unreferenced CPU tensors. Run multiple passes to handle
+                    # reference cycles in DataLoader internal buffers.
+                    for _ in range(3):
+                        gc.collect()
+                    torch.cuda.empty_cache()
+                    if torch.cuda.is_available():
+                        _freed = torch.cuda.memory_reserved() / (1024**2)
+                        logger.info(
+                            f'  [CPU RAM] freed GPU cached allocator '
+                            f'({_freed:.0f}MB reserved)'
+                        )
                 else:
                     logger.info(
                         f'  [CPU RAM] step={step + 1}  avail={avail_gb:.1f}GB  '
