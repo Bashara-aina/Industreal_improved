@@ -534,6 +534,10 @@ USE_COSINE_ANNEALING = False  # Per paper: uses OneCycleLR instead
 T_0 = 10
 T_mult = 2
 PATIENCE      = 10
+
+# [CRASH-HARDEN v2] GPU heartbeat watchdog timeout in seconds.
+WATCHDOG_TIMEOUT = 1200
+
 GRAD_CLIP_NORM = 5.0  # [FIX 2026-07-01 agent audit] Was 1.0 — far too tight for 5-head multi-task model.
                          # Combined gradient norm from 5 heads sharing backbone easily exceeds 5.0.
                          # At 1.0, every head's gradient was clipped 80-90%, slowing backbone convergence.
