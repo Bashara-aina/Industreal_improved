@@ -1,6 +1,20 @@
 # 80 — Head Pose + Multi-Task Orchestration: Final Gradient Health Verification [2026-07-01]
 
-**Goal:** Guarantee the Kendall uncertainty-weighted multi-task training is stable, no single task dominates or starves, and all 4 heads receive healthy gradient flow. This is the glue that determines whether the previous 3 files' individual fixes translate to a working joint model.
+**Goal:** Guarantee the Kendall uncertainty-weighted multi-task training is stable, no single task dominates or starves, and all tasks receive healthy gradient flow. This is the glue that determines whether the previous 3 files' individual fixes translate to a working joint model.
+
+## Important: Understanding the "Pose" Confusion
+
+The term "pose" in this codebase refers to THREE different things. Keeping them straight is critical:
+
+| Term | What it is | Ground truth source | Has IndustReal benchmark? | What to report |
+|------|-----------|-------------------|--------------------------|----------------|
+| **Head pose** (ours) | 9-DoF: forward[3] + position[3] + up[3] | Real HL2 sensor (`pose.csv`, 10 FPS) | **No** — novel addition | forward-gaze MAE, position MAE |
+| **Body keypoints** | 17 COCO keypoints via PoseHead | **Pseudo** — generated from detection boxes (model.py:1972-1976). No real annotations exist in IndustReal. | **No** — not a real task | Do NOT report as benchmark |
+| **Hand-FiLM** | Hand tracking → FiLM modulation on C5 features | From `hands.csv` (HL2) | **No** — feature enhancer | Ablation only (with/without) |
+
+**Fact**: IndustReal (WACV 2024) defines exactly **3 official benchmarks**: Action Recognition (AR), Assembly State Detection (ASD), and Procedure Step Recognition (PSR). Body pose and head pose are not benchmarked — they are raw sensor streams. Our `HeadPoseHead` adds 9-DoF head pose prediction as a **novel multi-task contribution**, establishing the first baseline on this data.
+
+The 4 task groups for Kendall are: **detection, activity, PSR, head pose**. Body pose shares `log_var_pose` with head pose but `loss_pose ≈ 0` always (no real keypoint targets).
 
 **Source files (all paths relative to `code/industreal_improved/src/`):**
 - `config.py:40–96, 508–518, 720–894, 1450–1530` — training flags, staged training, Kendall bounds, gradient blend
@@ -30,7 +44,7 @@ self.log_var_act = nn.Parameter(torch.zeros(1))   # s=0, precision=1.0
 self.log_var_psr = nn.Parameter(torch.zeros(1))   # s=0, precision=1.0
 ```
 
-**Key design choice** (losses.py:1019-1026): `log_var_pose` is shared for BOTH body pose (17-keypoint Wing Loss) AND head pose (9-DoF MSE). This is intentional per the paper spec: both are pose tasks of similar magnitude.
+**Key design choice** (losses.py:1019-1026): `log_var_pose` is shared for BOTH body pose (17-keypoint Wing Loss — pseudo, no real GT) AND head pose (9-DoF MSE — real GT from pose.csv). This is intentional per the paper spec: both are pose tasks of similar magnitude. **However**, since IndustReal has no real body keypoint annotations, `loss_pose ≈ 0` always (the Wing Loss branch at losses.py:1325-1333 finds no `'keypoints'` in targets). The loss code at losses.py:1766-1777 was specifically fixed (2026-06-17) to include `loss_head_pose` even when `loss_pose = 0`, so the head pose contribution is not zeroed by the dead body-pose branch.
 
 ### 1.2 Kendall Clamp Range (losses.py:988-991, config.py:854-860)
 ```python
@@ -198,7 +212,7 @@ STAGED_TRAINING = False  # All heads active from epoch 0
 
 The current config has `STAGED_TRAINING=False`, meaning all 5 heads (detection, body pose, head pose, activity, PSR) train simultaneously from epoch 0. The legacy stage definitions (STAGE1/2/3) are unused.
 
-**Risk**: Without staging, detection has no head-start before activity and PSR begin competing for backbone features. The fixes in files 77-79 (OHEM, DET_GT_FRAME_FRACTION, detached PSR/reg gradients) are designed to work WITHOUT staging — but Opus should verify this was intentional.
+**Risk**: Without staging, detection has no head-start before activity, PSR, and head pose begin competing for backbone features. (Body pose is negligible — `loss_pose ≈ 0` always, no real keypoint GT.) The fixes in files 77-79 (OHEM, DET_GT_FRAME_FRACTION, detached PSR/reg gradients) are designed to work WITHOUT staging — but Opus should verify this was intentional.
 
 **For RF1 (--reinit-heads)**: the `apply_preset()` function in train.py may override to detection-only for the first N epochs. Check if RF1 preset sets `STAGED_TRAINING=True` internally.
 
@@ -270,7 +284,7 @@ At training step 0, 200, 400, etc., the training loop logs:
 - **Activity clip-accuracy (grouped)**: 0.40–0.60
 - **Activity macro-F1 (grouped)**: 0.30–0.50
 - **PSR mean binary accuracy**: 0.75–0.85
-- **Head pose forward-gaze MAE**: 8.71° (or better) — this is the established baseline
+- **Head pose forward-gaze MAE**: 8.71° (or better) — our own target (no IndustReal baseline exists for head pose)
 - **Head pose position MAE**: < 20mm
 
 **If multiple heads fail simultaneously**: the issue is likely a gradient flow problem in the shared backbone (not the log-var device — §1.6 confirmed safe). Run one diagnostic epoch with `SIMPLIFY_LOSS=True` and `ASSERT_AND_CRASH=True` to surface any NaN/inf issues early.
