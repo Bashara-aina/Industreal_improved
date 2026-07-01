@@ -1837,8 +1837,8 @@ def compute_head_pose_metrics(
     gt_forward_norm = np.linalg.norm(gt[:, :3], axis=1).mean()
     pred_up_norm = np.linalg.norm(pred[:, 6:9], axis=1).mean()
     gt_up_norm = np.linalg.norm(gt[:, 6:9], axis=1).mean()
-    forward_is_unit = pred_forward_norm > 0.5 and gt_forward_norm > 0.5
-    up_is_unit = pred_up_norm > 0.5 and gt_up_norm > 0.5
+    forward_is_unit = pred_forward_norm > 0.5  # _angular_err normalizes GT internally
+    up_is_unit = pred_up_norm > 0.5
 
     if forward_is_unit and up_is_unit:
         # Both pred and gt forward/up are unit-norm; report true angular error in degrees.
@@ -3582,7 +3582,7 @@ def evaluate_all(
     if _run_seg_metrics:
         class _SegTimeoutExc(Exception):
             """Raised by SIGALRM handler when segment metrics exceed timeout."""
-        _seg_timeout = 600  # 10 minutes
+        _seg_timeout = 240  # 4 minutes — must be < probe timeout and < subprocess eval timeout
         def _seg_alarm(s, f):
             raise _SegTimeoutExc(
                 f'[GAP-B] Segment metrics timed out after {_seg_timeout}s (CUDA kernel hang)'
@@ -3596,7 +3596,8 @@ def evaluate_all(
             signal.alarm(_seg_timeout)
             _seg_have_alarm = True
         except ValueError:
-            logger.warning('[GAP-B] Cannot set SIGALRM timeout (not in main thread) — running without it')
+            logger.warning('[GAP-B] Cannot set SIGALRM timeout (not in main thread) — skipping segment metrics to avoid CUDA hang')
+            _run_seg_metrics = False
         try:
             seg_metrics = compute_activity_segment_metrics(
                 model, loader.dataset, device, T=16,

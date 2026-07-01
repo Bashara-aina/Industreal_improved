@@ -110,16 +110,17 @@ def _val_worker(
         prefetch_factor=2 if int(getattr(C, 'VAL_NUM_WORKERS', 0)) > 0 else None,
     )
 
-    max_batches = int(overrides.get('EVAL_MAX_BATCHES', 0)) or None
+    _raw_max_batches = overrides.get('EVAL_MAX_BATCHES')
+    max_batches = int(_raw_max_batches) if _raw_max_batches is not None else 0
 
-    logger.info('[SUB] Starting evaluate_all (max_batches=%s, batch_size=%d) ...', max_batches, val_batch_size)
+    logger.info('[SUB] Starting evaluate_all (max_batches=%s, batch_size=%d) ...', max_batches or 'unlimited', val_batch_size)
     with torch.no_grad():
         metrics = evaluate_all(
             model,
             criterion=None,  # loss not needed for inference-only eval
             loader=val_loader,
             device='cuda',
-            max_batches=max_batches or 2500,
+            max_batches=max_batches if max_batches > 0 else None,
             epoch=int(overrides.get('epoch', 0)),
         )
 

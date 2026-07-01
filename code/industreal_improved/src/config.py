@@ -303,16 +303,52 @@ assert len(ACT_CLASS_NAMES) == NUM_CLASSES_ACT == 75, (
 ACT_CLASS_GROUPING = os.environ.get('ACT_CLASS_GROUPING', 'hybrid')
 ACT_HYBRID_THRESHOLD = 100  # classes with >=100 frames stay standalone in hybrid mode
 
-# Lazy resolution via get_act_grouping() — avoids circular import at module level.
-# Consumers should use get_act_grouping() or the public helpers below.
-_ACT_GROUPING_CACHE = None  # (id_to_group, group_names, num_groups)
+# Lazy resolution via _act_grouping() — avoids circular import at module level.
+# NOTE: For 'hybrid' mode, we load the dataset to count per-class frames. To
+# prevent loading the full dataset (~800MB images) at module import time, the
+# first access to NUM_ACT_OUTPUTS etc. triggers the load via these helpers.
+# Results are cached in _ACT_GROUPING_CACHE so repeated imports are free.
+_ACT_GROUPING_CACHE = {}  # mode_string -> (id_to_group, group_names, num_groups)
+_ACT_FRAME_COUNTS_CACHE = None  # 75-element list or None, computed once
+
+def _count_act_frames_lightweight() -> list:
+    """Per-class frame counts from AR_labels.csv metadata only.
+    No images loaded, no OD/PSR/pose/hands parsing. Cached globally."""
+    global _ACT_FRAME_COUNTS_CACHE
+    if _ACT_FRAME_COUNTS_CACHE is not None:
+        return _ACT_FRAME_COUNTS_CACHE
+    from collections import Counter
+    recordings_root = RECORDINGS_ROOT
+    counter = Counter()
+    for split in ('train', 'val', 'test'):
+        split_root = recordings_root / split
+        if not split_root.exists():
+            continue
+        for rec in sorted(os.listdir(str(split_root))):
+            ar_file = split_root / rec / 'AR_labels.csv'
+            if not ar_file.exists():
+                continue
+            try:
+                with open(ar_file, encoding='utf-8') as f:
+                    for line in f:
+                        parts = line.strip().split(',')
+                        if len(parts) >= 5:
+                            aid = int(parts[1])
+                            start = int(Path(parts[3]).stem)
+                            end = int(Path(parts[4]).stem)
+                            counter[aid] += (end - start + 1)
+            except (OSError, ValueError, IndexError):
+                continue
+    _ACT_FRAME_COUNTS_CACHE = [counter.get(i, 0) for i in range(NUM_CLASSES_ACT)]
+    return _ACT_FRAME_COUNTS_CACHE
 
 def _act_grouping():
     """Return cached (id_to_group, group_names, num_groups), building on first call."""
     global _ACT_GROUPING_CACHE
-    if _ACT_GROUPING_CACHE is None:
-        _ACT_GROUPING_CACHE = _build_act_grouping(ACT_CLASS_GROUPING)
-    return _ACT_GROUPING_CACHE
+    mode = str(ACT_CLASS_GROUPING).lower()
+    if mode not in _ACT_GROUPING_CACHE:
+        _ACT_GROUPING_CACHE[mode] = _build_act_grouping(mode)
+    return _ACT_GROUPING_CACHE[mode]
 
 def get_act_id_to_group():
     return _act_grouping()[0]
@@ -350,20 +386,19 @@ def _build_act_grouping(mode: str):
     if m == 'none':
         return list(range(NUM_CLASSES_ACT)), list(ACT_CLASS_NAMES), NUM_CLASSES_ACT
 
-    # Load per-FRAME counts for hybrid mode directly from the dataset samples.
-    # The dataset is loaded lazily inside this function (safe — circular import
-    # has resolved by the time this function is actually called).
+    # Load per-FRAME counts for hybrid mode from AR_labels.csv metadata only.
+    # [FIX 2026-07-01] Replaced full dataset loading (which loaded images,
+    # OD/PSR/pose/hands + ~1.8GB RAM cache) with lightweight CSV metadata
+    # scanning. The old approach caused OOM on repeated config imports (the
+    # dataset was constructed 40+ times at module import).
     frame_counts = None
     if m == 'hybrid':
         try:
-            from src.data.industreal_dataset import IndustRealMultiTaskDataset
-            from collections import Counter
-            _ds = IndustRealMultiTaskDataset(split='train')
-            _raw_counts = Counter(int(s['action_label']) for s in _ds.samples)
-            frame_counts = [_raw_counts.get(i, 0) for i in range(NUM_CLASSES_ACT)]
-            print(f'[config] hybrid mode: loaded {sum(frame_counts)} labeled frames from dataset')
+            frame_counts = _count_act_frames_lightweight()
+            if frame_counts is not None:
+                print(f'[config] hybrid mode: counted {sum(frame_counts)} labeled frames from AR_labels.csv')
         except Exception as _exc:
-            print(f'[config] hybrid mode: cannot load dataset ({_exc}), falling back to pure verb')
+            print(f'[config] hybrid mode: cannot count frames ({_exc}), falling back to pure verb')
             m = 'verb'
 
     id_to_group = [0] * NUM_CLASSES_ACT
