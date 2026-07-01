@@ -37,7 +37,7 @@ def main():
 
     # Optional: per-group TRAIN frame counts (requires the dataset to load).
     try:
-        from src.data.industreal_dataset import IndustRealDataset  # noqa: E402
+        from src.data.industreal_dataset import IndustRealMultiTaskDataset as IndustRealDataset  # noqa: E402
         # Honor whatever subset the training uses.
         ds = IndustRealDataset(split='train')
         from collections import Counter

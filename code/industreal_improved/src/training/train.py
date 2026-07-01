@@ -4420,6 +4420,10 @@ def main(args):
                     f'loss={train_metrics.get("total",0)}). Not running val until '
                     f'training is healthy.'
                 )
+            # [100% DATA GUARD] Log SUBSET_RATIO every epoch so we can verify full-data training
+            _subset_v = float(getattr(C, 'SUBSET_RATIO', 1.0))
+            if _subset_v < 1.0:
+                logger.warning(f'  [DATA] WARNING: SUBSET_RATIO={_subset_v} — training on partial data!')
             logger.info(
                 f'  [PRE_VAL_GUARD] epoch {epoch} training healthy: '
                 f'batches={train_metrics["num_batches"]}, loss={train_metrics["total"]:.4f}'

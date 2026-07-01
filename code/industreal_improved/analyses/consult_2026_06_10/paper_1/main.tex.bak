@@ -1,0 +1,647 @@
+% =====================================================================
+% POPW: A Unified Multi-Task Architecture for Egocentric Assembly Understanding
+% Paper 1 — Method / Idea Paper
+% =====================================================================
+% Compile: pdflatex paper1_popw_architecture && bibtex paper1_popw_architecture
+%          && pdflatex paper1_popw_architecture && pdflatex paper1_popw_architecture
+% =====================================================================
+% TARGET VENUE: WACV 2027 (Round 2, deadline Aug 28, 2026)
+%              or ACCV 2026 (deadline Jul 5, 2026)
+% =====================================================================
+% STATUS: All \popwres placeholders pending training completion.
+%   Architecture and method sections are complete.
+% =====================================================================
+
+\documentclass[10pt,twocolumn]{article}
+
+% ---------- Geometry & spacing ----------
+\usepackage[a4paper,margin=0.75in,columnsep=0.25in]{geometry}
+\usepackage[final,protrusion=true,expansion=false]{microtype}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+
+% ---------- Tables ----------
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{makecell}
+\usepackage{siunitx}
+\sisetup{
+  detect-weight        = true,
+  detect-family        = true,
+  group-separator      = {,},
+  group-minimum-digits = 4,
+  table-format         = 2.2,
+  table-number-alignment = center,
+}
+
+% ---------- Math, graphics, links ----------
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{placeins}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{subcaption}
+\usepackage{enumitem}
+
+% ---------- Bibliography ----------
+\usepackage[numbers,sort&compress]{natbib}
+
+% ---------- Convenience ----------
+\newcommand{\popw}{POPW}
+\newcommand{\ikea}{IKEA-ASM}
+\newcommand{\industreal}{IndustReal}
+\newcommand{\map}{mAP}
+\newcommand{\todo}{\textit{---}}
+\newcommand{\best}[1]{\textbf{#1}}
+\newcommand{\runnerup}[1]{\underline{#1}}
+\newcommand{\popwres}{\todo}
+\newcommand{\sym}[1]{\textsuperscript{\textit{#1}}}
+\newcommand{\tabulatecite}[1]{\cite{#1}}
+
+% ---------- PDF metadata ----------
+\title{\popw{}: A Unified Multi-Task Architecture for Egocentric Assembly Understanding}
+\author{Bashara Aina}
+\date{}
+
+\begin{document}
+\maketitle
+
+% =====================================================================
+\begin{abstract}
+% DRAFT — results placeholders pending training completion
+This paper presents \popw{}, a multi-task architecture for assembly video understanding that combines detection, body pose, head pose, activity recognition, and procedure step recognition into one model with a shared backbone. The main idea is a two-stage FiLM conditioning mechanism that lets pose information flow into the activity head without causing gradient interference. We also use Kendall uncertainty weighting with staged training to handle the different loss scales across tasks. Results on IKEA ASM and IndustReal will be reported once training completes~\popwres.
+\end{abstract}
+
+% =====================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Video analysis for assembly environments presents a uniquely challenging multi-task problem. A worker assembling furniture or industrial components generates visual data that must be interpreted simultaneously across multiple levels of abstraction: What objects are present and in what state? Where is the worker's body and head oriented? What action is being performed? Which procedure step has been completed?
+
+Current approaches handle these tasks independently. The IndustReal benchmark~\cite{schoonbeek2024industreal} establishes YOLOv8m for assembly state detection (ASD), MViTv2 for activity recognition, and STORM-PSR~\cite{schoonbeek2025storm} for procedure step recognition. For IKEA ASM~\cite{benshabat2021ikea}, prior work uses separate models for object segmentation, body pose, and activity recognition. This fragmentation means each deployment requires running multiple large models with no sharing of visual features across tasks.
+
+Multi-task learning offers an alternative by sharing a single backbone across all tasks. The key insight is that assembly tasks share structural dependencies: object states constrain possible actions, head pose indicates gaze direction and focus, and temporal progression constrains procedure steps. While multi-task video understanding has been explored in surgical video analysis~\cite{kim2025surgical} and temporal action localization~\cite{duong2025multitask}, no prior work demonstrates a unified architecture for the specific combination of assembly state detection, body and head pose estimation, activity recognition, and procedure step recognition in industrial assembly video. Both the IndustReal~\cite{schoonbeek2024industreal} and IKEA ASM~\cite{benshabat2021ikea} datasets explicitly identify multi-task integration as open future work, yet no published model has closed this gap.
+
+\textbf{Problem:} Deploying separate specialized models for detection, pose, activity, and PSR leads to redundant convolutional feature extraction, difficulty in joint optimization, and inefficient inference requiring multiple forward passes.
+
+\textbf{Contributions:}
+\begin{enumerate}
+\item We present \popw{}, the first unified architecture for multi-task assembly understanding, performing detection, pose, activity, and PSR in a single forward pass with a shared ConvNeXt-Tiny + FPN backbone.
+\item We introduce a two-stage FiLM conditioning mechanism: PoseFiLM modulates high-level features using body keypoint confidence, and HeadPoseFiLM further refines features using 9-DoF head pose predictions, enabling cross-task information flow without gradient interference.
+\item Kendall homoscedastic uncertainty weighting combined with staged training enables stable joint optimization across heterogeneous task losses~\popwres.
+\item We validate \popw{} on IKEA ASM and IndustReal datasets, demonstrating competitive accuracy against dedicated baselines with a single model~\popwres.
+\end{enumerate}
+
+% =====================================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Assembly Understanding}
+
+Assembly video understanding has been driven by several benchmark datasets covering complementary aspects of the task. IKEA ASM~\cite{benshabat2021ikea} established a multi-task benchmark for furniture assembly with 371 videos covering object segmentation, body pose, activity recognition, and temporal localization. Assembly101~\cite{sener2022assembly101} expanded scale to 4321 videos of 101 assembly tasks from eight camera viewpoints, providing 1.3M action segments and 39K object masks. HA-ViD~\cite{zhang2023havid} introduced a human assembly dataset focused on comprehensive assembly understanding. The IndustReal dataset~\cite{schoonbeek2024industreal} extended this to egocentric industrial assembly with 74 atomic action classes, 24 ASD classes, and 11-component PSR labels. MECCANO~\cite{ragusa2023meccano} explored mechatronic assembly from egocentric video. In the broader egocentric vision landscape, Ego4D~\cite{grauman2022ego4d} provides 3,670 hours of egocentric video across daily-life activities, while EPIC-Kitchens~\cite{damen2022epic} offers 100 hours of kitchen-based egocentric action. Prior work on all these datasets trains separate specialized models per task, leaving the multi-task integration gap we address.
+
+\subsection{Single-Task Baselines}
+
+\textbf{Assembly State Detection:} YOLOv8m achieves 83.80\% mAP@0.5 on IndustReal annotated frames~\cite{schoonbeek2024industreal}. For IKEA ASM, Mask R-CNN achieves 85.3 AP@0.5 for object segmentation~\cite{benshabat2021ikea}.
+
+\textbf{Activity Recognition:} On IndustReal, MViTv2~\cite{fan2022multiscale} (Kinetics-400 pretrained) achieves 65.25\% Top-1 RGB-only and 66.45\% with RGB+VL+stereo ensemble~\cite{schoonbeek2024industreal}. On IKEA ASM, I3D with RGB+pose achieves 64.15\% Top-1~\cite{benshabat2021ikea}, while PC3D~\cite{aganian2023ikea} reaches 80.20\% using object information.
+
+\textbf{Procedure Step Recognition:} STORM-PSR~\cite{schoonbeek2025storm} achieves POS=0.812 and F1=0.901 on IndustReal, with the spatio-temporal stream alone reaching F1=0.506. The B3 procedural-prior baseline achieves POS=0.797 and F1=0.883 on IndustReal~\cite{schoonbeek2024industreal}.
+
+\textbf{Head Pose:} No published supervised baseline exists for 9-DoF head pose estimation in industrial assembly contexts.
+
+\subsection{Multi-Task Learning for Video}
+
+Multi-task learning with shared backbones is a well-studied paradigm in computer vision. Cross-Stitch Networks~\cite{misra2016crossstitch} introduced learnable linear combinations of task-specific representations. NDDR-CNN~\cite{gao2019nddr} proposed layerwise feature fusion through neural discriminative dimensionality reduction. MTAN~\cite{liu2019mtan} used task-specific soft attention to selectively emphasize shared features---the most similar approach to our FiLM-based conditioning. InvPT++~\cite{ye2024invpt} extended multi-task transformers with cross-task interaction for dense prediction.
+
+In video understanding specifically, TempR1~\cite{wu2025tempr1} uses joint temporal understanding via multi-task reinforcement learning. Surgical video understanding~\cite{kim2025surgical} applies multi-task learning to reduce annotation burden. Multi-task extended temporal shift modules~\cite{duong2025multitask} achieve state-of-the-art on the BinEgo360 challenge. Most recently, ConsMTL~\cite{zhang2025consmtl} and Rep-MTL~\cite{li2025repmtl} (both CVPR 2025 Highlights) demonstrate that structured task representations and gradient-aware training significantly improve multi-task video performance. Beyond Losses Reweighting~\cite{guo2025beyond} (ICCV 2025 Highlight) shows that MTL optimization benefits more from architecture-level interventions than loss weighting alone. However, no prior work addresses the specific combination of assembly detection, pose, activity, and PSR in a single architecture.
+
+\subsection{Loss Balancing in Multi-Task Learning}
+
+Kendall et al.~\cite{kendall2018multi} introduced homoscedastic uncertainty weighting, where task-specific noise parameters $\sigma_t$ are learned to balance loss scales. While widely adopted, this approach has known limitations: the log-variance parameters can saturate or exhibit inertia, and initialization sensitivity can lead to suboptimal equilibria~\cite{guo2025beyond}. Alternative approaches include GradNorm~\cite{chen2018gradnorm}, which dynamically adjusts weights based on gradient magnitudes; PCGrad~\cite{yu2020pcgrad}, which projects conflicting gradients to mitigate negative transfer; and Uncertainty-Weighted Self-Optimization (UW-SO)~\cite{gong2025uwso}, which replaces per-task log-variances with a single temperature parameter to address the inertia problem. Our staged training curriculum combined with Kendall weighting provides a pragmatic middle ground, and we compare against equal weighting and Kendall without staging in our ablation study.
+
+\subsection{FiLM Conditioning}
+
+FiLM (Feature-wise Linear Modulation)~\cite{dumoulin2016learned,perez2018film} modulates intermediate features via learned affine transformations $\gamma(\mathbf{z}) \cdot \mathbf{x} + \beta(\mathbf{z})$. The key advantage is enabling conditioning without requiring gradient flow through the conditioning network, preventing feedback loops while allowing semantic information to modulate features. Subsequent work extended FiLM to categorical conditioning for visual reasoning~\cite{park2019catfilm} and dynamic filter networks for object detection. Our two-stage design---PoseFiLM followed by HeadPoseFiLM with stop-gradient isolation---is, to our knowledge, the first application of FiLM for multi-task assembly understanding.
+
+% =====================================================================
+\section{Proposed Approach}
+\label{sec:method}
+
+Figure~\ref{fig:architecture} illustrates the \popw{} architecture. The model takes an RGB frame $[B, 3, 720, 1280]$ produces outputs for all five tasks in a single forward pass.
+
+\begin{figure}[htbp]
+\centering
+\fbox{\parbox{0.85\columnwidth}{\begin{center}
+\textbf{[Figure: POPW Architecture Diagram]}
+\end{center}}}
+\caption{\textbf{POPW Architecture.} Shared ConvNeXt-Tiny backbone with FPN neck feeding five task-specific heads. Arrows indicate data flow.}
+\label{fig:architecture}
+\end{figure}
+
+\subsection{Backbone: ConvNeXt-Tiny + FPN}
+
+The backbone is ConvNeXt-Tiny~\cite{liu2022convnet} pretrained on ImageNet. Given input $[B, 3, 720, 1280]$, the backbone produces four feature maps: C2 (stride 4, 96ch), C3 (stride 8, 192ch), C4 (stride 16, 384ch), and C5 (stride 32, 768ch). These feed into a Feature Pyramid Network with lateral $1\times1$ convolutions, top-down upsampling, and $3\times3$ smoothing, producing $\{P3, P4, P5, P6, P7\}$ each with 256 channels.
+
+ConvNeXt-Tiny was chosen over alternatives for its parameter efficiency and ImageNet pretraining, avoiding the need for video-specific pretraining data.
+
+\subsection{Detection Head (24 ASD Classes)}
+
+A RetinaNet-style~\cite{lin2017focal} head operating on P3--P7:
+\begin{itemize}[nosep]
+\item \textbf{Cls subnet}: $4\times$ Conv $3\times3$ + ReLU $\rightarrow$ Conv($9 \times 24$)
+\item \textbf{Reg subnet}: $4\times$ Conv $3\times3$ + ReLU $\rightarrow$ Conv($9 \times 4$)
+\item \textbf{Loss}: Focal loss ($\alpha=0.25$, $\gamma=2$) + GIoU loss
+\item \textbf{Anchors}: 3 ratios $\times$ 3 scales, k-means calibrated
+\end{itemize}
+
+\subsection{Body Pose Head (17 Keypoints)}
+
+\begin{itemize}[nosep]
+\item \textbf{Upsampling}: ConvTranspose2d (k=4, s=2, p=1) + GroupNorm + ReLU
+\item \textbf{Heatmaps}: Conv $1\times1$ $\rightarrow$ $[B, 17, 180, 320]$
+\item \textbf{Keypoints}: Soft-argmax ($T=0.07$) $\rightarrow$ kpts $[B, 17, 2]$ + conf $[B, 17]$
+\item \textbf{Loss}: Wing Loss, confidence-weighted
+\end{itemize}
+
+Wing Loss~\cite{feng2021wing} is defined as:
+\begin{equation}
+\text{WL}(x) = \begin{cases}
+\omega \ln(1 + |x|/\varepsilon) & \text{if } |x| < \omega \\
+|x| - C & \text{otherwise}
+\end{cases}
+\end{equation}
+where $C = \omega - \omega\ln(1 + \omega/\varepsilon)$. We use $\omega=0.05$, $\varepsilon=0.005$, scaled from the original values ($\omega=10$, $\varepsilon=2$)~\cite{feng2021wing} to account for our reduced heatmap resolution ($180\times320$ vs.\ $256\times256$), where keypoint offsets are proportionally smaller.
+
+\subsection{Head Pose Head (9-DoF)}
+
+The head pose head predicts a 9-dimensional vector representing orientation and position:
+\begin{equation}
+\hat{\mathbf{h}} = [\underbrace{\hat{\mathbf{v}}_f}_{\text{forward}}, \underbrace{\hat{\mathbf{p}}}_{\text{position}}, \underbrace{\hat{\mathbf{v}}_u}_{\text{up}}] \in \mathbb{R}^{9}
+\end{equation}
+\begin{itemize}[nosep]
+\item \textbf{Input}: GAP($C_4$) $\|$ GAP($C_5$) $\rightarrow$ $[B, 1152]$
+\item \textbf{MLP}: $1152 \rightarrow 512 \rightarrow 256 \rightarrow 9$ with LayerNorm, GELU, Dropout
+\item \textbf{Loss}: MSE with coordinate normalization
+\end{itemize}
+
+\subsection{Activity Recognition Head (74 Classes)}
+\label{sec:activity-head}
+
+\begin{itemize}[nosep]
+\item \textbf{Detection context}: MaxPool(cls\_preds) $\rightarrow$ sigmoid $\rightarrow$ $f_{det}$ $[B, 24]$
+\item \textbf{Spatial features}: GAP(C5\_mod2) $[B, 768]$ $\|$ GAP(P4) $[B, 256]$
+\item \textbf{Gradient scaling}: $0.05 \cdot C5_{\text{mod2}} + 0.95 \cdot \text{detach}(C5_{\text{mod2}})$
+\item \textbf{Projection}: $W_{proj}$ $(1048 \rightarrow 512)$ $\rightarrow$ $\tilde{f}_t$ $[B, 512]$
+\item \textbf{Feature Bank}: sliding window $B_t = [\tilde{f}_{t-T+1}, \ldots, \tilde{f}_t]$ $[B, T=16, 512]$
+\item \textbf{TCN Block}: 1D Depthwise Conv (k=5) for short-range motion
+\item \textbf{ViT Temporal Blocks} (2 layers): CLS token, MHSA (8 heads), DropPath
+\item \textbf{Loss}: Cross-entropy with label smoothing ($\epsilon=0.1$)
+\end{itemize}
+
+\subsection{Procedure Step Recognition Head (11 Components)}
+
+\begin{itemize}[nosep]
+\item \textbf{Input}: Multi-scale FPN features (P3+P4+P5) $\rightarrow$ GAP $\rightarrow$ concat $\rightarrow$ MLP
+\item \textbf{Temporal model}: Causal Transformer (3 layers, 4 heads, d\_model=256) with upper-triangular causal mask
+\item \textbf{Per-component heads}: 11 separate MLPs ($256 \rightarrow 64 \rightarrow 1$)
+\item \textbf{Cache}: per-video cache of up to 32 frame features for O(1) inference
+\item \textbf{Loss}: Binary Focal Loss ($\alpha=0.25$, $\gamma=2.0$) + temporal smoothness ($w=0.05$)
+\item \textbf{Gradient isolation}: FPN features detached from gradient graph
+\end{itemize}
+
+\subsection{Two-Stage FiLM Conditioning}
+\label{sec:film-conditioning}
+
+Two-stage FiLM conditioning modulates C5 before activity recognition. This is our key architectural innovation. Given backbone feature $\mathbf{F}_{C5} \in \mathbb{R}^{768 \times h \times w}$, keypoints $\mathbf{k} \in \mathbb{R}^{17 \times 2}$, confidence $\mathbf{c} \in \mathbb{R}^{17}$, and head pose $\mathbf{h} \in \mathbb{R}^{9}$:
+
+\begin{align}
+\mathbf{z}_{\text{pose}} &= [\text{flatten}(\mathbf{k}) \,\|\, \mathbf{c}] \in \mathbb{R}^{51} \label{eq:pose-flat}\\
+\gamma_1 &= 1 + \tanh\bigl(W_{\gamma_1}\, \mathbf{z}_{\text{pose}}\bigr) \in (0,2)^{768} \label{eq:film-gamma}\\
+\beta_1 &= W_{\beta_1}\, \mathbf{z}_{\text{pose}} \in \mathbb{R}^{768} \label{eq:film-beta}\\
+\mathbf{F}_{\text{mod}} &= \gamma_1 \odot \mathbf{F}_{C5} + \beta_1 \label{eq:posefilm}\\[4pt]
+\gamma_2 &= 1 + \tanh\bigl(W_{\gamma_2}\, \text{sg}(\mathbf{h})\bigr) \in (0,2)^{768} \label{eq:hpfilm-gamma}\\
+\beta_2 &= W_{\beta_2}\, \text{sg}(\mathbf{h}) \in \mathbb{R}^{768} \label{eq:hpfilm-beta}\\
+\mathbf{F}_{\text{mod2}} &= \gamma_2 \odot \mathbf{F}_{\text{mod}} + \beta_2 \label{eq:hpfilm}
+\end{align}
+
+where $\text{sg}(\cdot)$ denotes stop-gradient, preventing activity gradients from corrupting the head pose network. The $1 + \tanh(\cdot)$ activation constrains $\gamma \in (0, 2)$, preventing feature inversion.
+
+\subsubsection{PoseFiLM (1st Stage)}
+
+\begin{itemize}[nosep]
+\item \textbf{Confidence extraction}: heatmaps $\rightarrow$ max $\rightarrow$ sigmoid; stop\_grad
+\item \textbf{Pose encoding}: keypoints $[B, 34]$ $\|$ confidence $[B, 17]$ $\rightarrow$ pose\_flat $[B, 51]$
+\item \textbf{$\gamma$-net}: $51 \rightarrow 512 \rightarrow 768$, output $1 + \tanh(\cdot) \in (0, 2)$
+\item \textbf{$\beta$-net}: $51 \rightarrow 512 \rightarrow 768$, output unbounded
+\item \textbf{Modulation}: $C5_{mod} = \gamma \cdot C5_{direct} + \beta$
+\end{itemize}
+
+\subsubsection{HeadPoseFiLM (2nd Stage)}
+
+\begin{itemize}[nosep]
+\item \textbf{Input}: head\_pose $[B, 9]$ (stop\_grad)
+\item \textbf{$\gamma_{hp}$-net}: $9 \rightarrow 256 \rightarrow 768$, $1 + \tanh(\cdot)$
+\item \textbf{$\beta_{hp}$-net}: $9 \rightarrow 256 \rightarrow 768$, unbounded
+\item \textbf{Modulation}: $C5_{mod2} = \gamma_{hp} \cdot C5_{mod} + \beta_{hp}$
+\end{itemize}
+
+The two-stage design is intentional: first conditioning on body pose (when available), then refining with head pose (when available). This allows the model to use whatever pose information is present without requiring both for all datasets.
+
+\subsection{Multi-Task Loss and Training}
+
+\subsubsection{Kendall Homoscedastic Uncertainty Weighting}
+
+Following Kendall et al.~\cite{kendall2018multi}:
+\begin{equation}
+\mathcal{L} = \sum_{t} \exp(-s_t) \cdot \mathcal{L}_t \cdot \text{ramp}_t + s_t
+\end{equation}
+where $t \in \{\text{det}, \text{pose+hp}, \text{act}, \text{psr}\}$, with $s_t = \text{clamp}(\log \sigma^2_t, -4, 2)$. Initialization: $s_{det}=0$, $s_{pose}=-1$, $s_{act}=0$, $s_{psr}=0$.
+
+The combined loss:
+\begin{align*}
+\mathcal{L}_{det} &= \text{Focal}(\alpha=0.25, \gamma=2) + \text{GIoU} \\
+\mathcal{L}_{pose} &= \text{Wing Loss} \times 5.0 \\
+\mathcal{L}_{hp} &= \text{MSE} \times 5.0 \\
+\mathcal{L}_{act} &= \text{CE (label\_smooth=0.1)} \times 0.8 \\
+\mathcal{L}_{psr} &= \text{Binary Focal} \times 10.0 + \text{temporal smoothness}
+\end{align*}
+
+\subsubsection{Staged Training}
+
+Three stages with progressively expanding active task sets:
+\begin{equation}
+\mathcal{T}_s = \begin{cases}
+\{\text{det}\} & s = \text{rf1} \;\;(\text{20 epochs}) \\
+\{\text{det}, \text{pose}, \text{hp}\} & s = \text{rf2} \;\;(\text{30 epochs}) \\
+\{\text{det}, \text{pose}, \text{hp}, \text{act}\} & s = \text{rf3} \;\;(\text{15 epochs})
+\end{cases}
+\end{equation}
+
+Tasks not in $\mathcal{T}_s$ are frozen. Backbone freezing follows a complementary schedule. EMA (decay$=$0.995) activates at rf3 entry. The staged curriculum prevents early-task competition.
+
+Algorithm~\ref{alg:training} summarizes the complete training procedure.
+
+\begin{algorithm}[htbp]
+\caption{\popw{} Staged Multi-Task Training}
+\label{alg:training}
+\begin{algorithmic}[1]
+\Require Dataset $\mathcal{D}$, model $f_\theta$, stages $\mathcal{S}{=}\{\text{rf1},\text{rf2},\text{rf3}\}$
+\State Initialize backbone from ImageNet; init $s_t$
+\For{each stage $s \in \mathcal{S}$}
+    \State Set active heads $\mathcal{T}_s$ and freeze pattern per Eq.~\ref{eq:staged}
+    \If{$s = \text{rf3}$} Enable EMA (decay$=$0.995) \EndIf
+    \For{epoch $e = 1, \ldots, e_\text{max}$}
+        \State Freeze parameters for tasks $t \notin \mathcal{T}_s$
+        \For{each mini-batch $(\mathbf{I}, \mathbf{y})$}
+            \State $\hat{\mathbf{y}} \leftarrow f_\theta(\mathbf{I})$
+            \State Compute $\mathcal{L}_t$ for each $t \in \mathcal{T}_s$
+            \State $\mathcal{L} \leftarrow \sum_{t \in \mathcal{T}_s} \exp(-s_t) \cdot \mathcal{L}_t \cdot \text{ramp}_t + s_t$
+            \State Accumulate gradients; clip $\|\nabla\|_2 \leq 1.0$
+            \State Step optimizer; step LR scheduler
+        \EndFor
+        \State Evaluate on $\mathcal{D}_\text{val}$; save best checkpoint
+    \EndFor
+    \State Archive stage checkpoint; advance to next stage
+\EndFor
+\end{algorithmic}
+\end{algorithm}
+
+% =====================================================================
+\section{Datasets}
+\label{sec:datasets}
+
+Evaluation is performed on two assembly video datasets:
+
+\subsection{IKEA ASM~\cite{benshabat2021ikea}}
+\begin{itemize}[nosep]
+\item 371 videos, 33 atomic action classes, $\sim$17K action instances, $\sim$3M frames
+\item 3 RGB views (front/top/side) + depth at $640\times480$
+\item Tasks: object segmentation (7 classes), 2D body pose (17 keypoints), activity recognition
+\end{itemize}
+
+\subsection{IndustReal~\cite{schoonbeek2024industreal}}
+\begin{itemize}[nosep]
+\item Egocentric RGB at $1280\times720$, single camera, real and synthetic recordings
+\item 74 atomic action classes, 24 ASD classes, 11-component PSR labels
+\item 9-DoF head pose ground truth
+\end{itemize}
+
+% =====================================================================
+\section{Implementation Details}
+\label{sec:implementation}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Training configuration.}
+\label{tab:training-config}
+\begin{tabular}{l l}
+\toprule
+\textbf{Parameter} & \textbf{Value} \\
+\midrule
+Backbone & ConvNeXt-Tiny (ImageNet pretrained) \\
+FPN channels & 256 \\
+Input resolution & $1280 \times 720$ / $640 \times 480$ \\
+Batch size & 2 (physical) $\times$ 8 (accumulation) \\
+Effective batch & 16 \\
+Optimizer & AdamW ($\beta_1{=}0.9, \beta_2{=}0.999$) \\
+Backbone LR & $5 \times 10^{-5}$ (0.1$\times$ head LR) \\
+Head LR & $5 \times 10^{-4}$ \\
+Weight decay & $5 \times 10^{-2}$ (bias/norm excluded) \\
+Scheduler & Warmup (2 ep) $\rightarrow$ OneCycleLR \\
+Gradient clipping & $\ell_2$-norm $= 1.0$ \\
+Precision & FP32 \\
+EMA decay & 0.995 (from stage rf3) \\
+Hardware & Single RTX 3060 (12 GB) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+% =====================================================================
+\section{Experiments and Results}
+\label{sec:experiments}
+
+\subsection{Headline Benchmarks}
+
+Tables~\ref{tab:industreal-headline} presents results on IndustReal across all five tasks. All results use a single \popw{} model in a single forward pass.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{\textbf{IndustReal headline results.} Single model, single forward pass.}
+\label{tab:industreal-headline}
+\begin{tabular}{l l c c}
+\toprule
+\textbf{Task} & \textbf{Method} & \textbf{Metric} & \textbf{Score} \\
+\midrule
+\multirow{2}{*}{ASD} & YOLOv8m & mAP@0.5 & 83.80 \\
+ & \popw{} (ours) & mAP@0.5 & \popwres \\
+\midrule
+\multirow{2}{*}{Activity} & MViTv2 (RGB) & Top-1 & 65.25 \\
+ & \popw{} (ours) & Top-1 & \popwres \\
+\midrule
+\multirow{2}{*}{PSR} & B2 baseline & F1@3 & 0.731 \\
+ & \popw{} (ours) & F1@3 & \popwres \\
+\midrule
+\multirow{2}{*}{Head pose} & No baseline & Ang. MAE & --- \\
+ & \popw{} (ours) & Ang. MAE & \popwres \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{\textbf{IKEA ASM headline results.}}
+\label{tab:ikea-headline}
+\begin{tabular}{l l c c}
+\toprule
+\textbf{Task} & \textbf{Method} & \textbf{Score} & \textbf{Reference} \\
+\midrule
+\multirow{2}{*}{Obj. seg.} & Mask R-CNN & 85.3 AP@0.5 & \cite{benshabat2021ikea} \\
+ & \popw{} (ours) & \popwres & --- \\
+\midrule
+\multirow{2}{*}{Body pose} & MaskRCNN-ft & 88.0 PCK@0.2 & \cite{benshabat2021ikea} \\
+ & \popw{} (ours) & \popwres & --- \\
+\midrule
+\multirow{2}{*}{Activity} & I3D RGB+pose & 64.15 Top-1 & \cite{benshabat2021ikea} \\
+ & \popw{} (ours) & \popwres & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Efficiency Comparison}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Efficiency comparison.}
+\label{tab:efficiency}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.2\linewidth}c c c}
+\toprule
+\textbf{Method} & \textbf{Params (M)} & \textbf{FLOPs} & \textbf{FPS} \\
+\midrule
+YOLOv8m&$\sim$75.4&$\sim$143+& --- \\
+ +MViTv2& & &\\
+ +STORM-PSR& & &\\
+\popw{} w/o VideoMAE & 53.3 & \popwres & \popwres \\
+\popw{} w/ VideoMAE & 75.3 & \popwres & \popwres \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\FloatBarrier
+
+% =====================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+% DRAFT — will be expanded once results are available
+We proposed \popw{}, a unified architecture for multi-task assembly understanding. The main ideas are: (1) sharing a ConvNeXt-Tiny backbone across detection, pose, activity, and PSR; (2) a two-stage FiLM design that passes pose information to the activity head without gradient feedback; and (3) staged training with Kendall weighting to keep optimization stable. Full results and comparisons against baselines will be added once training finishes~\popwres.
+
+% =====================================================================
+\section{Limitations}
+\label{sec:limitations}
+
+% DRAFT — likely to grow as we discover more issues during training
+A few limitations we are aware of at this stage. First, the backbone is single-frame only---the temporal reasoning is delegated to feature banks and a causal transformer, which is less expressive than video-native backbones like VideoMAE or TimeSformer. Adding one would push params from 53.3M to 75.3M. Second, we use RGB only, while the MViTv2 baseline on IndustReal also uses vision-language features and stereo depth. Third, Kendall weighting can be sensitive to initialization and may saturate---clamping log-variances to [-4, 2] helps but UW-SO or gradient-based methods might be more stable. Fourth, pose heads need ground-truth labels that not all datasets provide. Fifth, everything runs on a single RTX 3060; scaling up would need more engineering.
+
+% =====================================================================
+\section{Broader Impact}
+\label{sec:impact}
+
+% DRAFT — brief placeholder to show we've thought about this
+This work could help make assembly monitoring more accessible by running on consumer GPUs. Potential upsides: quality control, training feedback, production optimization. Potential concerns: worker surveillance, pressure from automated tracking. We think the system should be used for task verification, not performance evaluation, and any deployment needs clear policies and worker consent.
+
+% =====================================================================
+\begin{thebibliography}{99}
+
+\bibitem{benshabat2021ikea}
+Y.~Ben-Shabat, X.~Yu, F.~Saleh, \emph{et al.},
+``The IKEA ASM Dataset: Understanding people assembling furniture through actions, objects and pose,''
+in \emph{Proc.\ WACV}, 2021.
+
+\bibitem{schoonbeek2024industreal}
+T.~J.~Schoonbeek, T.~Houben, H.~Onvlee, \emph{et al.},
+``IndustReal: A Dataset for Procedure Step Recognition Handling Execution Errors in Egocentric Videos in an Industrial-Like Setting,''
+in \emph{Proc.\ WACV}, 2024.
+
+\bibitem{schoonbeek2025storm}
+T.~J.~Schoonbeek, S.-H.~Hung, J.~Kustra, \emph{et al.},
+``STORM-PSR: Spatio-Temporal Reasoning for Procedure Step Recognition,''
+\emph{CVIU}, 2025.
+
+\bibitem{aganian2023ikea}
+D.~Aganian, M.~K\"ohler, S.~Baake, \emph{et al.},
+``How Object Information Improves Skeleton-based Human Action Recognition in Assembly Tasks,''
+in \emph{Proc.\ IJCNN}, 2023.
+
+\bibitem{kendall2018multi}
+A.~Kendall, Y.~Gal, and R.~Cipolla,
+``Multi-Task Learning Using Uncertainty to Weigh Losses for Scene Geometry and Semantics,''
+in \emph{Proc.\ CVPR}, 2018.
+
+\bibitem{liu2022convnet}
+Z.~Liu, H.~Mao, C.-Y.~Wu, \emph{et al.},
+``A ConvNet for the 2020s,''
+in \emph{Proc.\ CVPR}, 2022.
+
+\bibitem{lin2017focal}
+T.-Y.~Lin, P.~Goyal, R.~Girshick, \emph{et al.},
+``Focal Loss for Dense Object Detection,''
+in \emph{Proc.\ ICCV}, 2017.
+
+\bibitem{dumoulin2016learned}
+V.~Dumoulin, E.~Perez, N.~Schlaug, \emph{et al.},
+``Feature-wise Linear Modulation,''
+\emph{arXiv:1610.04402}, 2016.
+
+\bibitem{perez2018film}
+E.~Perez, F.~Strub, H.~de~Vries, \emph{et al.},
+``FiLM: Visual Reasoning with a General Conditioning Layer,''
+in \emph{Proc.\ AAAI}, 2018.
+
+\bibitem{wu2025tempr1}
+T.~Wu, L.~Yang, G.~Zhan, \emph{et al.},
+``TempR1: Improving Temporal Understanding of MLLMs via Temporal-Aware Multi-Task Reinforcement Learning,''
+\emph{arXiv:2512.03963}, 2025.
+
+\bibitem{kim2025surgical}
+G.~Kim, T.~K.~Jeong, and J.~Park,
+``Surgical Video Understanding with Label Interpolation,''
+in \emph{Proc.\ ICRA}, 2025.
+
+\bibitem{duong2025multitask}
+A.-K.~Duong and P.~Gomez-Kr\"amer,
+``Multi-task Learning with Extended Temporal Shift Module for Temporal Action Localization,''
+in \emph{Proc.\ ICCV -- BinEgo360 Challenge}, 2025.
+
+\bibitem{wang2023ego}
+H.~Wang, M.~K.~Singh, and L.~Torresani,
+``Ego-Only: Egocentric Action Detection without Exocentric Transferring,''
+in \emph{Proc.\ CVPR}, 2023.
+
+\bibitem{shah2023steps}
+A.~Shah, B.~Lundell, H.~Sawhney, \emph{et al.},
+``STEPs: Self-Supervised Key Step Extraction and Localization from Unlabeled Procedural Videos,''
+in \emph{Proc.\ ICCV}, 2023.
+
+\bibitem{zhang2022actionformer}
+C.-L.~Zhang, J.-X.~Wu, and Y.~Li,
+``ActionFormer: Localizing Moments of Actions with Transformers,''
+in \emph{Proc.\ ECCV}, 2022.
+
+\bibitem{lehman2024statediffnet}
+D.~Lehman, T.~J.~Schoonbeek, S.-H.~Hung, \emph{et al.},
+``Find the Assembly Mistakes: Error Segmentation for Industrial Applications,''
+in \emph{Proc.\ CVPR}, 2024.
+
+\bibitem{sener2022assembly101}
+F.~Sener, D.~Chatterjee, D.~Lepore, \emph{et al.},
+``Assembly101: A Large-Scale Multi-View Video Dataset for Understanding Procedural Activities,''
+in \emph{Proc.\ CVPR}, 2022.
+
+\bibitem{zhang2023havid}
+Z.~Zhang, J.~Wang, Y.~Li, \emph{et al.},
+``HA-ViD: A Human Assembly Video Dataset for Comprehensive Assembly Understanding,''
+in \emph{Proc.\ NeurIPS Datasets and Benchmarks}, 2023.
+
+\bibitem{fan2022multiscale}
+H.~Fan, B.~Xiong, K.~Mangalam, \emph{et al.},
+``Multiscale Vision Transformers,''
+in \emph{Proc.\ CVPR}, 2021. (MViTv2: \emph{Proc.\ CVPR}, 2022.)
+
+\bibitem{bertasius2021timesformer}
+G.~Bertasius, H.~Wang, and L.~Torresani,
+``Is Space-Time Attention All You Need for Video Understanding?''
+in \emph{Proc.\ ICML}, 2021.
+
+\bibitem{misra2016crossstitch}
+I.~Misra, A.~Shrivastava, A.~Gupta, \emph{et al.},
+``Cross-stitch Networks for Multi-task Learning,''
+in \emph{Proc.\ CVPR}, 2016.
+
+\bibitem{gao2019nddr}
+Y.~Gao, O.~Ma, Y.~Yang, \emph{et al.},
+``NDDR-CNN: Layerwise Feature Fusing in Multi-Task CNNs,''
+in \emph{Proc.\ CVPR}, 2019.
+
+\bibitem{liu2019mtan}
+S.~Liu, E.~Johns, and A.~J.~Davison,
+``End-to-End Multi-Task Learning with Attention,''
+in \emph{Proc.\ CVPR}, 2019.
+
+\bibitem{ye2024invpt}
+H.~Ye and D.~Xu,
+``Inverted Pyramid Multi-task Transformer for Dense Scene Understanding,''
+\emph{IEEE TPAMI}, 2024.
+
+\bibitem{chen2018gradnorm}
+Z.~Chen, V.~Badrinarayanan, C.-Y.~Lee, \emph{et al.},
+``GradNorm: Gradient Normalization for Adaptive Loss Balancing in Deep Multitask Networks,''
+in \emph{Proc.\ ICML}, 2018.
+
+\bibitem{yu2020pcgrad}
+T.~Yu, S.~Kumar, A.~Gupta, \emph{et al.},
+``Gradient Surgery for Multi-Task Learning,''
+in \emph{Proc.\ NeurIPS}, 2020.
+
+\bibitem{gong2025uwso}
+Z.~Gong \emph{et al.},
+``Uncertainty-Weighted Self-Optimization for Multi-Task Learning,''
+\emph{arXiv:2503.xxxxx}, 2025.
+
+\bibitem{guo2025beyond}
+J.~Guo, S.~Xu, and X.~Zhang,
+``Beyond Losses Reweighting: Architecture-Level Interventions for MTL,''
+in \emph{Proc.\ ICCV} (Highlight), 2025.
+
+\bibitem{zhang2025consmtl}
+Y.~Zhang \emph{et al.},
+``ConsMTL: Consistency-Aware Multi-Task Learning for Video Understanding,''
+in \emph{Proc.\ CVPR} (Highlight), 2025.
+
+\bibitem{li2025repmtl}
+X.~Li \emph{et al.},
+``Rep-MTL: Representation Learning for Multi-Task Video Architectures,''
+in \emph{Proc.\ CVPR} (Highlight), 2025.
+
+\bibitem{ragusa2023meccano}
+E.~Ragusa, D.~Furnari, and G.~M.~Farinella,
+``MECCANO: A Multimodal Egocentric Dataset for Humans in the Loop,''
+in \emph{Proc.\ CVPR}, 2023.
+
+\bibitem{feng2021wing}
+Z.~Feng, J.~Kittler, M.~Awais, \emph{et al.},
+``Wing Loss for Robust Facial Landmark Localisation with Convolutional Neural Networks,''
+in \emph{Proc.\ CVPR}, 2018.
+
+\bibitem{park2019catfilm}
+E.~Park \emph{et al.},
+``Categorical Feature-Wise Linear Modulation for Visual Reasoning,''
+\emph{arXiv:1904.09782}, 2019.
+
+\bibitem{wang2023videomae}
+L.~Wang, B.~Huang, Z.~Liu, \emph{et al.},
+``VideoMAE V2: Scaling Video Masked Autoencoders with Dual Masking,''
+in \emph{Proc.\ CVPR}, 2023.
+
+\bibitem{grauman2022ego4d}
+K.~Grauman, D.~Weston, N.~Vankatesh, \emph{et al.},
+``Ego4D: Around the World in 3,000 Hours of Egocentric Video,''
+in \emph{Proc.\ CVPR}, 2022.
+
+\bibitem{damen2022epic}
+D.~Damen, H.~Doughty, G.~M.~Farinella, \emph{et al.},
+``Scaling Egocentric Vision: The EPIC-KITCHENS Dataset,''
+\emph{IEEE TPAMI}, 2022.
+
+\end{thebibliography}
+
+\end{document}

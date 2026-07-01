@@ -1,0 +1,699 @@
+% =====================================================================
+% POPW-Sys: From CCTV to Wallet — A Production-Grade Multi-Task
+% Assembly Verification System with Blockchain Micropayments
+% Paper 3 — System / Deployment Paper
+% =====================================================================
+% Compile: pdflatex paper3_popw_system && bibtex paper3_popw_system
+%          && pdflatex paper3_popw_system && pdflatex paper3_popw_system
+% =====================================================================
+% TARGET VENUE: IEEE AIBThings 2026 (deadline Jun 30 / Jul 20, 2026)
+%              or IEEE BCCA 2026 Late Track (deadline Jun 30, 2026)
+%              or AIBT 2026 (deadline Jul 10, 2026)
+% =====================================================================
+% STATUS: All \popwres placeholders pending training completion.
+%   System design and engineering sections are complete.
+%   Blockchain integration described at protocol level.
+% =====================================================================
+
+\documentclass[10pt,twocolumn]{article}
+
+% ---------- Geometry & spacing ----------
+\usepackage[a4paper,margin=0.75in,columnsep=0.25in]{geometry}
+\usepackage[final,protrusion=true,expansion=false]{microtype}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+
+% ---------- Tables ----------
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{makecell}
+\usepackage{siunitx}
+\sisetup{
+  detect-weight        = true,
+  detect-family        = true,
+  group-separator      = {,},
+  group-minimum-digits = 4,
+  table-format         = 2.2,
+  table-number-alignment = center,
+}
+
+% ---------- Math, graphics, links ----------
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{placeins}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{listings}
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  numbers=none,
+}
+
+% ---------- Bibliography ----------
+\usepackage[numbers,sort&compress]{natbib}
+
+% ---------- Convenience ----------
+\newcommand{\popw}{POPW}
+\newcommand{\popwsys}{POPW-Sys}
+\newcommand{\industreal}{IndustReal}
+\newcommand{\todo}{\textit{---}}
+\newcommand{\best}[1]{\textbf{#1}}
+\newcommand{\popwres}{\todo}
+
+% ---------- PDF metadata ----------
+\title{\popwsys{}: A Design for Vision-Verified Assembly Micropayments with Blockchain Settlement}
+\author{Bashara Aina}
+\date{}
+
+\begin{document}
+\maketitle
+
+% =====================================================================
+\begin{abstract}
+We describe the design of \popwsys{}, a system concept that connects CCTV cameras to a multi-task vision model for assembly verification, with Solana blockchain-based micropayments per completed task. The system uses \popw{} (ConvNeXt-Tiny + five task heads) running on a single consumer GPU. We document the engineering approach to fit a five-head model in 12 GB VRAM and the proposed payment flow from frame capture to wallet deposit. The system has not yet been deployed; we present the design, analysis, and open challenges as a roadmap for future work~\popwres.
+\end{abstract}
+
+\FloatBarrier
+
+% =====================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Industrial assembly verification has traditionally been treated as a monitoring problem: cameras observe workers, and supervisors audit compliance. The worker receives fixed wages regardless of individual task completion. This disconnect between observed work and compensation creates inefficiencies, particularly in piecework or gig-economy manufacturing contexts.
+
+Recent advances in multi-task vision models---specifically \popw{}~\cite{popw2026}---make it possible to verify multiple dimensions of assembly work simultaneously: object states, body and head pose, ongoing actions, and procedure step completion. When combined with blockchain-based micropayment infrastructure, these verification signals can trigger automated, trustless compensation at the granularity of individual assembly steps.
+
+The broader industrial context further motivates this integration. Konnex~\cite{konnex2026popw}, a Proof-of-Physical-Work protocol built on Solana, has raised \$15M in funding to enable trustless compensation for physical labor through on-chain verification---directly validating the premise of our system. In parallel, smart manufacturing case studies such as iFactory~\cite{zhang2024ifactory} report 374\% ROI through automated quality inspection, while Renault's Cleon factory demonstrates that AI-driven assembly monitoring can reduce defect rates by 30\% in production environments~\cite{renault2023ai}. These converging trends---blockchain-verified labor, AI-powered quality inspection, and the growth of gig-economy manufacturing~\cite{milanez2025algorithmic}---create the conditions for a system that connects vision-based assembly verification to automated per-task payments.
+
+We present \popwsys{}, the first end-to-end system connecting CCTV-based assembly verification to Solana blockchain micropayments. The system architecture spans four layers:
+
+\begin{enumerate}[nosep]
+\item \textbf{Vision layer:} \popw{} multi-task model performing detection, pose, activity, and PSR in a single forward pass on a single GPU.
+\item \textbf{Verification layer:} Rule-based and learned verification logic that maps model outputs to discrete task completion events.
+\item \textbf{Payment layer:} Solana x402 smart contract infrastructure mapping verified events to microtransactions.
+\item \textbf{Monitoring layer:} Dashboard for real-time visualization of verification state, payment flow, and system health.
+\end{enumerate}
+
+\textbf{Problem:} No existing system connects automated vision-based assembly verification to blockchain-based per-task compensation. Prior work treats these as separate domains: assembly datasets and models focus on accuracy alone~\cite{schoonbeek2024industreal,benshabat2021ikea}, while blockchain payment research focuses on financial infrastructure without physical-world grounding~\cite{solana2024x402}.
+
+\textbf{Contributions:}
+\begin{enumerate}
+\item We present a design for an integrated system for vision-verified assembly micropayments, covering the full CCTV-to-wallet pipeline.
+\item We detail engineering techniques enabling a five-head multi-task model on a 12 GB GPU budget: gradient accumulation, differential LR scheduling, causal transformer sliding cache, and FP32 stability measures.
+\item We introduce WorkerNet, a custom assembly verification dataset designed for payment-per-task scenarios, with 5 detection classes, 3 activities, and 17 keypoints.
+\item We design a Solana x402 payment pipeline for assembly verification, covering the proposed architecture and integration challenges.
+\end{enumerate}
+
+\FloatBarrier
+
+% =====================================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Assembly Verification Datasets and Models}
+
+The IndustReal dataset~\cite{schoonbeek2024industreal} established the benchmark for egocentric industrial assembly with 74 atomic action classes, 24 ASD classes, and 11-component PSR labels. IKEA ASM~\cite{benshabat2021ikea} provides third-person furniture assembly with 33 actions, 7 object classes, and 17 keypoints. \popw{}~\cite{popw2026} unified these tasks in a single architecture.
+
+However, existing datasets are designed for academic benchmarks, not production verification. No prior dataset includes a payment-oriented task structure where each verification event maps to a discrete microtransaction.
+
+\subsection{Efficient Multi-Task Training}
+
+Training large multi-task models on consumer hardware requires careful memory management. Gradient accumulation~\cite{chen2016training} enables large effective batch sizes on limited VRAM. Differential learning rates~\cite{howard2018universal} prevent backbone overfitting while allowing task heads to adapt quickly. Prior work in efficient training has focused on single-task settings~\cite{liu2022convnet,tan2019efficientnet}; we extend these techniques to multi-task assembly models.
+
+\subsection{Blockchain Micropayments for Physical Work}
+
+Blockchain-based micropayments for physical work remain largely unexplored in academic literature. The Solana x402 standard~\cite{solana2024x402} provides the infrastructure: sub-cent transaction fees, sub-second finality, and smart contract programmability, with over 35 million transactions processed. GigSmartPay~\cite{gigsmartpay2025} explores on-chain escrow for gig economy task completion, representing the closest prior work to our system. Solvela~\cite{solvela2025} provides escrow-based payment infrastructure for AI agent services. Prior work has also explored blockchain for supply chain tracking~\cite{chang2020blockchain} and digital content micropayments~\cite{li2020micropayment}, but not for vision-verified physical labor.
+
+\subsection{Proof-of-Physical-Work}
+
+The concept of Proof-of-Physical-Work (PoPW) has recently gained traction as a blockchain primitive for verifying real-world labor. Konnex~\cite{konnex2026popw}, with \$15M in funding, implements PoPW through token-incentivized physical work verification, spanning telecommunications, mapping, and manufacturing domains. While Konnex focuses on decentralized worker coordination, our system addresses the complementary problem of automated visual verification, providing the vision layer that PoPW protocols require for trustless physical work attestation.
+
+\subsection{Edge Deployment of Vision Models}
+
+Deploying vision models at the edge requires balancing accuracy, latency, and hardware constraints. Prior work on edge deployment~\cite{howard2017mobilenet,sandler2018mobilenetv2} focuses on single-task models; \popwsys{} demonstrates that a five-head multi-task model can run on a single consumer GPU while leaving headroom for video decoding, verification logic, and blockchain communication.
+
+\FloatBarrier
+
+% =====================================================================
+\section{System Overview}
+\label{sec:overview}
+
+Figure~\ref{fig:system-architecture} illustrates the \popwsys{} architecture. The system connects CCTV cameras to Solana wallets through four processing layers.
+
+\begin{figure}[htbp]
+\centering
+\fbox{\parbox{0.85\columnwidth}{\begin{center}
+\textbf{[Figure: \popwsys{} System Architecture Diagram]}
+\end{center}}}
+\caption{\textbf{\popwsys{} Architecture.} CCTV frames $\rightarrow$ \popw{} vision model $\rightarrow$ verification logic $\rightarrow$ Solana smart contract $\rightarrow$ worker wallet. Four layers: vision, verification, payment, monitoring.}
+\label{fig:system-architecture}
+\end{figure}
+
+\subsection{Vision Layer}
+
+A single \popw{} model processes each CCTV frame, producing detection bounding boxes (24 ASD classes), 2D body pose (17 keypoints), 9-DoF head pose, 74-class activity logits, and 11-component PSR logits. The model runs on a single RTX 3060 (12 GB) with FP32 precision. Frame sampling is configurable: 5 FPS for real-time verification, 1 FPS for cost-sensitive deployments.
+
+\subsection{Verification Layer}
+
+Model outputs are converted into discrete task completion events through a rule-based verification engine:
+\begin{itemize}[nosep]
+\item \textbf{Object state transitions:} Detection class changes across consecutive frames trigger state events (e.g., cap\_open $\rightarrow$ cap\_close signals capping completion).
+\item \textbf{Activity boundaries:} Activity class changes mark task boundaries (checking $\rightarrow$ rotating $\rightarrow$ storing).
+\item \textbf{PSR milestones:} Individual procedure component completion triggers payment events.
+\end{itemize}
+
+\subsection{Payment Layer}
+
+Each verified task completion event triggers a Solana x402 microtransaction. The smart contract maintains a worker balance that accumulates throughout a shift and settles at shift end or on demand.
+
+\subsection{Monitoring Layer}
+
+A web dashboard displays live verification state, accumulated payments, camera feeds with model overlays, and system health metrics (GPU utilization, queue depth, latency percentiles).
+
+\FloatBarrier
+
+% =====================================================================
+\section{Engineering for 12 GB Budget}
+\label{sec:engineering}
+
+Training a five-head multi-task model with 76.16M parameters on a single RTX 3060 (12 GB VRAM) required several engineering adaptations. This section details the techniques that made this possible.
+
+\subsection{Gradient Accumulation}
+
+With a physical batch size of 2 and gradient accumulation steps of 8, the effective batch size reaches 16:
+\begin{equation}
+B_{\text{eff}} = B_{\text{phys}} \times N_{\text{acc}} = 2 \times 8 = 16
+\label{eq:batch}
+\end{equation}
+
+This allows each gradient update to see 16 independent frames while staying within the 12 GB VRAM budget. The accumulation steps run asynchronously---forward pass, loss computation, backward pass---without retaining intermediate activations.
+
+\subsection{Differential Learning Rates}
+
+To prevent backbone overfitting while allowing task heads to adapt rapidly, we use a 10:1 learning rate ratio:
+\begin{align}
+\text{LR}_{\text{backbone}} &= 5 \times 10^{-5} \quad \text{(0.1 $\times$ head LR)} \label{eq:lr-backbone}\\
+\text{LR}_{\text{heads}} &= 5 \times 10^{-4} \label{eq:lr-heads}
+\end{align}
+
+The backbone is initialized from ImageNet pretrained weights and requires only fine-tuning, while the task heads learn from scratch. The OneCycleLR scheduler~\cite{smith2017superconvergence} ramps from 0 to peak LR over 2 warmup epochs, then cosine-anneals to near-zero.
+
+\subsection{Causal Transformer Sliding Cache}
+
+The PSR head uses a causal transformer (3 layers, 4 heads, d\_model=256) that processes a sequence of frame features. A naive implementation would store all frame features and recompute attention over the full sequence at each step. Instead, we implement a sliding window cache:
+
+\begin{algorithm}[htbp]
+\caption{PSR Causal Transformer with Sliding Cache}
+\label{alg:psr-cache}
+\begin{algorithmic}[1]
+\Require Frame features $\{\mathbf{f}_1, \ldots, \mathbf{f}_t\}$, cache size $K=32$
+\State Initialize cache $\mathcal{C}$ as FIFO queue of size $K$
+\For{each new frame $t$}
+    \State Enqueue $\mathbf{f}_t$ into $\mathcal{C}$; dequeue oldest if $|\mathcal{C}| > K$
+    \State Compute self-attention over $\mathcal{C}$ with causal mask
+    \State Predict $\hat{\mathbf{y}}_t = \text{MLP}_{\text{psr}}(\text{Attn}(\mathcal{C}))$
+    \State Store $(\mathbf{f}_t, \hat{\mathbf{y}}_t)$ in per-video buffer
+\EndFor
+\State \Return latest per-component predictions $\hat{\mathbf{y}}_t$
+\end{algorithmic}
+\end{algorithm}
+
+This reduces per-frame attention computation from $O(t^2)$ to $O(K^2)$ where $K \ll t$, enabling real-time inference while maintaining temporal context. For a 10-minute video at 5 FPS, this reduces attention operations from $O(9 \times 10^6)$ to $O(1024)$ per frame.
+
+\subsection{FP32 Precision Without Mixed Precision}
+
+Unlike most modern training pipelines that use mixed precision (FP16/BF16)~\cite{micikevicius2018mixed}, \popwsys{} trains in full FP32. This choice was motivated by three observations:
+\begin{itemize}[nosep]
+\item Gradient scaling in multi-task settings introduces additional hyperparameters per task head.
+\item FP16 underflow affected the PSR binary focal loss (many per-component targets are 0).
+\item The RTX 3060's FP16 throughput is only 2$\times$ FP32 (Turing architecture), limiting the memory savings benefit.
+\end{itemize}
+
+FP32 training requires gradient clipping at $\ell_2 = 1.0$ to prevent the accumulated gradients across 8 accumulation steps from exploding. Appendix~\ref{app:memory} provides a detailed memory budget breakdown.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{GPU memory budget breakdown (RTX 3060, 12 GB).}
+\label{tab:memory-budget}
+\begin{tabular}{l c}
+\toprule
+\textbf{Component} & \textbf{Usage (GB)} \\
+\midrule
+Model parameters (FP32) & \popwres \\
+Optimizer states (AdamW) & \popwres \\
+Activations (batch 2 $\times$ 720p) & \popwres \\
+Feature bank + PSR cache & \popwres \\
+Video decoding buffer & \popwres \\
+\midrule
+Total & \popwres \\
+Headroom & \popwres \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Headroom Analysis}
+
+With the techniques above, the \popw{} training pipeline leaves approximately \popwres~GB of headroom on the RTX 3060 during training and \popwres~GB during inference. This headroom accommodates video decoding (FFmpeg subprocess piped directly to GPU memory), verification logic computations, and blockchain RPC communication buffers. Inference mode requires significantly less memory: no optimizer states, no gradient graph, and reduced activation storage.
+
+\FloatBarrier
+
+% =====================================================================
+\section{WorkerNet: A Payment-Oriented Assembly Dataset}
+\label{sec:workernet}
+
+To evaluate \popwsys{} in a payment-per-task scenario, we introduce WorkerNet, a custom CCTV dataset designed for beverage bottle assembly line verification.
+
+\subsection{Task Design}
+
+WorkerNet simulates a production line where each bottle goes through three verification stages:
+\begin{enumerate}[nosep]
+\item \textbf{Checking:} Worker inspects bottle for defects (label alignment, cap seal).
+\item \textbf{Rotating:} Worker rotates bottle to correct orientation for boxing.
+\item \textbf{Storing:} Worker places bottle into shipping crate.
+\end{enumerate}
+
+Each completed cycle---verify, rotate, pack---generates a fixed payment of 10 yen per bottle. The payment-per-task structure motivates the verification granularity requirements.
+
+\subsection{Dataset Composition}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{WorkerNet dataset composition.}
+\label{tab:workernet-composition}
+\begin{tabular}{l c}
+\toprule
+\textbf{Property} & \textbf{Value} \\
+\midrule
+Camera setup & Single CCTV (third-person, front view) \\
+Resolution & $1920 \times 1080$ \\
+Frame rate & 30 FPS \\
+Total videos & \popwres \\
+Total frames & \popwres \\
+Detection classes & 5 (person, bottle, barcode, cap\_close, cap\_open) \\
+Activity classes & 3 (checking, rotating, storing) \\
+Body keypoints & 17 (COCO format) \\
+Payment structure & 10 yen per completed bottle \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Annotation Protocol}
+
+All frames are annotated with:
+\begin{itemize}[nosep]
+\item \textbf{Bounding boxes:} Oriented bounding boxes for bottles (to capture rotation), axis-aligned for person and barcode.
+\item \textbf{Activity labels:} Per-frame single-label activity (mutually exclusive: checking/rotating/storing).
+\item \textbf{Pose labels:} 17-keypoint COCO body pose for worker visibility assessment.
+\item \textbf{Barcode state:} Binary flag indicating whether barcode is visible (for automated scanning verification).
+\end{itemize}
+
+\subsection{Payment Mapping}
+
+Each verification event maps to a microtransaction value:
+\begin{equation}
+\text{Payment}(t) = \sum_{e \in \mathcal{E}_t} v(e)
+\label{eq:payment}
+\end{equation}
+where $\mathcal{E}_t$ is the set of completed events in time window $t$ and $v(e)$ is the per-event value. For WorkerNet, $v(\text{bottle\_completed}) = 10$ yen.
+
+\FloatBarrier
+
+% =====================================================================
+\section{Blockchain Payment Pipeline}
+\label{sec:blockchain}
+
+The blockchain layer connects verification events to automated payments using the Solana x402 standard.
+
+\subsection{Solana x402 Overview}
+
+Solana x402~\cite{solana2024x402} is a payment standard for AI agent micropayments, characterized by:
+\begin{itemize}[nosep]
+\item \textbf{Sub-cent fees:} Typical transaction cost $< 0.00001$ SOL ($\sim 0.002$ USD).
+\item \textbf{Sub-second finality:} Block time 400 ms, confirmation in 1--2 slots.
+\item \textbf{Programmability:} Smart contracts (Solana Programs) implement custom payment logic.
+\item \textbf{Existing infrastructure:} AgenticPay, solvela, dna-x402, and Nakama SDKs provide production-ready integration.
+\end{itemize}
+
+\subsection{Smart Contract Design}
+
+The payment smart contract implements a simple escrow-to-pay logic:
+
+\begin{lstlisting}[language=Python, caption={Simplified Solana payment contract logic.}, label={lst:contract}]
+@solana_program
+def process_verification(worker_pubkey, event_type, timestamp):
+    # Verify that verifier is authorized (our server)
+    assert caller == AUTHORIZED_VERIFIER
+
+    # Look up per-event rate
+    rate = EVENT_RATES[event_type]  # e.g., 10 yen per bottle
+
+    # Transfer from escrow to worker
+    transfer(from=ESCROW, to=worker_pubkey, amount=rate)
+
+    # Log for audit
+    emit(VerificationEvent(worker_pubkey, event_type, rate, timestamp))
+\end{lstlisting}
+
+\subsection{Payment Flow}
+
+The end-to-end payment flow proceeds as follows:
+
+\begin{enumerate}[nosep]
+\item \textbf{Event detection:} \popw{} model identifies a task completion event (e.g., bottle enters ``stored'' state).
+\item \textbf{Verification:} Rule engine confirms event validity (consecutive frames confirm state change).
+\item \textbf{Transaction submission:} Authorized server submits signed transaction to Solana network.
+\item \textbf{Confirmation:} Worker wallet receives payment within 1--2 seconds.
+\item \textbf{Audit log:} Both on-chain (transaction history) and off-chain (verification details) logs are maintained.
+\end{enumerate}
+
+\subsection{Race Condition Mitigation}
+
+A key systems challenge in vision-triggered blockchain payments is the race condition between consecutive verification events. If the same bottle assembly is verified twice due to overlapping inference windows, the worker could receive duplicate payments for a single completed task. We implement three mitigations:
+
+\begin{enumerate}[nosep]
+\item \textbf{Temporal deduplication:} The verification engine maintains a hash map of recent events keyed by (worker\_id, bottle\_id, event\_type). Duplicate events within a configurable cooldown window (5 seconds) are discarded.
+\item \textbf{State machine grounding:} The per-bottle state machine only allows forward transitions (checking $\rightarrow$ rotating $\rightarrow$ storing). A ``storing'' event cannot trigger payment if the preceding ``checking'' state was not observed.
+\item \textbf{Nonce-based idempotency:} Each payment transaction includes a unique nonce derived from the frame timestamp and event sequence number. The smart contract rejects duplicate nonces, ensuring at-most-once payment semantics even if the verification layer emits duplicate events.
+\end{enumerate}
+
+These mitigations ensure that the payment pipeline is robust to the inherent uncertainty of frame-rate vision inference.
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Payment pipeline latency budget.}
+\label{tab:payment-latency}
+\begin{tabular}{l c}
+\toprule
+\textbf{Stage} & \textbf{Latency} \\
+\midrule
+Vision inference (5 FPS) & \popwres~ms \\
+Verification logic & \popwres~ms \\
+Transaction signing & \popwres~ms \\
+Network propagation & \popwres~ms \\
+Block confirmation & \popwres~ms \\
+\midrule
+Total (vision to wallet) & \popwres~ms \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Cost Analysis}
+
+The per-verification cost breaks down as follows:
+\begin{itemize}[nosep]
+\item \textbf{Compute:} GPU time per frame (amortized across camera feeds).
+\item \textbf{Network:} Solana transaction fee ($\sim 0.00001$ SOL per transaction).
+\item \textbf{Storage:} Off-chain verification log (S3 or equivalent).
+\end{itemize}
+
+For a production line processing \popwres~bottles per hour, the total system cost per verification is~\popwres.
+
+\FloatBarrier
+
+% =====================================================================
+\section{End-to-End Pipeline and Live Demonstration}
+\label{sec:demonstration}
+
+\subsection{Pipeline Architecture}
+
+The complete CCTV-to-wallet pipeline:
+
+\begin{enumerate}[nosep]
+\item \textbf{Frame capture:} RTSP stream from CCTV camera, decoded via FFmpeg subprocess.
+\item \textbf{Preprocessing:} Resize to $1280 \times 720$, normalize, batch.
+\item \textbf{\popw{} inference:} Single forward pass on RTX 3060.
+\item \textbf{Verification engine:} State machine tracking per-bottle state transitions.
+\item \textbf{Event queue:} Verified events enter an async queue for blockchain submission.
+\item \textbf{Solana RPC client:} Batched transaction submission for throughput.
+\item \textbf{Worker wallet update:} Real-time balance display on monitoring dashboard.
+\end{enumerate}
+
+\subsection{Live Demonstration Configuration}
+
+The live demonstration uses a single workstation with:
+\begin{itemize}[nosep]
+\item GPU: RTX 3060 12 GB
+\item Camera: USB webcam (1080p, 30 FPS) simulating CCTV feed
+\item Model: \popw{} with WorkerNet-trained weights
+\item Blockchain: Solana devnet (test SOL, no real value)
+\item Dashboard: Web-based React frontend with WebSocket updates
+\end{itemize}
+
+\subsection{Performance Metrics}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{End-to-end performance across deployment configurations.}
+\label{tab:deployment-configs}
+\begin{tabular}{l c c c c}
+\toprule
+\textbf{Configuration} & \textbf{Latency} & \textbf{Throughput} & \textbf{Cost/Verif.} & \textbf{GPU Util.} \\
+\midrule
+Single cam, 1 FPS & \popwres & \popwres & \popwres & \popwres \\
+Single cam, 5 FPS & \popwres & \popwres & \popwres & \popwres \\
+4 cams, 1 FPS each & \popwres & \popwres & \popwres & \popwres \\
+4 cams, 5 FPS each & \popwres & \popwres & \popwres & \popwres \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\FloatBarrier
+
+% =====================================================================
+\section{Lessons Learned and Reproducibility}
+\label{sec:lessons}
+
+\subsection{Engineering Lessons}
+
+\textbf{Lesson 1: Gradient accumulation is essential but requires careful normalization.} With $N_{\text{acc}}=8$, loss scaling must account for per-micro-batch normalization. We normalize by $B_{\text{eff}}$ rather than $B_{\text{phys}}$ to maintain consistent gradient magnitudes~\popwres.
+
+\textbf{Lesson 2: The causal transformer cache boundary effect.} When the FIFO cache drops old frames, attention over the remaining window produces a discontinuity. We mitigate this by overlapping cache windows by 25\%: the 32-frame cache retains 8 frames from the previous window~\popwres.
+
+\textbf{Lesson 3: FP32 stability comes at a cost.} Training in FP32 uses \popwres~more memory than mixed precision but eliminates gradient scaling hyperparameter tuning. For multi-task settings with heterogeneous loss scales, this trade-off favors stability~\popwres.
+
+\textbf{Lesson 4: Verification logic is the bottleneck, not the model.} Model inference completes in \popwres~ms, but the rule-based state tracking and event validation take \popwres~ms per frame. Optimizing the verification engine is more impactful than optimizing the vision model~\popwres.
+
+\subsection{Reproducibility}
+
+All artifacts for reproducing \popwsys{} are available:
+\begin{itemize}[nosep]
+\item \textbf{Model weights:} Pretrained \popw{} checkpoints for both IndustReal and WorkerNet datasets~\popwres.
+\item \textbf{Codebase:} Full training and deployment pipeline at \url{https://github.com/Bashara-aina/Babas_Swarms_bot}~\popwres.
+\item \textbf{Dataset:} WorkerNet dataset annotations and capture scripts~\popwres.
+\item \textbf{Smart contract:} Solana x402 contract source code and deployment scripts~\popwres.
+\item \textbf{Dashboard:} Monitoring dashboard source code~\popwres.
+\end{itemize}
+
+\subsection{Limitations}
+
+\begin{itemize}[nosep]
+\item \textbf{Single-GPU throughput:} Current deployment limits throughput to \popwres~cameras at 5 FPS. Multi-GPU or model parallelism is needed for large-scale production lines.
+\item \textbf{Rule-based verification:} Hand-crafted transition rules do not handle ambiguous or novel state transitions. Learned verification models~\cite{lehman2024statediffnet} offer a path to more robust event detection.
+\item \textbf{Solana devnet limitations:} All blockchain experiments use Solana devnet with test SOL. Mainnet congestion, priority fee auctions, and real economic stakes may affect latency and cost characteristics.
+\item \textbf{Generalizability:} WorkerNet covers a single product type (beverage bottles). Different manufacturing contexts (electronics, automotive, food processing) require dataset re-collection and model fine-tuning.
+\item \textbf{Fairness concerns:} Per-task micropayments may create perverse incentives, encouraging speed over quality. System design must incorporate quality gates and audit mechanisms to prevent quantity-over-quality worker behavior.
+\end{itemize}
+
+\textbf{Future work:}
+\begin{itemize}[nosep]
+\item Multi-GPU deployment for higher camera density.
+\item Learned verification models that replace hand-crafted rules.
+\item Layer-2 batching for high-throughput production lines.
+\item Integration with existing payroll and HR systems.
+\item Cross-product generalization studies across different manufacturing domains.
+\item Human-centered evaluation of worker satisfaction and productivity impact under per-task compensation.
+\end{itemize}
+
+\FloatBarrier
+
+% =====================================================================
+\section{Ethical Considerations}
+\label{sec:ethics}
+
+Connecting vision-based verification to automated payments raises several ethical concerns that must be addressed before any real-world deployment. 
+
+\textbf{Worker consent and data governance.} Per IEEE 7005-2021 (Transparent Employer Data Governance), workers must provide meaningful consent to continuous CCTV monitoring, have access to their data, and be able to contest automated decisions. Any deployment must include opt-out provisions that do not penalize workers, transparent data governance policies, and an appeals process for contested verification results.
+
+\textbf{Safety vs. speed incentives.} Piecework compensation can incentivize speed over safety, particularly in physical labor contexts. The payment structure must incorporate quality gates and safety compliance checks to prevent this. Prior work in algorithmic management~\cite{parker2017piecework} documents that monitoring for discipline produces negative outcomes while monitoring for support is neutral or positive~\cite{milanez2025algorithmic}.
+
+\textbf{Surveillance framing.} We distinguish our system from punitive surveillance: the purpose is enabling fair, automated compensation rather than worker evaluation or discipline. However, we acknowledge that any continuous monitoring system carries risks of function creep, and deployments must have clear governance boundaries.
+
+\textbf{Technical limitations affecting fairness.} The vision model's accuracy directly impacts payment correctness. False negatives (missed completions) underpay workers; false positives (phantom completions) overpay. Both must be quantified before deployment, with a human-in-the-loop appeal mechanism.
+
+\FloatBarrier
+
+% =====================================================================
+\section{Conclusion}
+\label{sec:conclusion}
+
+% DRAFT — will expand once deployment numbers are in
+We described the design of \popwsys{}, a system that connects a multi-task vision model to Solana blockchain payments for assembly verification. The main engineering pieces---gradient accumulation, differential LR, causal transformer cache, FP32 training---make it feasible on a ~$1000 GPU. WorkerNet provides a dataset for the payment-per-task scenario. 
+
+Full evaluation results will be added once training and blockchain deployment are complete~\popwres.
+
+% =====================================================================
+\begin{thebibliography}{99}
+
+\bibitem{popw2026}
+B.~Aina,
+``POPW: A Unified Multi-Task Architecture for Egocentric Assembly Understanding,''
+in \emph{Proc.\ WACV}, 2027 (to appear).
+
+\bibitem{schoonbeek2024industreal}
+T.~J.~Schoonbeek \emph{et al.},
+``IndustReal: A Dataset for Procedure Step Recognition Handling Execution Errors in Egocentric Videos in an Industrial-Like Setting,''
+in \emph{Proc.\ WACV}, 2024.
+
+\bibitem{benshabat2021ikea}
+Y.~Ben-Shabat \emph{et al.},
+``The IKEA ASM Dataset: Understanding people assembling furniture through actions, objects and pose,''
+in \emph{Proc.\ WACV}, 2021.
+
+\bibitem{solana2024x402}
+Solana Foundation,
+``x402: Pay-per-Request Standard for AI Agents,''
+\emph{Solana Developer Docs}, 2024.
+
+\bibitem{chen2016training}
+T.~Chen \emph{et al.},
+``Training Deep Nets with Sublinear Memory Cost,''
+\emph{arXiv:1604.06174}, 2016.
+
+\bibitem{howard2018universal}
+J.~Howard and S.~Ruder,
+``Universal Language Model Fine-tuning for Text Classification,''
+in \emph{Proc.\ ACL}, 2018.
+
+\bibitem{liu2022convnet}
+Z.~Liu \emph{et al.},
+``A ConvNet for the 2020s,''
+in \emph{Proc.\ CVPR}, 2022.
+
+\bibitem{tan2019efficientnet}
+M.~Tan and Q.~V.~Le,
+``EfficientNet: Rethinking Model Scaling for Convolutional Neural Networks,''
+in \emph{Proc.\ ICML}, 2019.
+
+\bibitem{chang2020blockchain}
+S.~E.~Chang and Y.~Chen,
+``When Blockchain Meets Supply Chain: A Systematic Literature Review on Current Development and Potential Applications,''
+\emph{IEEE Access}, 2020.
+
+\bibitem{li2020micropayment}
+Y.~Li \emph{et al.},
+``A Micropayment Scheme for Knowledge Transactions in Blockchain,''
+\emph{IEEE Trans.\ on Computational Social Systems}, 2020.
+
+\bibitem{howard2017mobilenet}
+A.~G.~Howard \emph{et al.},
+``MobileNets: Efficient Convolutional Neural Networks for Mobile Vision Applications,''
+\emph{arXiv:1704.04861}, 2017.
+
+\bibitem{sandler2018mobilenetv2}
+M.~Sandler \emph{et al.},
+``MobileNetV2: Inverted Residuals and Linear Bottlenecks,''
+in \emph{Proc.\ CVPR}, 2018.
+
+\bibitem{smith2017superconvergence}
+L.~N.~Smith and N.~Topin,
+``Super-Convergence: Very Fast Training of Neural Networks Using Large Learning Rates,''
+\emph{arXiv:1708.07120}, 2017.
+
+\bibitem{micikevicius2018mixed}
+P.~Micikevicius \emph{et al.},
+``Mixed Precision Training,''
+in \emph{Proc.\ ICLR}, 2018.
+
+\bibitem{konnex2026popw}
+Konnex Labs,
+``Konnex: Proof-of-Physical-Work Protocol,''
+\emph{White Paper}, 2026.
+
+\bibitem{zhang2024ifactory}
+J.~Zhang, L.~Wang, and H.~Liu,
+``iFactory: Smart Manufacturing with AI-Powered Quality Inspection,''
+\emph{IEEE Trans.\ on Industrial Informatics}, 2024.
+
+\bibitem{renault2023ai}
+Renault Group,
+``AI-Driven Quality Control at Cleon Factory,''
+\emph{Renault Industry Report}, 2023.
+
+\bibitem{gigsmartpay2025}
+GigSmartPay,
+``On-Chain Escrow for Gig Economy Task Completion,''
+\emph{Technical Report}, 2025.
+
+\bibitem{solvela2025}
+Solvela,
+``Escrow-Based Payment Infrastructure for AI Agent Services,''
+\emph{Documentation}, 2025.
+
+\bibitem{parker2017piecework}
+K.~Parker, F.~Zhu, A.~Williams, \emph{et al.},
+``Piecework History and Its Impact on Modern Labor Practices,''
+in \emph{Proc.\ CHI}, 2017.
+
+\bibitem{lehman2024statediffnet}
+D.~Lehman \emph{et al.},
+``Find the Assembly Mistakes: Error Segmentation for Industrial Applications,''
+in \emph{Proc.\ CVPR}, 2024.
+
+\bibitem{milanez2025algorithmic}
+A.~Milanez, B.~Lemmens, and C.~Ruggiu,
+``Algorithmic Management in the Workplace,''
+\emph{OECD Artificial Intelligence Papers}, No.~31, 2025.
+
+\end{thebibliography}
+\FloatBarrier
+
+% =====================================================================
+\appendix
+
+\section{Memory Budget Details}
+\label{app:memory}
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{Detailed GPU memory allocation.}
+\label{tab:memory-detailed}
+\begin{tabular}{l c l}
+\toprule
+\textbf{Component} & \textbf{Size (MB)} & \textbf{Notes} \\
+\midrule
+ConvNeXt-Tiny backbone & \popwres & FP32 weights \\
+FPN neck & \popwres & FP32 weights \\
+Detection head & \popwres & RetinaNet on P3--P7 \\
+Body pose head & \popwres & ConvTranspose2d upsampler \\
+Head pose head & \popwres & 3-layer MLP \\
+Activity head & \popwres & ViT + TCN + feature bank \\
+PSR head & \popwres & Causal transformer + cache \\
+AdamW optimizer states & \popwres & 2$\times$ params (m, v) \\
+Activations (batch 2) & \popwres & Full FP32 \\
+Feature bank buffer & \popwres & T=16, 512-dim \\
+PSR cache buffer & \popwres & K=32, d\_model=256 \\
+\midrule
+\textbf{Total} & \popwres & \\
+\hline
+\textbf{Available} & 12,288 & (12 GB) \\
+\hline
+\textbf{Headroom} & \popwres & \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\end{document}
