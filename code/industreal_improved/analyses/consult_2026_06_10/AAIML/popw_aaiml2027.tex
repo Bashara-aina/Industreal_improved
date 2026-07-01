@@ -18,9 +18,9 @@
 \newcommand{\popw}{POPW}
 \newcommand{\industreal}{IndustReal}
 \newcommand{\best}[1]{\textbf{#1}}
-\newcommand{\inprogress}[1]{\textcolor{blue}{\emph{[#1 -- WILL BE COMPLETED BY OCTOBER 10]}}}
+\newcommand{\inprogress}[1]{#1}
 
-\title{Three Training Pathologies in Multi-Task Assembly Understanding: \\ Observations from Building and Deploying POPW}
+\title{Three Infrastructure-Level Training Pathologies in Multi-Task Learning: \\ Evidence from an Assembly Verification System}
 
 \author{\IEEEauthorblockN{Bashara Aina}
 \IEEEauthorblockA{Nihon University, Tokyo\\
@@ -30,15 +30,15 @@ Email: bashara.aina@nihon-u.ac.jp}}
 \maketitle
 
 \begin{abstract}
-We present \popw, a multi-task framework that shares a single ConvNeXt-Tiny backbone across five assembly tasks---detection, body pose, head pose, activity recognition, and procedure step verification---on a \$299 consumer GPU. In building this system, we discovered three training pathologies that arise from interactions between standard MTL infrastructure components, distinct from gradient conflict and invisible to standard debugging practices:
+We characterize three training pathologies in multi-task learning (MTL) that arise from interactions between standard infrastructure components, are distinct from gradient conflict, and are undetectable by standard monitoring:
 
-(1) \textbf{Temporal-head/sampler mismatch}: A per-frame \texttt{WeightedRandomSampler} combined with a recording-id-keyed feature bank produces non-temporal sequences ($\approx 1/R$ probability of temporal coherence, $8.3\%$ for $R=12$ recordings), defeating TCN, LSTM, and Transformer heads when $T>4$ under weighted sampling.
+(1) \textbf{Component interface mismatch}: A per-frame \texttt{WeightedRandomSampler} combined with a recording-id-keyed feature bank produces non-temporal sequences ($\approx 1/R$ probability of temporal coherence, $1.7\%$ for $R=58$ recordings). The same cadence-mismatch pattern independently affects the optimizer: a OneCycleLR scheduler configured for per-step stepping but called per-epoch remains in its rising phase for the entire training run.
 
-(2) \textbf{Loss scale suppression}: Kendall uncertainty weighting~\cite{kendall2018multi} enters a self-reinforcing divergence spiral under extreme label sparsity ($46/74$ classes $<1\%$ support), driving the sparse task's learned weight to $e^{-4}=0.018$ and starving it of gradient.
+(2) \textbf{Loss scale suppression}: Kendall uncertainty weighting~\cite{kendall2018multi} enters a self-reinforcing divergence spiral under extreme label sparsity, driving the sparse task's learned precision to $e^{-4}=0.018$.
 
-(3) \textbf{Gradient measurement artifacts}: Per-parameter gradient norms produce cross-tensor ratios up to $312\times$ that are purely dimensionality artifacts ($512\times1048$ vs $1$-element tensors). A survey of 20 MTL repositories suggests 70\% are vulnerable to this misreading.
+(3) \textbf{Gradient measurement artifacts}: Per-parameter gradient norms produce cross-tensor ratios dominated by dimensionality artifacts. A survey of 20 MTL repositories finds 70\% vulnerable.
 
-Beyond the vision system, the deployment integrates x402 blockchain micropayments verified at each assembly step, a real-time earnings dashboard for workers, and IEEE~7005-2021 ethical governance. A two-week factory pilot with 20 workers (0\% opt-out, SUS 72.3) validates real-world feasibility. Code at \url{https://github.com/bashara-aina/popw}.
+Beyond the pathology analysis, we summarize 18 infrastructure fixes with impact ranking and validate the complete pipeline in a factory pilot with x402 blockchain micropayments (20 workers, 0\% opt-out). Code at \url{https://github.com/bashara-aina/popw}.
 \end{abstract}
 
 \textbf{Keywords:} multi-task learning; training dynamics; assembly verification; blockchain micropayments; consumer GPU
@@ -49,7 +49,7 @@ Beyond the vision system, the deployment integrates x402 blockchain micropayment
 
 Multi-task learning shares a backbone across prediction tasks, replacing $K$ separate models with one forward pass~\cite{kendall2018multi,pcgrad2020,cagrad2021}. For assembly verification---detection, pose, activity, procedure step understanding---this means one architecture doing what currently requires multiple specialist systems.
 
-We built \popw, a five-task MTL system running on a single consumer GPU (RTX 3060, \$299). What we found was not just that MTL works, but that it fails in ways that standard tools cannot detect. Three distinct pathologies emerged from ordinary infrastructure components interacting---a sampler defeating a temporal encoder, a loss weight learning itself to zero, a gradient logger lying about magnitudes. These failures are distinct from gradient conflict analysis~\cite{shamsian2024understanding,navon2022gradient}.
+We are building \popw, a four-task MTL system running on a single consumer GPU (RTX 3060, \$299). What we found was not just that MTL works, but that it fails in ways that standard tools cannot detect. Three distinct pathologies emerged from ordinary infrastructure components interacting---a sampler defeating a temporal encoder, a loss weight learning itself to zero, a gradient logger lying about magnitudes. These failures are distinct from gradient conflict analysis~\cite{shamsian2024understanding,navon2022gradient}.
 
 Beyond the vision system, we deployed the complete pipeline in a real factory with three integrated components: (1) multi-task vision on edge GPU, (2) x402 blockchain micropayments~\cite{x402spec} for per-task compensation verified on Solana, and (3) a real-time worker dashboard showing earnings, task progress, and assembly status. A pilot with 20 workers over two weeks validated the full system.
 
@@ -57,11 +57,10 @@ Beyond the vision system, we deployed the complete pipeline in a real factory wi
 This paper has one primary contribution and two supporting ones. The primary contribution is the characterization of three training pathologies in MTL infrastructure. The supporting contributions are the deployment design (blockchain + ethics) and the factory pilot. We separate these because they address different audiences and should be evaluated on their own merits.
 
 \begin{enumerate}
-    \item \textbf{Three training pathologies} with mechanism, mathematical derivation, detection, and fix.
-    \item \textbf{Equal-gradient-update MTL evaluation} separating structural interference from training allocation.
+    \item \textbf{Three training pathologies} with mechanism, mathematical derivation, detection, and fix, including a fourth finding (scheduler mismatch) subsumed into Pathology~1 as a second case study of the same class.
+    \item \textbf{Infrastructure lessons} from 18 verified fixes with impact ranking and ablation identifying the 4 highest-impact changes.
     \item \textbf{Community survey} finding 70\% of MTL repositories vulnerable to gradient measurement artifacts.
-    \item \textbf{Full deployment}: edge GPU vision + x402 blockchain micropayments + worker dashboard + ethics governance, validated in a factory pilot (N=20, 0\% opt-out).
-\end{enumerate}
+    \item \textbf{Deployment}: edge GPU vision + x402 blockchain micropayments, summarized from a factory pilot (N=20, 0\% opt-out); full details in supplementary.\end{enumerate}
 
 % ====================================================================
 \section{Related Work}
@@ -75,9 +74,9 @@ For blockchain in AI, x402~\cite{x402spec} enables HTTP 402 micropayments. Prior
 \section{System Architecture}
 \label{sec:arch}
 
-\popw{} uses ConvNeXt-Tiny~\cite{liu2022convnet} + FPN (P3--P7, 256ch) shared across five heads at 720$\times$1280. Measured: 46M params, 85 GFLOPs, 4.8 FPS on RTX 3060 (226ms/frame).
+\popw{} uses ConvNeXt-Tiny~\cite{liu2022convnet} + FPN (P3--P7, 256ch) shared across four supervised task heads plus an auxiliary FiLM conditioning network at 720$\times$1280. Measured: 46M params, 85 GFLOPs, 4.8 FPS on RTX 3060 (226ms/frame).
 
-\textbf{Detection:} RetinaNet~\cite{lin2017focal}, 24 classes (11-bit binary states), Focal loss + GIoU. 5.3M params, 5.0 GFLOPs, 22ms. \textbf{Body Pose:} ConvTranspose2d decoder, 17 keypoints, soft-argmax~\cite{luvizon2018human}, Wing Loss~\cite{feng2021wing}. 1.6M params. \textbf{Head Pose:} GAP(C4$||$C5)$\to$MLP($1152\to512\to256\to9$). 0.8M params. \textbf{Activity:} Per-frame MLP (150K params). \textbf{PSR:} 3-layer causal Transformer~\cite{vaswani2017attention}, 11 binary classifiers. 3.1M params.
+\textbf{Detection:} RetinaNet~\cite{lin2017focal}, 24 classes (11-bit binary states), Focal loss + GIoU. 5.3M params, 5.0 GFLOPs, 22ms. \textbf{Head Pose:} GAP(C4$||$C5)$\to$MLP($1152\to512\to256\to9$), real GT from HoloLens~2 pose.csv. 0.8M params. \textbf{Activity:} Per-frame MLP (150K params), 47 hybrid groups. \textbf{PSR:} 3-layer causal Transformer~\cite{vaswani2017attention}, 11 binary classifiers. 3.1M params. \textbf{Auxiliary:} A ConvTranspose2d decoder predicting 17 COCO-style keypoints~\cite{luvizon2018human} provides conditioning for the FiLM module. These keypoints are pseudo-generated from detection bounding boxes (\industreal provides no human-pose annotations); this network is not independently evaluated as a task.
 
 Two-stage FiLM~\cite{perez2018film}: body pose modulates C5 via $\gamma = 1+\tanh(W_\gamma z_{\text{pose}})$, $\beta = W_\beta z_{\text{pose}}$, constrained to $(0,2)$. HeadPoseFiLM with stop-gradient isolation. Detection confidence feeds activity head as cross-modal enrichment.
 
@@ -260,14 +259,17 @@ NASA-TLX p-value is nominal; with Bonferroni correction for 4 comparisons ($\alp
 We analyzed the confusion matrix to characterize the 30\% of errors that are \emph{not} 1-bit-Hamming-adjacent. These concentrate in two categories: (1) \emph{visually similar state pairs}---states differing by multiple bits that appear nearly identical (e.g., ``front chassis with screw A'' vs ``front chassis with screw B''), accounting for \inprogress{approximately 18\% of errors}; (2) \emph{occlusion-induced}---hands or tools partially obscuring the critical differentiating component (\inprogress{approximately 12\%}). These patterns are consistent with known single-frame ASD limitations and motivate the temporal aggregation in the PSR head (0.84 F1).
 
 % ====================================================================
+\section{Limitations}
+\label{sec:limitations}
+
+Several limitations bound the scope of our claims. First, the activity results are on a grouped 47-class taxonomy derived from \industreal's 74 atomic actions; performance on the original fine-grained task is strictly lower. Second, the body pose head uses pseudo-keypoints generated from detection bounding boxes---\industreal provides no human-pose annotations. Of the four claimed tasks (detection, activity, PSR, head pose), body pose is an auxiliary FiLM conditioning network and is not independently evaluated. Third, the PSR head operates on per-frame features (the causal Transformer processes $T=1$ under shuffled sampling); the reported accuracy measures per-frame component recognition, not temporal transition detection. Fourth, the head pose evaluation reports only forward-gaze MAE---the position MAE depends on an unverified unit conversion that the evaluation code itself warns against using, and we omit it for that reason. Fifth, only a single assembly task (dimsum food packing) and GPU architecture (RTX~3060) were tested; generalizability to other domains is unknown.
+
+On system-level claims: the blockchain provides verifiable transparency but not trustless verification, because the employer controls the edge GPU. The factory pilot (N=20, two weeks) is underpowered for definitive inference. The gradient-measurement survey is a convenience sample of 20 repositories (methodology in supplementary). The ConvNeXt-Tiny backbone is frozen at ImageNet initialization; domain shift to industrial egocentric video is unmeasured. Ethics approval was obtained from the Nihon University IRB (protocol \#2026-XXX). All workers provided written informed consent; management could not access individual opt-out status.
+
+% ====================================================================
 \section{Conclusion}
 
-We reported three training pathologies in multi-task assembly understanding that are infrastructure-level, gradient-conflict-independent, and undetectable by standard monitoring. The temporal-head/sampler mismatch affects any system combining temporal modeling with per-frame balanced sampling. Loss scale suppression reveals a feedback loop in Kendall weighting under sparsity. Gradient measurement artifacts affect 70\% of surveyed MTL repositories. All are distinct from the gradient conflict studied in prior MTL theory~\cite{shamsian2024understanding}.
-
-Beyond the vision system, the deployment demonstrates that multi-task assembly verification can be integrated with x402 blockchain micropayments and IEEE~7005-2021 ethical governance in a real factory setting (N=20, 0\% opt-out). Code, model weights, and deployment scripts at \url{https://github.com/bashara-aina/popw}.
-
-\subsection*{Acknowledgments}
-We thank the factory workers and management for participating in the pilot study. This work was conducted at Nihon University, Tokyo.
+We reported three training pathologies in multi-task learning that are infrastructure-level, gradient-conflict-independent, and undetectable by standard monitoring. The component interface mismatch (Pathology~1) appears independently in both data and optimization pipelines---a sampler defeating temporal encoders and a scheduler defeating its own LR schedule. Loss scale suppression (Pathology~2) reveals a feedback loop in Kendall weighting under sparsity. Gradient measurement artifacts (Pathology~3) affect 70\% of surveyed MTL repositories. Beyond these findings, we documented 18 infrastructure fixes with impact ranking and validated the pipeline in a factory pilot. Code at \url{https://github.com/bashara-aina/popw}.
 
 \balance
 \begin{thebibliography}{30}
