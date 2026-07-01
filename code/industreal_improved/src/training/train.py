@@ -2455,12 +2455,16 @@ def _log_per_head_grad_norm(model, step_idx: int, log_interval: int = 200,
     for prefix in head_prefixes:
         first_grad, last_grad = None, None
         first_name, last_name = '', ''
+        sum_sq = 0.0
+        n_params = 0
         for name, param in model.named_parameters():
             if not name.startswith(prefix):
                 continue
             if param.grad is None:
                 continue
             gn = param.grad.norm().item()
+            sum_sq += gn * gn
+            n_params += 1
             if first_grad is None:
                 first_grad = gn
                 first_name = name
@@ -2469,10 +2473,10 @@ def _log_per_head_grad_norm(model, step_idx: int, log_interval: int = 200,
         if first_grad is None:
             parts.append(f'{prefix}:NO_GRAD')
         else:
-            alive_first = 'ALIVE' if first_grad > 1e-6 else 'DEAD'
-            alive_last = 'ALIVE' if (last_grad is not None and last_grad > 1e-6) else 'DEAD'
+            agg_grad = (sum_sq / max(n_params, 1)) ** 0.5  # RMS gradient across all params
+            alive = 'ALIVE' if agg_grad > 1e-6 else 'DEAD'
             parts.append(
-                f'{prefix}:{alive_first}[{first_grad:.2e}]/{alive_last}[{last_grad:.2e}]'
+                f'{prefix}:{alive}[RMS={agg_grad:.2e}|n={n_params}]'
             )
     # --- PSR per-component output head grad norms ---
     # Log first-layer grad norm for each of 11 output heads individually.
