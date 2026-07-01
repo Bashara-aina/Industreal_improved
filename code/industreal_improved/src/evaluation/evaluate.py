@@ -3755,6 +3755,14 @@ def evaluate_all(
             f'Edit: {results["psr_edit_score"]:.4f}  '
             f'POS: {results["psr_pos"]:.4f}'
         )
+        # [FIX 2026-07-01 agent audit] Add per-component binary accuracy for go/no-go monitoring.
+        try:
+            _psr_pred_bin = (1.0 / (1.0 + np.exp(-all_psr_logits[..., :11]))) > 0.5
+            _psr_comp_acc = (_psr_pred_bin == all_psr_labels).mean()
+            results['psr_comp_acc'] = float(_psr_comp_acc)
+            logger.info(f'  PSR — Component Binary Accuracy: {_psr_comp_acc:.4f}')
+        except Exception:
+            results['psr_comp_acc'] = 0.0
 
     # -------------------------------------------------------------------------
     if torch.cuda.is_available():
