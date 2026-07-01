@@ -290,7 +290,8 @@ ACT_CLASS_GROUPING = os.environ.get('ACT_CLASS_GROUPING', 'verb')
 
 def _build_act_grouping(mode: str):
     """Return (id_to_group[75], group_names, num_groups) for the given mode.
-    'none' -> identity. 'verb' -> group by first underscore token of the name."""
+    'none' -> identity. 'verb' -> group by first underscore token of the name.
+    Verbs with 'unknown' are folded into group 0 (has 0 training frames)."""
     if str(mode).lower() != 'verb':
         return list(range(NUM_CLASSES_ACT)), list(ACT_CLASS_NAMES), NUM_CLASSES_ACT
     verb_to_gid = {}
@@ -298,6 +299,10 @@ def _build_act_grouping(mode: str):
     id_to_group = [0] * NUM_CLASSES_ACT
     for i, name in enumerate(ACT_CLASS_NAMES):
         verb = (str(name).split('_')[0] if name else f'cls{i}') or f'cls{i}'
+        # Fold 'unknown' into group 0 (has 0 training frames as its own group)
+        if verb == 'unknown':
+            id_to_group[i] = 0
+            continue
         if verb not in verb_to_gid:
             verb_to_gid[verb] = len(group_names)
             group_names.append(verb)
