@@ -1,88 +1,10 @@
 {
-  "current_stage": "rf4",
-  "stage_index": 3,
+  "epoch": 0,
   "status": "running",
-  "training_pid": 137412,
-  "epoch": 4,
-  "best_metric": 0.44498860323233125,
-  "best_metrics": {
-    "det_mAP50": 0.145280089736508,
-    "det_mAP50_pc": 0.193706786315344,
-    "det_n_present_classes": 18,
-    "forward_angular_MAE_deg": 9.475595474243164
-  },
-  "gate_passed": false,
-  "checklist_results": {
-    "gate": {
-      "passed": false,
-      "details": {}
-    },
-    "health": {
-      "passed": false,
-      "details": {}
-    },
-    "convergence": {
-      "passed": false,
-      "details": {}
-    },
-    "validation": {
-      "passed": false,
-      "details": {}
-    },
-    "stability": {
-      "passed": false,
-      "details": {}
-    }
-  },
-  "metric_history": [],
-  "retry_count": 0,
-  "current_strategy": "default",
-  "strategies_tried": [],
-  "det_health_history": [],
-  "stage_history": [
-    {
-      "stage": "rf1",
-      "status": "completed",
-      "epochs_completed": 10,
-      "best_metric": 0.184,
-      "best_metrics": {
-        "det_mAP50": 0.184
-      },
-      "timestamp": "2026-06-20T00:13:40+00:00"
-    },
-    {
-      "stage": "rf2",
-      "status": "completed",
-      "epochs_completed": 2,
-      "best_metric": 0.31,
-      "best_metrics": {
-        "det_mAP50_pc": 0.31,
-        "forward_angular_MAE_deg": 9.21
-      },
-      "timestamp": "2026-06-28T13:00:00+00:00"
-    },
-    {
-      "stage": "rf3",
-      "status": "completed",
-      "epochs_completed": 2,
-      "best_metric": 0.2592,
-      "best_metrics": {
-        "act_top1": 0.125,
-        "det_mAP50_pc": 0.31,
-        "forward_angular_MAE_deg": 9.21
-      },
-      "timestamp": "2026-06-28T20:00:00+00:00"
-    }
-  ],
-  "issues_log": [],
-  "last_check_time": null,
-  "run_start_time": "2026-06-30T11:00:33.539397+00:00",
-  "log_cursor": 13061580,
-  "cross_stage_memory": {},
-  "max_epochs": 23,
-  "last_heartbeat": "2026-07-01T07:10:13.639967+00:00",
+  "last_heartbeat": "2026-07-01T14:16:03.994036+00:00",
+  "training_pid": 738779,
   "batch": {
-    "current": 400,
-    "total": 6580
+    "current": 50,
+    "total": 712
   }
 }
