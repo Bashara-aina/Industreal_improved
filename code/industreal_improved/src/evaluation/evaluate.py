@@ -863,12 +863,23 @@ def compute_activity_segment_metrics(model, dataset, device, T=16):
     for seg in segs:
         try:
             clip, label = dataset.sample_segment_clip(seg, T=T)
-            if label == 0:  # NA segment — skip per docstring contract
+            if label == 0:  # NA segment — skip per docstring contract (raw-id check, before remap)
                 continue
+            # [FIX 2026-07-01 Opus round-4 Q5] The segment label is a RAW action_id
+            # (0-74 from _parse_ar_segments), but act_logits are in GROUPED output
+            # space (NUM_ACT_OUTPUTS channels) when ACT_CLASS_GROUPING != 'none'.
+            # Without this remap, pred (group idx) is compared to label (raw idx),
+            # making act_seg_top1/top5 meaningless — the exact MViTv2-comparable
+            # number reported in the paper. Remap the label to group space so both
+            # sides share an index space.
+            _remap = getattr(C, 'remap_activity_label', None)
+            if _remap is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() != 'none':
+                label = _remap(int(label))
             clip = clip.unsqueeze(0).to(device)  # [1,T,3,H,W]
             with torch.no_grad():
                 out = model(clip)
-            logits = out.get('act_logits', torch.zeros(1, 75))
+            _n_out = int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_CLASSES_ACT))
+            logits = out.get('act_logits', torch.zeros(1, _n_out))
             if logits.dim() > 2:
                 logits = logits.mean(dim=1)  # pool temporal dim
             pred = logits.argmax(dim=-1).item()
