@@ -509,13 +509,19 @@ VAL_NUM_WORKERS = 0      # [FIX 2026-06-30] 0 workers — match NUM_WORKERS to a
 
 EPOCHS        = 100 
 BASE_LR       = 5e-4   # Per paper: "5e-4"
-WEIGHT_DECAY  = 5e-2   # Per paper §Implementation: "5 × 10⁻² (bias/norm excluded)"
+WEIGHT_DECAY  = 1e-3   # [FIX 2026-07-01 agent audit] Was 5e-2 (50-500x standard). At 5e-2, combined with
+                         # GRAD_CLIP_NORM=5.0, weight decay dominated gradient for params with norm >~4.
+                         # Standard AdamW value 1e-3 for ConvNeXt multi-task. Per paper §Implementation
+                         # value of 5e-2 was likely for a single-task setup; multi-task needs lower decay.
 WARMUP_EPOCHS = 2      # Per paper §Implementation: "Warmup (2 ep) → OneCycleLR"
 USE_COSINE_ANNEALING = False  # Per paper: uses OneCycleLR instead
 T_0 = 10
 T_mult = 2
 PATIENCE      = 10
-GRAD_CLIP_NORM = 1.0  # Per paper §Implementation: "ℓ₂-norm = 1.0"
+GRAD_CLIP_NORM = 5.0  # [FIX 2026-07-01 agent audit] Was 1.0 — far too tight for 5-head multi-task model.
+                         # Combined gradient norm from 5 heads sharing backbone easily exceeds 5.0.
+                         # At 1.0, every head's gradient was clipped 80-90%, slowing backbone convergence.
+                         # 5.0 is the standard multi-task value (still safe against gradient explosion).
 VAL_EVERY = 1    # [BENCHMARK] Evaluate every 1 epoch (BENCHMARK_MODE override)
 VAL_EVERY_N_STEPS = 2500  # Reduced from 5000 — halves crash exposure window with mid-epoch checkpoint safety
 EVAL_MAX_BATCHES = 500    # Cap validation to 500 batches (~2 min) per epoch
@@ -644,6 +650,7 @@ DET_CLASS_ALPHAS = {
         2:  0.88,  # cat 3  '10010010000', train=349, val=0
         14: 0.88,  # cat 15 '11110101111', train=126, val=0
         # Zero train GT (can't learn): idx 13/19/23 --- default
+        # NOTE: idx 23 = error_state has zero train GT; FOCAL_ALPHA=0.25 is fine (nothing to learn from)
         # Zero val GT (can't measure): idx 1/3/15 --- default
     }
 GIOU_WEIGHT   = 2.0  # Doc 01 B.2: GIoU regression weight vs cls weight=1.0
@@ -798,7 +805,10 @@ TASK_AWARE_PSR_BOOST = 1.5      # 1.5x weight for frames with PSR labels
 # Set to 0.90 for detection-dominant stages (RF1/RF2), 0.40 for mixed stages.
 # The apply_preset() function overrides this per-stage; this default matters
 # only when running WITHOUT a preset.
-DET_GT_FRAME_FRACTION = float(os.environ.get('DET_GT_FRAME_FRACTION', '0.90'))
+DET_GT_FRAME_FRACTION = float(os.environ.get('DET_GT_FRAME_FRACTION', '0.40'))  # [FIX 2026-07-01] Changed default from 0.90 to 0.40.
+                             # 0.90 starves activity to ~0.14 frames/class/batch with 47 hybrid groups.
+                             # 0.40 is safe for multi-head stages: detection gets 40% batch mass for GT frames,
+                             # activity/PSR/pose get 60%. apply_preset() still overrides to 0.90 for det-only stages.
 
 # [FIX 2026-06-15] Activity dominance control
 # The 3-layer collapse cascade showed activity dominating all other heads via:
@@ -863,6 +873,9 @@ KENDALL_LOG_VAR_MAX_POSE = 3.0    # Allow pose suppression (was 0.0 — pose dom
 # Ramps PSR precision multiplier from PSR_WARMUP_INIT_MULT → 1.0 over first N steps
 # Gives PSR a gradient head start before activity loss dominates
 PSR_WARMUP_INIT_MULT = 2.0        # Reduced from 3.0 — gentler warmup start since sequence mode provides signal
+PSR_WARMUP_STEPS = 500            # [FIX 2026-07-01 agent audit] Step-based warmup for PSR precision multiplier.
+                                    # Ramps from PSR_WARMUP_INIT_MULT→1.0 over 500 steps. Prevents PSR head internal
+                                    # instability from aggressive early gradients when STAGED_TRAINING=False.
 
 # [FIX 2026-06-16] Regression gradient warmup for --reinit-heads
 # Ramps det_reg loss multiplier from REINIT_REG_WARMUP_INIT_MULT → 1.0 over the first
@@ -889,7 +902,10 @@ STAGE3_WARMUP_EPOCHS = 3  # LR warmup epochs at Stage 3 entry to stabilize new h
 # dedicated param group LR at train.py:2511-2526. Combining both ramps multiplied
 # gradient suppression (1/5 loss-side × 1/3 LR-side = 1/15 at epoch 16) — too
 # aggressive when used together. STAGE3_WARMUP alone is sufficient.
-PSR_WARMUP_EPOCHS = 0  # loss-side ramp disabled; STAGE3_WARMUP_EPOCHS handles psr_head
+PSR_WARMUP_EPOCHS = 3  # [FIX 2026-07-01 agent audit] Was 0 — no warmup when STAGED_TRAINING=False.
+                         # With STAGED_TRAINING=False, Stage 3 LR warmup never fires. Set to 3 epochs
+                         # so PSR has a gradual ramp even in non-staged mode. The KENDALL_STAGED_TRAINING
+                         # path (line 1741) also reads this for its stage-3 ramp.
 CLEAR_FRAME_CACHE_EPOCH_END = True  # free ~5-7GB FRAME_CACHE between epochs
 
 # =========================================================================

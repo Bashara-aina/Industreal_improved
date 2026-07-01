@@ -3362,16 +3362,28 @@ def main(args):
             f'samples ({seq_len} frames/window, stride=1)'
         )
 
-    class_counts = train_ds.class_counts  # full 75-element bincount (indices 0-74 for action_ids 0-74); set_class_counts handles the shift via counts[1:]
-    # Remap to group space when grouping is active (loss expects NUM_ACT_OUTPUTS-length weights)
+    class_counts = train_ds.class_counts  # full 75-element bincount (indices 0-74 for action_ids 0-74);
+                                           # set_class_counts handles the shift via counts[1:].
+                                           # When ACT_CLASS_GROUPING != 'none', class_counts is already
+                                           # in group space (NUM_ACT_OUTPUTS bins via minlength) — NO remap needed.
     _m = str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower()
+    # [FIX 2026-07-01 agent audit] When grouping is active, class_counts was already built by the
+    # dataset in group space (industreal_dataset.py:796-805 remaps activity_ids before bincount with
+    # minlength=NUM_ACT_OUTPUTS). The old code re-remapped through remap_activity_label() which treated
+    # group indices as raw action IDs, corrupting the per-class counts. Now we skip remap entirely.
     if _m != 'none':
-        _grouped = [0] * int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_CLASSES_ACT))
-        for _raw_id, _cnt in enumerate(class_counts):
-            _gid = C.remap_activity_label(_raw_id)
-            if _gid >= 0 and _gid < len(_grouped):
-                _grouped[_gid] += _cnt
-        class_counts = _grouped
+        _n_out = int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_CLASSES_ACT))
+        if len(class_counts) != _n_out:
+            logger.warning(
+                f'[ACT-GROUP] class_counts has {len(class_counts)} bins but NUM_ACT_OUTPUTS={_n_out}. '
+                f'This should not happen — counts were built with minlength={_n_out}.'
+            )
+            # Pad/truncate to correct length as safety net
+            _tmp = [0] * _n_out
+            for i, _cnt in enumerate(class_counts):
+                if i < _n_out:
+                    _tmp[i] = int(_cnt)
+            class_counts = _tmp
 
     logger.info(f'Training samples  : {len(train_ds):,}')
     logger.info(f'Validation samples: {len(val_ds):,}')

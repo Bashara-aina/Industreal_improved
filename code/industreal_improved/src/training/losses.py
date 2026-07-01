@@ -1238,7 +1238,13 @@ class MultiTaskLoss(nn.Module):
             # and with Kendall prec = exp(-lv_det) up to ~54.6, a loss_det of -1.5
             # multiplied by prec=54.6 gives ~-82 per detection step → divergence.
             # Full zero-floor: GIoU<0 gets 0 gradient (no negative signal to log_var).
-            NEG_SLOPE = 0.0
+            # [FIX 2026-07-01 agent audit] Changed from NEG_SLOPE=0.0 to 0.01. Zero-floor killed
+            # regression gradient for non-overlapping boxes — GIoU < 0 means box has zero overlap
+            # with GT, which is exactly when regression needs gradient signal. NEG_SLOPE=0.01 preserves
+            # 1% of the informative negative gradient while still protecting Kendall from large
+            # negative loss_det * prec_det products. Worst case: loss_det=-1.0 * prec=54.6 → -54.6,
+            # floor to -0.546 — well within stable range.
+            NEG_SLOPE = 0.01
             loss_det = torch.where(
                 loss_det < 0,
                 NEG_SLOPE * loss_det,
