@@ -1316,37 +1316,7 @@ class ActivityHead(nn.Module):
 
         self.proj_features = nn.Linear(proj_input_dim, embed_dim)
 
-        # A.1: TCN -- short-range motion (velocity/acceleration profiles)
-        self.tcn = TemporalConvBlock(
-            embed_dim=embed_dim,
-            kernel_size=5,
-            dropout=0.1,
-            drop_path=0.1,
-        )
-
-        # A.3: 2x ViT blocks with CLS token (replaces last-timestep pooling)
-        self.vit = nn.ModuleList([
-            ViTTemporalBlock(
-                embed_dim=embed_dim,
-                num_heads=8,
-                ff_dim=2048,
-                dropout=dropout,
-                drop_path=0.1,
-            ),
-            ViTTemporalBlock(
-                embed_dim=embed_dim,
-                num_heads=8,
-                ff_dim=2048,
-                dropout=dropout,
-                drop_path=0.15,
-            ),
-        ])
-
-        # CLS token for cross-attention pooling (TimeSformer / ViViT style)
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        nn.init.trunc_normal_(self.cls_token, std=0.02)
-
-        # Doc 2 A.1: VideoMAE fusion
+        # Doc 2 A.1: VideoMAE fusion (defined here so classifier_input_dim is available for both paths)
         if use_videomae:
             self.videomae_proj = nn.Sequential(
                 nn.Linear(videomae_hidden, embed_dim),
@@ -1358,20 +1328,52 @@ class ActivityHead(nn.Module):
             self.videomae_proj = None
             classifier_input_dim = embed_dim
 
-        # Activity classifier
-        self.activity_classifier = nn.Sequential(
-            nn.LayerNorm(classifier_input_dim),
-            nn.Dropout(0.1),
-            nn.Linear(classifier_input_dim, num_classes),
-        )
-
-        # [FIX 2026-06-30 Opus consult] Simple per-frame MLP head. See config
-        # ACTIVITY_HEAD_SIMPLE: under the class-balanced WeightedRandomSampler the
-        # temporal bank carries no real temporal signal, so the TCN+ViT stack is
-        # pure overfitting capacity with an attenuated gradient path. When enabled,
-        # forward() classifies proj_feat directly through this small MLP and the
-        # temporal modules are left unused (no gradient flows to them).
+        # [FIX 2026-07-01 agent audit] TCN+ViT+cls_token unconditionally allocated 7.66M dead params
+        # when ACTIVITY_HEAD_SIMPLE=True (85% of head params unused, ~92 MB GPU memory wasted).
+        # Now conditionally created only when ACTIVITY_HEAD_SIMPLE=False.
         self.simple = bool(getattr(C, 'ACTIVITY_HEAD_SIMPLE', False))
+        if not self.simple:
+            # A.1: TCN -- short-range motion (velocity/acceleration profiles)
+            self.tcn = TemporalConvBlock(
+                embed_dim=embed_dim,
+                kernel_size=5,
+                dropout=0.1,
+                drop_path=0.1,
+            )
+
+            # A.3: 2x ViT blocks with CLS token (replaces last-timestep pooling)
+            self.vit = nn.ModuleList([
+                ViTTemporalBlock(
+                    embed_dim=embed_dim,
+                    num_heads=8,
+                    ff_dim=2048,
+                    dropout=dropout,
+                    drop_path=0.1,
+                ),
+                ViTTemporalBlock(
+                    embed_dim=embed_dim,
+                    num_heads=8,
+                    ff_dim=2048,
+                    dropout=dropout,
+                    drop_path=0.15,
+                ),
+            ])
+
+            # CLS token for cross-attention pooling (TimeSformer / ViViT style)
+            self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
+            nn.init.trunc_normal_(self.cls_token, std=0.02)
+
+            # Activity classifier (non-simple path uses VideoMAE-fused features)
+            self.activity_classifier = nn.Sequential(
+                nn.LayerNorm(classifier_input_dim),
+                nn.Dropout(0.1),
+                nn.Linear(classifier_input_dim, num_classes),
+            )
+        else:
+            self.tcn = None
+            self.vit = None
+            self.cls_token = None
+            self.activity_classifier = None
         if self.simple:
             _hidden = int(getattr(C, 'ACTIVITY_HEAD_SIMPLE_HIDDEN', 256))
             self.simple_classifier = nn.Sequential(
