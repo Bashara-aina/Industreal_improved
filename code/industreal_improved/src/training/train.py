@@ -183,6 +183,22 @@ CFG_SUBPROCESS_EVAL_TIMEOUT = int(getattr(C, 'SUBPROCESS_EVAL_TIMEOUT', 900))
 # Wrapped around evaluate_all() calls via try/finally in the epoch loop.
 IN_EVALUATION_PHASE = False
 
+
+# [F6 2026-07-02 Fable RF4 consult] AMP dtype resolution. MIXED_PRECISION was
+# disabled because FP16 + GradScaler was corrupted by PSR seq-loss spikes.
+# BF16 has the same exponent range as FP32 (no GradScaler needed, spikes are
+# representable), and the RTX 5060 Ti supports it natively. Set
+# MIXED_PRECISION=True + AMP_DTYPE='bf16' in config to get ~1.5-2x throughput
+# without the GradScaler failure mode. AMP_DTYPE='fp16' restores old behavior.
+def _amp_dtype() -> torch.dtype:
+    return torch.bfloat16 if str(getattr(C, 'AMP_DTYPE', 'bf16')).lower() in ('bf16', 'bfloat16') \
+        else torch.float16
+
+
+def _amp_scaler_enabled() -> bool:
+    """GradScaler is only needed (and only valid) for FP16 autocast."""
+    return bool(C.MIXED_PRECISION) and _amp_dtype() is torch.float16
+
 # RC-25 guard: set True when --reinit-heads is active; gates step-0 assertions.
 _REINIT_HEADS_ACTIVE = False
 _REINIT_EPOCH_OFFSET = 0  # set to (start_epoch - 1) when --reinit-heads is used
@@ -1186,7 +1202,7 @@ def train_one_epoch(
             clip_rgb_seq = targets_seq.get('clip_rgb')
             if clip_rgb_seq is not None:
                 clip_rgb_seq = clip_rgb_seq.to(device)
-            with amp.autocast('cuda', enabled=C.MIXED_PRECISION):
+            with amp.autocast('cuda', enabled=C.MIXED_PRECISION, dtype=_amp_dtype()):
                 outputs_seq = model(images_seq, clip_rgb=clip_rgb_seq)
                 for _k in ('cls_preds', 'reg_preds', 'head_pose', 'psr_logits', 'act_logits'):
                     if _k in outputs_seq and isinstance(outputs_seq[_k], torch.Tensor):
@@ -1262,18 +1278,41 @@ def train_one_epoch(
                 del outputs_seq, loss_seq, loss_dict_seq, fake_outputs, fake_targets
                 torch.cuda.empty_cache()
                 continue
+            # [CRITICAL FIX 2026-07-02 Fable RF4 consult — F1] The old code set
+            # backbone/FPN .grad = None AFTER the seq backward "so PSR doesn't
+            # corrupt shared features". With GRAD_ACCUM_STEPS>1 and seq batches
+            # interleaved (PSR_SEQ_EVERY_N_BATCHES=2), that wipe ALSO erased the
+            # gradients accumulated from all preceding NON-seq batches in the same
+            # accumulation window: at accum=8/seq_every=2 the backbone only ever
+            # received gradient from the single non-seq batch AFTER the last seq
+            # batch of each window (~1/5 of the intended backbone signal; FPN same).
+            # This silently starved backbone/FPN learning for detection, activity
+            # and pose in every RF3/RF4 run.
+            #
+            # Correct behavior:
+            #   - DETACH_PSR_FPN=True (RF4 default): the PSR branch consumes
+            #     p3/p4/p5 .detach()'d (model.py seq path), so PSR backward CANNOT
+            #     produce backbone/FPN gradients — no wipe is needed at all.
+            #   - DETACH_PSR_FPN=False: snapshot backbone/FPN grads BEFORE the seq
+            #     backward and restore them after, which removes only the PSR
+            #     contribution while preserving accumulated non-seq gradients.
+            _psr_fpn_detached = bool(getattr(C, 'DETACH_PSR_FPN', False))
+            _bbfpn_grad_snapshot = None
+            if not _psr_fpn_detached:
+                _bbfpn_grad_snapshot = {}
+                for _mod_name in ('backbone', 'fpn'):
+                    _mod = getattr(model, _mod_name, None)
+                    if _mod is None:
+                        continue
+                    for _pn, _p in _mod.named_parameters(prefix=_mod_name):
+                        _bbfpn_grad_snapshot[_pn] = (
+                            _p, _p.grad.detach().clone() if _p.grad is not None else None
+                        )
             scaler.scale(loss_seq).backward()
-            # [FIX 2026-06-16] Zero backbone + FPN gradients on seq batches so
-            # PSR backward() doesn't corrupt shared visual features. Only PSR
-            # head + transformer weights update on seq steps.
-            if hasattr(model, 'backbone'):
-                for _p in model.backbone.parameters():
-                    if _p.grad is not None:
-                        _p.grad = None
-            if hasattr(model, 'fpn'):
-                for _p in model.fpn.parameters():
-                    if _p.grad is not None:
-                        _p.grad = None
+            if _bbfpn_grad_snapshot is not None:
+                for _p, _g in _bbfpn_grad_snapshot.values():
+                    _p.grad = _g
+                del _bbfpn_grad_snapshot
             for k in running:
                 if k in loss_dict_seq:
                     v = loss_dict_seq[k]
@@ -1328,12 +1367,17 @@ def train_one_epoch(
                     # common-mode gradient that drives all weights toward the same degenerate
                     # class (predicting 1/75 classes). For each param, subtract the mean across
                     # its output dimension so the remaining gradient is purely discriminative.
-                    for _n, _p in model.named_parameters():
-                        if _n.startswith('activity_head') and _p.grad is not None:
-                            if _p.dim() > 1:
-                                _p.grad.sub_(_p.grad.mean(dim=tuple(range(1, _p.dim())), keepdim=True))
-                            else:
-                                _p.grad.sub_(_p.grad.mean())
+                    # [F5 2026-07-02 Fable RF4 consult] Now gated behind
+                    # ACTIVITY_GRAD_CENTRALIZATION (default False): it was a collapse-era
+                    # debugging hack; with the FeatureBank gradient path fixed it removes
+                    # legitimate signal (e.g., the logit bias can never learn class priors).
+                    if bool(getattr(C, 'ACTIVITY_GRAD_CENTRALIZATION', False)):
+                        for _n, _p in model.named_parameters():
+                            if _n.startswith('activity_head') and _p.grad is not None:
+                                if _p.dim() > 1:
+                                    _p.grad.sub_(_p.grad.mean(dim=tuple(range(1, _p.dim())), keepdim=True))
+                                else:
+                                    _p.grad.sub_(_p.grad.mean())
                     _total_grad_norm = torch.nn.utils.clip_grad_norm_(
                         list(model.parameters()) + list(criterion.parameters()),
                         C.GRAD_CLIP_NORM,
@@ -1397,7 +1441,7 @@ def train_one_epoch(
             images[:, :1, 0, 0]
         )).to(device, non_blocking=True)
 
-        with amp.autocast('cuda', enabled=C.MIXED_PRECISION):
+        with amp.autocast('cuda', enabled=C.MIXED_PRECISION, dtype=_amp_dtype()):
             clip_rgb = targets.get('clip_rgb')
             if clip_rgb is not None and isinstance(clip_rgb, torch.Tensor) and clip_rgb.numel() > 0:
                 clip_rgb = clip_rgb.to(device)
@@ -1793,12 +1837,15 @@ def train_one_epoch(
                     torch.nn.utils.clip_grad_norm_(_act_params, _act_gc)
             # [GC 2026-06-30] Gradient centralization for activity head — removes the
             # common-mode gradient that drives all weights toward the same degenerate class.
-            for _n, _p in model.named_parameters():
-                if _n.startswith('activity_head') and _p.grad is not None:
-                    if _p.dim() > 1:
-                        _p.grad.sub_(_p.grad.mean(dim=tuple(range(1, _p.dim())), keepdim=True))
-                    else:
-                        _p.grad.sub_(_p.grad.mean())
+            # [F5 2026-07-02 Fable RF4 consult] Gated behind ACTIVITY_GRAD_CENTRALIZATION
+            # (default False) — collapse-era hack; see the seq-path twin block for rationale.
+            if bool(getattr(C, 'ACTIVITY_GRAD_CENTRALIZATION', False)):
+                for _n, _p in model.named_parameters():
+                    if _n.startswith('activity_head') and _p.grad is not None:
+                        if _p.dim() > 1:
+                            _p.grad.sub_(_p.grad.mean(dim=tuple(range(1, _p.dim())), keepdim=True))
+                        else:
+                            _p.grad.sub_(_p.grad.mean())
             # [REINIT-HEADS] Detection head gradient warmup after reinit
             # Proper fix: ZERO detection head gradients on frames with NO GT boxes.
             # 99.3% of RF1 frames have zero GT boxes, producing exclusively negative
@@ -2411,19 +2458,47 @@ def _clamp_kendall_log_vars(criterion):
 def _log_kendall_gradient_sentinel(criterion, step_idx: int, log_interval: int) -> None:
     """
     Doc 2 §B.1: Kendall gradient sentinels.
-    Every N steps, log gradient norms of Kendall log_var params.
-    All should be nonzero in stages where corresponding task is active.
+    Every N steps, log the Kendall log_var VALUES, their effective precisions
+    (exp(-lv)), and the gradient norms of the log_var params.
+
+    [FIX 2026-07-02 Fable RF4 consult — F2] This used to log ONLY gradient
+    norms, at logger.debug (invisible at the default INFO level), so the
+    log_var values central to multi-task balancing were never observable in
+    any training log. Now logs values + precisions + grads at INFO.
+    Interpretation guide:
+      lv pinned at a clamp bound (KENDALL_LOG_VAR_MIN_ACT / MAX_PSR / MAX_POSE
+      or the global [-4, 2]) means Kendall wants to go further and the bound is
+      doing load-bearing work. lv_psr is EXPECTED to sit at the MAX_PSR ceiling
+      (Kendall equilibrium lv* = ln(PSR_WEIGHT*loss) > 0 with the fixed 10-15x
+      PSR amplification). lv_pose is capped at lv_det by KENDALL_HP_PREC_CAP.
+
+    [F13 2026-07-02 Fable RF4 consult] Trigger at step ≡ 1 (mod interval), not 0.
+    This function is only reached on NON-seq steps, but steps ≡ 0 (mod
+    PSR_SEQ_EVERY_N_BATCHES) are ALL seq steps — so with an even interval
+    (100/200/500) and even seq cadence (2 or 4), `step % interval == 0` could
+    NEVER fire. This is why no [Kendall grad] line ever appeared in any RF4
+    log despite the probe existing. Odd offsets are never seq steps when the
+    seq cadence is even.
     """
-    if step_idx % log_interval != 0:
+    if step_idx % log_interval != 1:
         return
     try:
-        grad_det = criterion.log_var_det.grad.norm().item() if criterion.log_var_det.grad is not None else 0.0
-        grad_pose = criterion.log_var_pose.grad.norm().item() if criterion.log_var_pose.grad is not None else 0.0
-        grad_act = criterion.log_var_act.grad.norm().item() if criterion.log_var_act.grad is not None else 0.0
-        grad_psr = criterion.log_var_psr.grad.norm().item() if criterion.log_var_psr.grad is not None else 0.0
-        logger.debug(
-            f'  [Kendall grad] det={grad_det:.6f} pose={grad_pose:.6f} '
-            f'act={grad_act:.6f} psr={grad_psr:.6f}'
+        _vals = {}
+        _grads = {}
+        for _short, _name in (('det', 'log_var_det'), ('pose', 'log_var_pose'),
+                              ('act', 'log_var_act'), ('psr', 'log_var_psr')):
+            _p = getattr(criterion, _name)
+            _vals[_short] = _p.item()
+            _grads[_short] = _p.grad.norm().item() if _p.grad is not None else 0.0
+        logger.info(
+            '  [KENDALL step=%d] lv: det=%.3f pose=%.3f act=%.3f psr=%.3f | '
+            'prec(exp(-lv)): det=%.2f pose=%.2f act=%.2f psr=%.2f | '
+            'lv_grad: det=%.4f pose=%.4f act=%.4f psr=%.4f',
+            step_idx,
+            _vals['det'], _vals['pose'], _vals['act'], _vals['psr'],
+            math.exp(-_vals['det']), math.exp(-_vals['pose']),
+            math.exp(-_vals['act']), math.exp(-_vals['psr']),
+            _grads['det'], _grads['pose'], _grads['act'], _grads['psr'],
         )
     except Exception:
         pass
@@ -2444,8 +2519,14 @@ def _log_per_head_grad_norm(model, step_idx: int, log_interval: int = 200,
     (grad ~0.0) when the PSR head collapses, serving as an early warning.
     Sequence-batch indicator (is_seq_step) is included in the log prefix so
     the liveness probe shows whether PSR had a transition-target batch.
+
+    [F13 2026-07-02 Fable RF4 consult] Trigger at step ≡ 1 (mod interval) —
+    same parity fix as the Kendall sentinel: this is called on non-seq steps
+    only, and even intervals never land on non-seq steps when the seq cadence
+    is even. The [GRAD-NORM]/liveness lines cited by the RF4 gate criteria
+    (doc 85) were structurally dead in every prior run.
     """
-    if step_idx % log_interval != 0:
+    if step_idx % log_interval != 1:
         return
     head_prefixes = ['detection_head', 'pose_head', 'head_pose_head', 'activity_head', 'psr_head']
     parts = []
@@ -3634,7 +3715,11 @@ def main(args):
             {'params': videomae_params,         'lr': 0.0},  # [OPUS FIX #3] pre-registered frozen; lr toggled at unfreeze
         ]
         if loss_params:
-            param_groups.append({'params': loss_params, 'lr': head_lr})
+            # [F14 2026-07-02 Fable consult] weight_decay=0 for Kendall log_vars:
+            # they are log-variances, not weights — decaying them biases every
+            # task precision toward 1.0 (uniform), quietly fighting the learned
+            # balancing this group exists to provide.
+            param_groups.append({'params': loss_params, 'lr': head_lr, 'weight_decay': 0.0})
         _effective_wd = C.WEIGHT_DECAY * 3  # constant — NOT scaled by _stage_lr_mult
         optimizer = Lion(param_groups, weight_decay=_effective_wd)
         logger.info('Optimizer: Lion (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)), DET_BIAS_LR_FACTOR, _effective_wd))
@@ -3650,7 +3735,9 @@ def main(args):
             {'params': videomae_params,         'lr': 0.0},  # [OPUS FIX #3] pre-registered frozen; lr toggled at unfreeze
         ]
         if loss_params:
-            param_groups.append({'params': loss_params, 'lr': head_lr})
+            # [F14 2026-07-02 Fable consult] weight_decay=0 for Kendall log_vars
+            # (log-variances, not weights — see Lion branch comment).
+            param_groups.append({'params': loss_params, 'lr': head_lr, 'weight_decay': 0.0})
         _effective_wd = C.WEIGHT_DECAY  # constant — NOT scaled by _stage_lr_mult
         optimizer = torch.optim.AdamW(param_groups, weight_decay=_effective_wd)
         logger.info('Optimizer: AdamW with differential LR (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g, bias WD=0)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)), DET_BIAS_LR_FACTOR, _effective_wd))
@@ -3668,6 +3755,7 @@ def main(args):
     _stage_warmup_mult = float(os.environ.get('_STAGE_WARMUP_MULT', 1.0))
     _stage_warmup_epochs = int(C.WARMUP_EPOCHS * _stage_warmup_mult)
     warmup = LinearLR(optimizer, start_factor=0.1, total_iters=_stage_warmup_epochs)
+    _one_cycle_max_lr_cfg = None  # [F4b] set in the OneCycleLR branch below
     if bool(getattr(C, 'ONE_CYCLE_LR', False)):
         # Doc 2 E.2: OneCycleLR with super-convergence
         # High peak LR (5e-4) + aggressive cosine decay
@@ -3682,18 +3770,26 @@ def main(args):
         # land on the videomae slot. We name each group explicitly.
         # If you add/remove a param group, update this list AND
         # VIDEOMAE_PARAM_GROUP_IDX above.
+        # [FIX 2026-07-02 Fable RF4 consult — F4] The peak-LR factor was a
+        # hardcoded 0.5, silently halving OneCycleLR's peak to 2.5e-4 while the
+        # comment above claims "High peak LR (5e-4)". Combined with the effective
+        # batch (6x8=48) being 1.5x the paper's 32, the per-sample update
+        # intensity at peak was ~3x BELOW the paper spec — a systematic
+        # slow-convergence factor for every head. Now config-driven via
+        # ONE_CYCLE_PEAK_FACTOR (see config.py for the linear-scaling math).
+        _peak = float(getattr(C, 'ONE_CYCLE_PEAK_FACTOR', 0.5))
         max_lr = [
-            backbone_lr_local * 0.5,  # idx 0: backbone
-            head_lr_local * 0.5 * C.DET_LR_MULTIPLIER,  # idx 1: det_head
-            head_lr_local * 0.5,      # idx 2: head
-            head_lr_local * 0.5 * float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)),  # idx 3: activity
-            head_lr_local * 0.5,      # idx 4: psr
-            det_head_bias_lr_local * 0.5,  # idx 5: det_head_bias
-            bias_lr_local * 0.5,      # idx 6: bias
+            backbone_lr_local * _peak,  # idx 0: backbone
+            head_lr_local * _peak * C.DET_LR_MULTIPLIER,  # idx 1: det_head
+            head_lr_local * _peak,      # idx 2: head
+            head_lr_local * _peak * float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)),  # idx 3: activity
+            head_lr_local * _peak,      # idx 4: psr
+            det_head_bias_lr_local * _peak,  # idx 5: det_head_bias
+            bias_lr_local * _peak,      # idx 6: bias
             0.0,                      # idx 7: videomae (frozen at start, toggled at unfreeze)
         ]
         if loss_params:
-            max_lr.append(head_lr_local * 0.5)  # idx 8 (if present): loss
+            max_lr.append(head_lr_local * _peak)  # idx 8 (if present): loss
         # [FIX 2026-07-01 agent audit] OneCycleLR was built with steps_per_epoch=len(train_loader)//accum_steps
         # (~800) but scheduler.step() is called ONCE per epoch (line 4290), not per optimizer step.
         # Result: OneCycleLR received only ~100 total steps vs expected ~80,000 — stayed in warmup phase
@@ -3711,7 +3807,12 @@ def main(args):
         scheduler = SequentialLR(optimizer, [warmup, scheduler],
                                milestones=[_stage_warmup_epochs])
         lr_str = ', '.join(f'{v:.2e}' for v in max_lr)
-        logger.info(f'Scheduler: OneCycleLR (pct_start=0.1, steps_per_epoch=1, max_lr=[{lr_str}])')
+        logger.info(f'Scheduler: OneCycleLR (pct_start=0.1, steps_per_epoch=1, '
+                    f'peak_factor={_peak}, max_lr=[{lr_str}])')
+        # [F4b] Stash for the resume path: optimizer.load_state_dict() restores the
+        # CHECKPOINT's max_lr/initial_lr/min_lr into param_groups, silently undoing
+        # any ONE_CYCLE_PEAK_FACTOR change. The resume block re-applies these.
+        _one_cycle_max_lr_cfg = list(max_lr)
     elif C.USE_COSINE_ANNEALING:
         cosine = CosineAnnealingWarmRestarts(
             optimizer, T_0=C.T_0, T_mult=C.T_mult, eta_min=1e-6
@@ -3730,7 +3831,7 @@ def main(args):
     # so auto-resume from crash_recovery.pth does not reset LR schedule to epoch 0).
     _CR_SCHEDULER = scheduler
 
-    scaler = torch.cuda.amp.GradScaler(enabled=C.MIXED_PRECISION)
+    scaler = torch.cuda.amp.GradScaler(enabled=_amp_scaler_enabled())
 
     start_epoch = 0
     best_metric = 0.0
@@ -3862,6 +3963,27 @@ def main(args):
                 f'  Could not restore scheduler/scaler state ({e}). '
                 f'Re-initialized -- LR schedule continues.'
             )
+        # [F4b 2026-07-02 Fable RF4 consult] Re-apply the config-derived OneCycleLR
+        # hyperparams after optimizer/scheduler state load. load_state_dict restores
+        # the CHECKPOINT's per-group max_lr/initial_lr/min_lr, which silently undoes
+        # any ONE_CYCLE_PEAK_FACTOR (or LR-scaling) change made between runs.
+        # OneCycleLR.get_lr() reads these keys from param_groups at every step, so
+        # rewriting them here retunes the remaining schedule to the new config.
+        if _one_cycle_max_lr_cfg is not None and not getattr(args, 'reset_scheduler', False):
+            _ocl_div, _ocl_final_div = 25.0, 1e4  # OneCycleLR defaults (not overridden at construction)
+            _ocl_changed = False
+            for _i, _pg in enumerate(optimizer.param_groups):
+                if _i >= len(_one_cycle_max_lr_cfg):
+                    break
+                _m = float(_one_cycle_max_lr_cfg[_i])
+                if 'max_lr' in _pg and abs(float(_pg['max_lr']) - _m) > 1e-15:
+                    _pg['max_lr'] = _m
+                    _pg['initial_lr'] = _m / _ocl_div
+                    _pg['min_lr'] = _m / _ocl_div / _ocl_final_div
+                    _ocl_changed = True
+            if _ocl_changed:
+                logger.info('  [F4b] Re-applied config OneCycleLR max_lr/initial_lr/min_lr '
+                            'after checkpoint state load (ONE_CYCLE_PEAK_FACTOR now effective).')
         start_epoch = ckpt['epoch'] + 1
         if getattr(args, 'reset_scheduler', False):
             best_metric = 0.0
@@ -3922,12 +4044,15 @@ def main(args):
         if start_epoch < C.WARMUP_EPOCHS:
             with torch.no_grad():
                 criterion.log_var_det.fill_(0.0)
-                criterion.log_var_pose.fill_(-1.0)
+                # [F14b] Was -1.0 — stale copy of the pre-"Opus #1" init. The live
+                # init is 0.0 (losses.py: s_pose=0 so the clamp(min=0) path can't
+                # zero the pose Kendall term); the reset must match it.
+                criterion.log_var_pose.fill_(0.0)
                 criterion.log_var_act.fill_(0.0)
                 criterion.log_var_psr.fill_(0.0)
             logger.info(
                 '  Reset Kendall log_var params (early epoch resume): '
-                'det=0.0  head_pose=-1.0  act=0.0  psr=0.0'
+                'det=0.0  head_pose=0.0  act=0.0  psr=0.0'
             )
         else:
             logger.info(
