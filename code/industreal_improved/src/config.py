@@ -546,15 +546,14 @@ IMAGENET_STD  = [0.229, 0.224, 0.225]
 
 # =========================================================================
 # Training (RTX 3060 12 GB) — ConvNeXt + 5 heads + TMA + TemporalBank
-# BATCH_SIZE=2 is safe: VRAM at 3.78GB/11.4GB (33%) with batch=1, VideoMAE is OFF.
-# The BATCH_SIZE=1 constraint was written for VideoMAE+ConvNeXt+TMA+TemporalBank+5 heads.
-# With VideoMAE disabled, batch=2 uses ~7.6GB — well within 12GB (proven by R2.5 probe).
-# OOM fallback: train.py automatically halves batch if CUDA OOM is detected.
-BATCH_SIZE = 2        # Was 1 (VideoMAE-era constraint). VRAM 33% at batch=1 → 2× safe.
+# BATCH_SIZE=6 is safe on RTX 5060 Ti 16GB: VRAM at ~2GB/16GB with batch=2,
+# so 6x gives ~6-8GB peak, well within 16GB. Seq batches (8× frames) spike higher
+# but stay under 12GB. OOM fallback: train.py automatically halves batch if OOM.
+BATCH_SIZE = 6        # RTX 5060 Ti 16GB — batch=2 used 2GB, 6x is safe 3x throughput
 GRAD_ACCUM_STEPS = 8  # Per paper §Implementation: batch=2 × accum=8 = 16 effective
 EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 16
 
-VAL_BATCH_SIZE = 4   # Was 16 (8x train batch with FP32 → OOM on RTX 3060). 4× is safe with no_grad.
+VAL_BATCH_SIZE = 8   # Was 4 — 16GB card can handle 2x. no_grad, no optimizer states.
 VAL_NUM_WORKERS = 0      # [FIX 2026-06-30] 0 workers — match NUM_WORKERS to avoid CUDA hangs
 
 
@@ -573,13 +572,13 @@ PATIENCE      = 10
 # [CRASH-HARDEN] GPU heartbeat watchdog timeout in seconds. The watchdog
 # pauses during validation (IN_EVALUATION_PHASE flag), so this only covers
 # hang detection during training — 1200s is ample for that.
-WATCHDOG_TIMEOUT = 1200
+WATCHDOG_TIMEOUT = 1800  # [FIX 2026-07-02] Raised from 1200 — eval with 500 batches at FP32 can exceed 1200s. Fresh heartbeat written after eval fixes the post-eval immediate-kill.
 
 GRAD_CLIP_NORM = 5.0  # [FIX 2026-07-01 agent audit] Was 1.0 — far too tight for 5-head multi-task model.
                          # Combined gradient norm from 5 heads sharing backbone easily exceeds 5.0.
                          # At 1.0, every head's gradient was clipped 80-90%, slowing backbone convergence.
                          # 5.0 is the standard multi-task value (still safe against gradient explosion).
-VAL_EVERY = 1    # [BENCHMARK] Evaluate every 1 epoch (BENCHMARK_MODE override)
+VAL_EVERY = 3    # Evaluate every 3 epochs — skip useless epoch-0 val after random init
 VAL_EVERY_N_STEPS = 2500  # Reduced from 5000 — halves crash exposure window with mid-epoch checkpoint safety
 EVAL_MAX_BATCHES = 500    # Cap validation to 500 batches (~2 min) per epoch
                           # Full 38K-frame eval takes 5+ hours. Fast val every epoch,
@@ -1122,7 +1121,7 @@ SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP (~87 min/epoch) — s
 
 # [OPUS v5] Eval cadence: compute full detection mAP every N epochs; fast gate-only eval
 # (EVAL_MAX_BATCHES capped) on other epochs. 0 = eval every epoch (no skip).
-DET_METRICS_EVERY_N = int(os.environ.get('DET_METRICS_EVERY_N', '1'))  # Full mAP eval every N epochs; 0=every epoch
+DET_METRICS_EVERY_N = int(os.environ.get('DET_METRICS_EVERY_N', '3'))  # Full mAP eval every 3 epochs (was 1 — too slow, caused CUDA hangs)
 GATE_EVAL_MAX_BATCHES = int(os.environ.get('GATE_EVAL_MAX_BATCHES', '200'))  # Max val batches on non-full-eval epochs
 
 # [OPUS DECISION 5] Use subprocess evaluation on GPU 0 (idle RTX 3060).
@@ -1511,7 +1510,7 @@ PRESETS = {
         'use_temporal_bank':  True,
         'use_hand_film':      True,
         'benchmark_mode':     False,
-        'batch_size':         2,
+        'batch_size':         6,   # RTX 5060 Ti 16GB — 3x throughput over batch=2, safe VRAM
         'grad_accum_steps':   8,
         'zero_det_conf':      False,
         'staged_training':    False,
