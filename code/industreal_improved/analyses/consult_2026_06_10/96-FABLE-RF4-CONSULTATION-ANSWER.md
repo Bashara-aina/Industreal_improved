@@ -519,3 +519,43 @@ on your specific CUDA stack. The restart protocol (§5 + §9 step 0) is designed
 so both are answered within the first validation after restart, with rollback
 knobs for every change. If the epoch-5 thresholds in §2.7 are met, RF4→RF10 is
 a monitoring exercise; if any head misses, the per-head playbooks in §2 apply.
+
+---
+
+# ROUND 3 — Full import validation, missing-file discovery, regression suite
+
+### F17 — `src/data/__init__.py` was missing from the repository
+`train.py` does `import data as _ds_module` then getattr's
+`IndustRealMultiTaskDataset` / `collate_fn` / `collate_fn_sequences` — which
+only works if the data package re-exports them. A populated `__init__.py`
+must exist untracked on the training machine; the git repo had none, so **a
+fresh clone of this repository could not run training or evaluation at all**
+(this matters for the paper's code release and for any second machine).
+Reconstructed and committed.
+
+### Full-import validation (with CPU torch + all deps installed in the review container)
+`from src.training import train` now succeeds end-to-end — that executes the
+entire module chain (train → evaluate → losses → model → dataset → config)
+including every edit from rounds 1–2, and confirms `_amp_dtype()` /
+`_amp_scaler_enabled()` return (bf16, scaler-off) as designed.
+
+### New regression suite: `tests/test_fable_consult_fixes.py` (18 tests, all passing)
+Pins every fix so it cannot silently regress:
+- F1: destructive wipe absent, snapshot taken before the seq backward
+- F3/F3b: lv_psr gradient — none on structurally-zero per-frame batches,
+  present on live sequence batches (functional, CPU)
+- F4/F4b: peak factor config-driven; resume re-application present; plus a
+  test documenting the torch gotcha itself (load_state_dict restores max_lr)
+- F6: AMP dtype/scaler gating (bf16→no scaler, fp16→scaler), no bare
+  autocast sites left
+- F13: Kendall sentinel fires at step≡1 (mod interval) and NOT at ≡0;
+  grad-norm probe parity pinned
+- F14: both optimizer branches keep weight_decay=0 on the log_var group
+- F16: all four ablation presets apply with the intended task flags,
+  effective batch 24, pinned sampler fraction, act-only zeroes det_conf
+- F17: data package re-exports pinned
+
+`tests/test_loss_kendall.py` parity unchanged (13 pre-existing stale-assertion
+failures, 3 passes — those tests assert old source text like `s_pose=-1` and
+`×0.001` pose scaling that deliberate earlier fixes removed; they should be
+updated or retired, tracked as cleanup, not caused by this branch).
