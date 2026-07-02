@@ -603,3 +603,26 @@ class — two individually-reasonable ramps composing multiplicatively because
 they live in different modules.
 
 ### Regression suite now 20 tests (F1–F18), all passing; Kendall-test parity unchanged.
+
+### In-situ execution of the REAL `train_one_epoch` (round 4 finale)
+Ran the actual training-loop function with synthetic loaders on CPU
+(12 batches, accum=4, seq_every=4, all four heads):
+- 3/3 optimizer windows committed, zero NaN skips;
+- **backbone |grad| live at every optimizer step** (1.6–1.9e3) with seq
+  batches interleaved through the fixed F1 path;
+- `[KENDALL step=1/5/9]` and `[LIVENESS_GRAD]` lines fired at the F13 odd
+  offsets — the gate signals exist in a real log for the first time;
+- PSR seq losses live (3.8–7.1) while non-seq PSR stayed structurally zero
+  (F3/F3b in situ).
+
+One benign edge case surfaced by the harness, documented here so nobody
+panics later: if the LAST batch of an epoch is a seq batch AND forms a
+partial accumulation window by itself, that final optimizer step carries no
+backbone gradient (AdamW simply skips grad-less params). With the real
+loader (4387 batches, accum 4, seq_every 4) the final step lands on a
+non-seq batch, so this cannot occur in RF4 — it is a property to re-check
+only if loader length or cadences change parity.
+
+(Activity loss reads 0 in the container because the class-balanced loss
+weights derive from dataset frame counts, which are empty here — on the
+training machine with real counts it is nonzero, as your own logs show.)
