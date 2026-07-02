@@ -3598,27 +3598,31 @@ def evaluate_all(
         except ValueError:
             logger.warning('[GAP-B] Cannot set SIGALRM timeout (not in main thread) — skipping segment metrics to avoid CUDA hang')
             _run_seg_metrics = False
-        try:
-            seg_metrics = compute_activity_segment_metrics(
-                model, loader.dataset, device, T=16,
-            )
-            results['act_seg_top1'] = seg_metrics['act_top1']
-            results['act_seg_top5'] = seg_metrics['act_top5']
-            results['act_seg_n'] = seg_metrics['n_segments']
-            logger.info(
-                f'  [GAP-B] Activity Segment — Top-1: {seg_metrics["act_top1"]:.4f}  '
-                f'Top-5: {seg_metrics["act_top5"]:.4f}  '
-                f'Segments: {seg_metrics["n_segments"]}'
-            )
-        except Exception as e:
-            logger.error(f'  [GAP-B] Segment eval FAILED: {e} — skipping segment metrics')
+        if _seg_have_alarm:
+            try:
+                seg_metrics = compute_activity_segment_metrics(
+                    model, loader.dataset, device, T=16,
+                )
+                results['act_seg_top1'] = seg_metrics['act_top1']
+                results['act_seg_top5'] = seg_metrics['act_top5']
+                results['act_seg_n'] = seg_metrics['n_segments']
+                logger.info(
+                    f'  [GAP-B] Activity Segment — Top-1: {seg_metrics["act_top1"]:.4f}  '
+                    f'Top-5: {seg_metrics["act_top5"]:.4f}  '
+                    f'Segments: {seg_metrics["n_segments"]}'
+                )
+            except Exception as e:
+                logger.error(f'  [GAP-B] Segment eval FAILED: {e} — skipping segment metrics')
+                results['act_seg_top1'] = 0.0
+                results['act_seg_top5'] = 0.0
+                results['act_seg_n'] = 0
+            finally:
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, _old_handler)
+        else:
             results['act_seg_top1'] = 0.0
             results['act_seg_top5'] = 0.0
             results['act_seg_n'] = 0
-        finally:
-            if _seg_have_alarm:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, _old_handler)
     else:
         results['act_seg_top1'] = 0.0
         results['act_seg_top5'] = 0.0

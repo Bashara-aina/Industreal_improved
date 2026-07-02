@@ -1,10 +1,10 @@
 {
-  "epoch": 0,
+  "epoch": 2,
   "status": "running",
-  "last_heartbeat": "2026-07-02T01:11:08.038150+00:00",
-  "training_pid": 2729716,
+  "last_heartbeat": "2026-07-02T12:09:40.146609+00:00",
+  "training_pid": 554647,
   "batch": {
-    "current": 350,
-    "total": 13161
+    "current": 1100,
+    "total": 4387
   }
 }
