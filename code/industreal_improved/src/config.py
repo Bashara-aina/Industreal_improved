@@ -1756,12 +1756,11 @@ PRESETS = {
         'use_temporal_bank':  True,
         'use_hand_film':      True,
         'benchmark_mode':     False,
-        'batch_size':         4,
-        # [F4 2026-07-02 Fable consult] accum 8 -> 6: effective batch 24 at
-        # batch_size=4, matching stage_rf4's per-sample update intensity
-        # (ONE_CYCLE_PEAK_FACTOR*BASE_LR/24 == paper's 5e-4/32). On the
-        # RTX 5060 Ti, batch_size 6 + accum 4 is the faster equivalent.
-        'grad_accum_steps':   6,
+        'batch_size':         6,
+        # [F4 2026-07-02 Fable consult] batch 4→6, accum 6→4: effective batch 24,
+        # matching stage_rf4. Batch=6 gives more data variety per optimizer step
+        # and is consistent with ablation presets.
+        'grad_accum_steps':   4,
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
@@ -1784,15 +1783,6 @@ PRESETS = {
         'use_psr_order_prior':      True,
         'psr_sensitivity_weight':   0.01,
         'use_ldam_drw':             False,
-        # [FIX 2026-06-21 Opus v11 Q5] detach_reg_fpn=False for ALL non-reinit stages.
-        # These RF3–RF10 / paper_run stages are continuations, NOT reinit bootstraps:
-        # the regression head already carries good GIoU signal that SHOULD shape the
-        # shared FPN. detach=True severs the densest detection gradient from the trunk
-        # → features stay non-discriminative → cls sticks at the background equilibrium
-        # (the exact RF2 6-epoch plateau). The reg-loss warmup (REINIT_REG_WARMUP_STEPS)
-        # is the correct guard against any reinit gradient shock; detach is redundant
-        # overkill — matches stage_rf1 + the stage_manager recovery strategy (108–121).
-        # detach_psr_fpn is left True (PSR is a separate head, out of scope for v11).
         'detach_reg_fpn':           False,
         'detach_psr_fpn':           True,
     },
@@ -1804,12 +1794,10 @@ PRESETS = {
         'use_temporal_bank':  True,
         'use_hand_film':      True,
         'benchmark_mode':     False,
-        'batch_size':         4,
-        # [F4 2026-07-02 Fable consult] accum 8 -> 6: effective batch 24 at
-        # batch_size=4, matching stage_rf4's per-sample update intensity
-        # (ONE_CYCLE_PEAK_FACTOR*BASE_LR/24 == paper's 5e-4/32). On the
-        # RTX 5060 Ti, batch_size 6 + accum 4 is the faster equivalent.
-        'grad_accum_steps':   6,
+        'batch_size':         6,
+        # [F4 2026-07-02 Fable consult] batch 4→6, accum 6→4: effective batch 24,
+        # matching stage_rf4. Batch=6 gives more data variety per optimizer step.
+        'grad_accum_steps':   4,
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
@@ -1848,12 +1836,10 @@ PRESETS = {
         'use_temporal_bank':  True,
         'use_hand_film':      True,
         'benchmark_mode':     False,
-        'batch_size':         4,
-        # [F4 2026-07-02 Fable consult] accum 8 -> 6: effective batch 24 at
-        # batch_size=4, matching stage_rf4's per-sample update intensity
-        # (ONE_CYCLE_PEAK_FACTOR*BASE_LR/24 == paper's 5e-4/32). On the
-        # RTX 5060 Ti, batch_size 6 + accum 4 is the faster equivalent.
-        'grad_accum_steps':   6,
+        'batch_size':         6,
+        # [F4 2026-07-02 Fable consult] batch 4→6, accum 6→4: effective batch 24,
+        # matching stage_rf4. Batch=6 gives more data variety per optimizer step.
+        'grad_accum_steps':   4,
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
@@ -1890,12 +1876,10 @@ PRESETS = {
         'use_temporal_bank':  True,
         'use_hand_film':      True,
         'benchmark_mode':     False,
-        'batch_size':         4,
-        # [F4 2026-07-02 Fable consult] accum 8 -> 6: effective batch 24 at
-        # batch_size=4, matching stage_rf4's per-sample update intensity
-        # (ONE_CYCLE_PEAK_FACTOR*BASE_LR/24 == paper's 5e-4/32). On the
-        # RTX 5060 Ti, batch_size 6 + accum 4 is the faster equivalent.
-        'grad_accum_steps':   6,
+        'batch_size':         6,
+        # [F4 2026-07-02 Fable consult] batch 4→6, accum 6→4: effective batch 24,
+        # matching stage_rf4. Batch=6 gives more data variety per optimizer step.
+        'grad_accum_steps':   4,
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
@@ -1932,12 +1916,10 @@ PRESETS = {
         'use_temporal_bank':  True,
         'use_hand_film':      True,
         'benchmark_mode':     False,
-        'batch_size':         4,
-        # [F4 2026-07-02 Fable consult] accum 8 -> 6: effective batch 24 at
-        # batch_size=4, matching stage_rf4's per-sample update intensity
-        # (ONE_CYCLE_PEAK_FACTOR*BASE_LR/24 == paper's 5e-4/32). On the
-        # RTX 5060 Ti, batch_size 6 + accum 4 is the faster equivalent.
-        'grad_accum_steps':   6,
+        'batch_size':         6,
+        # [F4 2026-07-02 Fable consult] batch 4→6, accum 6→4: effective batch 24,
+        # matching stage_rf4. Batch=6 gives more data variety per optimizer step.
+        'grad_accum_steps':   4,
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
@@ -1974,12 +1956,10 @@ PRESETS = {
         'use_temporal_bank':  True,
         'use_hand_film':      True,
         'benchmark_mode':     False,
-        'batch_size':         4,
-        # [F4 2026-07-02 Fable consult] accum 8 -> 6: effective batch 24 at
-        # batch_size=4, matching stage_rf4's per-sample update intensity
-        # (ONE_CYCLE_PEAK_FACTOR*BASE_LR/24 == paper's 5e-4/32). On the
-        # RTX 5060 Ti, batch_size 6 + accum 4 is the faster equivalent.
-        'grad_accum_steps':   6,
+        'batch_size':         6,
+        # [F4 2026-07-02 Fable consult] batch 4→6, accum 6→4: effective batch 24,
+        # matching stage_rf4. Batch=6 gives more data variety per optimizer step.
+        'grad_accum_steps':   4,
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
