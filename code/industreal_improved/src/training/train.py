@@ -4927,11 +4927,11 @@ def main(args):
                             )
                             continue
                     finally:
-                        IN_EVALUATION_PHASE = False
-                        # [WATCHDOG FIX 2026-07-02] Write fresh GPU heartbeat so the
-                        # watchdog thread doesn't immediately kill after eval (heartbeat
-                        # is only written every 100 training steps, and eval can take
-                        # >1200s with 500 batches at FP32).
+                        # [WATCHDOG FIX 2026-07-03] Write fresh GPU heartbeat WHILE
+                        # IN_EVALUATION_PHASE is still True (watchdog sleeping), THEN
+                        # set the flag to False. Otherwise the watchdog wakes up, sees
+                        # a stale heartbeat, and kills the process between the flag set
+                        # and the heartbeat write.
                         try:
                             _hb_path = ckpt_dir / '.gpu_heartbeat'
                             with open(_hb_path, 'w') as _hb_f:
@@ -4942,6 +4942,7 @@ def main(args):
                                     _hb_f.write(f'gpu_alloc={_hb_alloc:.2f}GB reserved={_hb_resv:.2f}GB\n')
                         except Exception:
                             pass
+                        IN_EVALUATION_PHASE = False
                         # [CUDA-CRASH FIX 2026-06-30] Wrap cleanup in try/except.
                         # Silent CUDA errors (e.g. from corrupted context after a failed
                         # step-val) can crash the process during del/gc/empty_cache without

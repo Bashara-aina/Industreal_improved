@@ -561,7 +561,7 @@ BATCH_SIZE = 6        # RTX 5060 Ti 16GB — batch=2 used 2GB, 6x is safe 3x thr
 GRAD_ACCUM_STEPS = 8  # Per paper §Implementation: batch=2 × accum=8 = 16 effective
 EFFECTIVE_BATCH      = BATCH_SIZE * GRAD_ACCUM_STEPS  # 16
 
-VAL_BATCH_SIZE = 8   # Was 4 — 16GB card can handle 2x. no_grad, no optimizer states.
+VAL_BATCH_SIZE = 4   # Was 8 — reduce eval VRAM pressure and kernel time on RTX 5060 Ti
 VAL_NUM_WORKERS = 0      # [FIX 2026-06-30] 0 workers — match NUM_WORKERS to avoid CUDA hangs
 
 
@@ -587,8 +587,8 @@ GRAD_CLIP_NORM = 5.0  # [FIX 2026-07-01 agent audit] Was 1.0 — far too tight f
                          # At 1.0, every head's gradient was clipped 80-90%, slowing backbone convergence.
                          # 5.0 is the standard multi-task value (still safe against gradient explosion).
 VAL_EVERY = 3    # Evaluate every 3 epochs — skip useless epoch-0 val after random init
-VAL_EVERY_N_STEPS = 2500  # Reduced from 5000 — halves crash exposure window with mid-epoch checkpoint safety
-EVAL_MAX_BATCHES = 500    # Cap validation to 500 batches (~2 min) per epoch
+VAL_EVERY_N_STEPS = 0  # Disabled — intra-epoch step-vals caused CUDA hangs. End-of-epoch val every VAL_EVERY epochs is sufficient.
+EVAL_MAX_BATCHES = 250    # Cap validation to 250 batches — shorter eval window reduces CUDA hang risk
                           # Full 38K-frame eval takes 5+ hours. Fast val every epoch,
                           # then one full eval at the very end before the paper deadline.
 
@@ -672,7 +672,9 @@ DATALOADER_AUTO_FALLBACK = True
 # Performance flags
 USE_UINT8_DATA_PIPELINE = True
 CUDNN_DETERMINISTIC = False    # Max speed — reproducibility not critical for RF2-RF10
-CUDNN_BENCHMARK = True         # Auto-tune conv algorithms for +15-20% throughput
+CUDNN_BENCHMARK = False        # [STABILITY 2026-07-02] Was True — RTX 5060 Ti + CUDA 13.0 triggers
+                               # CUDNN_STATUS_EXECUTION_FAILED_CUDART kernel timeouts with benchmarked
+                               # algorithms. Default algorithms are ~10% slower but stable.
 
 # Ampere (RTX 3060) speedups
 ALLOW_TF32 = True
@@ -1711,7 +1713,7 @@ PRESETS = {
         'use_temporal_bank':  True,
         'use_hand_film':      True,
         'benchmark_mode':     False,
-        'batch_size':         6,   # RTX 5060 Ti 16GB — 3x throughput over batch=2, safe VRAM
+        'batch_size':         4,   # RTX 5060 Ti 16GB — 3x throughput over batch=2, safe VRAM
         # [F4 2026-07-02 Fable consult] 8 → 4: effective batch 48 → 24. At 48
         # (1.5x the paper's 32) with the hidden 0.5 peak-LR factor, per-sample
         # update intensity was ~3x below paper spec and updates/epoch were
