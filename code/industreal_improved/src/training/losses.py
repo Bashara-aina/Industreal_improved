@@ -1411,6 +1411,11 @@ class MultiTaskLoss(nn.Module):
 
         # === PSR ===
         preds = None
+        # [F3 2026-07-02] True when the PSR loss is structurally zero (per-frame
+        # batch under the transition objective) — the Kendall block then skips
+        # the "+ lv_psr" term so log_var_psr only receives gradient on batches
+        # that actually computed a PSR task loss.
+        _psr_structurally_zero = False
         if self.train_psr:
             # C.3: Binary focal loss for PSR (Doc 01 §D.4: per-component alpha)
             # [OPUS v5] USE_PSR_TRANSITION: convert fill-forward labels to transition targets
@@ -1447,6 +1452,16 @@ class MultiTaskLoss(nn.Module):
                     # The per-frame static labels teach constant output which drowns the
                     # transition signal on sequence batches.
                     loss_psr = zero
+                    # [FIX 2026-07-02 Fable RF4 consult — F3] Mark PSR loss as
+                    # structurally zero so the Kendall block below can skip the
+                    # "+ lv_psr" regularizer term. Without this, every non-seq
+                    # batch added a constant +1 gradient to log_var_psr (task loss
+                    # is zero, only the log-sigma term remains), pushing it toward
+                    # -4 (54.6x precision) on evidence-free batches. In practice
+                    # the seq-batch equilibrium + the MAX_PSR clamp masked this,
+                    # but the log_var dynamics (and any future clamp retuning)
+                    # were corrupted by the spurious signal.
+                    _psr_structurally_zero = True
                     # Skip sensitivity penalty + smooth-cap for per-frame batches under transition objective.
                     # The transition signal only flows on sequence (dim==3) batches.
             elif self.use_psr_focal:
@@ -1468,7 +1483,16 @@ class MultiTaskLoss(nn.Module):
             # Only fires at T=1 (dim==2); sequence mode (dim==3) handled by temporal smooth.
             # NOTE: requires batch > 1 — std(dim=0) on a single element has grad = (x-mean)/(n*std)
             # which divides by zero (std=0) and produces NaN in backward → LogBackward0 crash.
-            if outputs['psr_logits'].dim() == 2 and outputs['psr_logits'].shape[0] > 1:
+            # [F3b 2026-07-02 Fable RF4 consult] `and not _psr_structurally_zero`:
+            # the transition-objective branch above documents "Skip sensitivity
+            # penalty ... for per-frame batches under transition objective", but
+            # this block sat OUTSIDE that branch and fired anyway, silently
+            # re-adding a per-frame gradient the BLOCKER-A design explicitly
+            # removed (usually clamped to 0 by the Kendall min-clamp since
+            # -log(std) is negative for std>1, so training logs still showed
+            # psr=0.00 — but near collapse it injected undocumented gradient).
+            if (outputs['psr_logits'].dim() == 2 and outputs['psr_logits'].shape[0] > 1
+                    and not _psr_structurally_zero):
                 _per_comp_std = outputs['psr_logits'].std(dim=0, correction=0).mean()
                 _sens = -torch.log(_per_comp_std + 1e-3)
                 _sens = torch.where(
@@ -1779,7 +1803,7 @@ class MultiTaskLoss(nn.Module):
                     # precision, and Kendall log_vars learn to suppress PSR/pose to compensate.
                     _act_w = float(getattr(C, 'ACTIVITY_LOSS_WEIGHT', 1.0))
                     total = total + prec_act * (loss_act * _act_w) + lv_act
-                if self.train_psr:
+                if self.train_psr and not _psr_structurally_zero:
                     loss_psr = loss_psr.clamp(min=0.0)
                     # [INTERVENTION 2026-06-14] PSR_WEIGHT applied BEFORE Kendall precision
                     # so the learned s_psr (log_var) can still modulate the effective weight.
