@@ -571,7 +571,11 @@ T_mult = 2
 PATIENCE      = 10
 
 # [CRASH-HARDEN v2] GPU heartbeat watchdog timeout in seconds.
-WATCHDOG_TIMEOUT = 1200
+# Increased from 1200 to 3600 because validation on 38036 frames with
+# batch_size=2 and FP32 takes >1200s. The heartbeat is only updated during
+# training (every 100 steps), not during validation. A stale heartbeat
+# during long validation caused false watchdog kills.
+WATCHDOG_TIMEOUT = 3600
 
 GRAD_CLIP_NORM = 5.0  # [FIX 2026-07-01 agent audit] Was 1.0 — far too tight for 5-head multi-task model.
                          # Combined gradient norm from 5 heads sharing backbone easily exceeds 5.0.
