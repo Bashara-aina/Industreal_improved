@@ -386,6 +386,15 @@ Three training stages are defined with progressively expanding active task sets 
 
 \noindent For tasks $t \notin \mathcal{T}_s$, the corresponding head parameters are frozen (no gradient), and the Kendall precision $\exp(-s_t)$ is zeroed to prevent drift in the log-variance parameter.  Backbone freezing follows a complementary schedule: ConvNeXt stages 0--1 are frozen in Stage~1, stage 0 only in Stage~2, and all stages are trainable in Stage~3. EMA averaging (decay$=$0.999) activates at Stage~3 entry. LDAM-DRW~\cite{cao2019ldam} switches from uniform to class-balanced reweighting at epoch 60, when feature representations have stabilized.
 
+% ANNOTATION [SYNC 2026-07-02]: The staged curriculum above describes the
+% DESIGN-SPACE variant. The configuration that produces the reported results
+% is NON-STAGED (STAGED_TRAINING=False): all four heads train jointly from
+% epoch 0, activity ramps in over ACT_RAMP_EPOCHS=3, EMA (0.995) runs from
+% epoch 0, and LDAM-DRW is disabled (plain CE + label smoothing 0.1). Before
+% submission, either (a) rewrite this subsection to the non-staged procedure,
+% or (b) keep the staged description explicitly as an ablated alternative.
+% Reviewers WILL diff this section against the public code.
+
 Algorithm~\ref{alg:training} summarizes the complete training procedure.
 
 \begin{algorithm}[!htbp]
@@ -398,14 +407,12 @@ Algorithm~\ref{alg:training} summarizes the complete training procedure.
     \State Determine stage $s \leftarrow \text{Stage}(e)$ \Comment{Eq.~\ref{eq:staged}}
     \State Freeze parameters for tasks $t \notin \mathcal{T}_s$
     \State Set backbone freeze schedule per stage $s$
-    \If{$e = 16$} Enable EMA (decay$=$0.999) \EndIf
-    \If{$e = 60$} Activate DRW reweighting in LDAM \EndIf
     \For{each mini-batch $(\mathbf{I}, \mathbf{y})$ in $\mathcal{D}_\text{train}$}
         \State $\hat{\mathbf{y}} \leftarrow f_\theta(\mathbf{I})$ \Comment{Single forward pass, all heads}
         \State Compute $\mathcal{L}_t$ for each $t \in \mathcal{T}_s$
         \State $\mathcal{L} \leftarrow \sum_{t \in \mathcal{T}_s} \exp(-s_t) \cdot \mathcal{L}_t \cdot \text{ramp}_t + s_t$
-        \State Accumulate gradients (32 steps)
-        \State Clip $\|\nabla\|_2 \leq 1.0$; step optimizer; update EMA
+        \State Accumulate gradients (4 steps)
+        \State Clip $\|\nabla\|_2 \leq 5.0$; step optimizer; update EMA (decay$=$0.995)
     \EndFor
     \State Evaluate on $\mathcal{D}_\text{val}$; save best checkpoint
 \EndFor
@@ -481,25 +488,29 @@ Table~\ref{tab:training-config} summarizes the key training hyperparameters.
 Backbone & ConvNeXt-Tiny (ImageNet pretrained) \\
 FPN channels & 256 \\
 Input resolution & $1280 \times 720$ (IndustReal) / $640 \times 480$ (IKEA) \\
-Batch size & 1 (physical) $\times$ 32 (gradient accumulation) \\
-Effective batch & 32 \\
-Optimizer & Lion~\cite{chen2024lion} ($\beta_1{=}0.9, \beta_2{=}0.99$) \\
+% [SYNC 2026-07-02] Table synced with the code that actually trains the model
+% (src/config.py stage_rf4 preset + src/training/train.py, post-F1..F16 fixes).
+% The previous values (Lion, batch 1x32, clip 1.0, EMA 0.999@16, cosine
+% restarts) described an older design that was never the shipped configuration.
+Batch size & 6 (physical) $\times$ 4 (gradient accumulation) \\
+Effective batch & 24 \\
+Optimizer & AdamW ($\beta_1{=}0.9, \beta_2{=}0.999$) \\
 Backbone LR & $5 \times 10^{-5}$ (0.1$\times$ head LR) \\
-Head LR & $5 \times 10^{-4}$ \\
+Head LR & $5 \times 10^{-4}$ (OneCycle peak $3.75 \times 10^{-4}$) \\
 Bias LR & $1.5 \times 10^{-4}$ (0.3$\times$ head LR) \\
-Weight decay & $3 \times 10^{-4}$ (Lion-adjusted) \\
-Scheduler & Warmup (5 ep, 0.1$\times$) $\rightarrow$ CosineAnnealing ($T_0{=}10$, $T_\text{mult}{=}2$) \\
-Gradient clipping & $\ell_2$-norm $= 1.0$ \\
+Weight decay & $1 \times 10^{-3}$ (0 for bias/norm/loss log-variances) \\
+Scheduler & Warmup (2 ep, linear from 0.1$\times$) $\rightarrow$ OneCycleLR (pct$_\text{start}{=}0.1$, cosine anneal, stepped per epoch) \\
+Gradient clipping & $\ell_2$-norm $= 5.0$ (global, all heads) \\
 Total epochs & 100 \\
-EMA decay & 0.999 (active from epoch 16) \\
-Seed & 42 (deterministic mode) \\
+EMA decay & 0.995 (active from epoch 0) \\
+Seed & 42 (cuDNN benchmark mode; not bitwise-deterministic) \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\noindent\textbf{Optimizer choice.} The Lion optimizer~\cite{chen2024lion} is used instead of AdamW. Lion uses sign-based updates with decoupled weight decay, reducing memory footprint (no second moment) while providing comparable convergence. The backbone receives $0.1\times$ the head learning rate to preserve ImageNet pretraining; bias parameters receive $0.3\times$ to prevent EMA-locked collapse observed in preliminary experiments.
+\noindent\textbf{Optimizer choice.} AdamW with differential learning rates. The backbone receives $0.1\times$ the head learning rate to preserve ImageNet pretraining; bias parameters receive $0.3\times$ to prevent EMA-locked collapse observed in preliminary experiments. Weight decay is excluded for bias, normalization, and the Kendall log-variance parameters (decaying log-variances would bias all task precisions toward uniform).
 
-\noindent\textbf{Gradient accumulation.} With batch size 1 (VideoMAE + ConvNeXt + 5 heads + Feature Bank exceeds 12\,GB at batch${\geq}$2), gradients are accumulated over 32 steps to achieve an effective batch of 32 --- matching the $8 \times 4$ accumulation used in single-task baselines.
+\noindent\textbf{Gradient accumulation.} With physical batch size 6 on a 16\,GB GPU (RGB-only configuration, VideoMAE disabled), gradients are accumulated over 4 steps for an effective batch of 24. The OneCycleLR peak learning rate is scaled so the per-sample update intensity matches the $5\times10^{-4}/32$ reference of the single-task baselines (linear scaling rule~\cite{goyal2017accurate}).
 
 \subsection{Data Augmentation}
 \label{sec:augmentation}
@@ -529,7 +540,7 @@ The three-stage training schedule (Section~\ref{sec:method}) is controlled by ex
 \subsection{PSR Sequence Training}
 \label{sec:psr-seq-training}
 
-To properly engage the Causal Transformer in the PSR head, we alternate standard single-frame batches with sequence batches (every 10 steps). Each sequence batch consists of $T{=}4$ contiguous frames from the same recording, processed as a $[B, T, C, H, W]$ tensor. The Causal Transformer processes the full temporal sequence with upper-triangular masking. During sequence batches, only PSR loss is computed (detection, activity, and pose losses are disabled to avoid shape mismatches).
+To properly engage the Causal Transformer in the PSR head, we alternate standard single-frame batches with sequence batches (every 4th step). Each sequence batch consists of $T{=}8$ contiguous frames from the same recording, processed as a $[B, T, C, H, W]$ tensor. The Causal Transformer processes the full temporal sequence with upper-triangular masking. During sequence batches, only the PSR loss is computed (detection, activity, and pose losses are disabled); because the PSR branch consumes detached FPN features, sequence batches leave the shared backbone gradient accumulation untouched.
 
 \subsection{Reproducibility}
 
@@ -1231,6 +1242,13 @@ X.~Chen, C.~Liang, D.~Huang, E.~Real, K.~Wang, Y.~Liu, H.~Pham, X.~Dong, T.~Luon
 ``Symbolic Discovery of Optimization Algorithms,''
 in \emph{Proc.\ Advances in Neural Information Processing Systems (NeurIPS)}, 2023.
 \href{https://arxiv.org/abs/2302.06675}{arXiv:2302.06675}.
+
+% Linear LR scaling rule
+\bibitem{goyal2017accurate}
+P.~Goyal, P.~Doll\'ar, R.~Girshick, P.~Noordhuis, L.~Wesolowski, A.~Kyrola, A.~Tulloch, Y.~Jia, and K.~He,
+``Accurate, Large Minibatch SGD: Training ImageNet in 1 Hour,''
+arXiv preprint, 2017.
+\href{https://arxiv.org/abs/1706.02677}{arXiv:1706.02677}.
 
 % LDAM-DRW
 \bibitem{cao2019ldam}
