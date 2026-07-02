@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-02
 **Reviewer:** Claude (Fable) — full code verification pass over `src/config.py`, `src/training/train.py`, `src/training/losses.py`, `src/models/model.py`, `src/evaluation/evaluate.py`, plus files 89–95 and the paper tex.
-**Branch:** `claude/rf4-architecture-consultation-5mnnu5` — every fix referenced as F1–F12 below is **already implemented on this branch**.
+**Branch:** `claude/rf4-architecture-consultation-5mnnu5` — every fix referenced as F1–F16 below is **already implemented on this branch** (F1–F12 in round 1, F13–F16 + eval audit + paper sync in round 2, §8–§11).
 
 > Every claim in this document was verified against the actual code, not the docs.
 > Where the docs (89–95) were wrong, this file says so explicitly.
@@ -403,3 +403,119 @@ subprocess eval on the 3060, which the code already supports).
   but not executed. The restart protocol in §5 is the runtime verification plan.
 - The current training PID's in-memory config still has the old values; nothing
   in this branch affects the running process until you restart from checkpoint.
+
+---
+
+# ROUND 2 (same day) — Eval audit, more fixes, ablation infrastructure, paper sync
+
+## 8. New findings and fixes (F13–F16)
+
+### F13 — CRITICAL for gates: the probe log lines cited by the gate criteria were structurally dead
+`_log_per_head_grad_norm` (the `[GRAD-NORM]` liveness line) and the Kendall
+sentinel are called **only on non-seq steps**, but their trigger was
+`step % interval == 0` with even intervals (200/100/500) — and steps ≡ 0
+(mod seq_every) are **all seq steps** when seq_every is even (2 or 4). Result:
+`[GRAD-NORM]` and `[Kendall grad]` could never fire in any RF4 run. The gate
+criteria in doc 85 ("ALL 4 heads > 1e-8", "log_var_det in [-1,1]") reference
+log lines that never existed in any log. This also would have silently killed
+the F2 logging added in round 1. **Fixed:** both sentinels now trigger at
+step ≡ 1 (mod interval) — odd offsets are never seq steps.
+**Gate-criteria implication (doc 85):** the `[GRAD-NORM]`/`[KENDALL]` rows are
+usable for the FIRST time after this restart. Do not compare against old runs.
+
+### F14/F14b — Kendall log_vars received weight decay; stale pose reset
+The `loss_params` optimizer group (the 4 Kendall log_vars) inherited
+`weight_decay=1e-3` — decaying log-variances biases every task precision
+toward uniform, quietly fighting the learned balancing. Now `weight_decay=0`
+(matching bias/norm groups). Also the early-epoch-resume reset filled
+`log_var_pose=-1.0`, a stale copy of the pre-"Opus #1" init; the live init is
+0.0 — now consistent.
+
+### F15 — ablation knobs made env-overridable
+`KENDALL_FIXED_WEIGHTS=1` and `PSR_SEQ_EVERY_N_BATCHES=<n>` can now be set per
+run without code edits (needed by the ablation suite; stage_manager behavior
+unchanged).
+
+### F16 — Ablation A infrastructure (the mandatory AAIML ablation, ready to run)
+Four new presets — `ablation_det_only`, `ablation_act_only`,
+`ablation_psr_only`, `ablation_pose_only` — identical architecture and
+hyperparameters to stage_rf4 (batch 6 × accum 4, non-staged, EMA, FP32),
+identical sampler distribution (`det_gt_frame_fraction=0.4` pinned in ALL),
+only the task losses differ. `zero_det_conf=True` in act-only (the untrained
+det head would otherwise feed random confidences into the activity input);
+PSR-only runs with every batch a seq batch. Runner:
+`bash scripts/run_ablation_suite.sh {det|act|psr|pose|kendall-fixed|grouping-none}`
+(each writes to its own `src/runs/<name>/` via OUTPUT_ROOT_OVERRIDE;
+`ABLATION_EPOCHS` defaults to 25). All presets smoke-tested via
+`apply_preset()`.
+
+## 9. Eval-pipeline audit results (the RF-gate gatekeeper)
+
+- **EMA at eval: correct.** `ema.get_ema()` swaps EMA weights in before
+  `evaluate_all`, `ema.restore()` after; for non-staged runs EMA weights are
+  used once the stage counter ≥ 2 (epoch 6+), raw weights before that.
+  Consistent with best-checkpoint selection.
+- **Kendall state across restarts: correct.** log_vars are saved in
+  `ckpt['criterion']` and restored on resume; the reset-to-init path only
+  fires for resumes before WARMUP_EPOCHS (epoch < 2). Your restart at epoch
+  3+ keeps learned values.
+- **Combined metric inputs: honest variants.** Gate uses `det_mAP50_pc`
+  (present-class mAP) and `psr_f1_at_t` (±3-frame F1) — the right choices.
+- **Activity group count: the metrics are self-consistent, the DOCS were
+  wrong.** Head width, dataset remap, and eval all use `NUM_ACT_OUTPUTS`;
+  the "3/69" in your eval logs means the hybrid grouping resolves to **69
+  groups on your data** — not the "~41–47" the config comment guessed. The
+  paper protocol text must say 69 (verify with the `[config] hybrid mode:`
+  startup line after restart).
+- **Cadence: every val IS a full-det val.** `(epoch+1)%3` gates both VAL_EVERY
+  and DET_METRICS_EVERY_N → real mAP at the very first eval (end of epoch 2/5/8
+  …), not "epoch 6" as docs said.
+- **Residual risk is runtime, not logic** (CUDA hang / zombie kernel during a
+  20-min eval). Mitigation, now step 0 of the restart protocol: **before
+  restarting training, run one standalone eval of the current checkpoint on
+  the idle RTX 3060** (`run_eval_from_checkpoint.sh` or `USE_SUBPROCESS_EVAL`
+  path). If that completes, the epoch-2 gate eval will too; if it hangs, we
+  debug eval without burning training time.
+
+## 10. Paper strategy — corrected after reading both tex files
+
+**The AAIML tex (`AAIML/popw_aaiml2027.tex`) is a training-pathologies paper,
+not the benchmark paper.** Its thesis — "component interface mismatches
+between individually-correct mechanisms produce silent multi-task failures"
+(sampler×feature-bank, scheduler cadence, silent temporal collapse) — is a
+strong AAIML fit and does NOT live or die on SOTA-adjacent numbers. Two
+consequences:
+
+1. **F1 and F13 belong IN that paper.** The grad-wipe × gradient-accumulation
+   interaction (F1) is a textbook new instance of its Pathology-1 class: two
+   mechanisms, each individually defensible (protect features from PSR; 
+   accumulate gradients), whose composition silently deletes 80% of backbone
+   signal. F13 (probe cadence × seq cadence parity — the monitoring itself
+   structurally blind) is a *monitoring* pathology, a genuinely novel angle.
+   Add both as case studies with the before/after training curves from this
+   restart as evidence. That's the winning-paper move: the fixes ARE the
+   contributions.
+2. **The benchmark tex (`code/popw_paper_improved.tex`) is the companion /
+   second submission.** Its implementation table was synced to the real
+   configuration today (AdamW not Lion, batch 6×4, clip 5.0, EMA 0.995@0,
+   OneCycle pct 0.1, seq every-4/T=8, non-deterministic cuDNN note), a Goyal
+   citation was added for the LR-scaling statement, and the staged-training
+   subsection carries an ANNOTATION requiring rewrite-or-reframe before
+   submission. No TMA-cell claim exists in the tex (it was config/docs
+   fiction only) — nothing to scrub there.
+
+## 11. Confidence statement (honest)
+
+What is now high-confidence:
+- The training loop trains what it claims to train (F1/F7 fixed), at the
+  paper's per-sample intensity (F4/F4b), with observable balancing (F2/F13)
+  and uncorrupted log_var dynamics (F3/F3b/F14).
+- The gate signals of doc 85 are measurable for the first time.
+- The ablation matrix for the paper is one command per run.
+
+What CANNOT be promised from a container without the GPU/dataset — stated
+plainly: absolute metric outcomes (mAP/F1 values), and eval-runtime stability
+on your specific CUDA stack. The restart protocol (§5 + §9 step 0) is designed
+so both are answered within the first validation after restart, with rollback
+knobs for every change. If the epoch-5 thresholds in §2.7 are met, RF4→RF10 is
+a monitoring exercise; if any head misses, the per-head playbooks in §2 apply.

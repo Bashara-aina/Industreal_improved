@@ -2471,8 +2471,16 @@ def _log_kendall_gradient_sentinel(criterion, step_idx: int, log_interval: int) 
       doing load-bearing work. lv_psr is EXPECTED to sit at the MAX_PSR ceiling
       (Kendall equilibrium lv* = ln(PSR_WEIGHT*loss) > 0 with the fixed 10-15x
       PSR amplification). lv_pose is capped at lv_det by KENDALL_HP_PREC_CAP.
+
+    [F13 2026-07-02 Fable RF4 consult] Trigger at step ≡ 1 (mod interval), not 0.
+    This function is only reached on NON-seq steps, but steps ≡ 0 (mod
+    PSR_SEQ_EVERY_N_BATCHES) are ALL seq steps — so with an even interval
+    (100/200/500) and even seq cadence (2 or 4), `step % interval == 0` could
+    NEVER fire. This is why no [Kendall grad] line ever appeared in any RF4
+    log despite the probe existing. Odd offsets are never seq steps when the
+    seq cadence is even.
     """
-    if step_idx % log_interval != 0:
+    if step_idx % log_interval != 1:
         return
     try:
         _vals = {}
@@ -2511,8 +2519,14 @@ def _log_per_head_grad_norm(model, step_idx: int, log_interval: int = 200,
     (grad ~0.0) when the PSR head collapses, serving as an early warning.
     Sequence-batch indicator (is_seq_step) is included in the log prefix so
     the liveness probe shows whether PSR had a transition-target batch.
+
+    [F13 2026-07-02 Fable RF4 consult] Trigger at step ≡ 1 (mod interval) —
+    same parity fix as the Kendall sentinel: this is called on non-seq steps
+    only, and even intervals never land on non-seq steps when the seq cadence
+    is even. The [GRAD-NORM]/liveness lines cited by the RF4 gate criteria
+    (doc 85) were structurally dead in every prior run.
     """
-    if step_idx % log_interval != 0:
+    if step_idx % log_interval != 1:
         return
     head_prefixes = ['detection_head', 'pose_head', 'head_pose_head', 'activity_head', 'psr_head']
     parts = []
@@ -3701,7 +3715,11 @@ def main(args):
             {'params': videomae_params,         'lr': 0.0},  # [OPUS FIX #3] pre-registered frozen; lr toggled at unfreeze
         ]
         if loss_params:
-            param_groups.append({'params': loss_params, 'lr': head_lr})
+            # [F14 2026-07-02 Fable consult] weight_decay=0 for Kendall log_vars:
+            # they are log-variances, not weights — decaying them biases every
+            # task precision toward 1.0 (uniform), quietly fighting the learned
+            # balancing this group exists to provide.
+            param_groups.append({'params': loss_params, 'lr': head_lr, 'weight_decay': 0.0})
         _effective_wd = C.WEIGHT_DECAY * 3  # constant — NOT scaled by _stage_lr_mult
         optimizer = Lion(param_groups, weight_decay=_effective_wd)
         logger.info('Optimizer: Lion (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)), DET_BIAS_LR_FACTOR, _effective_wd))
@@ -3717,7 +3735,9 @@ def main(args):
             {'params': videomae_params,         'lr': 0.0},  # [OPUS FIX #3] pre-registered frozen; lr toggled at unfreeze
         ]
         if loss_params:
-            param_groups.append({'params': loss_params, 'lr': head_lr})
+            # [F14 2026-07-02 Fable consult] weight_decay=0 for Kendall log_vars
+            # (log-variances, not weights — see Lion branch comment).
+            param_groups.append({'params': loss_params, 'lr': head_lr, 'weight_decay': 0.0})
         _effective_wd = C.WEIGHT_DECAY  # constant — NOT scaled by _stage_lr_mult
         optimizer = torch.optim.AdamW(param_groups, weight_decay=_effective_wd)
         logger.info('Optimizer: AdamW with differential LR (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g, bias WD=0)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)), DET_BIAS_LR_FACTOR, _effective_wd))
@@ -4024,12 +4044,15 @@ def main(args):
         if start_epoch < C.WARMUP_EPOCHS:
             with torch.no_grad():
                 criterion.log_var_det.fill_(0.0)
-                criterion.log_var_pose.fill_(-1.0)
+                # [F14b] Was -1.0 — stale copy of the pre-"Opus #1" init. The live
+                # init is 0.0 (losses.py: s_pose=0 so the clamp(min=0) path can't
+                # zero the pose Kendall term); the reset must match it.
+                criterion.log_var_pose.fill_(0.0)
                 criterion.log_var_act.fill_(0.0)
                 criterion.log_var_psr.fill_(0.0)
             logger.info(
                 '  Reset Kendall log_var params (early epoch resume): '
-                'det=0.0  head_pose=-1.0  act=0.0  psr=0.0'
+                'det=0.0  head_pose=0.0  act=0.0  psr=0.0'
             )
         else:
             logger.info(
