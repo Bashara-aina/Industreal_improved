@@ -4106,6 +4106,13 @@ def main(args):
     _watchdog_timeout = int(getattr(C, 'WATCHDOG_TIMEOUT', 1200))
     def _watchdog_loop():
         while _watchdog_active:
+            # [FIX 2026-07-02] Skip kill check during validation — it can take
+            # >1200s on full data at FP32 batch=2, and the heartbeat is only
+            # written during training (every 100 steps). The IN_EVALUATION_PHASE
+            # flag is set by the epoch-loop validation block.
+            if IN_EVALUATION_PHASE:
+                time.sleep(30)
+                continue
             _hb_path = _watchdog_ckpt_dir / '.gpu_heartbeat'
             if _hb_path.exists():
                 try:
