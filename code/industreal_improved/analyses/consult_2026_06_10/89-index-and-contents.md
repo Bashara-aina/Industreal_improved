@@ -16,6 +16,7 @@
 | [93-validation-metrics-gate-status.md](93-validation-metrics-gate-status.md) | Validation history (zero successful runs), step-val data, expected targets, gate criteria | Are we on track to pass RF4? |
 | [94-fixes-paper-targets-strategic-recommendations.md](94-fixes-paper-targets-strategic-recommendations.md) | All 22 fixes, AAIML strategy, required baselines, contingency plans | What should we change architecturally? |
 | [95-50-deep-questions-for-opus.md](95-50-deep-questions-for-opus.md) | 50 probing questions on architecture, loss, detection, activity, training infrastructure | Companion deck for deeper Opus review |
+| [96-FABLE-RF4-CONSULTATION-ANSWER.md](96-FABLE-RF4-CONSULTATION-ANSWER.md) | **THE ANSWER (2026-07-02)** — code-verified findings (incl. critical seq-batch grad-wipe bug F1), answers to all 7 questions + 50-question triage, 14 fixes applied on branch, restart protocol, AAIML strategy | Read this after 89 |
 
 ## TL;DR for Opus
 

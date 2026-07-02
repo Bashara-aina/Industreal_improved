@@ -55,6 +55,11 @@ TRAIN_MAX_STEPS = int(os.environ.get('TRAIN_MAX_STEPS', 0))  # 0=disabled; set >
 ASSERT_AND_CRASH = int(os.environ.get('ASSERT_AND_CRASH', '0')) == 1
 LIVENESS_EVERY = 500  # Reduced from 100 — gates relaxed, less overhead needed
 LIVENESS_GRAD_EVERY = 200  # [FIX 2026-06-15] Separate grad-norm liveness (kept at 200 while output liveness is at 100)
+# [F2 2026-07-02 Fable RF4 consult] Kendall log_var VALUE logging cadence.
+# The sentinel in train.py now logs lv values + effective precisions + lv grads
+# at INFO every N steps. This was the single biggest observability gap: the 4
+# log_vars central to multi-task balancing were never visible in any log.
+LOG_KENDALL_GRAD_EVERY = 500
 DET_DEBUG_EVERY = 50  # [FIX4] Detection head debug diagnostic frequency (--reinit-heads only)
 # NOTE: Detection head warmup is HARDCODED in train.py (50 zero-grad + 200 linear ramp, 250 total).
 # DET_WARMUP_STEPS was considered as a config variable but was never wired up — see train.py for the actual logic.
@@ -598,6 +603,15 @@ MIXED_PRECISION = False  # Controls AMP. False = full FP32 (PSR seq loss spikes 
                          # losses over 1100+ steps). True = AMP with GradScaler gives ~2x training
                          # speedup. Keep the existing NaN/isfinite guards and RC-29 telemetry
                          # for detection of any future AMP-related gradient overflow.
+# [F6 2026-07-02 Fable RF4 consult] AMP dtype when MIXED_PRECISION=True.
+# 'bf16' (default): bfloat16 autocast, NO GradScaler — bf16 has FP32's exponent
+#   range, so the PSR seq-loss spikes that corrupted the FP16 GradScaler are
+#   fully representable. RTX 5060 Ti supports bf16 natively. This makes
+#   MIXED_PRECISION=True safe to re-enable for ~1.5-2x throughput.
+# 'fp16': legacy float16 + GradScaler behavior (known-bad with PSR spikes).
+# Recommended sequence: restart with MIXED_PRECISION=True, AMP_DTYPE='bf16',
+# watch 500 steps for loss parity with the FP32 trajectory, keep if clean.
+AMP_DTYPE = os.environ.get('AMP_DTYPE', 'bf16')
 SEED            = 42
 
 # EMA (Exponential Moving Average) — [FIX #4 HIGH] Enabled per paper §Training: EMA=0.999 in Stage 3
@@ -664,7 +678,16 @@ MATMUL_PRECISION = 'high'
 # =========================================================================
 # Loss hyperparameters
 # =========================================================================
-FOCAL_ALPHA   = 0.25  # Per paper: standard RetinaNet α=0.25, γ=2 (was 0.90 during debugging)
+# [F8 2026-07-02 Fable RF4 consult] FOCAL_ALPHA raised 0.25 → 0.50.
+# RetinaNet's alpha=0.25 was tuned WITH gamma=2 on BOTH sides. This codebase
+# uses asymmetric gamma (gamma_pos=0, gamma_neg=1.5, DET_ASYMMETRIC_GAMMA
+# below) + OHEM, so the imbalance is already handled by hard-negative mining.
+# At alpha=0.25/gamma_pos=0 a confident positive (p=0.9) gets weight 0.25
+# while a confident OHEM-selected negative gets 0.75*p^1.5≈0.64 — positives
+# are ~2.6x WEAKER exactly where score separation must grow. alpha=0.5 makes
+# pos/neg symmetric and lets positive scores climb faster.
+# ROLLBACK: 0.25 if cls loss diverges or false-positive flood at epoch-3 eval.
+FOCAL_ALPHA   = 0.50
 FOCAL_GAMMA   = 2.0
 
 # Per-class alpha for detection focal loss.
@@ -788,7 +811,12 @@ REINIT_PI = 0.01  # cls_score bias prior for reinit (RF1 uses 0.05)
 STAGE1_EPOCHS = 5    # Detection-only warmup
 STAGE2_EPOCHS = 10   # Add head pose (9-DoF from pose.csv, real GT) + body keypoints (pseudo, no real GT)
 STAGE3_EPOCHS = 85   # Full multi-task with EMA — 5+10+85=100 total — was 35
-ACT_RAMP_EPOCHS = 5  # Activity loss ramp-up
+# [F9 2026-07-02 Fable RF4 consult] ACT_RAMP_EPOCHS 5 → 3. The 5-epoch ramp was
+# collapse-protection from the era when the FeatureBank gradient path was severed
+# (root-caused + fixed 2026-06-30). With the path restored, delaying full activity
+# supervision to epoch 5 just starves the metric-heaviest head (combined weight
+# 0.35) for 5% of the run. At 3, a resume at epoch >=3 gets full weight instantly.
+ACT_RAMP_EPOCHS = 3  # Activity loss ramp-up
 ACTIVITY_LOSS_CAP = 80.0  # Cap activity loss to prevent NaN cascade at Stage 3 entry (epoch 16).
                          # Active loss is CE+label_smooth(0.1) — init ln(75)≈4.3, never nears 80.
                          # Cap is a safety net against extreme spikes, not a binding constraint.
@@ -876,9 +904,16 @@ DET_GT_FRAME_FRACTION = float(os.environ.get('DET_GT_FRAME_FRACTION', '0.40'))  
 # 2. PSR/pose gradients die → no multi-task signal → activity collapse to 2/75 classes
 # Fix: lower ACTIVITY_HEAD_GRAD_CLIP + weigh activity loss down before Kendall
 ACTIVITY_HEAD_DROPOUT = 0.3    # [OPUS DECISION 2] Raised from default 0.2 — more regularization to combat collapse
-ACTIVITY_HEAD_GRAD_CLIP = 1.0  # [FIX 2026-06-30] Raised from 0.3 — gradient norm at 0.012 is well below even 0.3;
-                                # clip was not constraining anything. Raising to 1.0 removes the ceiling so
-                                # when activity does escape the degenerate equilibrium, it isn't capped.
+ACTIVITY_HEAD_GRAD_CLIP = 5.0  # [F10 2026-07-02 Fable consult] Raised 1.0 → 5.0 (= GRAD_CLIP_NORM).
+                                # The per-head clip at 1.0 was 5x tighter than the global clip for the
+                                # task with the HIGHEST combined-metric weight (0.35). Post gradient-path
+                                # fix, activity grads ~0.5 don't need a special ceiling; ACTIVITY_LOSS_CAP
+                                # already tames loss spikes. Keep the mechanism for emergencies.
+# [F5 2026-07-02 Fable consult] Gradient centralization (subtract per-row grad
+# mean on activity head params) was a collapse-era hack; it prevents the logit
+# bias from ever learning class priors and removes legitimate common-mode
+# signal. Default OFF now that the FeatureBank gradient path is fixed.
+ACTIVITY_GRAD_CENTRALIZATION = False
 ACTIVITY_LR_MULTIPLIER = 1.0    # [FIX 2026-06-30 v4] RESET TO 1.0 after root cause fix.
                                 # The gradient starvation was caused by in-place tensor assignments
                                 # in FeatureBank and ActivityHead (model.py, lines 1240-1241 and 1384)
@@ -1014,7 +1049,17 @@ USE_PSR_SEQUENCE_MODE = True   # [FIX 2026-06-15] Enabled — PSR head outputs D
 PSR_SEQUENCE_LENGTH = 8        # [FIX E1] Increased from 2 to 8 — gives Transformer meaningful temporal context. Verified safe with gradient checkpointing.
                               # (sequence-mode memory doubled and fires 5x more often). T=4 is
                               # the memory-bounded choice; the bigger unlock is below.
-PSR_SEQ_EVERY_N_BATCHES = 2  # [FIX 2026-06-16] Restored to 2. At 1, every batch is a seq batch → detection NEVER trains. At 2, alternating freeze works but PSR gradients on seq steps pull backbone features away from detection. Fix: zero backbone grads on seq steps in train.py.
+# [F7 2026-07-02 Fable RF4 consult] PSR_SEQ_EVERY_N_BATCHES 2 → 4.
+# At 2, HALF of all training batches were PSR-only sequence batches: detection/
+# activity/pose saw only ~2194 of 4387 batches per epoch, while PSR — a head
+# that is fully detached from the backbone (DETACH_PSR_FPN=True) — consumed 50%
+# of forward compute that produces ZERO shared-feature learning. The paper
+# specifies seq batches every 10 steps. 4 is the compromise: PSR still gets
+# ~1100 seq steps/epoch (plenty for a 3M-param head), detection/activity
+# throughput per epoch rises 1.5x. NOTE (train.py wiring): with GRAD_ACCUM=4,
+# optimizer steps land on steps 3,7,11,... (non-seq) and each window contains
+# exactly one seq batch — the alternation stays well-formed.
+PSR_SEQ_EVERY_N_BATCHES = 4
 PSR_SEQ_LOSS_SCALE = 1.5     # [TUNE 2026-06-15] Reduced from 3.0 — PSR seq loss shows spike-decay cycles (period ~200-250 batches). At 3.0x, spikes reached 45-60, causing weight disruption. 1.5x retains gradient amplification while damping spike magnitude.
 
 # [OPUS v5] PSR transition objective — use Gaussian-smeared transition targets
@@ -1086,6 +1131,15 @@ RANDOM_TEMPORAL_STRIDE = True  # Random frame stride {1,2,3} per clip (dataset.p
 # =========================================================================
 USE_LION = False        # [PAPER-ALIGN] Use AdamW (paper Table 3 specifies AdamW, not Lion)
 ONE_CYCLE_LR = True      # Per paper §Implementation: "Warmup (2 ep) → OneCycleLR"
+# [F4 2026-07-02 Fable RF4 consult] Peak-LR factor for OneCycleLR max_lr.
+# train.py hardcoded 0.5 here for months (peak head LR 2.5e-4, HALF the paper's
+# 5e-4) while the effective batch ran at 48 (1.5x the paper's 32) — per-sample
+# update intensity at peak was ~3x below spec, a systematic slow-convergence
+# factor for every head. With EFFECTIVE_BATCH=24 (see stage_rf4 preset) and
+# factor 0.75: per-sample intensity = 0.75*5e-4/24 = 1.56e-5 = paper's
+# 5e-4/32 exactly (linear scaling rule, Goyal et al. 2017).
+# ROLLBACK: 0.5 if loss spikes/instability appear within ~500 steps of restart.
+ONE_CYCLE_PEAK_FACTOR = float(os.environ.get('ONE_CYCLE_PEAK_FACTOR', '0.75'))
 USE_SWA = False          # Stochastic Weight Averaging at end of training
 SWA_LR = 1e-5
 SWA_EPOCHS = 10
@@ -1122,7 +1176,11 @@ SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP (~87 min/epoch) — s
 # [OPUS v5] Eval cadence: compute full detection mAP every N epochs; fast gate-only eval
 # (EVAL_MAX_BATCHES capped) on other epochs. 0 = eval every epoch (no skip).
 DET_METRICS_EVERY_N = int(os.environ.get('DET_METRICS_EVERY_N', '3'))  # Full mAP eval every 3 epochs (was 1 — too slow, caused CUDA hangs)
-GATE_EVAL_MAX_BATCHES = int(os.environ.get('GATE_EVAL_MAX_BATCHES', '200'))  # Max val batches on non-full-eval epochs
+# [F11 2026-07-02 Fable consult] 200 → 250: at VAL_BATCH_SIZE=8, 200 batches
+# covered only 1600/1928 val frames (83%) — tail activity groups could be
+# entirely absent from a gated eval, making macro-F1 noisy exactly where gate
+# decisions are made. 250 covers the full val set for +25% eval time.
+GATE_EVAL_MAX_BATCHES = int(os.environ.get('GATE_EVAL_MAX_BATCHES', '250'))  # Max val batches on non-full-eval epochs
 
 # [OPUS DECISION 5] Use subprocess evaluation on GPU 0 (idle RTX 3060).
 # When True, validation forks a spawn child on CUDA_VISIBLE_DEVICES=0 that
@@ -1511,7 +1569,13 @@ PRESETS = {
         'use_hand_film':      True,
         'benchmark_mode':     False,
         'batch_size':         6,   # RTX 5060 Ti 16GB — 3x throughput over batch=2, safe VRAM
-        'grad_accum_steps':   8,
+        # [F4 2026-07-02 Fable consult] 8 → 4: effective batch 48 → 24. At 48
+        # (1.5x the paper's 32) with the hidden 0.5 peak-LR factor, per-sample
+        # update intensity was ~3x below paper spec and updates/epoch were
+        # halved. 24 + ONE_CYCLE_PEAK_FACTOR=0.75 restores the paper's exact
+        # per-sample intensity (0.75*5e-4/24 == 5e-4/32) with 2x more optimizer
+        # steps per epoch. See ONE_CYCLE_PEAK_FACTOR comment.
+        'grad_accum_steps':   4,
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
