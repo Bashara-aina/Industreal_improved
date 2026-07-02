@@ -86,7 +86,10 @@ KENDALL_HP_PREC_CAP = True
 #     Alternative: use fixed weights instead of learned Kendall for det-bootstrap.
 #     Detection drives backbone at λ=1.0, head_pose just stabilizes at λ=0.1-0.3.
 #     Set True for RF1-RF2; re-enable Kendall at RF3+ once detection is real.
-KENDALL_FIXED_WEIGHTS = False  # default off; toggled per-stage by stage_manager
+# [F15 2026-07-02 Fable consult] env-overridable so the Kendall-vs-fixed paper
+# ablation is runnable without a code edit (KENDALL_FIXED_WEIGHTS=1 env).
+# stage_manager may still toggle the module attribute per-stage at runtime.
+KENDALL_FIXED_WEIGHTS = os.environ.get('KENDALL_FIXED_WEIGHTS', '0') == '1'
 
 # (2) KENDALL_STAGED_TRAINING — kill the double curriculum (Opus v8 §3 Fix 3).
 #     The RF stage manager already controls which heads train. The epoch-indexed
@@ -1059,7 +1062,9 @@ PSR_SEQUENCE_LENGTH = 8        # [FIX E1] Increased from 2 to 8 — gives Transf
 # throughput per epoch rises 1.5x. NOTE (train.py wiring): with GRAD_ACCUM=4,
 # optimizer steps land on steps 3,7,11,... (non-seq) and each window contains
 # exactly one seq batch — the alternation stays well-formed.
-PSR_SEQ_EVERY_N_BATCHES = 4
+# Env-overridable for the PSR-only ablation (set 1: every batch is a seq batch,
+# which is exactly right when PSR is the only trained head).
+PSR_SEQ_EVERY_N_BATCHES = int(os.environ.get('PSR_SEQ_EVERY_N_BATCHES', '4'))
 PSR_SEQ_LOSS_SCALE = 1.5     # [TUNE 2026-06-15] Reduced from 3.0 — PSR seq loss shows spike-decay cycles (period ~200-250 batches). At 3.0x, spikes reached 45-60, causing weight disruption. 1.5x retains gradient amplification while damping spike magnitude.
 
 # [OPUS v5] PSR transition objective — use Gaussian-smeared transition targets
@@ -1560,6 +1565,144 @@ PRESETS = {
         # default (0.9) — we want a clean ablation, not recovery bootstrapping.
         'det_gt_frame_fraction':    0.4,
     },
+    # =====================================================================
+    # [F16 2026-07-02 Fable RF4 consult] ABLATION A MATRIX — the mandatory
+    # AAIML ablation: single-task baselines on the IDENTICAL architecture and
+    # training hyperparameters as stage_rf4 (batch 6, accum 4, non-staged,
+    # EMA, FP32). Only the task losses differ; the model keeps every module so
+    # parameter counts match the multi-task model. det_gt_frame_fraction is
+    # pinned to 0.4 in ALL of them so the data distribution the sampler emits
+    # is identical across the whole matrix (single-task vs multi-task deltas
+    # then measure task interference, not sampler drift).
+    # Suggested length: 20-25 epochs each (see scripts/run_ablation_suite.sh).
+    'ablation_det_only': {
+        'description': 'Ablation A1: detection-only, arch+hparams == stage_rf4.',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         6,
+        'grad_accum_steps':   4,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          True,
+        'train_act':          False,
+        'train_psr':          False,
+        'train_head_pose':    False,
+        'use_psr_transition':       False,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_detach_grad_entries_only': True,
+        'feature_bank_slot_overwrite': True,
+        'use_psr_order_prior':      False,
+        'psr_sensitivity_weight':   0.0,
+        'use_ldam_drw':             False,
+        'detach_reg_fpn':           False,
+        'detach_psr_fpn':           True,
+        'det_gt_frame_fraction':    0.4,
+    },
+    'ablation_act_only': {
+        'description': 'Ablation A2: activity-only, arch+hparams == stage_rf4. '
+                       'zero_det_conf=True: the untrained det head would feed '
+                       'random confidences into the activity input otherwise.',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         6,
+        'grad_accum_steps':   4,
+        'zero_det_conf':      True,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          False,
+        'train_act':          True,
+        'train_psr':          False,
+        'train_head_pose':    False,
+        'use_psr_transition':       False,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_detach_grad_entries_only': True,
+        'feature_bank_slot_overwrite': True,
+        'use_psr_order_prior':      False,
+        'psr_sensitivity_weight':   0.0,
+        'use_ldam_drw':             False,
+        'detach_reg_fpn':           False,
+        'detach_psr_fpn':           True,
+        'det_gt_frame_fraction':    0.4,
+    },
+    'ablation_psr_only': {
+        'description': 'Ablation A3: PSR-only, arch+hparams == stage_rf4. '
+                       'Run with PSR_SEQ_EVERY_N_BATCHES=1 env (every batch a '
+                       'seq batch — correct when PSR is the only trained head).',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         6,
+        'grad_accum_steps':   4,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          False,
+        'train_act':          False,
+        'train_psr':          True,
+        'train_head_pose':    False,
+        'use_psr_transition':       True,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_detach_grad_entries_only': True,
+        'feature_bank_slot_overwrite': True,
+        'use_psr_order_prior':      True,
+        'psr_sensitivity_weight':   0.50,
+        'use_ldam_drw':             False,
+        'detach_reg_fpn':           False,
+        'detach_psr_fpn':           True,
+        'det_gt_frame_fraction':    0.4,
+    },
+    'ablation_pose_only': {
+        'description': 'Ablation A4: head-pose-only, arch+hparams == stage_rf4.',
+        'dataset_mode':       'manual_only',
+        'backbone':           'convnext_tiny',
+        'use_tma_cell':       True,
+        'use_temporal_bank':  True,
+        'use_hand_film':      True,
+        'benchmark_mode':     False,
+        'batch_size':         6,
+        'grad_accum_steps':   4,
+        'zero_det_conf':      False,
+        'staged_training':    False,
+        'mixed_precision':    False,
+        'use_mixup':          False,
+        'use_ema':            True,
+        'train_det':          False,
+        'train_act':          False,
+        'train_psr':          False,
+        'train_head_pose':    True,
+        'use_psr_transition':       False,
+        'use_geo_head_pose':        True,
+        'feature_bank_detach':      True,
+        'feature_bank_detach_grad_entries_only': True,
+        'feature_bank_slot_overwrite': True,
+        'use_psr_order_prior':      False,
+        'psr_sensitivity_weight':   0.0,
+        'use_ldam_drw':             False,
+        'detach_reg_fpn':           False,
+        'detach_psr_fpn':           True,
+        'det_gt_frame_fraction':    0.4,
+    },
     'stage_rf4': {
         'description': 'RF4: All heads + PSR transition (100% data, 20 ep, verb-grouping).',
         'dataset_mode':       'manual_only',
@@ -1614,7 +1757,11 @@ PRESETS = {
         'use_hand_film':      True,
         'benchmark_mode':     False,
         'batch_size':         4,
-        'grad_accum_steps':   8,
+        # [F4 2026-07-02 Fable consult] accum 8 -> 6: effective batch 24 at
+        # batch_size=4, matching stage_rf4's per-sample update intensity
+        # (ONE_CYCLE_PEAK_FACTOR*BASE_LR/24 == paper's 5e-4/32). On the
+        # RTX 5060 Ti, batch_size 6 + accum 4 is the faster equivalent.
+        'grad_accum_steps':   6,
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
@@ -1658,7 +1805,11 @@ PRESETS = {
         'use_hand_film':      True,
         'benchmark_mode':     False,
         'batch_size':         4,
-        'grad_accum_steps':   8,
+        # [F4 2026-07-02 Fable consult] accum 8 -> 6: effective batch 24 at
+        # batch_size=4, matching stage_rf4's per-sample update intensity
+        # (ONE_CYCLE_PEAK_FACTOR*BASE_LR/24 == paper's 5e-4/32). On the
+        # RTX 5060 Ti, batch_size 6 + accum 4 is the faster equivalent.
+        'grad_accum_steps':   6,
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
@@ -1698,7 +1849,11 @@ PRESETS = {
         'use_hand_film':      True,
         'benchmark_mode':     False,
         'batch_size':         4,
-        'grad_accum_steps':   8,
+        # [F4 2026-07-02 Fable consult] accum 8 -> 6: effective batch 24 at
+        # batch_size=4, matching stage_rf4's per-sample update intensity
+        # (ONE_CYCLE_PEAK_FACTOR*BASE_LR/24 == paper's 5e-4/32). On the
+        # RTX 5060 Ti, batch_size 6 + accum 4 is the faster equivalent.
+        'grad_accum_steps':   6,
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
@@ -1736,7 +1891,11 @@ PRESETS = {
         'use_hand_film':      True,
         'benchmark_mode':     False,
         'batch_size':         4,
-        'grad_accum_steps':   8,
+        # [F4 2026-07-02 Fable consult] accum 8 -> 6: effective batch 24 at
+        # batch_size=4, matching stage_rf4's per-sample update intensity
+        # (ONE_CYCLE_PEAK_FACTOR*BASE_LR/24 == paper's 5e-4/32). On the
+        # RTX 5060 Ti, batch_size 6 + accum 4 is the faster equivalent.
+        'grad_accum_steps':   6,
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
@@ -1774,7 +1933,11 @@ PRESETS = {
         'use_hand_film':      True,
         'benchmark_mode':     False,
         'batch_size':         4,
-        'grad_accum_steps':   8,
+        # [F4 2026-07-02 Fable consult] accum 8 -> 6: effective batch 24 at
+        # batch_size=4, matching stage_rf4's per-sample update intensity
+        # (ONE_CYCLE_PEAK_FACTOR*BASE_LR/24 == paper's 5e-4/32). On the
+        # RTX 5060 Ti, batch_size 6 + accum 4 is the faster equivalent.
+        'grad_accum_steps':   6,
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
@@ -1812,7 +1975,11 @@ PRESETS = {
         'use_hand_film':      True,
         'benchmark_mode':     False,
         'batch_size':         4,
-        'grad_accum_steps':   8,
+        # [F4 2026-07-02 Fable consult] accum 8 -> 6: effective batch 24 at
+        # batch_size=4, matching stage_rf4's per-sample update intensity
+        # (ONE_CYCLE_PEAK_FACTOR*BASE_LR/24 == paper's 5e-4/32). On the
+        # RTX 5060 Ti, batch_size 6 + accum 4 is the faster equivalent.
+        'grad_accum_steps':   6,
         'zero_det_conf':      False,
         'staged_training':    False,
         'mixed_precision':    False,
