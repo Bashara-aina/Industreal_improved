@@ -1726,14 +1726,17 @@ class MultiTaskLoss(nn.Module):
                 # is preserved (not zeroed) so the learnable parameter can adapt to the
                 # ramping gradient magnitude. Zeroing lv_act would have starved log_var_act
                 # of all gradient signal.
-                # [FIX 2026-06-28 20-agent] Activity precision ramp using stage-local epoch.
-                # Uses _act_epoch_counter (resets to 0 when train_act becomes True) instead
-                # of _current_epoch (global epoch). Without this, RF3 starting at global
-                # epoch 50+ would bypass the 5-epoch precision ramp.
-                if self.train_act and self._act_epoch_counter >= 0:
-                    _act_ramp_epochs = int(getattr(C, 'ACT_RAMP_EPOCHS', 5))
-                    if _act_ramp_epochs > 0 and self._act_epoch_counter < _act_ramp_epochs:
-                        prec_act = prec_act * ((self._act_epoch_counter + 1) / _act_ramp_epochs)
+                # [F18 2026-07-02 Fable RF4 consult] DOUBLE-RAMP FIX. The activity
+                # ramp was applied TWICE: once to the RAW loss in the activity
+                # section above (`loss_act = loss_act * act_ramp`, the canonical
+                # site — it covers Kendall, fixed-weight, and non-Kendall paths
+                # alike), and AGAIN here to the Kendall precision. Effective
+                # activity supervision during warmup was ramp^2: 4% (not 20%) at
+                # epoch 0, 36% (not 60%) at epoch 2 — a compounding factor in
+                # every historical activity-collapse episode. The precision-side
+                # multiplication below is removed; the loss-level ramp is the
+                # single source of truth.
+                # (was: prec_act scaled by (counter+1)/ACT_RAMP_EPOCHS right here)
                 if bool(getattr(C, 'STAGED_TRAINING', True)) and self._current_epoch >= 1:
                     stage = _get_kendall_stage(self._current_epoch)
                     # Activity ramp — applies in BOTH stage 1 and stage 2 (ramp completes
@@ -1751,13 +1754,14 @@ class MultiTaskLoss(nn.Module):
                         lv_hp = lv_hp * 0
                         prec_psr = prec_psr * 0
                         lv_psr = lv_psr * 0
-                        # Activity ramps in (user-authorized; log_var preserved)
-                        prec_act = prec_act * act_ramp
+                        # [F18] Activity ramp handled ONCE at the loss level
+                        # (activity section above) — the old prec_act *= act_ramp
+                        # here made staged warmup ramp^2 as well.
                     elif stage == 2:
                         # Det + head_pose + activity (ramp at 1.0 by epoch >= ACT_RAMP_EPOCHS)
                         prec_psr = prec_psr * 0
                         lv_psr = lv_psr * 0
-                        prec_act = prec_act * act_ramp
+                        # [F18] prec_act ramp removed here too — see stage 1 note.
                     elif stage == 3:
                         stage1_end = int(getattr(C, 'STAGE1_EPOCHS', 5))
                         stage2_end = stage1_end + int(getattr(C, 'STAGE2_EPOCHS', 10))

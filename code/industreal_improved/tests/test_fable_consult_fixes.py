@@ -1,4 +1,4 @@
-"""Regression tests for the 2026-07-02 Fable RF4 consultation fixes (F1-F17).
+"""Regression tests for the 2026-07-02 Fable RF4 consultation fixes (F1-F18).
 
 Each test pins one of the fixes documented in
 analyses/consult_2026_06_10/96-FABLE-RF4-CONSULTATION-ANSWER.md so it cannot
@@ -270,3 +270,47 @@ class TestF17DataPackage:
                 f'F17 regression: data package no longer re-exports {name} — '
                 'train.py getattr calls will fail on a fresh clone'
             )
+
+
+# ---------------------------------------------------------------------------
+# F18 — activity ramp applied exactly once (was ramp^2: loss-level AND
+# Kendall-precision-level during warmup)
+# ---------------------------------------------------------------------------
+class TestF18SingleActivityRamp:
+    def _total_at(self, counter, ramp_epochs=4):
+        from src import config as C
+        C.USE_KENDALL = True
+        C.KENDALL_FIXED_WEIGHTS = False
+        C.STAGED_TRAINING = False
+        C.ACT_RAMP_EPOCHS = ramp_epochs
+        from src.training.losses import MultiTaskLoss
+        crit = MultiTaskLoss(train_det=False, train_pose=False,
+                             train_act=True, train_psr=False)
+        crit.act_loss_fn = torch.nn.CrossEntropyLoss()  # dataset-independent
+        crit._act_epoch_counter = counter
+        crit._act_warmup_epochs = ramp_epochs
+        crit._current_epoch = counter
+        torch.manual_seed(0)
+        out = {'act_logits': torch.randn(8, 10)}
+        tgt = {'activity': torch.randint(0, 10, (8,))}
+        total, _ = crit(out, tgt)
+        return float(total.detach())
+
+    def test_ramp_is_linear_not_squared(self):
+        ratio = self._total_at(0) / self._total_at(10)
+        # single application: (0+1)/4 = 0.25; the historical double-ramp bug
+        # (loss * ramp AND prec_act * ramp) would give 0.0625.
+        assert abs(ratio - 0.25) < 1e-3, (
+            f'F18 regression: activity warmup contribution ratio {ratio:.4f} '
+            f'!= 0.25 — ramp is being applied twice (or not at all)'
+        )
+
+    def test_prec_act_ramp_removed_from_kendall_block(self):
+        src = open(LOSSES_PY).read()
+        assert 'prec_act = prec_act * ((self._act_epoch_counter' not in src, (
+            'F18 regression: Kendall-precision activity ramp is back — '
+            'warmup supervision becomes ramp^2 again'
+        )
+        assert src.count('prec_act = prec_act * act_ramp') == 0, (
+            'F18 regression: staged-path prec_act ramp is back'
+        )
