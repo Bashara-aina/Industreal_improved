@@ -76,7 +76,40 @@ PSR transition F1 will be measured at epoch 8 after F22 fix. Expectation: 0.05-0
 
 ---
 
-## Key Takeaways for Paper Writing
+## Verification Summary
+
+**✅ Cross-referenced from 2+ search sources (likely correct):**
+- MediaPipe head pose: yaw=2.63°, pitch=2.04°, roll=2.19° (Table 4)
+- OpenPose head pose: yaw=4.29°, pitch=3.86°
+- MediaPipe hand pose: MPJPE=13.7mm (Table 5)
+- OpenPose hand pose: MPJPE=19.9mm
+
+**⚠️ Single source only (needs manual PDF check):**
+- OpenPose roll: 3.94°
+- MediaPipe translation: 0.79mm
+- OpenPose translation: 1.13mm
+- Hand pose AUC/PA-MPJPE values
+- YOLOv8m detection mAP (83.8%) — may be from a different paper
+- B2 PSR F1 (0.731) — may be from same WACV paper or follow-up
+- STORM-PSR F1 (0.901) from CVIU 2025
+
+**Not verifiable by automated tools (CVF blocks, arxiv IDs hallucinated):**
+The exact CVF paper URL could not be accessed (403). All arxiv IDs returned by web search were hallucinated (pointed to unrelated papers). **You must manually download the paper from `openaccess.thecvf.com`** before submission to confirm every number.
+
+## Automated Verification Attempts (2026-07-03)
+
+| Tool | Result |
+|---|---|
+| WebSearch (3 queries with different formulations) | ✅ MediaPipe head pose numbers confirmed by multiple search snippets |
+| Exa web_search | ❌ Out of credits |
+| Firecrawl search/scrape | ❌ Out of credits |
+| arxiv API (multiple IDs: 2311.13028, 2312.04070, 2402.09811, 2311.07212, 2302.07264) | ❌ All hallucinated by search engines — pointed to unrelated papers (radar, materials science, NLP) |
+| CVF openaccess direct download | ❌ HTTP 403 on all URL patterns |
+| Semantic Scholar API | ❌ HTTP 429 rate-limited after 1 request |
+| Google Scholar fetch | ❌ HTTP 403 |
+| crawl4ai MCP server | ❌ Not available in current environment |
+
+**Important:** The CLAUDE.md warning about search engine reliability was confirmed — every arxiv ID returned by web search was hallucinated. The MediaPipe numbers (2.63°, 2.04°, 2.19°) appeared consistently across multiple independent search results, so they are likely correct. **Download the paper manually from openaccess.thecvf.com to confirm all numbers before submission.**
 
 1. **Head pose is our strongest benchmark claim.** Not "we beat MediaPipe" — but "we achieve competitive head pose at zero additional cost." Cite MediaPipe 2.63° as specialist upper bound.
 
