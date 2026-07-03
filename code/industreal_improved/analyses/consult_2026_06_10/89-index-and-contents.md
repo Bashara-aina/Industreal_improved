@@ -17,6 +17,11 @@
 | [94-fixes-paper-targets-strategic-recommendations.md](94-fixes-paper-targets-strategic-recommendations.md) | All 22 fixes, AAIML strategy, required baselines, contingency plans | What should we change architecturally? |
 | [95-50-deep-questions-for-opus.md](95-50-deep-questions-for-opus.md) | 50 probing questions on architecture, loss, detection, activity, training infrastructure | Companion deck for deeper Opus review |
 | [96-FABLE-RF4-CONSULTATION-ANSWER.md](96-FABLE-RF4-CONSULTATION-ANSWER.md) | **THE ANSWER (2026-07-02)** — code-verified findings (incl. critical seq-batch grad-wipe bug F1), answers to all 7 questions + 50-question triage, 14 fixes applied on branch, restart protocol, AAIML strategy | Read this after 89 |
+| [97-current-status-deep-analysis.md](97-current-status-deep-analysis.md) | **DEEP STATUS (2026-07-03)** — 8h44m training history, ALL 24 fixes verified, loss trends epochs 2→4, Kendall progression, probability assessment for RF4→RF10 | Current state after fixes |
+| [98-head-by-head-analysis.md](98-head-by-head-analysis.md) | **PER-HEAD ANALYSIS** — each head's architecture, trajectory, fix impact, expected convergence timeline, conditions for SOTA-benchmarkable results | Which heads are viable? |
+| [99-aaiml-viability-benchmarking.md](99-aaiml-viability-benchmarking.md) | **AAIML VIABILITY** — gap analysis to publishable thresholds, risk quadrants per head, fallback tiers A-E, decision matrix | Can we win AAIML? |
+| [100-deep-20-questions-for-opus.md](100-deep-20-questions-for-opus.md) | **20 NEW QUESTIONS (2026-07-03)** — GPU stability crisis, detection/activity, PSR/pose, multi-task balancing, infrastructure | New questions after implementing F1-F16 |
+| [101-overview.md](101-overview.md) | **MASTER OVERVIEW** — navigation guide for all 12 files, reading order, critical path | How to read the package |
 
 ## TL;DR for Opus
 
