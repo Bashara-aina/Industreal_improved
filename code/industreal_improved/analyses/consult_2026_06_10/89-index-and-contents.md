@@ -22,6 +22,7 @@
 | [99-aaiml-viability-benchmarking.md](99-aaiml-viability-benchmarking.md) | **AAIML VIABILITY** — gap analysis to publishable thresholds, risk quadrants per head, fallback tiers A-E, decision matrix | Can we win AAIML? |
 | [100-deep-20-questions-for-opus.md](100-deep-20-questions-for-opus.md) | **20 NEW QUESTIONS (2026-07-03)** — GPU stability crisis, detection/activity, PSR/pose, multi-task balancing, infrastructure | New questions after implementing F1-F16 |
 | [101-overview.md](101-overview.md) | **MASTER OVERVIEW** — navigation guide for all 12 files, reading order, critical path | How to read the package |
+| [102-FABLE-ROUND5-20-ANSWERS.md](102-FABLE-ROUND5-20-ANSWERS.md) | **ROUND 5 ANSWERS (2026-07-03)** — all 20 questions answered with premise corrections (audit-agent files described a different codebase!), GPU crisis playbook (Xid/Xorg diagnostic ladder, TF32 mitigation was backwards), lv_pose=-1.000 solved, combined-metric unit bug, F19-F21 | Read after 100 |
 
 ## TL;DR for Opus
 

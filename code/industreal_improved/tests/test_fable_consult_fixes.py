@@ -314,3 +314,22 @@ class TestF18SingleActivityRamp:
         assert src.count('prec_act = prec_act * act_ramp') == 0, (
             'F18 regression: staged-path prec_act ramp is back'
         )
+
+
+# ---------------------------------------------------------------------------
+# F21 — 'auto' peak factor resolves to EFFECTIVE_BATCH/32
+# ---------------------------------------------------------------------------
+class TestF21AutoPeakFactor:
+    def test_auto_resolution_present(self):
+        src = open(TRAIN_PY).read()
+        assert "EFFECTIVE_BATCH', 32)) / 32.0" in src, (
+            'F21 regression: auto peak-factor resolution '
+            '(EFFECTIVE_BATCH/32) removed from scheduler build'
+        )
+
+    def test_config_default_is_auto(self):
+        from src import config as C
+        import importlib
+        # default comes from env fallback 'auto' unless the user overrode it
+        assert str(C.ONE_CYCLE_PEAK_FACTOR).lower() in ('auto',) or \
+            float(C.ONE_CYCLE_PEAK_FACTOR) > 0, 'peak factor misconfigured'

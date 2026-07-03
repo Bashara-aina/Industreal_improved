@@ -2500,6 +2500,23 @@ def _log_kendall_gradient_sentinel(criterion, step_idx: int, log_interval: int) 
             math.exp(-_vals['act']), math.exp(-_vals['psr']),
             _grads['det'], _grads['pose'], _grads['act'], _grads['psr'],
         )
+        # [F19 2026-07-03 Fable consult round 5] Log the EFFECTIVE pose log_var.
+        # The raw log_var_pose parameter can sit pinned (e.g., at a historical
+        # -1.000 from an old checkpoint) because KENDALL_HP_PREC_CAP applies
+        # lv_used = max(lv_pose, lv_det.detach()) — torch.maximum passes zero
+        # gradient to the smaller argument, and F14 removed the weight decay
+        # that used to drag it. The value that actually weights the pose loss
+        # is max(lv_pose, lv_det), i.e. pose precision == det precision while
+        # capped — NOT exp(+1)=2.718 as a raw reading of -1.000 suggests
+        # (misread this exact way in doc 97/98 §Kendall, and Q11 of doc 100).
+        if bool(getattr(C, 'KENDALL_HP_PREC_CAP', True)):
+            _lv_pose_eff = max(_vals['pose'], _vals['det'])
+            _capped = ' (HP_PREC_CAP ACTIVE: raw lv_pose grad-starved)' \
+                if _vals['pose'] < _vals['det'] else ''
+            logger.info(
+                '  [KENDALL step=%d] lv_pose_EFFECTIVE=%.3f prec_pose_eff=%.2f%s',
+                step_idx, _lv_pose_eff, math.exp(-_lv_pose_eff), _capped,
+            )
     except Exception:
         pass
 
@@ -3777,7 +3794,14 @@ def main(args):
         # intensity at peak was ~3x BELOW the paper spec — a systematic
         # slow-convergence factor for every head. Now config-driven via
         # ONE_CYCLE_PEAK_FACTOR (see config.py for the linear-scaling math).
-        _peak = float(getattr(C, 'ONE_CYCLE_PEAK_FACTOR', 0.5))
+        # [F21] 'auto' resolves to EFFECTIVE_BATCH/32 so peak per-sample
+        # intensity always equals the paper's 5e-4/32 regardless of batch
+        # geometry (batch 4x4=16 -> 0.5; 6x4=24 -> 0.75; paper 32 -> 1.0).
+        _peak_raw = getattr(C, 'ONE_CYCLE_PEAK_FACTOR', 'auto')
+        if str(_peak_raw).lower() == 'auto':
+            _peak = float(getattr(C, 'EFFECTIVE_BATCH', 32)) / 32.0
+        else:
+            _peak = float(_peak_raw)
         max_lr = [
             backbone_lr_local * _peak,  # idx 0: backbone
             head_lr_local * _peak * C.DET_LR_MULTIPLIER,  # idx 1: det_head
@@ -5132,6 +5156,40 @@ def main(args):
                         f'(best={best_metric:.4f}  '
                         f'patience={patience_counter}/{C.PATIENCE})'
                     )
+                    # [F20 2026-07-03 Fable consult round 5] combined_v2 — logged
+                    # ALONGSIDE (never used for selection/gates, so best_metric
+                    # history stays comparable). The v1 pose term feeds the RAW
+                    # 9-dim MAE (~0.10 for a converged pose) into 1/(1+mae),
+                    # yielding ~0.136 of the 0.15 pose budget — at epoch 2 that
+                    # was 81% of the entire combined=0.168, nearly saturated,
+                    # and insensitive to real pose quality. v2 normalizes with
+                    # forward angular MAE in DEGREES via 1/(1+deg/10): 10°→0.5,
+                    # 5°→0.67, 40°→0.2 — discriminative in the range that
+                    # matters. Use v2 when judging per-head progress; doc 102
+                    # has per-head gate thresholds that replace both.
+                    try:
+                        _fwd_deg = val_metrics.get('forward_angular_MAE_deg', float('nan'))
+                        if math.isfinite(_fwd_deg):
+                            _pose_acc_v2 = 1.0 / (1.0 + _fwd_deg / 10.0)
+                            _w_sum = ((_W_DET if CFG_TRAIN_DET else 0) + (_W_ACT if CFG_TRAIN_ACT else 0)
+                                      + (_W_POSE if CFG_TRAIN_HEAD_POSE else 0) + (_W_PSR if CFG_TRAIN_PSR else 0))
+                            _c2 = 0.0
+                            if _w_sum > 0:
+                                if CFG_TRAIN_DET:
+                                    _c2 += (_W_DET / _w_sum) * _map50_decision
+                                if CFG_TRAIN_ACT:
+                                    _c2 += (_W_ACT / _w_sum) * _f1_act
+                                if CFG_TRAIN_HEAD_POSE:
+                                    _c2 += (_W_POSE / _w_sum) * _pose_acc_v2
+                                if CFG_TRAIN_PSR:
+                                    _c2 += (_W_PSR / _w_sum) * _f1_psr
+                            val_metrics['combined_v2'] = _c2
+                            logger.info(
+                                f'  combined_v2={_c2:.4f} (deg-normalized pose term '
+                                f'{_pose_acc_v2:.3f} from fwd={_fwd_deg:.2f}°; diagnostic only)'
+                            )
+                    except Exception:
+                        pass
 
                     if combined > best_metric:
                         best_metric = combined
