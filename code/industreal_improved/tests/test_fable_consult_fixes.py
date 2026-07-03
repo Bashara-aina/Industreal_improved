@@ -1,4 +1,4 @@
-"""Regression tests for the 2026-07-02 Fable RF4 consultation fixes (F1-F18).
+"""Regression tests for the 2026-07-02 Fable RF4 consultation fixes (F1-F22).
 
 Each test pins one of the fixes documented in
 analyses/consult_2026_06_10/96-FABLE-RF4-CONSULTATION-ANSWER.md so it cannot
@@ -333,3 +333,68 @@ class TestF21AutoPeakFactor:
         # default comes from env fallback 'auto' unless the user overrode it
         assert str(C.ONE_CYCLE_PEAK_FACTOR).lower() in ('auto',) or \
             float(C.ONE_CYCLE_PEAK_FACTOR) > 0, 'peak factor misconfigured'
+
+
+# ---------------------------------------------------------------------------
+# F22/F22b — PSR eval pipeline: per-frame grouping + MonotonicDecoder dims
+# ---------------------------------------------------------------------------
+class TestF22PsrEvalPipeline:
+    def _synthetic(self):
+        import numpy as np
+        rng = np.random.RandomState(0)
+        frames = []
+        for rid, off in (('rec_A', 1), ('rec_B', 2)):
+            T, Cn = 40, 11
+            gt = np.zeros((T, Cn), dtype=np.float32)
+            lg = -4.0 * np.ones((T, Cn), dtype=np.float32)
+            for c in range(Cn):
+                t = min(T - 1, 3 * c + off)
+                gt[t:, c] = 1.0
+                lg[t, c] = 4.0
+            for t in range(T):
+                frames.append((rid, t, lg[t], gt[t]))
+        rng.shuffle(frames)  # eval sampler order is not temporal
+        lgs, gts, rec_ids, fns = [], [], [], []
+        for i in range(0, len(frames), 4):  # per-BATCH arrays, like the eval loop
+            chunk = frames[i:i + 4]
+            import numpy as np
+            lgs.append(np.stack([c[2] for c in chunk]))
+            gts.append(np.stack([c[3] for c in chunk]))
+            for c in chunk:
+                rec_ids.append(c[0])
+                fns.append(c[1])
+        return lgs, gts, rec_ids, fns
+
+    def test_grouping_and_decode_end_to_end(self):
+        try:
+            import importlib
+            E = importlib.import_module('src.evaluation.evaluate')
+        except ImportError:
+            pytest.skip('evaluate.py deps unavailable in this environment')
+        lgs, gts, rec_ids, fns = self._synthetic()
+        t_new, g_new = E._group_psr_by_recording(lgs, gts, rec_ids, fns)
+        assert set(t_new) == {'rec_A', 'rec_B'}
+        assert all(v.shape == (40, 11) for v in t_new.values()), (
+            'F22 regression: per-recording sequences not [T,11] — batch/frame '
+            'misalignment is back (the MonotonicDecoder crash root cause)'
+        )
+        out = E.decode_and_score_psr(t_new, g_new)
+        assert out['psr_f1'] > 0.8, (
+            f'F22b regression: near-perfect synthetic predictor scored '
+            f'{out["psr_f1"]:.3f} — decoder dim handling broken again '
+            f'(the blanket .squeeze() turned [1,T,C] into T length-1 sequences)'
+        )
+        for k in ('psr_f1', 'psr_pos', 'psr_edit'):
+            assert 0.0 <= out[k] <= 1.0
+
+    def test_decoder_single_recording_batch_shape(self):
+        try:
+            from src.models.psr_transition import MonotonicDecoder
+        except ImportError:
+            pytest.skip('psr_transition deps unavailable')
+        dec = MonotonicDecoder(num_components=11)
+        out = dec(torch.sigmoid(torch.randn(1, 40, 11)))
+        assert out.shape == (1, 40, 11), (
+            f'F22b regression: decoder returned {tuple(out.shape)} for a '
+            f'[1,T,C] batch (T frames must NOT become the batch dim)'
+        )
