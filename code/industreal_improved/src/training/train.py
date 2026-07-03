@@ -95,6 +95,10 @@ import numpy as np
 import psutil
 from tqdm import tqdm
 import torch
+try:
+    torch.backends.cuda.preferred_linalg_library('cusolver')
+except Exception:
+    pass  # fallback if not available
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.amp as amp
