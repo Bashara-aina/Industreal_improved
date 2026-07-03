@@ -114,10 +114,20 @@ class MonotonicDecoder(nn.Module):
         Returns:
             states: [B, T, C] — monotone binary state predictions
         """
-        # [FIX 2026-06-29] Squeeze extra dims (e.g. [B, T, C, 1]) from eval pipeline
-        logits = transition_logits.squeeze()
+        # [F22b 2026-07-03 Fable consult round 6] Explicit dim handling.
+        # The old blanket `.squeeze()` (added 2026-06-29 for [B,T,C,1] inputs)
+        # ALSO collapsed a batch of one recording: [1,T,C] -> [T,C] ->
+        # unsqueeze(1) -> [T,1,C] — i.e. T independent length-1 "sequences".
+        # The monotone fill-forward constraint then never applied across time,
+        # the output came back 3-D after the caller's squeeze(0), and every
+        # transition metric crashed to safe-default zeros (doc 107 Q1/Q18).
+        logits = transition_logits
+        if logits.dim() == 4 and logits.shape[-1] == 1:
+            logits = logits.squeeze(-1)   # [B,T,C,1] -> [B,T,C]
         if logits.dim() == 2:
-            logits = logits.unsqueeze(1)  # [B, C] → [B, 1, C]
+            # A 2-D input to a TEMPORAL decoder can only sensibly mean one
+            # recording [T,C]; decode it as a single batch element.
+            logits = logits.unsqueeze(0)  # [T,C] -> [1,T,C]
         B, T, C = logits.shape
         device = logits.device
 

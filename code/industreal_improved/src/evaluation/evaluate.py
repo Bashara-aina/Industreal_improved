@@ -321,6 +321,61 @@ logger = logging.getLogger(__name__)
 # [GAP-A2] PSR Transition Decode + Score — MonotonicDecoder at eval
 # =============================================================================
 
+def _group_psr_by_recording(psr_preds_logits, psr_labels, psr_rec_ids,
+                            psr_frame_nums=None):
+    """[F22 2026-07-03 Fable consult round 6] Build {rec: Tensor[T,11]} inputs
+    for decode_and_score_psr from the eval loop's raw collections.
+
+    Fixes the MonotonicDecoder crash ("only 0-dimensional arrays can be
+    converted to Python scalars", Q1/Q18 of doc 107): the old inline grouping
+    enumerated `psr_preds_logits` — a list of PER-BATCH arrays [B,11] — against
+    `psr_rec_ids`, a PER-FRAME list. Result: batch-blocks got filed under one
+    frame's recording id, np.stack built [K,B,11] 3-D "sequences", and every
+    transition metric crashed to the safe-default zeros. Additionally, even
+    correctly-aligned frames were never sorted temporally, which transition
+    F1 semantically requires.
+
+    This helper flattens per-frame, aligns ids/frame numbers positionally, and
+    sorts each recording by frame number (stable, so duplicate frames from the
+    weighted val sampler stay adjacent and contribute zero spurious
+    transitions). NOTE: the val sampler subsamples frames, so sequences are
+    gapped subsequences — pred and GT are compared on the SAME subsample, so
+    the F1 is internally consistent, but the ±tol tolerance is in subsample
+    index units, not raw video frames. Report as such.
+    """
+    import numpy as np
+    by_rec_logits, by_rec_gt, by_rec_fn = {}, {}, {}
+    flat_i = 0
+    for batch_logits, batch_labels in zip(psr_preds_logits, psr_labels):
+        bl = np.asarray(batch_logits)
+        lb = np.asarray(batch_labels)
+        if bl.ndim == 1:
+            bl = bl[None, :]
+        if lb.ndim == 1:
+            lb = lb[None, :]
+        for row in range(bl.shape[0]):
+            rec = psr_rec_ids[flat_i] if flat_i < len(psr_rec_ids) else f'rec_{flat_i}'
+            fn = (psr_frame_nums[flat_i]
+                  if psr_frame_nums is not None and flat_i < len(psr_frame_nums)
+                  else flat_i)
+            by_rec_logits.setdefault(rec, []).append(bl[row, :11])
+            by_rec_gt.setdefault(rec, []).append(
+                lb[row, :11] if row < lb.shape[0] else None)
+            by_rec_fn.setdefault(rec, []).append(fn)
+            flat_i += 1
+    psr_rec_tensors, gt_rec_tensors = {}, {}
+    for rec, rows in by_rec_logits.items():
+        gts = by_rec_gt[rec]
+        if any(g is None for g in gts) or len(rows) < 2:
+            continue
+        order = np.argsort(np.asarray(by_rec_fn[rec], dtype=np.int64), kind='stable')
+        psr_rec_tensors[rec] = torch.as_tensor(
+            np.stack([rows[k] for k in order]).astype(np.float32))
+        gt_rec_tensors[rec] = torch.as_tensor(
+            np.stack([gts[k] for k in order]).astype(np.float32))
+    return psr_rec_tensors, gt_rec_tensors
+
+
 def decode_and_score_psr(psr_logits_by_rec, gt_states_by_rec, tol_frames=3):
     """Decode per-recording PSR transition logits into monotone states, then score.
 
@@ -386,7 +441,9 @@ def _event_f1(pred_tr, gt_tr, tol=3):
                 fp += 1
         fn_tot += len(g_frames) - len(matched)
     prec = tp / max(tp + fp, 1)
-    rec = tp / max(tp + fn_tot + len([1 for pf in p_frames if not np.any(np.abs(g_frames - pf) <= tol)]), 1)
+    # [F22] removed a dead duplicate recall line that referenced p_frames/
+    # g_frames from the LAST loop iteration (latent NameError when n_comp==0;
+    # its value was discarded by the next line anyway).
     rec = tp / max(tp + fn_tot, 1)  # standard: TP / (TP + FN)
     return 2 * prec * rec / max(prec + rec, 1e-9)
 
@@ -3089,6 +3146,7 @@ def evaluate_all(
     act_preds, act_labels, act_logits_all = [], [], []
     head_pose_preds, head_pose_gts = [], []
     psr_preds_logits, psr_labels, psr_rec_ids = [], [], []  # [GAP-A2] +rec_ids for decoder grouping
+    psr_frame_nums = []  # [F22] per-frame temporal position for per-recording sort
     dp_boxes, dp_scores, dp_labels = [], [], []
     dg_boxes, dg_labels = [], []
     act_clip_ids: List[str] = []
@@ -3279,6 +3337,14 @@ def evaluate_all(
             _meta = targets['metadata'][i] if i < len(targets['metadata']) else {}
             _r = _meta.get('recording_id', _meta.get('rec_id', f'rec_{bi}_{i}'))
             psr_rec_ids.append(str(_r.item()) if isinstance(_r, torch.Tensor) else str(_r))
+            # [F22] frame_num enables temporal sort inside each recording —
+            # transition F1 is meaningless on unsorted sampler order.
+            _fn = _meta.get('frame_num', _meta.get('frame_idx', len(psr_frame_nums)))
+            try:
+                _fn = int(_fn.item()) if isinstance(_fn, torch.Tensor) else int(_fn)
+            except (TypeError, ValueError):
+                _fn = len(psr_frame_nums)
+            psr_frame_nums.append(_fn)
 
         # --- Detection ---
         if _cached_anchors_np is None:
@@ -3698,22 +3764,20 @@ def evaluate_all(
     try:
         if getattr(C, 'USE_PSR_TRANSITION', False):
             logger.info('  [GAP-A2] Decoding PSR via MonotonicDecoder for transition F1/POS/Edit')
-            _psr_by_rec = {}
-            _gt_by_rec = {}
-            for _i, _psr_logit in enumerate(psr_preds_logits):
-                _rec = psr_rec_ids[_i] if _i < len(psr_rec_ids) else f'rec_{_i}'
-                if _rec not in _psr_by_rec:
-                    _psr_by_rec[_rec] = []
-                    _gt_by_rec[_rec] = []
-                _psr_by_rec[_rec].append(_psr_logit)
-                if _i < len(psr_labels):
-                    _gt_by_rec[_rec].append(psr_labels[_i])
-            _psr_rec_tensors = {}
-            _gt_rec_tensors = {}
-            for _rec in _psr_by_rec:
-                _psr_rec_tensors[_rec] = torch.as_tensor(np.stack(_psr_by_rec[_rec]))
-                if _rec in _gt_by_rec and _gt_by_rec[_rec]:
-                    _gt_rec_tensors[_rec] = torch.as_tensor(np.stack(_gt_by_rec[_rec]))
+            # [F22 2026-07-03 Fable consult round 6] The old inline grouping
+            # enumerated PER-BATCH logit arrays against PER-FRAME rec ids —
+            # every eval crashed in the decoder path ("only 0-dimensional
+            # arrays...") and PSR transition metrics were silently zero.
+            # _group_psr_by_recording flattens per-frame, aligns ids, and
+            # sorts each recording temporally by frame_num.
+            _psr_rec_tensors, _gt_rec_tensors = _group_psr_by_recording(
+                psr_preds_logits, psr_labels, psr_rec_ids, psr_frame_nums,
+            )
+            logger.info(
+                f'  [GAP-A2] Grouped PSR into {len(_psr_rec_tensors)} recordings '
+                f'(frames per rec: '
+                f'{[v.shape[0] for v in list(_psr_rec_tensors.values())[:5]]}...)'
+            )
             _decoded = decode_and_score_psr(_psr_rec_tensors, _gt_rec_tensors)
             if _decoded:
                 psr_metrics = {
