@@ -519,3 +519,110 @@ on your specific CUDA stack. The restart protocol (§5 + §9 step 0) is designed
 so both are answered within the first validation after restart, with rollback
 knobs for every change. If the epoch-5 thresholds in §2.7 are met, RF4→RF10 is
 a monitoring exercise; if any head misses, the per-head playbooks in §2 apply.
+
+---
+
+# ROUND 3 — Full import validation, missing-file discovery, regression suite
+
+### F17 — `src/data/__init__.py` was missing from the repository
+`train.py` does `import data as _ds_module` then getattr's
+`IndustRealMultiTaskDataset` / `collate_fn` / `collate_fn_sequences` — which
+only works if the data package re-exports them. A populated `__init__.py`
+must exist untracked on the training machine; the git repo had none, so **a
+fresh clone of this repository could not run training or evaluation at all**
+(this matters for the paper's code release and for any second machine).
+Reconstructed and committed.
+
+### Full-import validation (with CPU torch + all deps installed in the review container)
+`from src.training import train` now succeeds end-to-end — that executes the
+entire module chain (train → evaluate → losses → model → dataset → config)
+including every edit from rounds 1–2, and confirms `_amp_dtype()` /
+`_amp_scaler_enabled()` return (bf16, scaler-off) as designed.
+
+### New regression suite: `tests/test_fable_consult_fixes.py` (18 tests, all passing)
+Pins every fix so it cannot silently regress:
+- F1: destructive wipe absent, snapshot taken before the seq backward
+- F3/F3b: lv_psr gradient — none on structurally-zero per-frame batches,
+  present on live sequence batches (functional, CPU)
+- F4/F4b: peak factor config-driven; resume re-application present; plus a
+  test documenting the torch gotcha itself (load_state_dict restores max_lr)
+- F6: AMP dtype/scaler gating (bf16→no scaler, fp16→scaler), no bare
+  autocast sites left
+- F13: Kendall sentinel fires at step≡1 (mod interval) and NOT at ≡0;
+  grad-norm probe parity pinned
+- F14: both optimizer branches keep weight_decay=0 on the log_var group
+- F16: all four ablation presets apply with the intended task flags,
+  effective batch 24, pinned sampler fraction, act-only zeroes det_conf
+- F17: data package re-exports pinned
+
+`tests/test_loss_kendall.py` parity unchanged (13 pre-existing stale-assertion
+failures, 3 passes — those tests assert old source text like `s_pose=-1` and
+`×0.001` pose scaling that deliberate earlier fixes removed; they should be
+updated or retired, tracked as cleanup, not caused by this branch).
+
+---
+
+# ROUND 4 — Full-model runtime proof + the double-ramp discovery (F18)
+
+### Full-model smoke test (real POPWMultiTaskModel, CPU, synthetic batch)
+Executed the actual model (ConvNeXt-Tiny backbone, all heads) + MultiTaskLoss
+end-to-end in the review container:
+- **Joint step:** finite total loss, backbone gradient flows (|grad| sum
+  5.4e4), lv_det/lv_pose/lv_act all receive gradient — and lv_psr correctly
+  receives NONE on the per-frame batch (F3 working inside the full pipeline).
+- **PSR-only sequence step ([B,T,3,H,W] path): ZERO backbone params and ZERO
+  FPN params receive gradient.** This runtime-proves the F1 premise on the
+  real model: with DETACH_PSR_FPN=True the PSR backward cannot touch the
+  trunk, so the old post-backward wipe destroyed *only* the accumulated
+  detection/activity/pose gradients — pure damage, no protection.
+
+### F18 — the activity ramp was applied TWICE (ramp², not ramp)
+Found while investigating the smoke test's loss readout: the warmup ramp
+multiplied BOTH the raw activity loss (`loss_act = loss_act * act_ramp`) AND
+the Kendall precision (`prec_act *= ramp`, in the non-staged block and again
+in staged stages 1–2). Effective activity supervision during warmup was
+**ramp²**:
+
+| epoch (ramp 5) | believed | actual |
+|---|---|---|
+| 0 | 20% | **4%** |
+| 1 | 40% | **16%** |
+| 2 | 60% | **36%** |
+| 4 | 100% | 100% |
+
+Every historical "activity collapse" observation at epochs 0–2 happened under
+4–36% supervision, not the 20–60% everyone assumed — this compounds F1 (backbone
+starvation) and retroactively explains why the head looked dead early and only
+started diversifying near the end of the ramp. **Fixed:** the loss-level ramp
+is now the single application (covers Kendall, fixed-weight, and non-Kendall
+paths identically); the two precision-side multiplications are removed.
+Functionally verified: activity contribution ratio at ramp-epoch-0 vs
+post-ramp is exactly 0.25 with ACT_RAMP_EPOCHS=4 (the bug would give 0.0625).
+Note for the AAIML pathologies paper: this is a third case study of the same
+class — two individually-reasonable ramps composing multiplicatively because
+they live in different modules.
+
+### Regression suite now 20 tests (F1–F18), all passing; Kendall-test parity unchanged.
+
+### In-situ execution of the REAL `train_one_epoch` (round 4 finale)
+Ran the actual training-loop function with synthetic loaders on CPU
+(12 batches, accum=4, seq_every=4, all four heads):
+- 3/3 optimizer windows committed, zero NaN skips;
+- **backbone |grad| live at every optimizer step** (1.6–1.9e3) with seq
+  batches interleaved through the fixed F1 path;
+- `[KENDALL step=1/5/9]` and `[LIVENESS_GRAD]` lines fired at the F13 odd
+  offsets — the gate signals exist in a real log for the first time;
+- PSR seq losses live (3.8–7.1) while non-seq PSR stayed structurally zero
+  (F3/F3b in situ).
+
+One benign edge case surfaced by the harness, documented here so nobody
+panics later: if the LAST batch of an epoch is a seq batch AND forms a
+partial accumulation window by itself, that final optimizer step carries no
+backbone gradient (AdamW simply skips grad-less params). With the real
+loader (4387 batches, accum 4, seq_every 4) the final step lands on a
+non-seq batch, so this cannot occur in RF4 — it is a property to re-check
+only if loader length or cadences change parity.
+
+(Activity loss reads 0 in the container because the class-balanced loss
+weights derive from dataset frame counts, which are empty here — on the
+training machine with real counts it is nonzero, as your own logs show.)

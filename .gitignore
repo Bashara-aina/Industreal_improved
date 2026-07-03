@@ -1,5 +1,9 @@
 # Exclude large/sensitive directories
-data/
+# [F17 2026-07-02] Root-anchored: the old unanchored `data/` also ignored the
+# SOURCE package code/industreal_improved/src/data/ — which is why its
+# __init__.py silently never made it into the repo and fresh clones could not
+# run training. Dataset dirs at the repo root stay ignored.
+/data/
 external/
 
 # Exclude logs and model files
