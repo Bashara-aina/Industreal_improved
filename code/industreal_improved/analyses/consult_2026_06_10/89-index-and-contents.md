@@ -23,6 +23,11 @@
 | [100-deep-20-questions-for-opus.md](100-deep-20-questions-for-opus.md) | **20 NEW QUESTIONS (2026-07-03)** — GPU stability crisis, detection/activity, PSR/pose, multi-task balancing, infrastructure | New questions after implementing F1-F16 |
 | [101-overview.md](101-overview.md) | **MASTER OVERVIEW** — navigation guide for all 12 files, reading order, critical path | How to read the package |
 | [102-FABLE-ROUND5-20-ANSWERS.md](102-FABLE-ROUND5-20-ANSWERS.md) | **ROUND 5 ANSWERS (2026-07-03)** — all 20 questions answered with premise corrections (audit-agent files described a different codebase!), GPU crisis playbook (Xid/Xorg diagnostic ladder, TF32 mitigation was backwards), lv_pose=-1.000 solved, combined-metric unit bug, F19-F21 | Read after 100 |
+| [103-current-status-deep-analysis.md](103-current-status-deep-analysis.md) | **LATEST STATUS (2026-07-03)** — RF4 gate PASSED (combined=0.241), all 26 fixes verified, epoch 5 val metrics, probability assessment for RF10 | Current state with metrics |
+| [104-head-by-head-analysis.md](104-head-by-head-analysis.md) | **POST-FIX PER-HEAD** — each head's trajectory with epoch 5 metrics, Kendall progression, recovery from activity collapse | How each head is doing now |
+| [105-psr-deep-dive.md](105-psr-deep-dive.md) | **PSR DEEP DIVE** — binary accuracy 0.554, eval bug analysis (MonotonicDecoder crash), transition metrics invisible, path to benchmarkable results | What's the PSR status? |
+| [106-aaiml-viability-update.md](106-aaiml-viability-update.md) | **AAIML UPDATE** — viability revised from 40-60% to 65-80%, revised timeline 2 weeks ahead, head pose as uncontested contribution | Can we still win AAIML? |
+| [107-20-new-deep-questions.md](107-20-new-deep-questions.md) | **20 NEW QUESTIONS (2026-07-03)** — PSR eval bug, detection score separation, activity recovery dynamics, combined_v2 gate criteria, ablation timing | New questions after epoch 5 val |
 
 ## TL;DR for Opus
 
