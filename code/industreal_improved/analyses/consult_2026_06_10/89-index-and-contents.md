@@ -28,6 +28,7 @@
 | [105-psr-deep-dive.md](105-psr-deep-dive.md) | **PSR DEEP DIVE** — binary accuracy 0.554, eval bug analysis (MonotonicDecoder crash), transition metrics invisible, path to benchmarkable results | What's the PSR status? |
 | [106-aaiml-viability-update.md](106-aaiml-viability-update.md) | **AAIML UPDATE** — viability revised from 40-60% to 65-80%, revised timeline 2 weeks ahead, head pose as uncontested contribution | Can we still win AAIML? |
 | [107-20-new-deep-questions.md](107-20-new-deep-questions.md) | **20 NEW QUESTIONS (2026-07-03)** — PSR eval bug, detection score separation, activity recovery dynamics, combined_v2 gate criteria, ablation timing | New questions after epoch 5 val |
+| [108-complete-overview.md](108-complete-overview.md) | **COMPLETE OVERVIEW** — navigation guide for all 20 files (89-108), four-layer organization, recommended reading orders per role, key current facts | How all files fit together |
 
 ## TL;DR for Opus
 
