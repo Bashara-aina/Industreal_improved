@@ -89,8 +89,8 @@ The activity loss RISE is not divergence — it's the ramp (ACT_RAMP_EPOCHS=3) c
 - RF10 target: 8-13° fwd MAE (already met).
 
 ### 3.5 Conditions for SOTA-benchmarkable
-- Already viable. First IndustReal head pose baseline.
-- Needs comparison to OpenFace, 6DRepNet for benchmarking.
+- Already viable. First IndustReal ego-pose baseline (wearer's head orientation from HoloLens).
+- CORRECTION: This is NOT face-based head pose — comparisons to OpenFace/6DRepNet are category errors.
 - Risk is OVER-performing and creating gradient imbalance with other heads.
 
 ---

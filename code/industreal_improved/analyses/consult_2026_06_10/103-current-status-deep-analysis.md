@@ -73,9 +73,9 @@ F21: LR auto-scaling: ONE_CYCLE_PEAK_FACTOR='auto' = effective_batch/32
 | act_top5 | 0.055 | **0.381** | +7x | 0.40+ | ✅ |
 | pred_distinct | 5/69 | **48/69** | +9.6x | 50+/69 | ✅ |
 | entropy (nats) | 1.27 | **3.09** | +143% | 3.5+ | ✅ |
-| pose fwd MAE | 11.32° | **8.92°** | -21% | 8-13° | ✅ **SOTA** |
-| pose up MAE | 9.98° | **7.48°** | -25% | 8-13° | ✅ **SOTA** |
-| pose position | 65.1mm | **16.6mm** | -75% | <30mm | ✅ **Excellent** |
+| pose fwd MAE | 11.32° | **8.92°** | -21% | 8-13° | ✅ **First IndustReal ego-pose baseline** |
+| pose up MAE | 9.98° | **7.48°** | -25% | 8-13° | ✅ **First IndustReal ego-pose baseline** |
+| pose position | ⚠️ UNVERIFIED | ⚠️ UNVERIFIED | — | TBD | ❌ Unit ambiguous — not reportable |
 | psr comp acc | 0.291 | **0.554** | +90% | 0.65+ | ⚡ Improving |
 | psr_f1 | 0.0 | 0.0 | — | 0.15+ | ❌ Eval bug |
 | Combined | 0.183 | **0.241** | +32% | 0.45-0.55 | ✅ Passed gate |
@@ -95,9 +95,9 @@ Detection mAP50_pc=0.339 at epoch 5 — more than doubled from 0.133 at epoch 2.
 dp_scores range [0.069, 0.998] mean=0.333 — scores are finally separating from the 0.036 bias floor.
 15/24 classes detected, mAP50_pc exceeds mAP50 by +0.127 (9 zero-GT background channels drag the headline).
 
-## 6. Head Pose — Already SOTA-competitive
+## 6. Head Pose — First IndustReal Ego-Pose Baseline
 
-8.92° forward MAE, 7.48° up MAE, 16.6mm position. All within or exceeding the 8-13° target range. This is the first IndustReal head pose baseline and already publishable.
+8.92° forward MAE, 7.48° up MAE. **This is ego-pose regression** (HoloLens wearer's head orientation), NOT face-based head pose estimation. Comparisons to OpenFace/6DRepNet are category errors. Ours is the first reported ego-pose baseline on IndustReal data. Position values are not reportable — unit ambiguous (see HEAD_POSE_POS_SCALE=100.0).
 
 ## 7. PSR — Learning but Slow
 

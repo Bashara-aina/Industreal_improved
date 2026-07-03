@@ -30,10 +30,10 @@ This paper does NOT contain the MediaPipe head pose or hand pose benchmark numbe
 | Roll MAE | **2.19°** ✅ | 3.94° ⚠️ | — | |
 | **Composite fwd MAE** | — | — | **8.92°** | Our primary metric |
 | **Composite up MAE** | — | — | **7.48°** | |
-| Translation | **0.79mm** ⚠️ | 1.13mm ⚠️ | **16.55mm** | Our position error is much worse |
+| Translation | ⚠️ UNVERIFIED UNIT | ⚠️ UNVERIFIED UNIT | ⚠️ NOT REPORTABLE | Unit ambiguous (mm/cm) — see HEAD_POSE_POS_SCALE |
 | **Training** | Dedicated pipeline | Dedicated pipeline | **Zero-cost byproduct** | |
 
-**Honest framing for paper:** MediaPipe is a dedicated face tracker with temporal smoothness. We predict 9-DoF head pose from a *single RGB frame* as a *free byproduct* of multi-task assembly recognition. Our 8.9° composite is competitive with OpenPose+PnP and achieved at $299 GPU cost vs their multi-camera setups.
+**Honest framing for paper:** MediaPipe is a dedicated face tracker. We predict 9-DoF **ego-pose** (wearer's head orientation from HoloLens) from a *single RGB frame* — this is NOT comparable to face-based head pose estimators like OpenFace/6DRepNet. This is the first reported ego-pose baseline on IndustReal data.
 
 **Not comparable directly:** per-axis yaw/pitch/roll vs our composite forward/up. Our loss uses vector regression (forward + up direction vectors), not Euler angles.
 
