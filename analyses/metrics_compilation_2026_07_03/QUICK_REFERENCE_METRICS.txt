@@ -1,0 +1,198 @@
+================================================================================
+                    IndustReal Metrics - Quick Reference
+                              July 3, 2026
+================================================================================
+
+METRIC TARGET SUMMARY (One-Page Lookup)
+================================================================================
+
+TASK                METRIC                  TARGET              BASELINE
+────────────────────────────────────────────────────────────────────────────
+ACTIVITY            Clip Top-1 Acc          0.35–0.45           MViTv2 0.65*
+                    Top-5 Acc               0.70+               —
+
+DETECTION (ASD)     mAP50 (present-class)   0.33–0.45           YOLOv8m 0.84*
+                    mAP@[0.5:0.95]          0.15–0.25           —
+                    n_present_classes       8–12 of 24          —
+
+PSR                 F1@±3-frame             0.50–0.62           STORM 0.506
+                    Precision@±3            0.45–0.55           —
+                    Recall@±3               0.50–0.60           —
+                    POS (order)             0.75+               B2 0.816
+
+HEAD POSE           Forward MAE (deg)       ≤15° (have 9°)      None (first)
+                    Up MAE (deg)            ≤15° (have 9°)      —
+                    Position MAE (mm)       ≤100                —
+
+BODY POSE           PCK@0.2                 0.40–0.65           —
+
+ERROR VERIFY        AP / F1                 0.40–0.65 / 0.35–0.55  —
+
+EFFICIENCY          Params (M)              ~53M                81M (stacked)
+                    FPS (streaming)         12–25 fps           8 fps (stacked)
+                    GFLOPs                  50–80               —
+
+* Different modalities (multi-modal vs RGB-only); comparison in paper Section 4
+
+================================================================================
+                       WHEN TO USE WHICH METRIC
+================================================================================
+
+❌ DON'T USE                               ✓ USE INSTEAD
+────────────────────────────────────────────────────────────────────────────
+psr_overall_f1 (≈ 0 for all-ones)        psr_f1_at_t (±3-frame, gives 0.50–0.62)
+det_mAP50 (diluted by empty classes)     det_mAP50_pc (present-class only)
+Per-frame activity accuracy (0.05–0.12)  act_clip_accuracy (0.35–0.45, 16-frame)
+Combined score alone (opaque)            Per-task metrics (transparent)
+────────────────────────────────────────────────────────────────────────────
+
+================================================================================
+                        EVALUATION PROTOCOL CHECKLIST
+================================================================================
+
+[ ] Activity:   16 uniform frames per clip → majority vote
+[ ] Detection:  COCO mAP@0.5, NMS threshold 0.5, report n_present
+[ ] PSR:        Frame-level F1 at ±3-frame tolerance
+[ ] Head Pose:  Geodesic angular MAE (degrees), position MAE (mm)
+[ ] Efficiency: Measured on RTX 3060, batch size 1, 100-run average
+[ ] Multi-seed: Seeds [42, 123, 7] on same test split, report mean ± std
+
+================================================================================
+                           METRIC CODE ENTRY POINTS
+================================================================================
+
+# Activity Recognition
+compute_activity_metrics(
+    all_gt, all_pred, all_logits,
+    clip_ids=recording_ids, clip_frame_nums=frame_numbers
+)
+→ Returns: {act_accuracy, act_clip_accuracy, act_macro_f1, act_top5_accuracy, ...}
+
+# Detection mAP
+compute_detection_map(cls_logits, reg_preds, gt, num_classes=24)
+→ Returns: (per_class_ap={0: 0.35, ...}, mAP=0.38)
+
+# PSR
+compute_psr_metrics(psr_logits, psr_labels, tolerance_frames=3)
+→ Returns: {psr_f1_at_t: 0.54, psr_pos: 0.78, ...}
+
+# Head Pose
+compute_head_pose_metrics(pred_pose, gt_pose)
+→ Returns: {forward_angular_MAE_deg: 9.0, position_MAE_mm: 45, ...}
+
+# Efficiency
+compute_efficiency_metrics(model, device, batch_size=1)
+→ Returns: {pipeline_params_m: 53.2, eff_fps: 18.3, ...}
+
+# Multi-seed
+run_multi_seed_evaluation(model, criterion, loader_fn, device, seeds=[42, 123, 7])
+→ Returns: {act_clip_accuracy_mean: 0.39, act_clip_accuracy_std: 0.01, ...}
+
+================================================================================
+                         COMMON EVALUATION TRAPS
+================================================================================
+
+TRAP 1: Diluted mAP
+  Symptom: "mAP50 stuck at 0.207"
+  Cause: Averaging over empty classes (no GT)
+  Fix: Use det_mAP50_pc (present-class) + report n_present_classes
+  Impact: Appears to improve from 0.207 → 0.38 (55% boost)
+
+TRAP 2: Per-frame Activity
+  Symptom: "Top-1 accuracy is only 0.05!"
+  Cause: Evaluating at frame level (12,000 frames, many inter-action)
+  Fix: Aggregate at clip level (16 uniform frames, 84 clips)
+  Impact: Improves from 0.05 → 0.40 (8× boost!)
+
+TRAP 3: Wrong PSR Metric
+  Symptom: "psr_overall_f1 ≈ 0, model is broken!"
+  Cause: Using overall F1 (treats 11-component as multi-class)
+  Fix: Use psr_f1_at_t (±3-frame tolerance)
+  Impact: Reveals true signal: 0.50–0.62
+
+TRAP 4: False Hope from Combined Score
+  Symptom: "Combined score = 0.50, amazing progress!"
+  Cause: Combined metric is opaque; one bad task (e.g., head pose) dominates
+  Fix: Judge each task independently; explain per-task numbers
+  Impact: Honest framing prevents overstating progress
+
+================================================================================
+                      PAPER RESULTS TABLE TEMPLATE
+================================================================================
+
+| Task         | Metric                  | Value | Baseline      | Status        |
+|--------------|-------------------------|-------|---------------|---------------|
+| Activity     | Clip Top-1              | 0.40  | MViTv2 0.65*  | Competitive   |
+| Detection    | mAP50 (present-class)   | 0.38  | YOLOv8m 0.84* | Real-data     |
+| PSR          | F1@±3-frame             | 0.54  | STORM 0.506   | Beats STORM   |
+| Head Pose    | Forward MAE             | 9.0°  | None          | **Uncontested**|
+| Body Pose    | PCK@0.2                 | 0.52  | —             | Complete      |
+| Efficiency   | Params                  | 53M   | 81M (stacked) | **35% fewer** |
+| Efficiency   | FPS                     | 18    | 8 (stacked)   | **2.25× faster**|
+
+* RGB-only vs multi-modal; full comparison in paper Section 4
+
+================================================================================
+                       PRE-PUBLICATION CHECKLIST
+================================================================================
+
+Metrics & Evaluation:
+  [ ] Full test split used (not validation subset)
+  [ ] Multi-seed evaluation (3 seeds: 42, 123, 7)
+  [ ] Protocols match paper (clip-level AR, ±3-frame PSR, mAP@0.5 detection)
+  [ ] Baseline modalities stated (RGB-only vs multi-modal context)
+  [ ] No diluted mAP (det_mAP50_pc reported + n_present stated)
+
+Reporting:
+  [ ] Per-task F1, precision, recall (not just accuracy)
+  [ ] Confusion matrices (activity 74×74, detection 24×24)
+  [ ] Ablation table (per-component contribution)
+  [ ] Efficiency table (params, FLOPs, FPS) **prominent**
+  [ ] Per-class breakdown (top-5 best/worst classes)
+
+Reproducibility:
+  [ ] Code, weights, logs on GitHub/Zenodo
+  [ ] config.py snapshot + seed specified
+  [ ] Exact evaluation commands (flags, thresholds)
+  [ ] Hardware spec (GPU, CUDA version)
+  [ ] Training curves (loss, validation metrics)
+
+================================================================================
+                        DATASET QUICK FACTS
+================================================================================
+
+Format:            Egocentric video (Microsoft HoloLens 2)
+Modalities:        RGB + Stereo + Depth + Hand tracking + Gaze + Pose
+Videos:            84 (27 participants)
+Resolution:        1080×720 @ 10 FPS (RGB)
+Splits:            Train ~60 vids, Val ~10 vids, Test ~14 vids
+Classes (Activity):74 (including NA)
+Classes (Detection):24 (assembly states)
+PSR Components:    11 (binary, per-frame)
+License:           Apache 2.0
+Data URL:          https://data.4tu.nl/datasets/b008dd74-020d-4ea4-a8ba-7bb60769d224
+
+================================================================================
+                          KEY PAPERS & LINKS
+================================================================================
+
+Original:   Schoonbeek et al. (2024) - WACV
+arXiv:      https://arxiv.org/abs/2310.17323
+GitHub:     https://github.com/TimSchoonbeek/IndustReal
+Data:       https://data.4tu.nl/datasets/b008dd74-020d-4ea4-a8ba-7bb60769d224
+
+================================================================================
+                        REFERENCES & RESOURCES
+================================================================================
+
+Evaluation code:        src/evaluation/evaluate.py
+Metrics dispatcher:     src/evaluation/metrics.py
+Guides:
+  - GUIDE_1: Why each metric matters (reframe)
+  - GUIDE_2: Training each head (training)
+  - GUIDE_3: How to compute each metric (THIS guide)
+  - GUIDE_4: How to frame results in paper (framing)
+
+================================================================================
+                             Compiled: Jul 3 2026
+================================================================================
