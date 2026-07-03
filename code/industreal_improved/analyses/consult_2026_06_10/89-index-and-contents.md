@@ -29,6 +29,7 @@
 | [106-aaiml-viability-update.md](106-aaiml-viability-update.md) | **AAIML UPDATE** — viability revised from 40-60% to 65-80%, revised timeline 2 weeks ahead, head pose as uncontested contribution | Can we still win AAIML? |
 | [107-20-new-deep-questions.md](107-20-new-deep-questions.md) | **20 NEW QUESTIONS (2026-07-03)** — PSR eval bug, detection score separation, activity recovery dynamics, combined_v2 gate criteria, ablation timing | New questions after epoch 5 val |
 | [108-complete-overview.md](108-complete-overview.md) | **COMPLETE OVERVIEW** — navigation guide for all 20 files (89-108), four-layer organization, recommended reading orders per role, key current facts | How all files fit together |
+| [109-FABLE-ROUND6-PSR-FIX-AND-20-ANSWERS.md](109-FABLE-ROUND6-PSR-FIX-AND-20-ANSWERS.md) | **ROUND 6 (2026-07-03)** — PSR eval bug FIXED (two stacked bugs: grouping misalignment F22 + decoder dim collapse F22b, both verified), random-baseline F1≈0.14 for the paper, all 20 questions of file 107 answered (15/24 classes = eval-sample artifact, keep HP_PREC_CAP, start ablations now) | Read after 107 — merge before epoch-8 val |
 
 ## TL;DR for Opus
 
