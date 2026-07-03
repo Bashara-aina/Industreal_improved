@@ -1142,11 +1142,17 @@ ONE_CYCLE_LR = True      # Per paper §Implementation: "Warmup (2 ep) → OneCyc
 # train.py hardcoded 0.5 here for months (peak head LR 2.5e-4, HALF the paper's
 # 5e-4) while the effective batch ran at 48 (1.5x the paper's 32) — per-sample
 # update intensity at peak was ~3x below spec, a systematic slow-convergence
-# factor for every head. With EFFECTIVE_BATCH=24 (see stage_rf4 preset) and
-# factor 0.75: per-sample intensity = 0.75*5e-4/24 = 1.56e-5 = paper's
-# 5e-4/32 exactly (linear scaling rule, Goyal et al. 2017).
-# ROLLBACK: 0.5 if loss spikes/instability appear within ~500 steps of restart.
-ONE_CYCLE_PEAK_FACTOR = float(os.environ.get('ONE_CYCLE_PEAK_FACTOR', '0.75'))
+# factor for every head.
+# [F21 2026-07-03 Fable consult round 5] Default is now 'auto', resolved at
+# scheduler build in train.py as EFFECTIVE_BATCH/32. This generalizes the F4
+# math to ANY batch geometry: peak per-sample intensity =
+# factor*BASE_LR/EFFECTIVE_BATCH = 5e-4/32 = paper spec, always (linear
+# scaling rule, Goyal et al. 2017). Context: the stability reduction to
+# batch 4x4=16 (2026-07-02) silently turned the fixed 0.75 into a 1.5x
+# OVERSHOOT of paper intensity (0.75*5e-4/16 = 2.34e-5 vs 1.56e-5); 'auto'
+# resolves to 0.5 there, 0.75 at effective 24, 1.0 at the paper's 32.
+# Set a number via env to override (e.g. ONE_CYCLE_PEAK_FACTOR=0.5).
+ONE_CYCLE_PEAK_FACTOR = os.environ.get('ONE_CYCLE_PEAK_FACTOR', 'auto')
 USE_SWA = False          # Stochastic Weight Averaging at end of training
 SWA_LR = 1e-5
 SWA_EPOCHS = 10
