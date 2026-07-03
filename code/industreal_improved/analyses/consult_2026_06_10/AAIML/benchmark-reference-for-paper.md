@@ -1,17 +1,23 @@
 # Benchmark Reference: WACV 2024 IndustReal Baselines vs Our Results
 
 **Date:** 2026-07-03
-**Source:** Multiple IndustReal papers at WACV 2024 (see notes per section).
-**CVF proceedings:** Multiple papers titled "IndustReal" exist — one about 3D assembly matching (Ohkawa et al.), one about head/hand pose estimation (Ohkawa et al.), and possibly others. The exact CVF URL could not be fetched (403 forbidden).
+**IMPORTANT FINDING: The "IndustReal: A Dataset and Benchmark for Head and Hand Pose Estimation" paper by Ohkawa does NOT appear to exist on CVF.**  
 
-**Verification process (2026-07-03):**
-- Used WebSearch, Exa (out of credits), Firecrawl (out of credits), and arxiv API
-- arxiv IDs returned by search results were hallucinated/wrong (pointed to unrelated papers)
-- CVF open access returned 403 errors
-- Numbers marked ✅ were confirmed by 2+ independent web search results (search engine snippets citing the paper)
-- Numbers marked ⚠️ came from a single search result only
+Using httpx to scan CVF proceedings (CVPR2023, CVPR2024, WACV2024, WACV2025, ICCV2023), the only paper with "IndustReal" in the title is Schoonbeek et al., "IndustReal: A Dataset for Procedure Step Recognition Handling Execution Errors in Egocentric Videos" — which is about PSR, not head/hand pose. Ohkawa's only CVF paper is about egocentric video captioning at WACV 2025.
 
-**Recommendation:** Download the actual PDFs from CVF manually (openaccess.thecvf.com) and confirm all numbers before paper submission. The paper title is likely "IndustReal: A Dataset and Benchmark for Industrial Hand-Head-Human Pose Estimation and Interaction" at WACV 2024.
+**All benchmark numbers below — including MediaPipe (2.63°, 2.04°, 2.19°) and hand pose MPJPE (13.7mm) — are from search engine snippets that may be hallucinated.** They appear in multiple search result summaries (which is why they were marked ✅), but no actual PDF has been located to confirm them. **Do not cite any of these numbers in the paper without finding the actual source.**
+
+---
+
+## Source: Schoonbeek et al. (the only confirmed IndustReal WACV 2024 paper)
+
+The only IndustReal paper confirmed on CVF is:
+- **Title:** "IndustReal: A Dataset for Procedure Step Recognition Handling Execution Errors in Egocentric Videos in an Industrial-Like Setting"
+- **Authors:** Schoonbeek et al.
+- **URL:** https://openaccess.thecvf.com/content/WACV2024/html/Schoonbeek_IndustReal_A_Dataset_for_Procedure_Step_Recognition_Handling_Execution_Errors_WACV_2024_paper.html
+- **Focus:** Procedure step recognition (PSR), NOT head/hand pose estimation.
+
+This paper does NOT contain the MediaPipe head pose or hand pose benchmark numbers that search results attributed to "IndustReal."
 
 ---
 
@@ -76,25 +82,20 @@ PSR transition F1 will be measured at epoch 8 after F22 fix. Expectation: 0.05-0
 
 ---
 
-## Verification Summary
+## Verification Summary — UPDATED AFTER SCRAPING CVF
 
-**✅ Cross-referenced from 2+ search sources (likely correct):**
-- MediaPipe head pose: yaw=2.63°, pitch=2.04°, roll=2.19° (Table 4)
-- OpenPose head pose: yaw=4.29°, pitch=3.86°
-- MediaPipe hand pose: MPJPE=13.7mm (Table 5)
-- OpenPose hand pose: MPJPE=19.9mm
+**CRITICAL FINDING: No "IndustReal: A Dataset and Benchmark for Head and Hand Pose Estimation" paper exists on any CVF proceedings we could access.** The WACV 2024 IndustReal paper is about PSR (Schoonbeek), not head/hand pose. All head/hand pose benchmark numbers below are from unverifiable search snippets.
 
-**⚠️ Single source only (needs manual PDF check):**
-- OpenPose roll: 3.94°
-- MediaPipe translation: 0.79mm
-- OpenPose translation: 1.13mm
-- Hand pose AUC/PA-MPJPE values
-- YOLOv8m detection mAP (83.8%) — may be from a different paper
-- B2 PSR F1 (0.731) — may be from same WACV paper or follow-up
-- STORM-PSR F1 (0.901) from CVIU 2025
+**All numbers — marked ✅ or ⚠️ — should be treated as UNVERIFIED until the actual source paper is found.**
 
-**Not verifiable by automated tools (CVF blocks, arxiv IDs hallucinated):**
-The exact CVF paper URL could not be accessed (403). All arxiv IDs returned by web search were hallucinated (pointed to unrelated papers). **You must manually download the paper from `openaccess.thecvf.com`** before submission to confirm every number.
+| Number | Source claimed | Actual source found? |
+|---|---|---|
+| MediaPipe yaw=2.63°, pitch=2.04°, roll=2.19° | "Table 4" of Ohkawa WACV 2024 | ❌ No such paper found |
+| MediaPipe hand MPJPE=13.7mm | "Table 5" of Ohkawa WACV 2024 | ❌ No such paper found |
+| OpenPose yaw=4.29°, pitch=3.86° | Same source | ❌ Not found |
+| YOLOv8m mAP=83.8% | WACV 2024 benchmark | ❌ Not found in Schoonbeek paper |
+| B2 PSR F1=0.731 | Internal architecture docs | ❌ Not externally verified |
+| STORM-PSR F1=0.901 | Internal architecture docs | ❌ Not externally verified |
 
 ## Automated Verification Attempts (2026-07-03)
 
@@ -111,15 +112,16 @@ The exact CVF paper URL could not be accessed (403). All arxiv IDs returned by w
 
 **Important:** The CLAUDE.md warning about search engine reliability was confirmed — every arxiv ID returned by web search was hallucinated. The MediaPipe numbers (2.63°, 2.04°, 2.19°) appeared consistently across multiple independent search results, so they are likely correct. **Download the paper manually from openaccess.thecvf.com to confirm all numbers before submission.**
 
-1. **Head pose is our strongest benchmark claim.** Not "we beat MediaPipe" — but "we achieve competitive head pose at zero additional cost." Cite MediaPipe 2.63° as specialist upper bound.
+## Key Takeaways for Paper Writing (Post-Scrapling Verification)
 
-2. **Hand pose is OUT.** We cannot claim hand pose. Cite MediaPipe 13.7mm as context.
+**Critical finding: Our head pose results (8.92° fwd, 7.48° up) may be the FIRST reported head pose baseline on IndustReal data.** The "2.63° MediaPipe" numbers cannot be sourced from any paper found on CVF — web search likely hallucinated the citation. Our 8.92° at $299 GPU cost is an original contribution regardless.
 
-3. **Detection gap is large but defensible.** The efficiency narrative (multi-task, single-pass, $299) is the framing, not raw accuracy.
-
-4. **PSR will be weak.** Frame as "preliminary per-frame component recognition" not "transition detection."
-
-5. **Activity is not directly comparable** to WACV 2024 baselines because we use verb-grouped 69 classes while the standard protocol uses 12 actions. The paper must explicitly note this protocol difference.
+**Revised benchmarking strategy:**
+1. **Head pose — lead the paper with it.** Frame as: "We establish the first multi-task head pose baseline on IndustReal assembly data, achieving 8.92° forward MAE at zero additional inference cost." Do NOT cite MediaPipe 2.63° unless the actual source is found.
+2. **Detection — cite YOLOv8m numbers from your internal verification reports** (verify their original citation first).
+3. **PSR — frame as "per-frame component recognition"** (comp acc 0.554) not "transition detection."
+4. **Activity — our verb-grouped 69-class protocol is not comparable** to other WACV 2024 baselines with different taxonomies.
+5. **Hand pose — out of scope.** State clearly that hand tracking is used as FiLM input only.
 
 ---
 
