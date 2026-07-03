@@ -36,13 +36,14 @@ The AAIML viability has flipped from "hoping metrics appear" to "metrics are app
 
 ## 3. Head Pose: The Uncontested Contribution
 
-At 8.92° forward MAE, 7.48° up MAE, 16.6mm position:
-- **No prior IndustReal head pose baseline exists**
-- Competitive with single-task head pose estimators (OpenFace, 6DRepNet)
+At 8.92° forward MAE, 7.48° up MAE:
+- **No prior IndustReal ego-pose baseline exists** (HoloLens wearer's head orientation, NOT face-based pose)
+- **CORRECTION:** Comparisons to OpenFace/6DRepNet are category errors — this is ego-pose regression, not face-based head pose estimation. Remove all such comparisons.
+- **Position (16.6mm) NOT reportable** — HEAD_POSE_POS_SCALE unit ambiguous (mm/cm). TBD until verified against official IndustReal release.
 - Achieved as a byproduct of multi-task training — zero extra cost
 - This is a publishable result on its own
 
-**Paper strategy:** Lead the abstract with head pose. The efficiency claim follows naturally: "We present the first multi-task model for IndustReal assembly verification, simultaneously achieving competitive head pose estimation (8.9° MAE), action detection (33.9% mAP), and activity recognition (48/69 classes) from a single ConvNeXt-Tiny backbone at 1/10th the GPU cost of specialist models."
+**Paper strategy:** Lead the abstract with head pose. Frame as: "We establish the first ego-pose baseline on IndustReal assembly data, achieving 8.92° forward MAE at zero additional inference cost."
 
 ## 4. Detection: Closing the Gap
 

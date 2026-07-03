@@ -74,7 +74,7 @@ The simple MLP architecture (ACTIVITY_HEAD_SIMPLE=True) appears sufficient with 
 - KENDALL_HP_PREC_CAP: effective pose precision = exp(-lv_det) ≈ 0.88
 
 ### Analysis
-Head pose is the uncontested contribution. At 8.92° forward MAE it's already within SOTA range for single-frame head pose estimation. Position error at 16.6mm is excellent. No prior IndustReal baseline exists — this is an original contribution for the paper.
+Head pose is the uncontested contribution. At 8.92° forward MAE this is the first reported ego-pose baseline on IndustReal data (HoloLens wearer's head orientation). **CORRECTION:** This is NOT face-based head pose — comparisons to OpenFace/6DRepNet are category errors. Position values are not reportable (HEAD_POSE_POS_SCALE unit ambiguous). No prior IndustReal baseline exists — this is an original contribution for the paper.
 
 The HP_PREC_CAP causes lv_pose to be perpetually at -1.000 (fossil from old checkpoint), but F19 shows the effective precision = exp(-lv_det) ≈ 0.88 — meaning pose is properly weighted relative to detection.
 

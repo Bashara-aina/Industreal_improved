@@ -831,7 +831,7 @@ DET_LOSS_CAP = 50.0      # Detection: GIoU + Focal cls loss cap
 POSE_LOSS_CAP = 30.0     # Body keypoint Wing Loss cap
 PSR_LOSS_CAP = 20.0      # PSR focal loss + temporal smooth cap
 HEAD_POSE_LOSS_CAP = 30.0  # Head pose 9-DoF MSE cap
-HEAD_POSE_POS_SCALE = 100.0  # Standardizes raw position (~110 in CSV) to O(1); also fixes mm/cm unit ambiguity
+HEAD_POSE_POS_SCALE = 100.0  # Standardizes raw position to O(1). UNIT UNCERTAIN — DO NOT REPORT mm/cm until verified against official IndustReal release.
 
 # [INTERVENTION 2026-06-14] PSR and body-pose weight multipliers
 # Audit verdict: PSR and body-pose pseudo-keypoints produce DEAD backbone gradients.

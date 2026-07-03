@@ -68,7 +68,7 @@ Layer 4: POST-FIX STATUS (where we are now)
 | det_mAP50_pc | **0.339** | Near RF10 floor |
 | act_macro_f1 | **0.097** | Recovered from 0.006 |
 | pred_distinct | **48/69** | Was 5 at epoch 2 |
-| pose fwd MAE | **8.92°** | SOTA-competitive |
+| pose fwd MAE | **8.92°** | First IndustReal ego-pose baseline |
 | psr comp acc | **0.554** | Above chance (was 0.291) |
 | psr transition F1 | **Now measurable** | F22 fix — epoch 8 val first read |
 
