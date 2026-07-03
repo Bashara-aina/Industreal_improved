@@ -1,0 +1,345 @@
+{
+  "dataset_info": {
+    "name": "IndustReal",
+    "paper_arxiv": "2310.17323",
+    "paper_title": "IndustReal: A Dataset for Procedure Step Recognition Handling Execution Errors in Egocentric Videos in an Industrial-Like Setting",
+    "authors": "Schoonbeek, T., Damen, D., Nellaker, C.",
+    "venue": "WACV 2024",
+    "format": "Egocentric video from Microsoft HoloLens 2",
+    "resolution": {
+      "rgb": "1080x720 @ 10 FPS",
+      "stereo": "640x480 @ 10 FPS",
+      "depth": "320x288 @ 5 FPS"
+    },
+    "participants": 27,
+    "videos": 84,
+    "modalities": ["RGB", "Stereo", "Depth", "Hand tracking", "Gaze", "Head/Body Pose"],
+    "license": "Apache 2.0",
+    "data_url": "https://data.4tu.nl/datasets/b008dd74-020d-4ea4-a8ba-7bb60769d224"
+  },
+  "tasks": {
+    "activity_recognition": {
+      "name": "Activity Recognition (AR)",
+      "classes": 74,
+      "protocol": "Clip-level aggregation via 16 uniform frames per recording",
+      "metrics": {
+        "act_accuracy": {
+          "type": "primary",
+          "description": "Clip-level top-1 accuracy",
+          "target": "0.35-0.45",
+          "baseline": "MViTv2 0.6525"
+        },
+        "act_clip_accuracy": {
+          "type": "primary",
+          "description": "Majority vote over 16 uniform frames",
+          "target": "0.35-0.45"
+        },
+        "act_top5_accuracy": {
+          "type": "secondary",
+          "description": "Top-5 accuracy (lenient)",
+          "target": "0.70+"
+        },
+        "act_macro_f1": {
+          "type": "secondary",
+          "description": "Macro F1 over present classes",
+          "target": "0.35-0.50"
+        },
+        "act_weighted_f1": {
+          "type": "secondary",
+          "description": "Weighted F1 by class support"
+        },
+        "act_frame_accuracy": {
+          "type": "diagnostic",
+          "description": "Per-frame top-1 accuracy"
+        }
+      }
+    },
+    "assembly_state_detection": {
+      "name": "Assembly State Detection (ASD)",
+      "classes": 24,
+      "protocol": "COCO mAP with NMS, IoU threshold 0.5",
+      "metrics": {
+        "det_mAP50": {
+          "type": "primary",
+          "description": "Mean AP@0.5 over all 24 classes",
+          "target": "0.33-0.45",
+          "note": "Includes empty classes; use det_mAP50_pc for honest metric"
+        },
+        "det_mAP50_pc": {
+          "type": "honest",
+          "description": "Mean AP@0.5 over present-class only (GT>0)",
+          "target": "0.33-0.45"
+        },
+        "det_mAP_50_95": {
+          "type": "rigorous",
+          "description": "Mean AP over IoU ∈ [0.5, 0.95]",
+          "target": "0.15-0.25"
+        },
+        "det_n_present_classes": {
+          "type": "context",
+          "description": "Number of classes with GT > 0",
+          "typical_range": "8-12"
+        },
+        "det_precision": {
+          "type": "diagnostic",
+          "description": "TP / (TP + FP)"
+        },
+        "det_recall": {
+          "type": "diagnostic",
+          "description": "TP / (TP + FN)"
+        }
+      }
+    },
+    "procedure_step_recognition": {
+      "name": "Procedure Step Recognition (PSR)",
+      "steps_classes": 36,
+      "component_binary_labels": 11,
+      "protocol": "Frame-level F1 at ±3-frame tolerance window",
+      "metrics": {
+        "psr_f1_at_t": {
+          "type": "primary",
+          "description": "F1 @ ±3-frame tolerance (USE THIS)",
+          "baseline": "STORM-PSR 0.506",
+          "target": "0.50-0.62"
+        },
+        "psr_precision_at_t": {
+          "type": "secondary",
+          "description": "Precision @ ±3-frame tolerance",
+          "target": "0.45-0.55"
+        },
+        "psr_recall_at_t": {
+          "type": "secondary",
+          "description": "Recall @ ±3-frame tolerance",
+          "target": "0.50-0.60"
+        },
+        "psr_pos": {
+          "type": "secondary",
+          "description": "Procedure Order Score",
+          "baseline": "B2 heuristic 0.816",
+          "target": "0.75+"
+        },
+        "psr_f1_at_t5": {
+          "type": "alternative",
+          "description": "F1 @ ±5-frame tolerance (lenient)",
+          "target": "0.55-0.70"
+        },
+        "psr_component_f1": {
+          "type": "secondary",
+          "description": "Macro-F1 over 11 components",
+          "target": "0.40-0.55"
+        }
+      },
+      "baselines": {
+        "B2_heuristic": {
+          "type": "rule-based",
+          "f1_at_3": 0.731,
+          "pos": 0.816
+        },
+        "STORM_PSR": {
+          "type": "neural",
+          "f1_at_3": 0.506,
+          "pos": 0.812
+        }
+      }
+    },
+    "head_pose_estimation": {
+      "name": "Head Pose Estimation",
+      "dimensions": 9,
+      "protocol": "Geodesic/Angular MAE (degrees and mm)",
+      "metrics": {
+        "forward_angular_MAE_deg": {
+          "type": "primary",
+          "units": "degrees",
+          "target": "≤15° (have 9°)"
+        },
+        "up_angular_MAE_deg": {
+          "type": "primary",
+          "units": "degrees",
+          "target": "≤15° (have 9°)"
+        },
+        "position_MAE_mm": {
+          "type": "secondary",
+          "units": "mm",
+          "target": "≤100"
+        },
+        "head_pose_MAE": {
+          "type": "combined",
+          "description": "Normalized metric"
+        }
+      },
+      "note": "No published supervised baseline; first learned approach on egocentric industrial domain"
+    },
+    "body_pose_estimation": {
+      "name": "Body Pose Estimation",
+      "keypoints": 17,
+      "protocol": "PCK@0.2 (20% bounding box diagonal)",
+      "metrics": {
+        "body_pose_pck_02": {
+          "type": "primary",
+          "description": "Percentage of Correct Keypoints @ 0.2",
+          "target": "0.40-0.65"
+        }
+      },
+      "note": "Secondary task; completeness metric only"
+    },
+    "error_verification": {
+      "name": "Error Verification (EV)",
+      "protocol": "Binary classification: error vs no-error",
+      "metrics": {
+        "ev_ap": {
+          "type": "primary",
+          "description": "Average Precision (error class)",
+          "target": "0.40-0.65"
+        },
+        "ev_f1": {
+          "type": "primary",
+          "description": "F1 @ threshold 0.5",
+          "target": "0.35-0.55"
+        }
+      },
+      "note": "Emerging task; only test set contains errors"
+    },
+    "efficiency": {
+      "name": "Efficiency Metrics",
+      "hardware": "NVIDIA RTX 3060 (12GB)",
+      "input_resolution": "1280x720 RGB",
+      "batch_size": 1,
+      "metrics": {
+        "pipeline_params_m": {
+          "type": "model",
+          "units": "Millions",
+          "target": "~53M",
+          "vs_baseline": "81M stacked = 35% reduction"
+        },
+        "pipeline_gflops": {
+          "type": "computation",
+          "units": "GFLOPs",
+          "target": "50-80"
+        },
+        "eff_fps": {
+          "type": "throughput",
+          "units": "frames/sec",
+          "target": "15-30",
+          "note": "Batched inference"
+        },
+        "eff_fps_streaming": {
+          "type": "throughput",
+          "units": "frames/sec",
+          "target": "12-25",
+          "note": "Online (single-frame)"
+        },
+        "pipeline_fps": {
+          "type": "throughput",
+          "units": "frames/sec",
+          "target": "12-25",
+          "note": "End-to-end with postprocessing"
+        }
+      },
+      "baseline_comparison": {
+        "YOLOv8m": {
+          "params": 26,
+          "fps": 40,
+          "note": "Detection-only"
+        },
+        "MViTv2": {
+          "params": 35,
+          "fps": 20,
+          "note": "Activity-only"
+        },
+        "STORM_PSR": {
+          "params": 20,
+          "fps": 50,
+          "note": "PSR-only"
+        },
+        "Stacked_3models": {
+          "params": 81,
+          "fps": 8,
+          "note": "Three separate models"
+        }
+      }
+    }
+  },
+  "combined_score": {
+    "formula": "(det_mAP50_pc * 0.25) + (act_clip_accuracy * 0.25) + ((1 - head_pose_MAE/10) * 0.25) + (psr_f1_at_t * 0.25)",
+    "weights": {
+      "detection": 0.25,
+      "activity": 0.25,
+      "head_pose": 0.25,
+      "psr": 0.25
+    },
+    "note": "Use per-task judgment; don't rely on combined score"
+  },
+  "evaluation_traps": [
+    {
+      "trap": "Diluted mAP",
+      "symptom": "mAP50 stuck at 0.207",
+      "cause": "Averaging over empty classes",
+      "fix": "Use det_mAP50_pc (present-class)",
+      "impact": "+55% apparent mAP"
+    },
+    {
+      "trap": "Per-frame activity eval",
+      "symptom": "Top-1 looks terrible (0.05)",
+      "cause": "Evaluating at frame granularity",
+      "fix": "Aggregate: clip-level majority vote",
+      "impact": "+6-8× improvement"
+    },
+    {
+      "trap": "psr_overall_f1 ≈ 0",
+      "symptom": "PSR completely broken",
+      "cause": "Using wrong metric",
+      "fix": "Use psr_f1_at_t (±3-frame)",
+      "impact": "True signal emerges (0.50-0.62)"
+    },
+    {
+      "trap": "Combined score ≈ 0.50",
+      "symptom": "Amazing progress!",
+      "cause": "MAE dominates if head pose fails",
+      "fix": "Judge per-task independently",
+      "impact": "Prevents false hope"
+    }
+  ],
+  "multi_seed_evaluation": {
+    "seeds": [42, 123, 7],
+    "protocol": "Full evaluation on same test split; aggregate mean ± std",
+    "expected_results_example": {
+      "act_clip_accuracy": "0.39 ± 0.01",
+      "det_mAP50_pc": "0.36 ± 0.015",
+      "psr_f1_at_t": "0.54 ± 0.015",
+      "forward_angular_MAE_deg": "9.13 ± 0.2"
+    }
+  },
+  "paper_reporting_checklist": [
+    "Full test split used (not validation subset)",
+    "Multi-seed evaluation (seeds 42, 123, 7)",
+    "Metric protocols match paper (clip-level activity, ±3-frame PSR)",
+    "Baseline comparisons stated with modality context",
+    "No diluted mAP (reported det_mAP50_pc + n_present context)",
+    "Ablation table (per-component contribution)",
+    "Efficiency table (params, FLOPs, FPS) prominently featured",
+    "Per-class breakdown (confusion matrix)",
+    "All per-task F1, precision, recall",
+    "Combined score justified"
+  ],
+  "code_interfaces": {
+    "activity_metrics": "compute_activity_metrics(all_gt, all_pred, all_logits, class_names, clip_ids, clip_frame_nums)",
+    "detection_map": "compute_detection_map(cls_logits, reg_preds, gt, num_classes=24, score_thresh=0.5, nms_thresh=0.5)",
+    "psr_metrics": "compute_psr_metrics(psr_logits, psr_labels, tolerance_frames=3)",
+    "head_pose": "compute_head_pose_metrics(pred_pose, gt_pose)",
+    "efficiency": "compute_efficiency_metrics(model, device, batch_size=1, warmup_runs=10, measure_runs=100)",
+    "multi_seed": "run_multi_seed_evaluation(model, criterion, base_loader_fn, device, seeds=[42,123,7])"
+  },
+  "references": {
+    "arxiv_paper": "https://arxiv.org/abs/2310.17323",
+    "github_repo": "https://github.com/TimSchoonbeek/IndustReal",
+    "dataset_download": "https://data.4tu.nl/datasets/b008dd74-020d-4ea4-a8ba-7bb60769d224",
+    "guides": {
+      "reframe": "GUIDE_1_THE_REFRAME.md",
+      "training": "GUIDE_2_TRAIN_ALL_HEADS.md",
+      "metrics": "GUIDE_3_METRICS_AND_BENCHMARKS.md",
+      "framing": "GUIDE_4_PAPER_FRAMING_AND_RIGOR.md"
+    }
+  },
+  "compilation_date": "2026-07-03",
+  "status": "Complete - Ready for Publication"
+}
