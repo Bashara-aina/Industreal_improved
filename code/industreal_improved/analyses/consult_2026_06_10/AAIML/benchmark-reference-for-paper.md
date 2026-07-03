@@ -1,10 +1,17 @@
 # Benchmark Reference: WACV 2024 IndustReal Baselines vs Our Results
 
 **Date:** 2026-07-03
-**Source:** Ohkawa et al., "IndustReal: A Dataset and Benchmark for Head and Hand Pose Estimation in Industrial Assembly," WACV 2024
-**arXiv:** https://arxiv.org/abs/2311.13028
+**Source:** Multiple IndustReal papers at WACV 2024 (see notes per section).
+**CVF proceedings:** Multiple papers titled "IndustReal" exist — one about 3D assembly matching (Ohkawa et al.), one about head/hand pose estimation (Ohkawa et al.), and possibly others. The exact CVF URL could not be fetched (403 forbidden).
 
-> ⚠️ **Verification status:** Numbers marked ✅ have been cross-referenced from multiple web searches. Numbers marked ⚠️ came from an initial search result and should be confirmed against the actual PDF before submission.
+**Verification process (2026-07-03):**
+- Used WebSearch, Exa (out of credits), Firecrawl (out of credits), and arxiv API
+- arxiv IDs returned by search results were hallucinated/wrong (pointed to unrelated papers)
+- CVF open access returned 403 errors
+- Numbers marked ✅ were confirmed by 2+ independent web search results (search engine snippets citing the paper)
+- Numbers marked ⚠️ came from a single search result only
+
+**Recommendation:** Download the actual PDFs from CVF manually (openaccess.thecvf.com) and confirm all numbers before paper submission. The paper title is likely "IndustReal: A Dataset and Benchmark for Industrial Hand-Head-Human Pose Estimation and Interaction" at WACV 2024.
 
 ---
 
