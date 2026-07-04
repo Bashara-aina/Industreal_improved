@@ -1650,6 +1650,35 @@ For AAIML 2027, the deadline is likely January-February 2027. This gives 6-7 mon
 
 **Opus, should we target ICHCIIS-26 with interim results (ego-pose + detection + PSR with D1/D3/D4) and AAIML 2027 with the full paper (including temporal activity)?**
 
+## 7.25 Where Are The 50 Deep SOTA-Impact Questions?
+
+The 24 questions above (7.1-7.24) are the original open questions. Since then, a deeper set of **50 questions** has been written with the explicit goal of moving a metric by 0.05+ or closing a SOTA gap.
+
+**File:** `117-50-deep-questions-for-sota.md` (2,034 lines, 50 questions, 10 categories, 5 questions per category)
+
+**Categories (5 questions each, 50 total):**
+
+| # | Category | Why it matters |
+|---|---|---|
+| 1 | **Detection head** — closing the YOLOv8m gap | YOLOv8m 0.838 vs ours 0.317 multi-task. Single-task ablation expected ~0.45. |
+| 2 | **Activity head** — temporal modeling | Per-frame 0.110 macro-F1 vs MViTv2 0.65 Top-1. TCN+ViT is the planned path. |
+| 3 | **Ego-pose head** — defending the 8.14° MAE | First baseline for IndustReal. No comparison. Position MAE unreliable (HEAD_POSE_POS_SCALE=100.0). |
+| 4 | **PSR head** — beating SOTA POS=0.812 | Our POS=0.968 (per-frame state). F1=0.144. D4 YOLOv8m pipeline expected to bridge F1 to ~0.50-0.70. |
+| 5 | **Multi-task balancing** — Kendall vs GradNorm vs PCGrad | HP_PREC_CAP is active (pose grad-starved). Is Kendall the right choice? |
+| 6 | **Architecture** — backbone swaps | ConvNeXt-Tiny is current. ImageNet pretrain costs ~0.02 mAP. Swin-T? EfficientNet? |
+| 7 | **Training strategy** — schedule, augmentation, EMA | OneCycleLR is used. 25 epochs. Mixup? EMA? SWA? Label smoothing? |
+| 8 | **Data strategy** | 26K train, 38K val. 15/24 non-zero ASD classes. Synthetic data? Pseudo-labels? |
+| 9 | **Comparability and paper positioning** | What tables go in AAIML 2027. What to claim as novelty vs engineering. |
+| 10 | **Wildcards** — high-leverage unexpected | Cross-modal FiLM, Feature Bank, MAE pretraining on 188K frames, test-time augmentation. |
+
+**Each of the 50 questions has the structure:**
+
+```
+Context → Question → Why this matters → Constraints → Hypothesis → Validation
+```
+
+**Every question is answerable with a code/config/data change, cites file:line or paper Table X.Y, and includes a metric impact estimate.** The file is the prioritized question queue for Opus. Read it for any SOTA-impact work going forward.
+
 ---
 
 # Section 8: Glossary & Evidence Index (210 lines)
@@ -2006,6 +2035,7 @@ This document was created by systematically reading, executing, and verifying ev
 - Section 5 (What's Been Done): 420+ lines — 108 analysis file catalog, 6 Fable consultation rounds, 28+ fixes (F1-F22b), Opus consultation excerpts, lessons learned (wrong hypotheses, OHEM dynamics, evaluation gaps)
 - Section 6 (What Needs to Happen): 330+ lines — 4 experiment tracks (A-D), detailed protocols (D1/D3/D4, T1-T4, A2-A4, B1, C1, E1, E2), risk/bottleneck analysis, paper outline, timeline estimates
 - Section 7 (Open Questions): 300+ lines — 24 questions for Opus (detection ceiling, temporal activity ROI, PSR F1 gap, body pose dead code, omnibus deadline strategy, validation subsampling, OHEM timing, venue strategy, per-frame framing, MViTv2 remap, overfitting risk)
+  - 7.25 cross-references the 50-question file (`117-50-deep-questions-for-sota.md`, 2,034 lines) with 10 categories × 5 questions, each with Context/Question/Why-This-Matters/Constraints/Hypothesis/Validation
 - Section 8 (Glossary & Evidence): 280+ lines — 40 glossary terms, 100+ evidence entries with file:line citations, config presets, key file paths
 
 *Instruction for the reader (Opus): You now have complete context. No other file needs to be read to understand the full situation. All claims have evidence citations. Open questions are flagged in Section 7. Proceed with your analysis.*
