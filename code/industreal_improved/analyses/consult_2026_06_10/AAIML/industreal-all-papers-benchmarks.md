@@ -127,5 +127,5 @@ The thesis compiles all metrics from Papers 1-3 above plus additional context. N
 
 ## What Needs Ablation A (Single-Task) Before We Can Claim
 
-5. **Multi-task efficiency** — "31% fewer params" needs single-task baseline comparison
+5. **Multi-task efficiency** — "67% fewer params" needs single-task baseline comparison
 6. **PSR head quality** — need backbone swap experiment (see `todo-psr-backbone-swap.md`)
