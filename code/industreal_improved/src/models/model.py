@@ -1817,6 +1817,12 @@ class POPWMultiTaskModel(nn.Module):
             temperature=C.SOFT_ARGMAX_TEMPERATURE,
             training_temperature=C.SOFT_ARGMAX_TEMP_TRAIN,
         )
+        # [FIX 2026-07-04 Opus 111 SS3.2] Freeze body-pose sub-head when
+        # FREEZE_BODY_POSE_BRANCH=True (dead code, no real annotations).
+        if getattr(C, 'FREEZE_BODY_POSE_BRANCH', False):
+            for p in self.pose_head.parameters():
+                p.requires_grad = False
+            logger.info('  [MODEL] Body-pose branch FROZEN (FREEZE_BODY_POSE_BRANCH=True)')
 
         # === PoseFiLM (keypoint-conditioned, hand-keypoint FiLM) ===
         # [FIX] USE_HAND_FILM now wired: conditional instantiation enables ablation.
