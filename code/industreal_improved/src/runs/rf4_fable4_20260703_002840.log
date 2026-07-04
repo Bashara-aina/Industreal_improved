@@ -1,0 +1,7 @@
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+Traceback (most recent call last):
+  File "<string>", line 7, in <module>
+    exec(open('src/training/train.py').read())
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 43, in <module>
+NameError: name '__file__' is not defined. Did you mean: '__name__'?

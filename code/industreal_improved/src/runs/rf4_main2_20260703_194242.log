@@ -1,0 +1,7 @@
+[W703 19:42:43.550644274 Context.cpp:444] Warning: torch.backends.cuda.preferred_linalg_library is an experimental feature. If you see any error or unexpected behavior when this flag is set please file an issue on GitHub. (function operator())
+Traceback (most recent call last):
+  File "<string>", line 4, in <module>
+    exec(open('src/training/train.py').read())
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 43, in <module>
+NameError: name '__file__' is not defined. Did you mean: '__name__'?

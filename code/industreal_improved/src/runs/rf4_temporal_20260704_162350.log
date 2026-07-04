@@ -1,0 +1,89 @@
+[W704 16:23:51.616222769 Context.cpp:444] Warning: torch.backends.cuda.preferred_linalg_library is an experimental feature. If you see any error or unexpected behavior when this flag is set please file an issue on GitHub. (function operator())
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+[config] DET_GT_FRAME_FRACTION = 0.40 (train_det=True, train_act=True, train_psr=True)
+[config] Applied preset "stage_rf4": RF4: All heads + PSR transition (100% data, 20 ep, verb-grouping).
+[train] Applied preset: stage_rf4 (MIXED_PRECISION=False, STAGED_TRAINING=False, ZERO_DET_CONF_FOR_RECOVERY=False, USE_EMA=True, USE_MIXUP=False, BATCH_SIZE=4x4)
+[train] Stage preset detected — redirected OUTPUT_ROOT to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages
+[train] STAGED_TRAINING=False — all 5 heads active from epoch 0
+Config hash: 226e157782e2f614  (seed=42)
+Config hash details: {"ALLOW_TF32": true, "BACKBONE": "convnext_tiny", "BASE_LR": 0.0005, "BATCH_SIZE": 4, "CUDNN_BENCHMARK": false, "CUDNN_DETERMINISTIC": false, "CUTMIX_ALPHA": 0.0, "EMA_DECAY": 0.995, "EPOCHS": 100, "F
+Config snapshot saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/config.py
+Device: cuda
+GPU : NVIDIA GeForce RTX 5060 Ti
+VRAM: 16.6 GB
+[LOCK] Stale PID 3420164 still running: python3 -u src/training/train.py --preset stage_rf4 --no-staged-training --resume src/runs/rf_stages/checkpoints/latest.pth  — killing
+[LOCK] Killed stale PID 3420164
+[LOCK] PID lock acquired: PID=3421476, GPU=0
+Could not log git commit: Command '['git', 'rev-parse', 'HEAD']' returned non-zero exit status 128.
+Library versions: torch=2.12.1+cu130  torchvision=2.12.1+cu130  CUDA=13.0  Python=3.13.13
+[CHECKLIST 34] Command and env vars saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/logs/run_command.txt
+Process nice level increased by +10.
+Torch CPU threads capped: intraop=12 interop=4
+CUDA memory fraction cap enabled: 0.95.
+Ablation: TRAIN_DET=True  TRAIN_HEAD_POSE=True  TRAIN_ACT=True  TRAIN_PSR=True  USE_KENDALL=True
+Config: DET_POS_IOU_THRESH=0.4  DET_POS_IOU_TOP_K=9  DET_POS_IOU_IOU_FLOOR=0.2  DET_OHEM_ENABLED=True  DET_ASYMMETRIC_GAMMA=True  DET_BIAS_LR_FACTOR=1.0  DET_LR_MULTIPLIER=1.0  KENDALL_HP_PREC_CAP=True  KENDALL_FIXED_WEIGHTS=False  KENDALL_HP_FIXED_LAMBDA=0.2  KENDALL_STAGED_TRAINING=False  DET_POS_ANCHOR_PROBE_EVERY=1000  _STAGE_NAME=
+[CHECKLIST 32] Resolved config dumped to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/logs/resolved_config.json (275 keys)
+[CHECKLIST 35] === Hyperparameter snapshot ===
+  BASE_LR = 0.0005
+  DET_LR_MULTIPLIER = 1.0
+  DET_BIAS_LR_FACTOR = 1.0
+  POSE_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  HEAD_POSE_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  ACT_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  PSR_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  WEIGHT_DECAY = 0.001
+  LR_SCHEDULER = None (not explicitly set — using training code default)
+  LR_WARMUP_EPOCHS = None (not explicitly set — using training code default)
+  LR_MIN_RATIO = None (not explicitly set — using training code default)
+  CLIP_GRAD_NORM = None (not explicitly set — using training code default)
+  BATCH_SIZE = 4
+  EFFECTIVE_BATCH = 16
+  GRAD_ACCUM_STEPS = 4
+  EPOCHS = 100
+  MIXED_PRECISION = False
+  USE_EMA = True
+  EMA_DECAY = 0.995
+  USE_MIXUP = False
+  LOSS_DET_CLASS_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_DET_BOX_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_DET_IOU_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_POSE_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_HEAD_POSE_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_ACT_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_PSR_WEIGHT = None (not explicitly set — using training code default)
+  DET_POS_IOU_THRESH = 0.4
+  DET_POS_IOU_TOP_K = 9
+  DET_NEG_IOU_THRESH = 0.4
+  DET_OHEM_ENABLED = True
+  DET_ASYMMETRIC_GAMMA = True
+  STAGED_TRAINING = False
+  SUBSET_RATIO = 1.0
+  NUM_WORKERS = 0
+  SEED = 42
+[CHECKLIST 35] All 36 hyperparameters validated — OK
+Building datasets ...
+[RAM_CACHE] Pre-loading 8000 train images as JPEG bytes (cap=8000)...
+[RAM_CACHE] 1000/8000 scanned — 1000 cached, 0s
+[RAM_CACHE] 2000/8000 scanned — 2000 cached, 0s
+[RAM_CACHE] 3000/8000 scanned — 3000 cached, 0s
+[RAM_CACHE] 4000/8000 scanned — 4000 cached, 0s
+[RAM_CACHE] 5000/8000 scanned — 5000 cached, 0s
+[RAM_CACHE] 6000/8000 scanned — 6000 cached, 0s
+[RAM_CACHE] 7000/8000 scanned — 7000 cached, 0s
+[RAM_CACHE] Cap reached (8000) — stopping cache fill
+[RAM_CACHE] Done — 8000 images cached in 0s (~2734.4MB estimated)
+[industreal_dataset] Loaded 26322 frames (split=train, recordings=all)
+[RAM_CACHE] Pre-loading 2000 val images as JPEG bytes (cap=2000)...
+[RAM_CACHE] 1000/2000 scanned — 1000 cached, 0s
+[RAM_CACHE] Cap reached (2000) — stopping cache fill
+[RAM_CACHE] Done — 2000 images cached in 0s (~683.6MB estimated)
+[industreal_dataset] Loaded 38036 frames (split=val, recordings=all)
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 4710/26322 (17.89%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~17.89% under base sampler).
+[get_sampler] effective per-class sampling mass: 67 classes present, max/min ratio=7.4x (uniform would be 1.0x), max=0.0323 vs uniform=0.0149. Top-5 sampled class ids=[12, 57, 24, 23, 28]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+[RAM_CACHE] Pre-loading 8000 train images as JPEG bytes (cap=8000)...
+[RAM_CACHE] 1000/8000 scanned — 1000 cached, 0s
+[RAM_CACHE] 2000/8000 scanned — 2000 cached, 0s
+[RAM_CACHE] 3000/8000 scanned — 3000 cached, 0s
+[RAM_CACHE] 4000/8000 scanned — 4000 cached, 0s
+[RAM_CACHE] 5000/8000 scanned — 5000 cached, 0s
+[RAM_CACHE] 6000/8000 scanned — 6000 cached, 0s

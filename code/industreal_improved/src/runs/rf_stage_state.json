@@ -1,10 +1,17 @@
 {
-  "epoch": 2,
+  "epoch": 12,
   "status": "running",
-  "last_heartbeat": "2026-07-02T12:09:40.146609+00:00",
-  "training_pid": 554647,
+  "last_heartbeat": "2026-07-04T08:32:36.525924+00:00",
+  "training_pid": 3432463,
   "batch": {
-    "current": 1100,
-    "total": 4387
+    "current": 2400,
+    "total": 6580
+  },
+  "best_metric": 0.36279466832883,
+  "best_metrics": {
+    "det_mAP50": 0.3164572227172358,
+    "det_mAP50_pc": 0.5063315563475773,
+    "det_n_present_classes": 15,
+    "forward_angular_MAE_deg": 8.135645866394043
   }
 }
