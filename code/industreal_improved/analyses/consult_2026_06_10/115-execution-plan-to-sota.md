@@ -2037,6 +2037,6 @@ python3 -c "from ultralytics import YOLO; YOLO('yolov8m.pt')"  # COCO pretrained
 **Total: ~2200 lines.**
 **Compiled:** July 4, 2026 17:30 JST, from live system state.
 **Sources:** nvidia-smi, ps aux, training logs, config.py source, metrics.jsonl, AAIML master documents, paper PDFs in industrealpaper/.
-**Document ID:** 105-execution-plan-to-sota-v2.md
+**Document ID:** 115-execution-plan-to-sota.md
 
 **Next action:** Verify YOLOv8m weights URL. Begin ICHCIIS-26 abstract writing in parallel with waiting for ablation det-only to finish (~July 5 15:00 JST).

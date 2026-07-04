@@ -3,7 +3,7 @@
 **Generated:** 2026-07-04 17:30 JST
 **Purpose:** Single document that, read alone, gives Opus (or any reader) complete understanding of all benchmark numbers, contributions, experiments, risks, and drop-in LaTeX for the AAIML 2027 paper.
 **Evidence discipline:** Every claim cites file:line or paper Table X.Y. Nothing invented. Source files all listed and all read verbatim before writing.
-**Source v2 docs (5 total, ~10,100 combined lines):** `101-overview-v2.md` (2,011 lines), `102-training-metrics-deep-dive-v2.md` (2,011 lines), `103-all-fixes-chronicle-v2.md` (2,019 lines), `104-comparability-vs-4-papers-v2.md` (2,002 lines), `105-execution-plan-to-sota-v2.md` (2,042 lines).
+**Source v2 docs (5 total, ~10,100 combined lines):** `111-overview.md` (2,011 lines), `112-training-metrics-deep-dive.md` (2,011 lines), `113-all-fixes-chronicle.md` (2,019 lines), `114-comparability-vs-4-papers.md` (2,002 lines), `115-execution-plan-to-sota.md` (2,042 lines).
 **Source papers (4 PDFs):** `industrealpaper/2310.17323v1.pdf` (Paper 1, WACV 2024), `industrealpaper/2510.12385v1.pdf` (Paper 2, STORM-PSR), `industrealpaper/2408.11700v1.pdf` (Paper 3, ASD Rep Learning), `industrealpaper/20251120_Schoonbeek_hf.pdf` (Paper 4, PhD thesis).
 **Source AAIML files:** `AAIML/popw_aaiml2027.tex` (303 lines, pathology-focused template), `AAIML/FINAL-COMPARABILITY-STATUS.md` (204 lines), `AAIML/MASTER-EXECUTION-PLAN.md` (176 lines).
 **Output target:** This document feeds directly into the AAIML 2027 paper, providing all benchmark tables, contribution statements, and BibTeX entries ready for paste-in.
@@ -31,19 +31,19 @@
 
 ## 1.1 Executive Summary (150 lines)
 
-POPW is a multi-task assembly verification system running on a single consumer GPU (RTX 5060 Ti 16GB, $299 promotional price). It performs four tasks simultaneously from a single egocentric RGB camera stream: object detection (24-class assembly state detection, ASD taxonomy), activity recognition (69 verb-grouped action classes), ego-pose estimation (9-DoF forward gaze direction plus up vector from real HoloLens 2 sensor data), and procedure step recognition (11 binary component state classifiers operating on spatial-semantic features from the detection head's FPN outputs). The model uses a ConvNeXt-Tiny backbone (28.6M params) with an FPN neck (4.5M params) and four task-specific heads (detection: 5.3M, pose: 1.6M plus 0.8M FiLM and 0.4M headpose_film, activity: 0.7M, PSR: 3.1M). Total trainable parameters: 45.0M, total including frozen: 46.5M. Source: `101-overview-v2.md:14-31`.
+POPW is a multi-task assembly verification system running on a single consumer GPU (RTX 5060 Ti 16GB, $299 promotional price). It performs four tasks simultaneously from a single egocentric RGB camera stream: object detection (24-class assembly state detection, ASD taxonomy), activity recognition (69 verb-grouped action classes), ego-pose estimation (9-DoF forward gaze direction plus up vector from real HoloLens 2 sensor data), and procedure step recognition (11 binary component state classifiers operating on spatial-semantic features from the detection head's FPN outputs). The model uses a ConvNeXt-Tiny backbone (28.6M params) with an FPN neck (4.5M params) and four task-specific heads (detection: 5.3M, pose: 1.6M plus 0.8M FiLM and 0.4M headpose_film, activity: 0.7M, PSR: 3.1M). Total trainable parameters: 45.0M, total including frozen: 46.5M. Source: `111-overview.md:14-31`.
 
-The system targets the IndustReal dataset (Schoonbeek et al., WACV 2024), which until now has required separate models for each task: YOLOv8m for detection (mAP@0.5 = 0.838), MViTv2-S for action recognition (Top-1 = 65.25% on 75 fine-grained classes), and B3 or STORM-PSR for PSR (POS = 0.797, F1 = 0.883, tau = 22.4s for B3; POS = 0.812, F1 = 0.901, tau = 15.5s for STORM-PSR). Prior work has never reported ego-pose estimation as a prediction task on this dataset. The four tasks in prior work require three to four separate models with distinct architectures, each needing its own GPU or time-shared on expensive hardware like the V100 ($8K+) or A100 ($10K+). Source: `101-overview-v2.md:57-81`.
+The system targets the IndustReal dataset (Schoonbeek et al., WACV 2024), which until now has required separate models for each task: YOLOv8m for detection (mAP@0.5 = 0.838), MViTv2-S for action recognition (Top-1 = 65.25% on 75 fine-grained classes), and B3 or STORM-PSR for PSR (POS = 0.797, F1 = 0.883, tau = 22.4s for B3; POS = 0.812, F1 = 0.901, tau = 15.5s for STORM-PSR). Prior work has never reported ego-pose estimation as a prediction task on this dataset. The four tasks in prior work require three to four separate models with distinct architectures, each needing its own GPU or time-shared on expensive hardware like the V100 ($8K+) or A100 ($10K+). Source: `111-overview.md:57-81`.
 
-**The core claim is threefold.** First, the system establishes the first reported ego-pose estimation baseline on the IndustReal dataset, achieving forward angular MAE of 8.14 degrees and up MAE of 7.06 degrees. No prior paper benchmarks this task despite the HoloLens 2 recording head tracking data as a sensor modality. This is an original contribution requiring no comparison. Source: `FINAL-COMPARABILITY-STATUS.md:12-24` and `101-overview-v2.md:751-757`.
+**The core claim is threefold.** First, the system establishes the first reported ego-pose estimation baseline on the IndustReal dataset, achieving forward angular MAE of 8.14 degrees and up MAE of 7.06 degrees. No prior paper benchmarks this task despite the HoloLens 2 recording head tracking data as a sensor modality. This is an original contribution requiring no comparison. Source: `FINAL-COMPARABILITY-STATUS.md:12-24` and `111-overview.md:751-757`.
 
 Second, the PSR procedure order similarity (POS) of 0.968 exceeds the published SOTA baselines from both the original WACV 2024 paper (B3: 0.797, +21%) and STORM-PSR (0.812, +19%). This is the same metric (weighted Damerau-Levenshtein edit distance normalized by ground-truth length) on the same dataset, making it a directly comparable SOTA-beating claim. Paradigm disclosure is mandatory because our MonotonicDecoder uses a fill-forward constraint that guarantees monotonic sequences, artificially inflating POS relative to transition-detection methods. Source: `FINAL-COMPARABILITY-STATUS.md:36-48`.
 
-Third, the parameter efficiency is 67% below a four-model pipeline (28M backbone params shared across four tasks versus approximately 86M total for four dedicated models) and runs on a $299 consumer GPU rather than a $10K+ datacenter GPU. The single forward pass performs detection, pose estimation, activity classification, and PSR simultaneously -- something no prior system on IndustReal has demonstrated. Source: `101-overview-v2.md:33-53`.
+Third, the parameter efficiency is 67% below a four-model pipeline (28M backbone params shared across four tasks versus approximately 86M total for four dedicated models) and runs on a $299 consumer GPU rather than a $10K+ datacenter GPU. The single forward pass performs detection, pose estimation, activity classification, and PSR simultaneously -- something no prior system on IndustReal has demonstrated. Source: `111-overview.md:33-53`.
 
-The weakest metric is detection mAP@0.5 at 0.317, which is 62% below YOLOv8m's published 0.838. This gap has three primary drivers. First, our backbone is randomly initialized (no COCO pretrain on 118K images with 80 object categories). Second, our architecture is multi-task (four tasks competing for backbone features), whereas YOLOv8m dedicates its full 25M-parameter capacity to detection alone. Third, we use only real IndustReal training data, whereas the best YOLOv8m model supplements with 100K synthetic images from Unity Perception. A single 2-hour experiment (D1: evaluate YOLOv8m on our validation split) would confirm whether our split matches the published benchmark and establish the true gap. Source: `104-comparability-vs-4-papers-v2.md:168-184`.
+The weakest metric is detection mAP@0.5 at 0.317, which is 62% below YOLOv8m's published 0.838. This gap has three primary drivers. First, our backbone is randomly initialized (no COCO pretrain on 118K images with 80 object categories). Second, our architecture is multi-task (four tasks competing for backbone features), whereas YOLOv8m dedicates its full 25M-parameter capacity to detection alone. Third, we use only real IndustReal training data, whereas the best YOLOv8m model supplements with 100K synthetic images from Unity Perception. A single 2-hour experiment (D1: evaluate YOLOv8m on our validation split) would confirm whether our split matches the published benchmark and establish the true gap. Source: `114-comparability-vs-4-papers.md:168-184`.
 
-The activity head reports macro-F1 of 0.110 on 69 verb-grouped classes using a per-frame MLP classifier (no temporal context). This is NOT comparable to MViTv2's 65.25% Top-1 accuracy on 75 fine-grained classes with 16-frame temporal clips. The honest framing is to rename this "per-frame action classification" as a distinct task from temporal action recognition, establishing the single-frame baseline on the 69-class verb-grouped protocol. A five-day experiment suite (T2+T3+T4) would enable temporal processing and make macro-F1 approximately comparable to a remapped MViTv2 baseline (~0.20 expected). Source: `104-comparability-vs-4-papers-v2.md:74-93`.
+The activity head reports macro-F1 of 0.110 on 69 verb-grouped classes using a per-frame MLP classifier (no temporal context). This is NOT comparable to MViTv2's 65.25% Top-1 accuracy on 75 fine-grained classes with 16-frame temporal clips. The honest framing is to rename this "per-frame action classification" as a distinct task from temporal action recognition, establishing the single-frame baseline on the 69-class verb-grouped protocol. A five-day experiment suite (T2+T3+T4) would enable temporal processing and make macro-F1 approximately comparable to a remapped MViTv2 baseline (~0.20 expected). Source: `114-comparability-vs-4-papers.md:74-93`.
 
 **What makes AAIML winning** is that no single-model system reports all four IndustReal tasks simultaneously. The ego-pose baseline is genuinely novel and does not require beating any prior number. The PSR POS beats SOTA by a wide margin (+19-21%) even after paradigm disclosure. The $299 GPU thesis resonates directly with AAIML's Asian-Pacific accessible-AI theme, where small-to-medium manufacturers cannot afford V100/A100 multi-GPU setups but can afford consumer gaming GPUs. The paper has seven distinct contributions (see Section 8), and even the fallback plan without experiments retains five strong claims.
 
@@ -81,11 +81,11 @@ After A2-A4 (single-task ablations, 5 days): "Single-task detection achieves mAP
 
 ## 1.5 Current State Summary (30 lines)
 
-Training is actively running on the RTX 5060 Ti (PID 3432463, started July 4 16:26 JST). Current epoch: 12 of 99 (100 total, 0-indexed). Current batch: approximately 1,130 of 6,580 (17% through epoch 12). Training speed: 1.6-1.7 seconds per batch, approximately 0.6 batches/second. Epoch time: approximately 3 hours (2 hours 56 minutes for non-validation epochs, approximately 4-5 hours for epochs with validation). ETA to epoch 100 completion: approximately July 15-16 (11 days from now at 3.5 hours per epoch including validation). Source: `101-overview-v2.md:479-497`.
+Training is actively running on the RTX 5060 Ti (PID 3432463, started July 4 16:26 JST). Current epoch: 12 of 99 (100 total, 0-indexed). Current batch: approximately 1,130 of 6,580 (17% through epoch 12). Training speed: 1.6-1.7 seconds per batch, approximately 0.6 batches/second. Epoch time: approximately 3 hours (2 hours 56 minutes for non-validation epochs, approximately 4-5 hours for epochs with validation). ETA to epoch 100 completion: approximately July 15-16 (11 days from now at 3.5 hours per epoch including validation). Source: `111-overview.md:479-497`.
 
-RTX 3060 status: IDLE (no training process running). Previous ablation run (det-only, PID 80288) crashed at epoch 16. Currently using 470 MB VRAM (Xorg plus Chrome). Available for experiments D1, D3, D4 immediately. Source: `101-overview-v2.md:249-254`.
+RTX 3060 status: IDLE (no training process running). Previous ablation run (det-only, PID 80288) crashed at epoch 16. Currently using 470 MB VRAM (Xorg plus Chrome). Available for experiments D1, D3, D4 immediately. Source: `111-overview.md:249-254`.
 
-Checkpoint status: 11 epoch checkpoints (epochs 1-11), best.pth (epoch 11, combined=0.3628), latest.pth, crash_recovery.pth. Total checkpoint storage: approximately 10.3 GB. Each checkpoint is approximately 738 MB (model weights + optimizer states + EMA copy). Source: `101-overview-v2.md:350-362`.
+Checkpoint status: 11 epoch checkpoints (epochs 1-11), best.pth (epoch 11, combined=0.3628), latest.pth, crash_recovery.pth. Total checkpoint storage: approximately 10.3 GB. Each checkpoint is approximately 738 MB (model weights + optimizer states + EMA copy). Source: `111-overview.md:350-362`.
 
 ---
 
@@ -95,31 +95,31 @@ Checkpoint status: 11 epoch checkpoints (epochs 1-11), best.pth (epoch 11, combi
 
 | Filename | Absolute Path | Lines | Size | Purpose | Who Should Read This | Cross-Reference in This Synthesis |
 |----------|--------------|-------|------|---------|---------------------|----------------------------------|
-| `101-overview-v2.md` | `analyses/consult_2026_06_10/101-overview-v2.md` | 2,011 | 156 KB | Project context, hardware, dataset, architecture, live training state snapshot | Anyone new to the project; venue reviewers | Sections 1, 3, 4-8, 11, Appendices |
-| `102-training-metrics-deep-dive-v2.md` | `analyses/consult_2026_06_10/102-training-metrics-deep-dive-v2.md` | 2,011 | 108 KB | Every epoch-by-epoch metric, loss curve, Kendall log-var trajectory, parameter architecture | Metric reviewers, ablation analysts, anyone writing Results section | Section 3 benchmark table, Section 7 contributions, Section 9 LaTeX |
-| `103-all-fixes-chronicle-v2.md` | `analyses/consult_2026_06_10/103-all-fixes-chronicle-v2.md` | 2,019 | 148 KB | F1-F22b engineering history: 38+ fixes, crash recovery, correctness fixes, config flips | Code reviewers, reproducibility auditors, anyone writing Training Dynamics section | Section 8 contributions, Section 9 LaTeX pathology content |
-| `104-comparability-vs-4-papers-v2.md` | `analyses/consult_2026_06_10/104-comparability-vs-4-papers-v2.md` | 2,002 | 129 KB | Every metric versus every published paper: paradigm analysis, gap quantification, experiments | Paper writers, benchmark analysts, reviewer defense writers | Sections 4-7 paper integrations, Section 10 risks |
-| `105-execution-plan-to-sota-v2.md` | `analyses/consult_2026_06_10/105-execution-plan-to-sota-v2.md` | 2,042 | 97 KB | Experiment tracks A-E, GPU allocation matrix, day-by-day calendar, risk register, budget | Executors, timeline planners, resource managers | Section 3 experiment columns, Section 10 risks |
+| `111-overview.md` | `analyses/consult_2026_06_10/111-overview.md` | 2,011 | 156 KB | Project context, hardware, dataset, architecture, live training state snapshot | Anyone new to the project; venue reviewers | Sections 1, 3, 4-8, 11, Appendices |
+| `112-training-metrics-deep-dive.md` | `analyses/consult_2026_06_10/112-training-metrics-deep-dive.md` | 2,011 | 108 KB | Every epoch-by-epoch metric, loss curve, Kendall log-var trajectory, parameter architecture | Metric reviewers, ablation analysts, anyone writing Results section | Section 3 benchmark table, Section 7 contributions, Section 9 LaTeX |
+| `113-all-fixes-chronicle.md` | `analyses/consult_2026_06_10/113-all-fixes-chronicle.md` | 2,019 | 148 KB | F1-F22b engineering history: 38+ fixes, crash recovery, correctness fixes, config flips | Code reviewers, reproducibility auditors, anyone writing Training Dynamics section | Section 8 contributions, Section 9 LaTeX pathology content |
+| `114-comparability-vs-4-papers.md` | `analyses/consult_2026_06_10/114-comparability-vs-4-papers.md` | 2,002 | 129 KB | Every metric versus every published paper: paradigm analysis, gap quantification, experiments | Paper writers, benchmark analysts, reviewer defense writers | Sections 4-7 paper integrations, Section 10 risks |
+| `115-execution-plan-to-sota.md` | `analyses/consult_2026_06_10/115-execution-plan-to-sota.md` | 2,042 | 97 KB | Experiment tracks A-E, GPU allocation matrix, day-by-day calendar, risk register, budget | Executors, timeline planners, resource managers | Section 3 experiment columns, Section 10 risks |
 
 ## 2.2 Detailed Description Per Doc (120 lines)
 
-**101-overview-v2.md (2,011 lines, 156 KB):** Start here if you know nothing about the project. Contains five sections: Section 1 (340 lines) covers what POPW is, the $299 GPU thesis, the four-paper landscape, venue targets (ICHCIIS-26 abstract deadline July 15, 2026; AAIML-27 submission January-February 2027), dataset details (188,111 labeled frames, 69 verb-grouped activity classes, 24 ASD detection codes, 11 PSR components), the comparability problem (five categories from A to E), and the current best numbers versus SOTA table. Section 2 (230 lines) covers hardware layout (RTX 5060 Ti 16GB at 129W/180W TDP, RTX 3060 12GB at 22W idle), GPU training state from nvidia-smi at 16:57 JST, system RAM and CPU, the complete 41,915-line code tree at src/ with every Python file's line count, run directory structure, checkpoint sizes, and the complete startup config dump (BASE_LR=0.0005, BATCH_SIZE=4 effective=16 through all hyperparameters). Section 3 (340 lines) covers the live training state right now: PID 3432463, epoch 12/99, batch 1,130/6,580, losses at step 1,130 (total=3.6744, det=1.1472, activity=1.0669, head_pose=0.0167, psr=0.0000), liveness gradient status (all five heads ALIVE), HP_PREC_CAP status, model architecture diagram, batch composition analysis, E4-TEST diagnostic, and crash history. Section 4 (340 lines) covers all current metrics at epoch 11: detection (mAP@0.5=0.317, mAP50_pc=0.506, full 15-class per-class AP breakdown), activity (macro-F1=0.110, frame accuracy=0.177, top-5=0.398, pred_distinct=35/69), ego-pose (forward MAE=8.14, up MAE=7.06), PSR (F1=0.144, POS=0.968, edit=0.752), combined metric (0.306 log line, 0.363 JSONL), Kendall log-var trajectory (epochs 1-11 table with all four log_vars), metric trajectory (epochs 1/5/8/11 table with all eight metrics), loss analysis by head (epoch 11 decomposition table), optimizer and learning rate schedule, loss trajectory over epochs (epochs 1-11 table with all seven loss components), evaluation code architecture, and detection probe status. Section 5 (340 lines) catalogs what's been done: complete 108+ file directory index, git version control status, project size (26 GB total), and checkpoint structure.
+**111-overview.md (2,011 lines, 156 KB):** Start here if you know nothing about the project. Contains five sections: Section 1 (340 lines) covers what POPW is, the $299 GPU thesis, the four-paper landscape, venue targets (ICHCIIS-26 abstract deadline July 15, 2026; AAIML-27 submission January-February 2027), dataset details (188,111 labeled frames, 69 verb-grouped activity classes, 24 ASD detection codes, 11 PSR components), the comparability problem (five categories from A to E), and the current best numbers versus SOTA table. Section 2 (230 lines) covers hardware layout (RTX 5060 Ti 16GB at 129W/180W TDP, RTX 3060 12GB at 22W idle), GPU training state from nvidia-smi at 16:57 JST, system RAM and CPU, the complete 41,915-line code tree at src/ with every Python file's line count, run directory structure, checkpoint sizes, and the complete startup config dump (BASE_LR=0.0005, BATCH_SIZE=4 effective=16 through all hyperparameters). Section 3 (340 lines) covers the live training state right now: PID 3432463, epoch 12/99, batch 1,130/6,580, losses at step 1,130 (total=3.6744, det=1.1472, activity=1.0669, head_pose=0.0167, psr=0.0000), liveness gradient status (all five heads ALIVE), HP_PREC_CAP status, model architecture diagram, batch composition analysis, E4-TEST diagnostic, and crash history. Section 4 (340 lines) covers all current metrics at epoch 11: detection (mAP@0.5=0.317, mAP50_pc=0.506, full 15-class per-class AP breakdown), activity (macro-F1=0.110, frame accuracy=0.177, top-5=0.398, pred_distinct=35/69), ego-pose (forward MAE=8.14, up MAE=7.06), PSR (F1=0.144, POS=0.968, edit=0.752), combined metric (0.306 log line, 0.363 JSONL), Kendall log-var trajectory (epochs 1-11 table with all four log_vars), metric trajectory (epochs 1/5/8/11 table with all eight metrics), loss analysis by head (epoch 11 decomposition table), optimizer and learning rate schedule, loss trajectory over epochs (epochs 1-11 table with all seven loss components), evaluation code architecture, and detection probe status. Section 5 (340 lines) catalogs what's been done: complete 108+ file directory index, git version control status, project size (26 GB total), and checkpoint structure.
 
-**102-training-metrics-deep-dive-v2.md (2,011 lines, 108 KB):** The single-source reference for every numerical result. Contains 12 sections. Section 1 (training runs inventory) catalogs every training run from inception across Phase A (5060 Ti initial exploration), probe runs, clean runs, batch6 runs, Fable runs (F1-F12 fix testing), Round 5 runs (F17-F21), main runs, stable runs (current production track), 3060 runs, temporal head experiments, and Phase A/B/C history. The fix-to-run cross-reference table maps all 22+ fixes to their git commits. Section 2 (model architecture and parameter count) provides the definitive parameter breakdown: ConvNeXt-Tiny backbone 28,589,128 (63.5%), FPN 4,474,880 (9.9%), detection head 5,305,596 (11.8%), pose hand 1,643,793 (3.7%), pose FiLM 841,216 (1.9%), HeadPose FiLM 400,896 (0.9%), activity head 687,173 (1.5%), PSR head 3,077,515 (6.8%). Total 46,468,910. Section 3 (hyperparameter configuration) exhaustively documents every training, detection, pose, activity, PSR, Kendall, validation, combined metric weight, and loss weight parameter with source file and line number. Section 4 (loss curves by epoch) provides the per-epoch training and validation loss table for all RF4 and Phase A/B/C runs, with trajectory analysis explaining the V-shaped recovery and the counterintuitive rising validation loss with improving combined metric. Section 5 (validation metric history) provides the complete RF4 and Phase A/B/C validation table with all eight metrics at every validated epoch, plus metric-level trend analysis (improving, flat, regressing) and VAL_EVERY=1 explanation. Section 6 (ablation training state) documents the det-only ablation on the 3060, its configuration, current progress, and the counterintuitive finding that single-task ablation has LOWER mAP than multi-task. Section 7 (per-head loss decomposition) provides detailed loss structure for all four heads, including Focal loss parameters, OHEM configuration, CE with label smoothing, ego-pose angular loss, and PSR monotonic decoder loss. Section 8 (Kendall uncertainty weighting) provides the complete theory, current log-var values, HP_PREC_CAP mechanism, gradient composition table, and log-var clamp bounds. Section 9 (gate criteria RF1-RF10) documents the staging logic, current gate state, and pass/fail status for RF1 through RF4. Remaining sections cover optimization, combined metric computation, and key regression patterns.
+**112-training-metrics-deep-dive.md (2,011 lines, 108 KB):** The single-source reference for every numerical result. Contains 12 sections. Section 1 (training runs inventory) catalogs every training run from inception across Phase A (5060 Ti initial exploration), probe runs, clean runs, batch6 runs, Fable runs (F1-F12 fix testing), Round 5 runs (F17-F21), main runs, stable runs (current production track), 3060 runs, temporal head experiments, and Phase A/B/C history. The fix-to-run cross-reference table maps all 22+ fixes to their git commits. Section 2 (model architecture and parameter count) provides the definitive parameter breakdown: ConvNeXt-Tiny backbone 28,589,128 (63.5%), FPN 4,474,880 (9.9%), detection head 5,305,596 (11.8%), pose hand 1,643,793 (3.7%), pose FiLM 841,216 (1.9%), HeadPose FiLM 400,896 (0.9%), activity head 687,173 (1.5%), PSR head 3,077,515 (6.8%). Total 46,468,910. Section 3 (hyperparameter configuration) exhaustively documents every training, detection, pose, activity, PSR, Kendall, validation, combined metric weight, and loss weight parameter with source file and line number. Section 4 (loss curves by epoch) provides the per-epoch training and validation loss table for all RF4 and Phase A/B/C runs, with trajectory analysis explaining the V-shaped recovery and the counterintuitive rising validation loss with improving combined metric. Section 5 (validation metric history) provides the complete RF4 and Phase A/B/C validation table with all eight metrics at every validated epoch, plus metric-level trend analysis (improving, flat, regressing) and VAL_EVERY=1 explanation. Section 6 (ablation training state) documents the det-only ablation on the 3060, its configuration, current progress, and the counterintuitive finding that single-task ablation has LOWER mAP than multi-task. Section 7 (per-head loss decomposition) provides detailed loss structure for all four heads, including Focal loss parameters, OHEM configuration, CE with label smoothing, ego-pose angular loss, and PSR monotonic decoder loss. Section 8 (Kendall uncertainty weighting) provides the complete theory, current log-var values, HP_PREC_CAP mechanism, gradient composition table, and log-var clamp bounds. Section 9 (gate criteria RF1-RF10) documents the staging logic, current gate state, and pass/fail status for RF1 through RF4. Remaining sections cover optimization, combined metric computation, and key regression patterns.
 
-**103-all-fixes-chronicle-v2.md (2,019 lines, 148 KB):** The complete engineering history of the POPW training system. Catalogs 38+ discrete fixes across 22 labeled buckets (F1-F22b) plus approximately 16 unlabeled stability patches. Each fix is classified by type: CRIT (prevents crash or data loss, 12 fixes), CORR (ensures right numbers, 16 fixes), PAPER (affects reported metrics, 10 fixes), CONFIG (value change only, 12+ flips). The executive summary provides the complete fix inventory table with ID, name, type, code location, git commit, and untested status for every fix. Section 2 (critical fixes, 500+ lines) covers cuDNN STATUS_INTERNAL_ERROR (kernel timeout on RTX 5060 Ti with CUDA 13.0), cuSOLVER fix, CUDNN_BENCHMARK=False, CUDA_LAUNCH_BLOCKING=1, watchdog and Xorg issues (two bugs: watchdog killing healthy validation, post-eval heartbeat race condition), crash recovery logic (three tiers with auto-resume, mid-epoch resume, and per-epoch rollback), and heartbeat race condition fix. Section 3 (correctness fixes, 500+ lines) exhaustively documents every fix from F1 through F22b: F1 (seq-batch backbone grad wipe, the single most impactful fix -- was losing approximately 80% of backbone/FPN gradient signal), F2 (Kendall log-var visibility, the biggest observability gap -- these were logged at DEBUG level and invisible), F3/F3b (spurious PSR log-var gradient and sensitivity penalty leak), F4/F4b (OneCycleLR peak factor: hidden 0.5 factor made per-sample intensity 3x below paper spec, plus resume overwrite bug), F13 (probe parity fix: monitoring probes were structurally NEVER firing because all trigger steps were even and all even steps were seq batches), F14/F14b (weight decay for Kendall log-vars: applying weight decay to uncertainty parameters silently fights the learned balancing), F17 (fresh-clone breakage: four critical files not tracked in git), F18 (activity double-ramp: activity ramp was applied twice, making effective ramp ramp^2), F19-F21 (effective pose log-var logging, combined_v2 deg-normalized metric, auto peak factor), and F22/F22b (PSR eval grouping misalignment and decoder dimension collapse: two stacked bugs causing all PSR metrics to return zeros). Section 4 (config flips, 300+ lines) documents every value change: ACTIVITY_HEAD_SIMPLE true-false-true history, VAL_EVERY 3-to-1, DET_OHEM_RATIO 5-to-2, DET_OHEM_MIN_NEG 128-to-32, ACTIVITY_GRAD_BLEND_RATIO 0.10-1.00 through five progressive changes, DET_EVAL_SCORE_THRESH through seven changes, DET_GT_FRAME_FRACTION 0.90-to-0.40, PSR_SEQ_EVERY_N_BATCHES 2-to-4.
+**113-all-fixes-chronicle.md (2,019 lines, 148 KB):** The complete engineering history of the POPW training system. Catalogs 38+ discrete fixes across 22 labeled buckets (F1-F22b) plus approximately 16 unlabeled stability patches. Each fix is classified by type: CRIT (prevents crash or data loss, 12 fixes), CORR (ensures right numbers, 16 fixes), PAPER (affects reported metrics, 10 fixes), CONFIG (value change only, 12+ flips). The executive summary provides the complete fix inventory table with ID, name, type, code location, git commit, and untested status for every fix. Section 2 (critical fixes, 500+ lines) covers cuDNN STATUS_INTERNAL_ERROR (kernel timeout on RTX 5060 Ti with CUDA 13.0), cuSOLVER fix, CUDNN_BENCHMARK=False, CUDA_LAUNCH_BLOCKING=1, watchdog and Xorg issues (two bugs: watchdog killing healthy validation, post-eval heartbeat race condition), crash recovery logic (three tiers with auto-resume, mid-epoch resume, and per-epoch rollback), and heartbeat race condition fix. Section 3 (correctness fixes, 500+ lines) exhaustively documents every fix from F1 through F22b: F1 (seq-batch backbone grad wipe, the single most impactful fix -- was losing approximately 80% of backbone/FPN gradient signal), F2 (Kendall log-var visibility, the biggest observability gap -- these were logged at DEBUG level and invisible), F3/F3b (spurious PSR log-var gradient and sensitivity penalty leak), F4/F4b (OneCycleLR peak factor: hidden 0.5 factor made per-sample intensity 3x below paper spec, plus resume overwrite bug), F13 (probe parity fix: monitoring probes were structurally NEVER firing because all trigger steps were even and all even steps were seq batches), F14/F14b (weight decay for Kendall log-vars: applying weight decay to uncertainty parameters silently fights the learned balancing), F17 (fresh-clone breakage: four critical files not tracked in git), F18 (activity double-ramp: activity ramp was applied twice, making effective ramp ramp^2), F19-F21 (effective pose log-var logging, combined_v2 deg-normalized metric, auto peak factor), and F22/F22b (PSR eval grouping misalignment and decoder dimension collapse: two stacked bugs causing all PSR metrics to return zeros). Section 4 (config flips, 300+ lines) documents every value change: ACTIVITY_HEAD_SIMPLE true-false-true history, VAL_EVERY 3-to-1, DET_OHEM_RATIO 5-to-2, DET_OHEM_MIN_NEG 128-to-32, ACTIVITY_GRAD_BLEND_RATIO 0.10-1.00 through five progressive changes, DET_EVAL_SCORE_THRESH through seven changes, DET_GT_FRAME_FRACTION 0.90-to-0.40, PSR_SEQ_EVERY_N_BATCHES 2-to-4.
 
-**104-comparability-vs-4-papers-v2.md (2,002 lines, 129 KB):** The single most important document for writing the AAIML paper. Contains 8 sections. Section 1 (Paper 1 deep dive, lines 22-410) provides Table 2 (AR benchmark: every MViTv2 and SlowFast number with per-modality breakdown), Table 3 (detection mAP@0.5: every training scheme with gap analysis, paradigm analysis, and D1 experiment design), Table 4 (PSR: every B1/B2/B3 number for all recordings and error recordings with paradigm analysis and D4 experiment design), ego-pose analysis (no prior benchmark, original contribution), operational details (178 fps on V100, modalities, dataset split, 5.8h total video), and what remains incomparable even after all experiments (Kinetics pretraining, multi-modal input, test split difference). Section 2 (Paper 2 deep dive, lines 413-572) covers Table 1 (STORM-PSR on IndustReal and MECCANO), all four ablation studies (temporal backbone, sampling strategy, temporal receptive field, KFS time window), and full ablation study analysis. Section 3 (Paper 3 deep dive, lines 574-800) covers the task incomparability statement (retrieval versus detection), Figure 4 all 8 configurations with approximate bar chart readings, Figure 5 unseen state generalization, Figure 8 error detection performance, ISIL loss function deep dive, and full numerical breakdown. Section 4 (Paper 4 deep dive, lines 804-950) covers all thesis chapters with per-table/figure comparisons, Chapter 5 error localization (new content, different task), Chapter 7 AR user study (N=27, three groups, implications for our work), and thesis confirmation (all numbers from Papers 1-3 confirmed). Sections 5-7 cover the three comparability categories: Category 1 (comparable now: ego-pose, mAP50_pc, PSR POS, PSR edit, component accuracy, per-frame activity), Category 2 (comparable after experiments: D1 for detection mAP@0.5, D3 for full eval, D4 for PSR F1, R1 for embeddings, T2+T3 for temporal activity), and Category 3 (never comparable: ASD Rep Learning retrieval metrics, AR Top-1 at native 75 classes).
+**114-comparability-vs-4-papers.md (2,002 lines, 129 KB):** The single most important document for writing the AAIML paper. Contains 8 sections. Section 1 (Paper 1 deep dive, lines 22-410) provides Table 2 (AR benchmark: every MViTv2 and SlowFast number with per-modality breakdown), Table 3 (detection mAP@0.5: every training scheme with gap analysis, paradigm analysis, and D1 experiment design), Table 4 (PSR: every B1/B2/B3 number for all recordings and error recordings with paradigm analysis and D4 experiment design), ego-pose analysis (no prior benchmark, original contribution), operational details (178 fps on V100, modalities, dataset split, 5.8h total video), and what remains incomparable even after all experiments (Kinetics pretraining, multi-modal input, test split difference). Section 2 (Paper 2 deep dive, lines 413-572) covers Table 1 (STORM-PSR on IndustReal and MECCANO), all four ablation studies (temporal backbone, sampling strategy, temporal receptive field, KFS time window), and full ablation study analysis. Section 3 (Paper 3 deep dive, lines 574-800) covers the task incomparability statement (retrieval versus detection), Figure 4 all 8 configurations with approximate bar chart readings, Figure 5 unseen state generalization, Figure 8 error detection performance, ISIL loss function deep dive, and full numerical breakdown. Section 4 (Paper 4 deep dive, lines 804-950) covers all thesis chapters with per-table/figure comparisons, Chapter 5 error localization (new content, different task), Chapter 7 AR user study (N=27, three groups, implications for our work), and thesis confirmation (all numbers from Papers 1-3 confirmed). Sections 5-7 cover the three comparability categories: Category 1 (comparable now: ego-pose, mAP50_pc, PSR POS, PSR edit, component accuracy, per-frame activity), Category 2 (comparable after experiments: D1 for detection mAP@0.5, D3 for full eval, D4 for PSR F1, R1 for embeddings, T2+T3 for temporal activity), and Category 3 (never comparable: ASD Rep Learning retrieval metrics, AR Top-1 at native 75 classes).
 
-**105-execution-plan-to-sota-v2.md (2,042 lines, 97 KB):** The execution blueprint. Contains 10 sections. Section 1 (current state baseline, 306 lines) provides system overview (dual-GPU workstation, Ubuntu 24.04, CUDA 13.2), main training details (PID 3432463, 5060 Ti, 129% CPU, 6.9 GB RAM, 0.6 batches/sec), complete checkpoint inventory with timestamps showing 3-hour epoch cadence, validation metrics history (epochs 2/5/8/11 with all metrics), ablation det-only status (epoch 16/25, 3060), GPU utilization analysis, 28 fixes applied, and what is NOT yet running (D1/D3/D4/T1-T4/A2-A4/B1/C1/E1/E2/R1). Section 2 (Track A: publish NOW, 210 lines) covers the ICHCIIS-26 paper (abstract deadline approximately August 2026), what we can publish right now (8 metrics with values and significance), what we cannot publish yet (5 metrics with experiments needed), paper structure and needed content, writing timeline (P0 tasks first), outcome-first writing strategy, and verification requirements. Section 3 (Track B: YOLOv8m swap experiments, 420 lines) covers D1 (YOLOv8m eval on our split, 2 hours, expected outcomes table), D3 (full eval EVAL_MAX_BATCHES=0, 1 hour), D4 (YOLOv8m to PSR decoder, 2-3 hours, expected outcomes table), dependencies, and 7-risk assessment table. Section 4 (Track C: temporal activity head, 420 lines) covers the current activity problem table (six-dimension gap to MViTv2), T2 fresh run with ACTIVITY_HEAD_SIMPLE=False (configuration comparison table, steps, parameter recommendations, timeline), T3 MViTv2 remap 75-to-69 (1 day, expected outcomes table), T4 add act_top1 (1 hour), and the T2 resource decision (Option A on 5060 Ti after main versus Option B on 3060 for parallel execution). Section 5 (Track D: ablation suite, 320 lines) covers A1 (det-only running on 3060), A2 (pose-only, expected 1.5 days), A3 (activity-only, expected 2 days), A4 (PSR-only, expected 1.5 days), B1 (Kendall versus fixed, 2 days), C1 (verb-grouping versus raw, 2 days), E1 (FPS measurement, 1 hour), E2 (PSR tau measurement, 1 day), and the efficiency claims table. Section 6 (Track E: embedding extraction, 320 lines) covers the task difference table (Paper 3 versus ours across 6 dimensions), R1a-d pipeline (extraction, retrieval, computation, comparison, 2-3 days), expected outcome (Fi@1 20-35, competitive with ViT-S), and the paper narrative. Section 7 (GPU allocation matrix, 220 lines) provides time-blocked allocation showing which experiment runs on which GPU at which time. Section 8 (risk register, 220 lines) provides 16 risks with probability, impact, and mitigation. Section 9 (day-by-day calendar, 320 lines) provides July 4-25 schedule. Section 10 (budget and resources, 220 lines) provides GPU-hours, storage, and cost estimates.
+**115-execution-plan-to-sota.md (2,042 lines, 97 KB):** The execution blueprint. Contains 10 sections. Section 1 (current state baseline, 306 lines) provides system overview (dual-GPU workstation, Ubuntu 24.04, CUDA 13.2), main training details (PID 3432463, 5060 Ti, 129% CPU, 6.9 GB RAM, 0.6 batches/sec), complete checkpoint inventory with timestamps showing 3-hour epoch cadence, validation metrics history (epochs 2/5/8/11 with all metrics), ablation det-only status (epoch 16/25, 3060), GPU utilization analysis, 28 fixes applied, and what is NOT yet running (D1/D3/D4/T1-T4/A2-A4/B1/C1/E1/E2/R1). Section 2 (Track A: publish NOW, 210 lines) covers the ICHCIIS-26 paper (abstract deadline approximately August 2026), what we can publish right now (8 metrics with values and significance), what we cannot publish yet (5 metrics with experiments needed), paper structure and needed content, writing timeline (P0 tasks first), outcome-first writing strategy, and verification requirements. Section 3 (Track B: YOLOv8m swap experiments, 420 lines) covers D1 (YOLOv8m eval on our split, 2 hours, expected outcomes table), D3 (full eval EVAL_MAX_BATCHES=0, 1 hour), D4 (YOLOv8m to PSR decoder, 2-3 hours, expected outcomes table), dependencies, and 7-risk assessment table. Section 4 (Track C: temporal activity head, 420 lines) covers the current activity problem table (six-dimension gap to MViTv2), T2 fresh run with ACTIVITY_HEAD_SIMPLE=False (configuration comparison table, steps, parameter recommendations, timeline), T3 MViTv2 remap 75-to-69 (1 day, expected outcomes table), T4 add act_top1 (1 hour), and the T2 resource decision (Option A on 5060 Ti after main versus Option B on 3060 for parallel execution). Section 5 (Track D: ablation suite, 320 lines) covers A1 (det-only running on 3060), A2 (pose-only, expected 1.5 days), A3 (activity-only, expected 2 days), A4 (PSR-only, expected 1.5 days), B1 (Kendall versus fixed, 2 days), C1 (verb-grouping versus raw, 2 days), E1 (FPS measurement, 1 hour), E2 (PSR tau measurement, 1 day), and the efficiency claims table. Section 6 (Track E: embedding extraction, 320 lines) covers the task difference table (Paper 3 versus ours across 6 dimensions), R1a-d pipeline (extraction, retrieval, computation, comparison, 2-3 days), expected outcome (Fi@1 20-35, competitive with ViT-S), and the paper narrative. Section 7 (GPU allocation matrix, 220 lines) provides time-blocked allocation showing which experiment runs on which GPU at which time. Section 8 (risk register, 220 lines) provides 16 risks with probability, impact, and mitigation. Section 9 (day-by-day calendar, 320 lines) provides July 4-25 schedule. Section 10 (budget and resources, 220 lines) provides GPU-hours, storage, and cost estimates.
 
 ## 2.3 Reading Order Recommendations (20 lines)
 
-For a new reader who wants the fastest path to understanding, read 101-overview-v2.md Section 1 (project context, 340 lines) and Section 4 (all current metrics, 340 lines), then the headline benchmark table in this document (Section 3, 200+ lines), then Sections 4 through 7 in this document (paper integrations, 900+ lines), and finally Section 8 (seven contributions, 400+ lines). This path gets you from zero to comprehensive understanding in approximately 2,500 lines.
+For a new reader who wants the fastest path to understanding, read 111-overview.md Section 1 (project context, 340 lines) and Section 4 (all current metrics, 340 lines), then the headline benchmark table in this document (Section 3, 200+ lines), then Sections 4 through 7 in this document (paper integrations, 900+ lines), and finally Section 8 (seven contributions, 400+ lines). This path gets you from zero to comprehensive understanding in approximately 2,500 lines.
 
-For someone preparing the paper submission, read the entire 104-comparability-vs-4-papers-v2.md (2,002 lines) first, then Section 9 in this document (drop-in LaTeX, 300+ lines), and Section 10 (risks and fallback, 200+ lines).
+For someone preparing the paper submission, read the entire 114-comparability-vs-4-papers.md (2,002 lines) first, then Section 9 in this document (drop-in LaTeX, 300+ lines), and Section 10 (risks and fallback, 200+ lines).
 
-For someone running experiments, read 105-execution-plan-to-sota-v2.md (2,042 lines) completely, then the experiment columns in Section 3 of this document.
+For someone running experiments, read 115-execution-plan-to-sota.md (2,042 lines) completely, then the experiment columns in Section 3 of this document.
 
 ---
 
@@ -166,7 +166,7 @@ Table legend: Task abbreviations -- Det = Detection, Act = Activity recognition,
 
 ## 3.2 Per-Class Detection AP Breakdown (20 lines)
 
-From `101-overview-v2.md:692-708` and `metrics.jsonl` epoch 11. 24 ASD channels, of which 15 have non-zero ground truth in the validation subset.
+From `111-overview.md:692-708` and `metrics.jsonl` epoch 11. 24 ASD channels, of which 15 have non-zero ground truth in the validation subset.
 
 Classes with non-zero GT, sorted by AP:
 - Channel 7 (11110100000): AP=0.938, GT=74 -- best
@@ -214,13 +214,13 @@ Claim 1 -- first ego-pose baseline on IndustReal: Forward MAE 8.14 degrees, up M
 
 Claim 2 -- PSR POS exceeds published SOTA: Our 0.968 beats B3 (0.797) by 21% and STORM-PSR (0.812) by 19%. Same metric (weighted Damerau-Levenshtein edit distance normalized by ground-truth length), same dataset (IndustReal), same recording protocol (84 recordings from 27 participants). Paradigm difference must be disclosed: our MonotonicDecoder uses fill-forward constraint, making predicted sequences always monotonic and inflating POS. Source: `FINAL-COMPARABILITY-STATUS.md:36-48`.
 
-Claim 3 -- 67% parameter savings: 28M backbone params plus 18.5M head params equals 46.5M total versus estimated 86M for the pipeline of four separate models. Even at the lower pipeline estimate (YOLOv8m 25M + MViTv2-S 36M + B3/STORM approximately 25M = 86M), the savings are 46%. The backbone-only comparison (28M versus 86M) gives 67%. Source: `102-training-metrics-deep-dive-v2.md:193-207`.
+Claim 3 -- 67% parameter savings: 28M backbone params plus 18.5M head params equals 46.5M total versus estimated 86M for the pipeline of four separate models. Even at the lower pipeline estimate (YOLOv8m 25M + MViTv2-S 36M + B3/STORM approximately 25M = 86M), the savings are 46%. The backbone-only comparison (28M versus 86M) gives 67%. Source: `112-training-metrics-deep-dive.md:193-207`.
 
-Claim 4 -- first per-frame action classification baseline on 69-class protocol: macro-F1 0.110, frame accuracy 0.177, top-5 0.398, pred_distinct 35/69. No prior work reports per-frame classification on this verb-grouped protocol. The renaming from "action recognition" to "per-frame action classification" is honest and clearly defines a new benchmark sub-task. Source: `104-comparability-vs-4-papers-v2.md:1022-1044`.
+Claim 4 -- first per-frame action classification baseline on 69-class protocol: macro-F1 0.110, frame accuracy 0.177, top-5 0.398, pred_distinct 35/69. No prior work reports per-frame classification on this verb-grouped protocol. The renaming from "action recognition" to "per-frame action classification" is honest and clearly defines a new benchmark sub-task. Source: `114-comparability-vs-4-papers.md:1022-1044`.
 
 Claim 5 -- detection mAP50_pc = 0.506: Present-class metric excluding nine zero-GT background channels. No published equivalent on IndustReal. Source: `FINAL-COMPARABILITY-STATUS.md:28-33`.
 
-Claim 6 -- four tasks in one forward pass on $299 GPU: First single-model system to simultaneously perform all four IndustReal benchmark tasks. Prior work requires a minimum of three separate models. Source: `104-comparability-vs-4-papers-v2.md:1056-1063`.
+Claim 6 -- four tasks in one forward pass on $299 GPU: First single-model system to simultaneously perform all four IndustReal benchmark tasks. Prior work requires a minimum of three separate models. Source: `114-comparability-vs-4-papers.md:1056-1063`.
 
 ## 3.5 Claims That Require Specific Experiments (20 lines)
 
@@ -234,7 +234,7 @@ Claim 6 -- four tasks in one forward pass on $299 GPU: First single-model system
 | "System runs at X FPS on RTX 5060 Ti" | E1 | 1h | Deferred -- not needed for first draft |
 | "PSR delay tau = X seconds" | E2 | 1 day | Not implemented in eval pipeline |
 
-All P0 experiments (D1, D3, D4) can start immediately on the idle RTX 3060. As of July 4 16:57 JST, the 3060 has 470 MB VRAM in use by Xorg and Chrome -- no training process running. The ablation_det_only process (PID 80288) crashed and is not running. Source: `101-overview-v2.md:249-254`.
+All P0 experiments (D1, D3, D4) can start immediately on the idle RTX 3060. As of July 4 16:57 JST, the 3060 has 470 MB VRAM in use by Xorg and Chrome -- no training process running. The ablation_det_only process (PID 80288) crashed and is not running. Source: `111-overview.md:249-254`.
 
 ---
 
@@ -249,7 +249,7 @@ All P0 experiments (D1, D3, D4) can start immediately on the idle RTX 3060. As o
 **BibTeX key:** `schoonbeek2024industreal`
 **Key tables:** Table 2 (AR benchmark), Table 3 (ASD benchmark), Table 4 (PSR benchmark)
 
-Paper 1 defines the IndustReal dataset and provides benchmark results for three tasks: Action Recognition (75 fine-grained classes, MViTv2 and SlowFast on 16-frame clips), Assembly State Detection (YOLOv8m with 24-class mAP@0.5), and Procedure Step Recognition (B1/B2/B3 decoders with POS/F1/tau). The dataset includes 84 egocentric recordings from 27 participants, 5.8 hours of video, 9,273 action instances, and operates at 10 fps with HoloLens 2 RGB, depth, VL, and stereo modalities. Source: `104-comparability-vs-4-papers-v2.md:24-31`.
+Paper 1 defines the IndustReal dataset and provides benchmark results for three tasks: Action Recognition (75 fine-grained classes, MViTv2 and SlowFast on 16-frame clips), Assembly State Detection (YOLOv8m with 24-class mAP@0.5), and Procedure Step Recognition (B1/B2/B3 decoders with POS/F1/tau). The dataset includes 84 egocentric recordings from 27 participants, 5.8 hours of video, 9,273 action instances, and operates at 10 fps with HoloLens 2 RGB, depth, VL, and stereo modalities. Source: `114-comparability-vs-4-papers.md:24-31`.
 
 ## 4.2 Table 2: Action Recognition Benchmark (60 lines)
 
@@ -267,7 +267,7 @@ Paper 1 Table 2 reports Top-1 and Top-5 accuracy for action recognition on 75 fi
 | MViTv2-S | VL | Kinetics-400 | 58.59 | 83.50 |
 | MViTv2-S | Stereo | Kinetics-400 | 58.86 | 83.55 |
 
-Source: `104-comparability-vs-4-papers-v2.md:40-63`.
+Source: `114-comparability-vs-4-papers.md:40-63`.
 
 **Our situation:** We use a per-frame MLP (no temporal context) on 69 verb-grouped classes (reduced from 75). Our macro-F1 of 0.110 is a different metric (macro-F1 versus Top-1) on a different task (per-frame versus temporal). Direct comparison is invalid. The full decomposition of the gap:
 
@@ -280,7 +280,7 @@ Source: `104-comparability-vs-4-papers-v2.md:40-63`.
 | Class count | 69 verb-grouped | 75 fine-grained | 3-5% Top-1 | T3: MViTv2 remap 75->69 |
 | Macro-F1 vs Top-1 difference | Different metrics | Different metrics | Significant | Both should be reported |
 
-Source: `104-comparability-vs-4-papers-v2.md:96-122`.
+Source: `114-comparability-vs-4-papers.md:96-122`.
 
 **How to cite in our paper (Results section, Activity subsection):**
 
@@ -299,7 +299,7 @@ Paper 1 Table 3 reports mAP@0.5 for assembly state detection (ASD) using YOLOv8m
 | Synthetic -> IndustReal | 0.779 | 0.575 | 0.317 | 0.506 | -59.3% |
 | **COCO -> Ind+Synth (best)** | **0.838** | **0.641** | **0.317** | **0.506** | **-62.2%** |
 
-Source: `104-comparability-vs-4-papers-v2.md:148-163`.
+Source: `114-comparability-vs-4-papers.md:148-163`.
 
 **Paradigm differences across six dimensions:**
 
@@ -313,7 +313,7 @@ Source: `104-comparability-vs-4-papers-v2.md:148-163`.
 | GPU + cost | V100 ($8K+) | RTX 5060 Ti ($299 promotional) |
 | Inference speed | 178 fps on V100 | ~4.8 fps on RTX 5060 Ti (4 tasks simultaneously) |
 
-Source: `104-comparability-vs-4-papers-v2.md:166-184` and `104-comparability-vs-4-papers-v2.md:193-225`.
+Source: `114-comparability-vs-4-papers.md:166-184` and `114-comparability-vs-4-papers.md:193-225`.
 
 **D1 experiment -- what it answers:** The critical question is whether our validation split is comparable to Paper 1's test split. Paper 1 trains on 12 participants and tests on 10, using a 70/15/15 split that respects recording boundaries. Our split may differ in participant composition, which would affect absolute comparability. D1 evaluates the published YOLOv8m weights on our validation split.
 
@@ -326,7 +326,7 @@ Source: `104-comparability-vs-4-papers-v2.md:166-184` and `104-comparability-vs-
 | 0.600-0.700 | Significantly harder split | "Our split contains more challenging frames" |
 | <0.600 | Our split is very different from Paper 1 | "Direct comparison is misleading; need split reconciliation" |
 
-Source: `104-comparability-vs-4-papers-v2.md:228-239`.
+Source: `114-comparability-vs-4-papers.md:228-239`.
 
 **How to cite in our paper (Results section, Detection subsection):**
 
@@ -352,7 +352,7 @@ Paper 1 Table 4 reports POS, F1, and tau for three PSR decoders (B1: change dete
 | B2 | 0.636 | 0.784 | 20.2 | **0.968** (+52%) | 0.144 (-82%) |
 | **B3** | **0.731** | **0.816** | **20.4** | **0.968** (+32%) | 0.144 (-82%) |
 
-Source: `104-comparability-vs-4-papers-v2.md:257-299`.
+Source: `114-comparability-vs-4-papers.md:257-299`.
 
 **Paradigm analysis -- why our POS is high and F1 is low:**
 
@@ -362,7 +362,7 @@ Our MonotonicDecoder operates at the FRAME level: it predicts per-component bina
 
 **Why POS = 0.968 is inflated.** The fill-forward constraint guarantees that the predicted sequence is always a subsequence of the canonical assembly order. The weighted Damerau-Levenshtein edit distance, which Paper 1 designed for scenarios where steps can be inserted, deleted, substituted, and transposed, only sees insertions (adding steps that the canonical order includes). Deletions, substitutions, and transpositions are structurally impossible under our decoder. This reduces the maximum possible edit distance, increasing POS. A perfect POS can be approximated by a model that simply predicts the canonical order before observing any frames.
 
-**Why F1 = 0.144 is depressed.** Our F1 of 0.144 on the ConvNeXt backbone (mAP=0.317) is driven primarily by detection quality. The PSR head operates on spatial-semantic (s2) features from the detection FPN. When detection is weak (62% below YOLOv8m), the s2 features are poor, and the per-frame binary classifiers cannot reliably detect transitions. D4 (YOLOv8m to MonotonicDecoder) will demonstrate this by showing F1 = 0.50-0.70 when detection quality is not the bottleneck. Source: `104-comparability-vs-4-papers-v2.md:288-297`.
+**Why F1 = 0.144 is depressed.** Our F1 of 0.144 on the ConvNeXt backbone (mAP=0.317) is driven primarily by detection quality. The PSR head operates on spatial-semantic (s2) features from the detection FPN. When detection is weak (62% below YOLOv8m), the s2 features are poor, and the per-frame binary classifiers cannot reliably detect transitions. D4 (YOLOv8m to MonotonicDecoder) will demonstrate this by showing F1 = 0.50-0.70 when detection quality is not the bottleneck. Source: `114-comparability-vs-4-papers.md:288-297`.
 
 **How to cite in our paper (Results section, PSR subsection):**
 
@@ -380,7 +380,7 @@ Our MonotonicDecoder operates at the FRAME level: it predicts per-component bina
 **BibTeX key:** `schoonbeek2025storm`
 **Key table:** Table 1 (PSR on IndustReal and MECCANO), Tables 2-5 (ablations)
 
-STORM-PSR is the first approach to directly optimize for PSR using spatio-temporal features, combining an ASD stream (YOLOv8m) with a spatio-temporal stream (ViT-S + 6-layer transformer) via linear late fusion. It introduces key-frame sampling (KFS) and key-clip aware sampling (KCAS) for weakly supervised pretraining. Source: `104-comparability-vs-4-papers-v2.md:420-423`.
+STORM-PSR is the first approach to directly optimize for PSR using spatio-temporal features, combining an ASD stream (YOLOv8m) with a spatio-temporal stream (ViT-S + 6-layer transformer) via linear late fusion. It introduces key-frame sampling (KFS) and key-clip aware sampling (KCAS) for weakly supervised pretraining. Source: `114-comparability-vs-4-papers.md:420-423`.
 
 ## 5.2 Table 1: PSR Performance on IndustReal (40 lines)
 
@@ -394,7 +394,7 @@ STORM-PSR is the first approach to directly optimize for PSR using spatio-tempor
 | Ours (ConvNeXt multi-task, per-frame decoder) | **0.968** (+19%) | **0.144** (-84%) | N/A |
 | Ours (YOLOv8m -> decoder, D4 estimated) | ~0.80-0.90 | ~0.50-0.70 | N/A |
 
-Source: `104-comparability-vs-4-papers-v2.md:429-458`.
+Source: `114-comparability-vs-4-papers.md:429-458`.
 
 **MECCANO results (for reference, not applicable to our comparison):**
 
@@ -404,9 +404,9 @@ Source: `104-comparability-vs-4-papers-v2.md:429-458`.
 | Spatio-temporal stream only | 0.206 | 0.247 | 120.3 |
 | STORM-PSR combined | 0.377 | 0.497 | 88.6 |
 
-**F1 discrepancy note between Paper 1 and Paper 2:** STORM-PSR reports B3 baseline F1 = 0.891 (versus 0.883 in Paper 1) and tau = 21.0 seconds (versus 22.4 in Paper 1). This minor discrepancy (approximately 1% for F1, 6% for tau) is likely due to a code update between publications. The direction and magnitude are consistent. Source: `104-comparability-vs-4-papers-v2.md:441-443`.
+**F1 discrepancy note between Paper 1 and Paper 2:** STORM-PSR reports B3 baseline F1 = 0.891 (versus 0.883 in Paper 1) and tau = 21.0 seconds (versus 22.4 in Paper 1). This minor discrepancy (approximately 1% for F1, 6% for tau) is likely due to a code update between publications. The direction and magnitude are consistent. Source: `114-comparability-vs-4-papers.md:441-443`.
 
-**Key insight for our paper:** The spatio-temporal stream alone (ViT-S + 6-layer transformer + KFS + KCAS + ImageNet-21K pretrain) achieves only F1 = 0.506 on PSR, despite all that machinery. This tells us that PSR event detection on IndustReal is hard regardless of architecture -- the bottleneck is the inherent ambiguity of step completion timestamps. Even STORM-PSR's combined model (ASD + temporal) achieves F1 = 0.901, only 0.018 above B3's 0.883. This means the temporal stream adds only marginal improvement over the ASD-only baseline. Source: `104-comparability-vs-4-papers-v2.md:527-536`.
+**Key insight for our paper:** The spatio-temporal stream alone (ViT-S + 6-layer transformer + KFS + KCAS + ImageNet-21K pretrain) achieves only F1 = 0.506 on PSR, despite all that machinery. This tells us that PSR event detection on IndustReal is hard regardless of architecture -- the bottleneck is the inherent ambiguity of step completion timestamps. Even STORM-PSR's combined model (ASD + temporal) achieves F1 = 0.901, only 0.018 above B3's 0.883. This means the temporal stream adds only marginal improvement over the ASD-only baseline. Source: `114-comparability-vs-4-papers.md:527-536`.
 
 ## 5.3 The Four STORM-PSR Ablation Studies (50 lines)
 
@@ -418,7 +418,7 @@ Source: `104-comparability-vs-4-papers-v2.md:429-458`.
 | TCN | 0.195 | 0.414 | 49.4 |
 | Transformer | **0.497** | **0.506** | **14.2** |
 
-Transformer outperforms LSTM by 39% and TCN by 22% on F1. Key insight for our work: even the temporal stream alone cannot match the ASD-based baseline (F1 = 0.506 versus 0.891). PSR on IndustReal is primarily a spatial (object state) task. Source: `104-comparability-vs-4-papers-v2.md:472-479`.
+Transformer outperforms LSTM by 39% and TCN by 22% on F1. Key insight for our work: even the temporal stream alone cannot match the ASD-based baseline (F1 = 0.506 versus 0.891). PSR on IndustReal is primarily a spatial (object state) task. Source: `114-comparability-vs-4-papers.md:472-479`.
 
 **Ablation 2 (Table 3): Sampling Strategy (for temporal stream)**
 
@@ -428,7 +428,7 @@ Transformer outperforms LSTM by 39% and TCN by 22% on F1. Key insight for our wo
 | Gaussian | 0.419 | 0.382 | 22.4 |
 | **KCAS (bimodal)** | **0.497** | **0.506** | **14.2** |
 
-Without KFS, all temporal models fail completely (F1 = 0.000). KCAS bimodal sampling adds 20% relative improvement over uniform. The key KCAS insight: hard negatives (frames immediately BEFORE step completion) are more valuable than positives (frames after). Source: `104-comparability-vs-4-papers-v2.md:485-493`.
+Without KFS, all temporal models fail completely (F1 = 0.000). KCAS bimodal sampling adds 20% relative improvement over uniform. The key KCAS insight: hard negatives (frames immediately BEFORE step completion) are more valuable than positives (frames after). Source: `114-comparability-vs-4-papers.md:485-493`.
 
 **Ablation 3 (Table 4): Temporal Receptive Field**
 
@@ -438,7 +438,7 @@ Without KFS, all temporal models fail completely (F1 = 0.000). KCAS bimodal samp
 | TCN | 0.119 | 0.144 | 0.265 | 0.502 |
 | MLP (non-temporal) | 0.226 | 0.346 | 0.407 | 0.330 |
 
-Longer temporal context monotonically improves PSR for both Transformer and TCN. At w=256, TCN matches Transformer F1 (0.502 versus 0.514). Interesting: the MLP at w=256 (non-temporal per-frame) achieves F1 = 0.330, above the Transformer-16 F1 = 0.218. Our current F1 = 0.144 is closest to TCN-w16 (F1 = 0.119) or Transformer-w16 (F1 = 0.218). Source: `104-comparability-vs-4-papers-v2.md:497-505`.
+Longer temporal context monotonically improves PSR for both Transformer and TCN. At w=256, TCN matches Transformer F1 (0.502 versus 0.514). Interesting: the MLP at w=256 (non-temporal per-frame) achieves F1 = 0.330, above the Transformer-16 F1 = 0.218. Our current F1 = 0.144 is closest to TCN-w16 (F1 = 0.119) or Transformer-w16 (F1 = 0.218). Source: `114-comparability-vs-4-papers.md:497-505`.
 
 **Ablation 4 (Table 5): KFS Time Window**
 
@@ -448,7 +448,7 @@ Longer temporal context monotonically improves PSR for both Transformer and TCN.
 | **2.0s (optimal)** | **0.514** | **25.3** |
 | 8.0s | 0.508 | 52.7 |
 
-Optimal sampling window is 2 seconds after step completion. Source: `104-comparability-vs-4-papers-v2.md:549-555`.
+Optimal sampling window is 2 seconds after step completion. Source: `114-comparability-vs-4-papers.md:549-555`.
 
 ## 5.4 How to Cite STORM-PSR in Our Paper (20 lines)
 
@@ -476,7 +476,7 @@ Optimal sampling window is 2 seconds after step completion. Source: `104-compara
 
 This is the most important thing to understand about Paper 3: it addresses a fundamentally different task from our work. Paper 3 does assembly state recognition (ASR) as an embedding retrieval problem. Given a test image, find the closest training image by cosine similarity in 128-dim embedding space. The predicted class is the nearest neighbor's class. Our system does object detection (predicting bounding boxes plus class labels).
 
-From `104-comparability-vs-4-papers-v2.md:622-626`: "A model can have high F1@1 without any localization capability (it just needs to identify the assembly state from the whole image). A model can have high mAP@0.5 with poor retrieval (it can detect individual components without understanding the overall assembly state)."
+From `114-comparability-vs-4-papers.md:622-626`: "A model can have high F1@1 without any localization capability (it just needs to identify the assembly state from the whole image). A model can have high mAP@0.5 with poor retrieval (it can detect individual components without understanding the overall assembly state)."
 
 **Recommendation:** Cite Paper 3 in Related Work only. Do NOT include in the main benchmark comparison table. If R1 (embedding extraction) is run, add a supplementary comparison section.
 
@@ -502,7 +502,7 @@ Paper 3 reports macro-averaged F1@1 and MAP@R(+) for 2 backbones x 4 training me
 | SupCon | ~30 | ~22 |
 | **SupCon + ISIL (best)** | **~32** | **~25** |
 
-Source: `104-comparability-vs-4-papers-v2.md:596-613`.
+Source: `114-comparability-vs-4-papers.md:596-613`.
 
 Key observation: ResNet-34 consistently outperforms ViT-S for assembly state recognition, which is the opposite of typical image classification. ISIL provides 5-22% MAP@R(+) improvement across all configurations.
 
@@ -515,7 +515,7 @@ R1 (embedding extraction plus retrieval eval, 2-3 days) would:
 4. For each query validation image, find nearest neighbor by cosine similarity
 5. Compute F1@1 and MAP@R per Paper 3's definition
 
-**Expected outcome** from `104-comparability-vs-4-papers-v2.md:641-644`: Our ConvNeXt-Tiny (random init, detection-trained) is expected to achieve F1@1 approximately 20-35. This is below ResNet-34 SupCon+ISIL (~55) but competitive with ViT-S (~30-32).
+**Expected outcome** from `114-comparability-vs-4-papers.md:641-644`: Our ConvNeXt-Tiny (random init, detection-trained) is expected to achieve F1@1 approximately 20-35. This is below ResNet-34 SupCon+ISIL (~55) but competitive with ViT-S (~30-32).
 
 **Narrative after R1:** "Despite being trained exclusively with detection supervision and no contrastive learning, our ConvNeXt-Tiny backbone achieves F1@1 = X on assembly state retrieval -- within Y% of specialist contrastive methods and competitive with ViT-S (F1@1 = 32)."
 
@@ -532,19 +532,19 @@ R1 (embedding extraction plus retrieval eval, 2-3 days) would:
 **File:** `industrealpaper/20251120_Schoonbeek_hf.pdf`
 **Date:** November 2025
 
-The thesis compiles all work from Papers 1-3 plus additional chapters on error localization (Chapter 5) and an AR user study (Chapter 7). It provides more comprehensive documentation but no new benchmark numbers. Source: `104-comparability-vs-4-papers-v2.md:806-813`.
+The thesis compiles all work from Papers 1-3 plus additional chapters on error localization (Chapter 5) and an AR user study (Chapter 7). It provides more comprehensive documentation but no new benchmark numbers. Source: `114-comparability-vs-4-papers.md:806-813`.
 
 ## 7.2 Chapter-by-Chapter Confirmation (40 lines)
 
 **Chapter 3 (same as Paper 1):** Table 3.2 confirms AR benchmark (MViTv2 Top-1 = 65.25%). Table 3.3 confirms ASD benchmark (YOLOv8m mAP@0.5 = 0.838). Table 3.4 confirms PSR benchmark (B3 POS = 0.797, F1 = 0.883, tau = 22.4s). All numbers match Paper 1 exactly.
 
-**Chapter 4 (same as Paper 3):** Figure 4.4 confirms F1@1 and MAP@R for all 8 configurations. Figure 4.5 provides UMAP visualization of embedding space (not directly comparable). Figure 4.6 confirms unseen state generalization results. Source: `104-comparability-vs-4-papers-v2.md:832-840`.
+**Chapter 4 (same as Paper 3):** Figure 4.4 confirms F1@1 and MAP@R for all 8 configurations. Figure 4.5 provides UMAP visualization of embedding space (not directly comparable). Figure 4.6 confirms unseen state generalization results. Source: `114-comparability-vs-4-papers.md:832-840`.
 
-**Chapter 5 (NEW -- error localization):** Uses change detection between synthetic CAD reference images and real-world assembly images. Performance: ROC-AUC = 0.93, AP = 0.88. Trained exclusively on synthetic data, tested on real errors. This is a DIFFERENT TASK from our work: given a reference image (correct assembly) and a sample image, localize WHERE the error is. We do not attempt localization. Source: `104-comparability-vs-4-papers-v2.md:847-860`.
+**Chapter 5 (NEW -- error localization):** Uses change detection between synthetic CAD reference images and real-world assembly images. Performance: ROC-AUC = 0.93, AP = 0.88. Trained exclusively on synthetic data, tested on real errors. This is a DIFFERENT TASK from our work: given a reference image (correct assembly) and a sample image, localize WHERE the error is. We do not attempt localization. Source: `114-comparability-vs-4-papers.md:847-860`.
 
-**Chapter 6 (same as Paper 2):** Table 6.1 confirms STORM-PSR numbers (POS = 0.812, F1 = 0.901, tau = 15.5s). Tables 6.2-6.5 confirm all four ablation studies. Additional context: MECCANO has only 1.1 step completions per minute of video versus 2.2 for IndustReal. Source: `104-comparability-vs-4-papers-v2.md:864-878`.
+**Chapter 6 (same as Paper 2):** Table 6.1 confirms STORM-PSR numbers (POS = 0.812, F1 = 0.901, tau = 15.5s). Tables 6.2-6.5 confirm all four ablation studies. Additional context: MECCANO has only 1.1 step completions per minute of video versus 2.2 for IndustReal. Source: `114-comparability-vs-4-papers.md:864-878`.
 
-**Chapter 7 (NEW -- AR user study):** 27 participants in three groups (novices, technicians, experts). Key results: experts make errors at higher rates (1.8/procedure, overconfident), novices follow instructions more closely (0.7/procedure). System ROC-AUC = 0.93 for error detection. Implications for our work: a multi-task system like ours could replace the pipeline of individual components, and our PSR output could provide AR guidance. Source: `104-comparability-vs-4-papers-v2.md:880-908`.
+**Chapter 7 (NEW -- AR user study):** 27 participants in three groups (novices, technicians, experts). Key results: experts make errors at higher rates (1.8/procedure, overconfident), novices follow instructions more closely (0.7/procedure). System ROC-AUC = 0.93 for error detection. Implications for our work: a multi-task system like ours could replace the pipeline of individual components, and our PSR output could provide AR guidance. Source: `114-comparability-vs-4-papers.md:880-908`.
 
 ## 7.3 Thesis Confirmation Summary (15 lines)
 
@@ -564,7 +564,7 @@ The thesis confirms ALL numbers from Papers 1-3 with no discrepancies. This is v
 
 **Claim:** "We report the first ego-pose estimation baseline on the IndustReal dataset. Our multi-task ConvNeXt-Tiny predicts HoloLens 2 wearer head orientation with forward MAE of 8.14 degrees and up MAE of 7.06 degrees, using only the integrated RGB camera stream."
 
-**Evidence:** Forward MAE = 8.14 degrees at epoch 11, source `train.log` Val: line confirmed in `101-overview-v2.md:751-757`. Up MAE = 7.06 degrees, source `101-overview-v2.md:754`. No prior work benchmarks ego-pose on IndustReal -- Paper 1 records HoloLens 2 head tracking as a sensor modality (line 316-318) but does not predict it. Position values are unreliable per evaluate.py:1918-1926.
+**Evidence:** Forward MAE = 8.14 degrees at epoch 11, source `train.log` Val: line confirmed in `111-overview.md:751-757`. Up MAE = 7.06 degrees, source `111-overview.md:754`. No prior work benchmarks ego-pose on IndustReal -- Paper 1 records HoloLens 2 head tracking as a sensor modality (line 316-318) but does not predict it. Position values are unreliable per evaluate.py:1918-1926.
 
 **Paper section:** Results, Ego-Pose Estimation subsection (new, required in current LaTeX).
 
@@ -578,7 +578,7 @@ The thesis confirms ALL numbers from Papers 1-3 with no discrepancies. This is v
 
 **Claim:** "We present the first single-model system to simultaneously perform all four IndustReal benchmark tasks on a single consumer GPU ($299 promotional price for RTX 5060 Ti 16GB)."
 
-**Evidence:** Total trainable params = 45.0M, backbone 28.6M, source `102-training-metrics-deep-dive-v2.md:193-207`. Pipeline baseline estimate: 86M params (YOLOv8m 25M + MViTv2-S 36M + B3/STORM approximately 25M). Backbone savings: (86M - 28M) / 86M = 67%. GPU cost: $299 promotional versus $8K+ V100 or $10K+ A100.
+**Evidence:** Total trainable params = 45.0M, backbone 28.6M, source `112-training-metrics-deep-dive.md:193-207`. Pipeline baseline estimate: 86M params (YOLOv8m 25M + MViTv2-S 36M + B3/STORM approximately 25M). Backbone savings: (86M - 28M) / 86M = 67%. GPU cost: $299 promotional versus $8K+ V100 or $10K+ A100.
 
 **Paper section:** Introduction paragraph 2, Results, Efficiency subsection.
 
@@ -590,7 +590,7 @@ The thesis confirms ALL numbers from Papers 1-3 with no discrepancies. This is v
 
 **Claim:** "We propose and report present-class mAP@0.5 (mAP50_pc) which excludes zero-GT background channels from the mAP computation. Our system achieves mAP50_pc = 0.506, compared to the diluted standard mAP@0.5 = 0.317."
 
-**Evidence:** Standard mAP@0.5 = 0.317 (diluted by 9 zero-GT channels), present-class mAP50_pc = 0.506. Source `101-overview-v2.md:683-687`. Zero-GT classes: channels 1,2,3,5,8,13,14,15,23. Source `101-overview-v2.md:708`.
+**Evidence:** Standard mAP@0.5 = 0.317 (diluted by 9 zero-GT channels), present-class mAP50_pc = 0.506. Source `111-overview.md:683-687`. Zero-GT classes: channels 1,2,3,5,8,13,14,15,23. Source `111-overview.md:708`.
 
 **Paper section:** Results, Detection subsection (new sub-subsection "Present-Class Metric").
 
@@ -604,7 +604,7 @@ The thesis confirms ALL numbers from Papers 1-3 with no discrepancies. This is v
 
 **Claim:** "We define and report per-frame action classification as a distinct task from temporal action recognition, establishing the first baseline on the 69-class IndustReal verb-grouped protocol."
 
-**Evidence:** Per-frame macro-F1 = 0.110, frame accuracy = 0.177, top-5 = 0.398, pred_distinct = 35/69. Source `101-overview-v2.md:716-721`. Verb-grouping reduces 75 fine-grained classes to 69 by merging rarely-occurring verb-noun pairs with the same verb. Source `104-comparability-vs-4-papers-v2.md:1028-1041`.
+**Evidence:** Per-frame macro-F1 = 0.110, frame accuracy = 0.177, top-5 = 0.398, pred_distinct = 35/69. Source `111-overview.md:716-721`. Verb-grouping reduces 75 fine-grained classes to 69 by merging rarely-occurring verb-noun pairs with the same verb. Source `114-comparability-vs-4-papers.md:1028-1041`.
 
 **Paper section:** Results, Per-Frame Action Classification subsection (new).
 
@@ -616,7 +616,7 @@ The thesis confirms ALL numbers from Papers 1-3 with no discrepancies. This is v
 
 **Claim:** "Our per-frame PSR MonotonicDecoder achieves POS = 0.968, exceeding the published B3 baseline (0.797) by 21% and STORM-PSR (0.812) by 19%, with full paradigm disclosure."
 
-**Evidence:** Our POS = 0.968 from `train.log` Val: line at epoch 11. Paper 1 B3 POS = 0.797 (Table 4), Paper 2 STORM-PSR POS = 0.812 (Table 1). Source `104-comparability-vs-4-papers-v2.md:260-265` and `104-comparability-vs-4-papers-v2.md:430-435`. Beat margins: +21% over B3, +19% over STORM-PSR. Source `FINAL-COMPARABILITY-STATUS.md:43-48`.
+**Evidence:** Our POS = 0.968 from `train.log` Val: line at epoch 11. Paper 1 B3 POS = 0.797 (Table 4), Paper 2 STORM-PSR POS = 0.812 (Table 1). Source `114-comparability-vs-4-papers.md:260-265` and `114-comparability-vs-4-papers.md:430-435`. Beat margins: +21% over B3, +19% over STORM-PSR. Source `FINAL-COMPARABILITY-STATUS.md:43-48`.
 
 **Paradigm disclosure:** Our MonotonicDecoder uses a fill-forward constraint -- each component transitions from 0 to 1 at most once, in canonical order. The predicted step sequence is always a subsequence of canonical order, inflating POS. The weighted Damerau-Levenshtein edit distance only sees insertions (adding steps already in canonical order), never deletions, substitutions, or transpositions.
 
@@ -870,19 +870,19 @@ If time runs short and only D1 (2 hours) and D3 (1 hour) run on the idle 3060:
 
 **Forward angular MAE (degrees):** Mean angular error between predicted and ground-truth forward gaze direction vectors. Computed as: MAE = mean over frames of arccos(|dot(v_pred, v_gt)|). Lower is better. Source: `evaluate.py:1918-1926`.
 
-**Up vector MAE (degrees):** Same as above for the up direction vector. Source: `101-overview-v2.md:754`.
+**Up vector MAE (degrees):** Same as above for the up direction vector. Source: `111-overview.md:754`.
 
 **Position MAE (mm):** NOT REPORTED. The evaluation code explicitly warns "DO NOT USE FOR REPORTING" at evaluate.py:1918-1926. The HEAD_POSE_POS_SCALE=100.0 unit conversion is unverified.
 
 ## 16b.4 PSR Metrics
 
-**POS (Procedure Order Similarity):** Weighted Damerau-Levenshtein edit distance between predicted and ground-truth step sequences, normalized by ground-truth length and clipped at 1.0. Higher is better (1.0 = perfect order). Our POS of 0.968 is inflated by the fill-forward MonotonicDecoder constraint. Source: `104-comparability-vs-4-papers-v2.md:274-276`.
+**POS (Procedure Order Similarity):** Weighted Damerau-Levenshtein edit distance between predicted and ground-truth step sequences, normalized by ground-truth length and clipped at 1.0. Higher is better (1.0 = perfect order). Our POS of 0.968 is inflated by the fill-forward MonotonicDecoder constraint. Source: `114-comparability-vs-4-papers.md:274-276`.
 
-**F1@±3 (Per-step F1):** Per-step detection F1 with ±3-frame tolerance on step completion timestamps. True positive: predicted completion timestamp within 3 frames of actual completion. Source: `104-comparability-vs-4-papers-v2.md:276-278`.
+**F1@±3 (Per-step F1):** Per-step detection F1 with ±3-frame tolerance on step completion timestamps. True positive: predicted completion timestamp within 3 frames of actual completion. Source: `114-comparability-vs-4-papers.md:276-278`.
 
 **Edit Distance:** Levenshtein distance between predicted and ground-truth step sequences, normalized by maximum possible distance. Approximately 0.752 = 75.2% of steps in correct order. Source: `train.log` Val: line.
 
-**Component Binary Accuracy:** Per-component accuracy of binary state prediction (installed/not installed). Average across 11 components: 0.346. Range: 0.278 (C4) to 1.000 (C0). Source: `102-training-metrics-deep-dive-v2.md:766-770`.
+**Component Binary Accuracy:** Per-component accuracy of binary state prediction (installed/not installed). Average across 11 components: 0.346. Range: 0.278 (C4) to 1.000 (C0). Source: `112-training-metrics-deep-dive.md:766-770`.
 
 ## 16b.5 Combined Metric
 
@@ -890,7 +890,7 @@ The training code uses a weighted combination for best-model selection:
 
 combined = 0.30 * det_mAP50_pc + 0.35 * (1 - act_macro_f1) + 0.15 * (45/(45 + fwd_MAE)) + 0.20 * psr_f1
 
-At epoch 11: 0.30 * 0.506 + 0.35 * (1 - 0.110) + 0.15 * (45/53.14) + 0.20 * 0.144 = 0.152 + 0.312 + 0.127 + 0.029 = 0.619? This doesn't match the logged 0.306. The discrepancy suggests the formula involves additional normalization (active-head reweighting when some heads are zero). Source: `102-training-metrics-deep-dive-v2.md:374-389`.
+At epoch 11: 0.30 * 0.506 + 0.35 * (1 - 0.110) + 0.15 * (45/53.14) + 0.20 * 0.144 = 0.152 + 0.312 + 0.127 + 0.029 = 0.619? This doesn't match the logged 0.306. The discrepancy suggests the formula involves additional normalization (active-head reweighting when some heads are zero). Source: `112-training-metrics-deep-dive.md:374-389`.
 
 ---
 
@@ -930,11 +930,11 @@ The research targets the 2027 Asia Conference on Artificial Intelligence and Mac
 
 | File | Total Lines | Key Content |
 |------|-------------|-------------|
-| `101-overview-v2.md` | 2,011 | Project context, hardware, dataset, architecture, live state |
-| `102-training-metrics-deep-dive-v2.md` | 2,011 | All metrics, losses, Kendall, parameter architecture |
-| `103-all-fixes-chronicle-v2.md` | 2,019 | F1-F22b fixes, crash recovery, correctness |
-| `104-comparability-vs-4-papers-v2.md` | 2,002 | Every metric vs every published paper |
-| `105-execution-plan-to-sota-v2.md` | 2,042 | Experiment tracks A-E, GPU schedule, calendar |
+| `111-overview.md` | 2,011 | Project context, hardware, dataset, architecture, live state |
+| `112-training-metrics-deep-dive.md` | 2,011 | All metrics, losses, Kendall, parameter architecture |
+| `113-all-fixes-chronicle.md` | 2,019 | F1-F22b fixes, crash recovery, correctness |
+| `114-comparability-vs-4-papers.md` | 2,002 | Every metric vs every published paper |
+| `115-execution-plan-to-sota.md` | 2,042 | Experiment tracks A-E, GPU schedule, calendar |
 | `FINAL-COMPARABILITY-STATUS.md` | 204 | Which metrics are comparable and why |
 | `MASTER-EXECUTION-PLAN.md` | 176 | The one plan to rule them all |
 | `popw_aaiml2027.tex` | 303 | Current AAIML template (pathology-focused) |
@@ -971,8 +971,8 @@ All values from `train.log` Val: line at 2026-07-04 13:58:10 JST and `metrics.js
 | act_top5_accuracy | 0.398 | `train.log` Val: line |
 | act_clip_accuracy | 0.0625 | `train.log` Val: line |
 | forward_angular_MAE_deg | 8.14 | `train.log` Val: line |
-| up_angular_MAE_deg | 7.06 | `101-overview-v2.md:754` |
-| head_pose_angular_MAE_deg | 6.98 | `105-execution-plan-to-sota-v2.md:126` |
+| up_angular_MAE_deg | 7.06 | `111-overview.md:754` |
+| head_pose_angular_MAE_deg | 6.98 | `115-execution-plan-to-sota.md:126` |
 | psr_f1 | 0.144 | `train.log` Val: line |
 | psr_pos | 0.968 | `train.log` Val: line |
 | psr_edit | 0.752 | `train.log` Val: line |
@@ -1095,7 +1095,7 @@ where exp(-log_var_i) is the effective precision (weight) for task i, and the +l
 | 10 | -0.072 | -0.999 | +0.438 | -0.347 | 1.075 | 2.716 | 0.645 | 1.415 |
 | 11 | -0.137 | -0.998 | +0.527 | -0.365 | 1.147 | 2.713 | 0.590 | 1.441 |
 
-Source: `102-training-metrics-deep-dive-v2.md:818-826`.
+Source: `112-training-metrics-deep-dive.md:818-826`.
 
 ## 12.3 Interpretation of the Trajectory
 
@@ -1118,7 +1118,7 @@ Source: `102-training-metrics-deep-dive-v2.md:818-826`.
 
 Without the HP_PREC_CAP, head pose would claim 53.7% of the gradient, leaving only 46.3% for the other three heads combined.
 
-Source: `102-training-metrics-deep-dive-v2.md:874-890`.
+Source: `112-training-metrics-deep-dive.md:874-890`.
 
 ## 12.5 The HP_PREC_CAP Mechanism
 
@@ -1155,7 +1155,7 @@ This means log_var_pose can sit at a fossil value (currently -0.998 from a check
 | C9 | 0.412 | 0.347 | 88.6 | Late component |
 | C10 | **0.289** | 0.221 | 105.4 | Late component, rare, poorly learned |
 
-Source: `102-training-metrics-deep-dive-v2.md:323-336` and `101-overview-v2.md:148-155`.
+Source: `112-training-metrics-deep-dive.md:323-336` and `111-overview.md:148-155`.
 
 ## 13.2 Prevalence vs Accuracy Correlation
 
@@ -1192,7 +1192,7 @@ After both fixes, CPU synthetic testing showed: correct grouping of [40, 11] per
 
 # Section 14: Training Dynamics Deep Analysis (Expanded from F1-F22b)
 
-## 13.1 The Three Training Pathologies (from 103-all-fixes-chronicle-v2.md)
+## 13.1 The Three Training Pathologies (from 113-all-fixes-chronicle.md)
 
 The AAIML paper currently frames three pathologies. This section provides the evidence from our training runs to support those claims.
 
@@ -1206,7 +1206,7 @@ Recovery of activity Top-1: From 2.1% (temporal on shuffled data) to 17.8% (per-
 
 **Pathology 2: Loss Scale Suppression Under Label Sparsity**
 
-Evidence from our Kendall log-var trajectory (102-training-metrics-deep-dive-v2.md:818-826): The activity log_var increases over training epochs from -0.003 (epoch 1) to +0.527 (epoch 11). This means Kendall's learned precision for activity drops from approximately 1.0 to approximately 0.59. The activity head receives decreasing gradient as training progresses.
+Evidence from our Kendall log-var trajectory (112-training-metrics-deep-dive.md:818-826): The activity log_var increases over training epochs from -0.003 (epoch 1) to +0.527 (epoch 11). This means Kendall's learned precision for activity drops from approximately 1.0 to approximately 0.59. The activity head receives decreasing gradient as training progresses.
 
 Mechanism: With 46 of 74 classes below 1% support, the activity loss is numerically small on most samples. The Kendall gradient: dL/ds = -exp(-s)*L + 1. When L << 1, the fixed point s* = log(L) is strongly negative, creating a spiral: decreasing weight leads to less gradient, which leads to continued majority-class prediction, which leads to smaller L, which leads to further decreasing weight.
 
@@ -1877,7 +1877,7 @@ The five v2 docs were written by different authors at different times. The follo
 
 ## 16d.2 Resolved: Activity Class Count
 
-The most significant discrepancy involves the activity class count. Doc 1 (101-overview-v2.md) states 69 verb-grouped classes. Doc 2 (102-training-metrics-deep-dive-v2.md) states NUM_CLASSES_ACT=75. Doc 3 (103-all-fixes-chronicle-v2.md) confirms NUM_CLASSES_ACT=75 with action_id=0 as a real class and IDs 37 and 64 absent.
+The most significant discrepancy involves the activity class count. Doc 1 (111-overview.md) states 69 verb-grouped classes. Doc 2 (112-training-metrics-deep-dive.md) states NUM_CLASSES_ACT=75. Doc 3 (113-all-fixes-chronicle.md) confirms NUM_CLASSES_ACT=75 with action_id=0 as a real class and IDs 37 and 64 absent.
 
 Resolution: The config reserves 75 slots (IDs 0-74), but verb-grouping reduces the effective number to 69. Activity class 0 is a real class ("take_short_brace"), not background. Class 37 is absent (no training frames). The remaining 69 slots represent the verb-grouped protocol. The activity head outputs 69 logits.
 
