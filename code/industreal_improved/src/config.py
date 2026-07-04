@@ -586,7 +586,7 @@ GRAD_CLIP_NORM = 5.0  # [FIX 2026-07-01 agent audit] Was 1.0 — far too tight f
                          # Combined gradient norm from 5 heads sharing backbone easily exceeds 5.0.
                          # At 1.0, every head's gradient was clipped 80-90%, slowing backbone convergence.
                          # 5.0 is the standard multi-task value (still safe against gradient explosion).
-VAL_EVERY = 3    # Evaluate every 3 epochs — skip useless epoch-0 val after random init
+VAL_EVERY = 1    # Evaluate every epoch (was 3 — now that training is stable, more frequent val is safe and informative)
 VAL_EVERY_N_STEPS = 0  # Disabled — intra-epoch step-vals caused CUDA hangs. End-of-epoch val every VAL_EVERY epochs is sufficient.
 EVAL_MAX_BATCHES = 250    # Cap validation to 250 batches — shorter eval window reduces CUDA hang risk
                           # Full 38K-frame eval takes 5+ hours. Fast val every epoch,
@@ -938,7 +938,7 @@ ACTIVITY_LOSS_WEIGHT = 0.8     # Per paper: "CE (label_smooth=0.1) × 0.8" (was 
 # 1-of-17 tokens behind two self-attention blocks, attenuating its gradient. A
 # direct MLP gives a strong, short gradient path and ~150K params. Re-enable the
 # temporal stack only when training on true sequence batches (sequence_mode).
-ACTIVITY_HEAD_SIMPLE = True
+ACTIVITY_HEAD_SIMPLE = True   # Per-frame MLP (temporal head needs fresh run due to random TCN+ViT weights)
 ACTIVITY_HEAD_SIMPLE_HIDDEN = 256  # hidden width of the simple MLP classifier
 
 # Per paper: "ℒ_hp = MSE × 5.0" — explicit multiplier for head pose loss
