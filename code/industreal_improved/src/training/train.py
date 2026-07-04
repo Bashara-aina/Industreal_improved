@@ -1242,7 +1242,7 @@ def train_one_epoch(
                     'psr_labels': targets_seq['psr_labels'],
                     # Omit head_pose from fake_targets too — matched to fake_outputs omission.
                     # detection/activity/hand_joints also omitted: train_det=False,
-                    # train_act=False, train_pose=False in this branch.
+                    # train_pose=False in this branch.
                 }
                 loss_seq, loss_dict_seq = criterion(fake_outputs, fake_targets)
                 # [TUNE 2026-06-15] Scale PSR loss on seq batches for stronger temporal signal
