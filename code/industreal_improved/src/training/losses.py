@@ -1330,6 +1330,11 @@ class MultiTaskLoss(nn.Module):
         pose_cap = float(getattr(C, 'POSE_LOSS_CAP', 30.0))
         loss_pose = _smooth_cap(loss_pose, pose_cap)
 
+        # [FIX 2026-07-04 Opus 111 SS3.2] Zero body-pose loss when the branch
+        # is frozen — prevents dead-code loss from distorting Kendall head-pose weight.
+        if getattr(C, 'FREEZE_BODY_POSE_BRANCH', False):
+            loss_pose = zero  # body-pose frozen — no gradient contribution
+
         # === Activity ===
         if self.train_act:
             act_logits = outputs['act_logits']

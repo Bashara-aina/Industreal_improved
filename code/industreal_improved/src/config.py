@@ -48,6 +48,10 @@ USE_KENDALL     = True   # Kendall weighting active for 4 tasks (det, act, psr, 
                            # but has NO real annotations — keypoints are pseudo-generated from detection boxes.
                            # The Wing Loss body-pose branch is effectively dead code (loss_pose ≈ 0 always).
                            # Head pose 9-DoF MSE is the real task under log_var_pose.
+# [FIX 2026-07-04 Opus 111 SS3.2] FREEZE_BODY_POSE_BRANCH: freeze the body-pose
+# sub-head (pose_head) and zero its loss contribution. The body-pose branch has no
+# real annotations. Default False for backward compat with running training.
+FREEZE_BODY_POSE_BRANCH = False
 TRAIN_MAX_STEPS = int(os.environ.get('TRAIN_MAX_STEPS', 0))  # 0=disabled; set >0 to stop after N batches
 
 # [OPUS v5 AUDIT] Bring-up mode: flip guards from silent-fallback to assert-and-crash
@@ -473,6 +477,11 @@ NUM_HAND_JOINTS = 26
 # --- Procedure Step Recognition (PSR) ---
 NUM_PSR_STEPS = 36       # number of distinct procedure step types (from procedure_info.json)
 NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_labels_raw.csv)
+# [NEW METRIC 2026-07-04] Per-component PSR threshold calibration (Add 2 / Q18).
+PSR_PER_COMPONENT_THRESHOLDS = False  # default off; when True, calibrates per-component thresholds
+                                       # using prevalence-aligned prior: threshold[c] = base * 1/sqrt(prevalence[c])
+PSR_THRESHOLD_TUNE_FRAC = 0.5         # fraction of val used for threshold tuning (remaining half for eval)
+                                       # keeps calibration and evaluation on disjoint data to avoid test-set fitting
 
 # =========================================================================
 # Image and model
@@ -2121,7 +2130,7 @@ def apply_preset(preset_name: str) -> None:
     # went stale when a preset changed BATCH_SIZE / GRAD_ACCUM_STEPS.
     EFFECTIVE_BATCH = BATCH_SIZE * GRAD_ACCUM_STEPS
 
-    update_dynamic_paths()
+    update_dynamic_paths(preset_name)
 
     if 'description' in preset:
         _cfg_logger.info(f'[config] Applied preset "{preset_name}": {preset["description"]}')
@@ -2129,8 +2138,13 @@ def apply_preset(preset_name: str) -> None:
         _cfg_logger.info(f'[config] Applied preset "{preset_name}"')
 
 
-def update_dynamic_paths():
-    """Recompute all dynamic paths after config changes."""
+def update_dynamic_paths(preset_name: str = ''):
+    """Recompute all dynamic paths after config changes.
+    Args:
+        preset_name: When set (from apply_preset), appends preset name to the
+            directory path so each ablation gets its own checkpoint/log directory
+            instead of all writing into full_multi_task_tma_tbank/.
+    """
     global OUTPUT_ROOT, CHECKPOINT_DIR, LOG_DIR, EVAL_SAVE_DIR
 
     # Don't override if set by environment variable
@@ -2144,6 +2158,11 @@ def update_dynamic_paths():
             parts.append('tbank')
         if BENCHMARK_MODE:
             parts.append('benchmark')
+        # [FIX 2026-07-04 Opus 111 SS3.2] Append preset name for ablation runs
+        # so checkpoints land in e.g. runs/full_multi_task_tma_tbank_ablation_det_only/
+        # instead of colliding with the main experiment directory.
+        if preset_name:
+            parts.append(preset_name)
 
         OUTPUT_ROOT = Path(__file__).parent / 'runs' / '_'.join(parts)
     CHECKPOINT_DIR = OUTPUT_ROOT / 'checkpoints'

@@ -817,6 +817,15 @@ def _save_crash_recovery(tag: str = '') -> None:
     _cr_set_state() which is called at the start of every train_one_epoch
     and by main() after model build.
     """
+    # [HARDENING] Disk-full check — prevent silent total-loss on mid-epoch disk full.
+    try:
+        _usage = shutil.disk_usage('.')
+        if _usage.free < 2 * (1024 ** 3):  # 2 GB
+            logger.warning(f'[DISK_LOW] Free disk space {_usage.free / (1024**3):.1f}GB < 2GB — skipping crash recovery')
+            return None
+    except Exception:
+        pass  # best-effort check; don't block recovery on stat failure
+
     global _CR_MODEL, _CR_OPT, _CR_SCALER, _CR_CRIT, _CR_EMA, _CR_EPOCH, _CR_CKPT_DIR, _CR_SCHEDULER
     model = _CR_MODEL; optimizer = _CR_OPT; scaler = _CR_SCALER
     criterion = _CR_CRIT; ema = _CR_EMA; epoch = _CR_EPOCH; ckpt_dir = _CR_CKPT_DIR
@@ -830,6 +839,17 @@ def _save_crash_recovery(tag: str = '') -> None:
             if _checkpoint_has_nan(model):
                 logger.warning('  [CRASH_RECOVERY] Skipping save — model has NaN/Inf params')
                 return
+            # [FIX 2026-07-04 Opus 111 SS3.2] Disk-space check — skip crash_recovery
+            # when free space < 2GB to prevent disk-full mid-epoch total-loss failure.
+            try:
+                _usage = shutil.disk_usage(ckpt_dir)
+                if _usage.free < 2 * 1024**3:
+                    logger.warning(
+                        f'  [CRASH_RECOVERY] Skipping save — free disk {_usage.free/1024**3:.1f}GB < 2GB'
+                    )
+                    return
+            except OSError:
+                pass  # non-fatal: proceed with save if disk_usage() fails
             recovery_path = ckpt_dir / 'crash_recovery.pth'
 
             cuda_healthy = False
@@ -4792,6 +4812,10 @@ def main(args):
                 elif ema is not None:
                     logger.info('  [EMA] Skipping EMA swap — shadow not yet updated (stage<3, staged=%s)' % _ema_staged)
 
+                # [HARDENING] Log weights source + EMA decay for eval-path provenance
+                _src = 'ema' if ema_warmed else 'raw'
+                logger.info(f'[EMA_USED] weights_source={_src}')
+
                 # [OPUS DECISION 5] Save subprocess checkpoint (post-EMA-swap) so the
                 # subprocess eval worker on GPU 0 picks up EMA-smoothed weights.
                 if CFG_USE_SUBPROCESS_EVAL:
@@ -5009,9 +5033,11 @@ def main(args):
                         logger.info('  [EMA] Restored original weights after val')
 
                     def _s(v, alt=float('nan')):
-                        """Safe numeric: NaN/Inf → alt (default NaN so broken metrics surface visibly)."""
-                        if isinstance(v, float) and math.isfinite(v):
-                            return v
+                        """Safe numeric: NaN/Inf → alt (default NaN so broken metrics surface visibly).
+                        Accepts float OR int — det_n_present_classes is an int, and isinstance(int, float)
+                        is False, so the old float-only check returned alt=0 on every Val: line."""
+                        if isinstance(v, (float, int)) and math.isfinite(v):
+                            return float(v)
                         return alt
 
                     # Compute combined metric before printing Val: line (same logic as below, with safe fallback)
@@ -5051,12 +5077,21 @@ def main(args):
                         f'det_n_present={int(_s(val_metrics.get("det_n_present_classes"), alt=0))}  '
                         f'act_clip={_s(val_metrics.get("act_clip_accuracy")):.4f}  '
                         f'act_frame={_s(val_metrics.get("act_frame_accuracy")):.4f}  '
+                        f'act_top1={_s(val_metrics.get("act_top1")):.4f}  '       # [Add 1] Per-frame Top-1 (NOT clip-vote)
                         f'act_macro_f1={_s(val_metrics.get("act_macro_f1")):.4f}  '
                         f'act_top5={_s(val_metrics.get("act_top5_accuracy")):.4f}  '
                         f'forward_angular_MAE_deg={_s(val_metrics.get("forward_angular_MAE_deg"), alt=float("nan")):.2f}  '
                         f'psr_f1={_s(val_metrics.get("psr_f1_at_t")):.4f}  '
                         f'psr_edit={_s(val_metrics.get("psr_edit_score")):.4f}  '
                         f'psr_pos={_s(val_metrics.get("psr_pos")):.4f}  '
+                        f'psr_pos_blind={_s(val_metrics.get("psr_pos_blind")):.4f}  '  # [Add 4] Canonical-order POS baseline
+                        f'psr_tau={_s(val_metrics.get("psr_tau", float("nan")), alt=float("nan")):.2f}  '  # [Add 3] Frame delay
+                        # [FIX 2026-07-04 Opus 111 SS3.2] Unweighted per-head val losses
+                        # (not Kendall-weighted) so loss-vs-quality trends are interpretable.
+                        f'vl_det={_s(val_metrics.get("val_loss_det")):.4f}  '
+                        f'vl_hp={_s(val_metrics.get("val_loss_head_pose")):.4f}  '
+                        f'vl_act={_s(val_metrics.get("val_loss_activity")):.4f}  '
+                        f'vl_psr={_s(val_metrics.get("val_loss_psr")):.4f}  '
                         f'as_f1={_s(val_metrics.get("as_f1")):.4f}  '
                         f'as_map_r={_s(val_metrics.get("as_map_at_r")):.4f}  '
                         f'ev_ap={_s(val_metrics.get("ev_ap")):.4f}  '
@@ -5105,6 +5140,11 @@ def main(args):
                     _map50_pc = _s(val_metrics.get('det_mAP50_pc', 0.0))
                     _n_present = int(val_metrics.get('det_n_present_classes', 0))
                     _n_total = int(getattr(C, 'NUM_DET_CLASSES', 24))
+                    # [FIX 2026-07-04 Opus 111 §3.2] Assertion: det_n_present_classes==0 iff
+                    # mAP50_pc is 0 or NaN. Catches the _s() int-vs-float bug at source.
+                    _m_nan = math.isnan(_map50_pc)
+                    assert (_n_present == 0) == (_map50_pc == 0 or _m_nan), \
+                        f'MISMATCH: n_present={_n_present} but mAP50_pc={_map50_pc}'
                     if _map50_pc > 0 or _map50 > 0:
                         logger.info(
                             f'  det_mAP50={_map50:.4f} (COCO-{_n_total}, diluted)  '

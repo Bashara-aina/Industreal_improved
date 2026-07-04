@@ -39,6 +39,7 @@ def _val_worker(
     ckpt_path: str,
     out_path: str,
     overrides: dict[str, Any],
+    predictions_path: str | None = None,
 ) -> None:
     """Load checkpoint, run evaluation, write results to JSON.
 
@@ -67,7 +68,7 @@ def _val_worker(
     for k, v in overrides.items():
         setattr(C, k, v)
 
-    from src.data.industreal_dataset import IndustRealDataset
+    from src.data.industreal_dataset import IndustRealMultiTaskDataset as IndustRealDataset
     from src.evaluation.evaluate import evaluate_all
     from src.models.model import POPWMultiTaskModel
 
@@ -75,15 +76,27 @@ def _val_worker(
     state = torch.load(ckpt_path, map_location='cpu', weights_only=False)
     cfg = state.get('config', {})
 
-    num_classes_list = cfg.get(
-        'NUM_CLASSES_LIST',
-        [C.NUM_CLASSES_DET, C.NUM_CLASSES_ACT, C.NUM_CLASSES_PSR],
-    )
+    # Build model matching train.py constructor API
+    backbone_type = cfg.get('BACKBONE_TYPE', getattr(C, 'BACKBONE_TYPE', 'convnext_tiny'))
+    use_hand_film = bool(cfg.get('USE_HAND_FILM', getattr(C, 'USE_HAND_FILM', True)))
+    use_headpose_film = bool(cfg.get('USE_HEADPOSE_FILM', getattr(C, 'USE_HEADPOSE_FILM', False)))
+    use_videomae = bool(cfg.get('USE_VIDEOMAE', getattr(C, 'USE_VIDEOMAE', False)))
+    train_pose = bool(cfg.get('TRAIN_HEAD_POSE', getattr(C, 'TRAIN_HEAD_POSE', True)))
+    use_backbone_checkpoint = bool(cfg.get('USE_BACKBONE_CHECKPOINT', getattr(C, 'USE_BACKBONE_CHECKPOINT', False)))
+
     model = POPWMultiTaskModel(
-        num_classes_list=num_classes_list,
-        backbone_name=cfg.get('BACKBONE_NAME', getattr(C, 'BACKBONE_NAME', 'convnext_tiny')),
-        backbone_out_channels=cfg.get('BACKBONE_OUT_CHANNELS', getattr(C, 'BACKBONE_OUT_CHANNELS', 512)),
+        pretrained=True,
+        backbone_type=backbone_type,
+        use_hand_film=use_hand_film,
+        use_headpose_film=use_headpose_film,
+        use_videomae=use_videomae,
+        train_pose=train_pose,
+        use_backbone_checkpoint=use_backbone_checkpoint,
     ).to('cuda').eval()
+    model._seq_len = cfg.get(
+        'PSR_SEQUENCE_LENGTH',
+        getattr(C, 'PSR_SEQUENCE_LENGTH', 1),
+    ) if cfg.get('USE_PSR_SEQUENCE_MODE', getattr(C, 'USE_PSR_SEQUENCE_MODE', False)) else 1
 
     result = model.load_state_dict(state['model'], strict=False)
     if result.missing_keys:
@@ -92,15 +105,14 @@ def _val_worker(
         logger.warning('[SUB] Unexpected keys: %s', result.unexpected_keys)
 
     # Build val dataset and loader
-    val_root = Path(getattr(C, 'VAL_ROOT', getattr(C, 'DATA_ROOT', '.')))
     val_ds = IndustRealDataset(
-        root=val_root,
         split='val',
         img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
-        cache_max_images=getattr(C, 'RAM_CACHE_MAX_IMAGES', 0),
     )
 
     val_batch_size = int(overrides.get('VAL_BATCH_SIZE', getattr(C, 'VAL_BATCH_SIZE', C.BATCH_SIZE)))
+    _ds_module = sys.modules.get('src.data.industreal_dataset') or __import__('src.data.industreal_dataset', fromlist=['collate_fn'])
+    _collate_fn = getattr(_ds_module, 'collate_fn', None)
     val_loader = torch.utils.data.DataLoader(
         val_ds,
         batch_size=val_batch_size,
@@ -108,6 +120,7 @@ def _val_worker(
         num_workers=0,
         pin_memory=False,
         prefetch_factor=2 if int(getattr(C, 'VAL_NUM_WORKERS', 0)) > 0 else None,
+        collate_fn=_collate_fn,
     )
 
     _raw_max_batches = overrides.get('EVAL_MAX_BATCHES')
@@ -122,6 +135,7 @@ def _val_worker(
             device='cuda',
             max_batches=max_batches if max_batches > 0 else None,
             epoch=int(overrides.get('epoch', 0)),
+            predictions_path=predictions_path,
         )
 
     # Convert any non-serialisable values
@@ -143,6 +157,7 @@ def run_val_subprocess(
     out_path: str | Path,
     overrides: dict[str, Any] | None = None,
     timeout: int = 900,
+    predictions_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run validation in a subprocess on GPU 0, killable via SIGKILL.
 
@@ -157,6 +172,8 @@ def run_val_subprocess(
         ``{'EVAL_MAX_BATCHES': 200, 'VAL_BATCH_SIZE': 4}``).
     timeout:
         Maximum wall-clock seconds before SIGKILL.
+    predictions_path:
+        If set, save per-frame predictions to this JSON file.
 
     Returns
     -------
@@ -165,6 +182,7 @@ def run_val_subprocess(
     """
     ckpt_path = Path(ckpt_path)
     out_path = Path(out_path)
+    predictions_path = Path(predictions_path) if predictions_path else None
 
     if not ckpt_path.exists():
         logger.error('[SUB] Checkpoint not found: %s', ckpt_path)
@@ -174,7 +192,7 @@ def run_val_subprocess(
 
     p = _CTX.Process(
         target=_val_worker,
-        args=(str(ckpt_path), str(out_path), overrides),
+        args=(str(ckpt_path), str(out_path), overrides, str(predictions_path) if predictions_path else None),
     )
     p.start()
 
@@ -216,3 +234,81 @@ def run_val_subprocess(
 
     logger.warning('[SUB] Subprocess finished but no output at %s', out_path)
     return {}
+
+
+def main() -> None:
+    """CLI entry point for standalone evaluation with per-frame persistence."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description='Run subprocess evaluation (SIGKILL-safe, isolated CUDA context).'
+    )
+    parser.add_argument('--ckpt', required=True, help='Path to checkpoint (.pth)')
+    parser.add_argument('--out_path', required=True, help='Path to write metrics JSON')
+    parser.add_argument(
+        '--predictions_path',
+        default=None,
+        help='If set, save per-frame predictions to this JSON file',
+    )
+    parser.add_argument(
+        '--persist_predictions',
+        action='store_true',
+        default=False,
+        help='Persist per-frame predictions to --predictions_path',
+    )
+    parser.add_argument(
+        '--EVAL_MAX_BATCHES',
+        type=int,
+        default=0,
+        help='Max eval batches (0 = full dataset)',
+    )
+    parser.add_argument(
+        '--VAL_BATCH_SIZE',
+        type=int,
+        default=None,
+        help='Validation batch size (overrides config default)',
+    )
+    parser.add_argument(
+        '--timeout',
+        type=int,
+        default=7200,
+        help='Subprocess timeout in seconds (default 7200 = 2h)',
+    )
+
+    args = parser.parse_args()
+
+    # Build overrides from CLI args
+    overrides: dict[str, Any] = {}
+    if args.EVAL_MAX_BATCHES is not None:
+        overrides['EVAL_MAX_BATCHES'] = args.EVAL_MAX_BATCHES
+    if args.VAL_BATCH_SIZE is not None:
+        overrides['VAL_BATCH_SIZE'] = args.VAL_BATCH_SIZE
+
+    # If --persist_predictions is set but no --predictions_path, derive from --out_path
+    predictions_path: str | None = args.predictions_path
+    if args.persist_predictions and predictions_path is None:
+        out_dir = Path(args.out_path).parent
+        predictions_path = str(out_dir / 'per_frame_predictions.json')
+        logger.info('[SUB] --persist_predictions set, writing to %s', predictions_path)
+
+    logger.info(
+        '[SUB] Starting subprocess eval: ckpt=%s out=%s predictions=%s',
+        args.ckpt, args.out_path, predictions_path,
+    )
+
+    result = run_val_subprocess(
+        ckpt_path=args.ckpt,
+        out_path=args.out_path,
+        overrides=overrides,
+        timeout=args.timeout,
+        predictions_path=predictions_path,
+    )
+
+    if result:
+        logger.info('[SUB] Evaluation complete: %d metrics written', len(result))
+    else:
+        logger.error('[SUB] Evaluation returned empty results (timeout or error)')
+
+
+if __name__ == '__main__':
+    main()

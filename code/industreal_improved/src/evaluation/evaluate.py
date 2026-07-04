@@ -637,6 +637,7 @@ def run_multi_seed_evaluation(
     metric_keys = [
         # Activity
         'act_accuracy', 'act_macro_f1', 'act_clip_accuracy',
+        'act_frame_accuracy', 'act_top1', 'act_top5_accuracy',  # [Add 1 / Add 5]
         # Head pose (paper headline = angular deg + position mm)
         'forward_angular_MAE_deg', 'up_angular_MAE_deg', 'position_MAE_mm',
         'head_pose_MAE',
@@ -646,6 +647,8 @@ def run_multi_seed_evaluation(
         'psr_overall_f1_at5', 'psr_f1_at_t5',
         'psr_precision_at_t5', 'psr_recall_at_t5',
         'psr_edit_score', 'psr_pos',
+        'psr_tau', 'psr_pos_blind',  # [Add 3 / Q44] [Add 4 / Q43]
+        'psr_f1_calibrated', 'psr_f1_calibrated_t5',  # [Add 2 / Q18]
         # Assembly State Detection
         'det_mAP50', 'det_mAP_50_95',
         'as_f1', 'as_map_at_r',
@@ -964,9 +967,21 @@ def compute_activity_metrics(
     Comprehensive activity recognition metrics.
     Identical interface to IKEA evaluate.py — just pass C.ACT_CLASS_NAMES.
 
+    Metric definitions (Add 5 / Q42 clarification):
+      - act_frame_accuracy / act_top1: Per-frame Top-1 accuracy. Argmax of per-frame logits
+        compared to per-frame GT label. This is the frame-level accuracy score, NOT a
+        clip-vote number. Same value as 'act_accuracy_no_na' when NA class is excluded.
+      - act_clip_accuracy (act_accuracy): Clip-level accuracy via 16-uniform-frame majority
+        vote. Aggregated per recording/clip, then averaged. This is the "whole-clip"
+        metric comparable to MViTv2's multi-modal benchmark.
+      - act_top5_accuracy: Per-frame Top-5 accuracy. Correct if GT class is in the top-5
+        predicted logits (frame-level, not clip-level).
+      - act_macro_f1: Macro-averaged F1 over per-frame predictions (excluding NA class 0).
+        Unweighted average of per-class F1 scores.
+
     Args:
         all_gt      : np.ndarray [N] -- ground truth class ids
-        all_pred    : np.ndarray [N] -- predicted class ids
+        all_pred    : np.ndarray [N] -- predicted class ids (argmax of logits)
         all_logits  : np.ndarray [N, C] or None -- raw logits for top-k
         class_names : list of str or None
         save_dir    : str or None -- if provided, saves confusion matrix image
@@ -985,6 +1000,7 @@ def compute_activity_metrics(
         return {
             'act_accuracy': 0.0,
             'act_frame_accuracy': 0.0,
+            'act_top1': 0.0,  # [NEW] Per-frame Top-1 accuracy (alias for act_frame_accuracy)
             'act_accuracy_no_na': 0.0,
             'act_macro_f1': 0.0,
             'act_macro_f1_present': 0.0,
@@ -1064,9 +1080,17 @@ def compute_activity_metrics(
         clip_frame_nums=clip_fn_arr,
     ) if clip_ids_arr is not None and len(clip_ids_arr) > 0 else None
 
+    # [NEW METRIC Add 1 / Q42] act_top1: Per-frame Top-1 accuracy.
+    # This is the argmax of per-frame logits compared to per-frame GT label.
+    # alias for fa_all (= act_frame_accuracy), but explicitly labeled as Top-1
+    # to distinguish from clip-vote accuracy (act_clip_accuracy).
+    # See docstring for full metric definitions (Add 5 / Q42 clarification).
+    act_top1 = fa_all
+
     return {
         'act_accuracy': act_clip_acc if act_clip_acc is not None else fa_all,
         'act_frame_accuracy': fa_all,
+        'act_top1': act_top1,  # [NEW] Per-frame Top-1 accuracy (Add 1 / Q42 T4)
         'act_accuracy_no_na': fa_no_na,
         'act_macro_f1': macro_f1,
         'act_macro_f1_present': macro_f1_present,
@@ -2488,6 +2512,230 @@ def _symmetric_f1_at_t(gt_changes, pred_changes, tolerance):
     return f1
 
 
+# =============================================================================
+# [NEW METRIC Add 3 / E2 Q44] PSR tau — per-frame transition delay
+# =============================================================================
+
+def _compute_psr_tau(
+    pred_binary: np.ndarray,
+    gt_safe: np.ndarray,
+    valid_mask: np.ndarray,
+    max_offset: int = 60,
+) -> float:
+    """
+    Compute PSR tau: average frame delay between predicted and GT state transitions.
+
+    For each component, finds all GT transitions (0->1 or 1->0) and the nearest
+    predicted transition within max_offset frames. tau is the mean absolute frame
+    offset over all matched pairs, aggregated as the mean across all valid components.
+
+    This is a frame-level temporal precision metric: lower tau means the model
+    predicts transitions closer to when they actually occur.
+
+    Args:
+        pred_binary: np.ndarray [N, C] binary predictions
+        gt_safe: np.ndarray [N, C] binary GT (invalid entries zeroed)
+        valid_mask: np.ndarray [N, C] boolean valid mask
+        max_offset: maximum frame offset to consider (prevents unbounded outliers)
+
+    Returns:
+        float: mean tau in frames, averaged over components
+    """
+    C = pred_binary.shape[1]
+    tau_per_comp = []
+
+    for c in range(C):
+        vm = valid_mask[:, c]
+        if not vm.any():
+            continue
+
+        gt_c = gt_safe[vm, c].astype(np.int32)
+        pred_c = pred_binary[vm, c].astype(np.int32)
+
+        # Find transition frames (both 0->1 and 1->0)
+        gt_changes = np.where(np.diff(gt_c) != 0)[0]
+        pred_changes = np.where(np.diff(pred_c) != 0)[0]
+
+        if len(gt_changes) == 0 or len(pred_changes) == 0:
+            # No transitions in either — perfect temporal alignment (tau=0)
+            # Only one side has transitions — cannot compute meaningful delay
+            continue
+
+        # For each GT transition, find nearest predicted transition
+        diff = np.abs(gt_changes[:, None] - pred_changes[None, :])  # [n_gt, n_pred]
+        # Best match for each GT transition (minimum offset)
+        best_offsets = diff.min(axis=1)  # [n_gt]
+        # Clamp to max_offset to prevent outliers from dominating
+        best_offsets = np.clip(best_offsets, 0, max_offset)
+        mean_offset = float(best_offsets.mean())
+        tau_per_comp.append(mean_offset)
+
+    return float(np.mean(tau_per_comp)) if tau_per_comp else 0.0
+
+
+# =============================================================================
+# [NEW METRIC Add 2 / Q18] Per-component PSR threshold calibration
+# =============================================================================
+
+def _calibrate_psr_thresholds(
+    gt_safe: np.ndarray,
+    valid_mask: np.ndarray,
+    tune_frac: float = 0.5,
+    base_threshold: float = 0.5,
+) -> np.ndarray:
+    """
+    Calibrate per-component PSR thresholds using prevalence-aligned prior.
+
+    Rare components get lower thresholds than common ones to avoid missing
+    their sparse transition events. The calibration uses:
+        threshold[c] = base_threshold * (1 / sqrt(component_prevalence[c]))
+
+    Where prevalence[c] = fraction of frames where component c is "done" (== 1)
+    in the tuning portion of the data.
+
+    Args:
+        gt_safe: np.ndarray [N, C] binary GT labels
+        valid_mask: np.ndarray [N, C] boolean valid mask
+        tune_frac: fraction of data used for threshold tuning (rest held out)
+        base_threshold: default threshold before calibration
+
+    Returns:
+        np.ndarray [C] per-component thresholds
+    """
+    C = gt_safe.shape[1]
+    N_tune = max(1, int(gt_safe.shape[0] * tune_frac))
+    thresholds = np.full(C, base_threshold, dtype=np.float64)
+
+    for c in range(C):
+        vm = valid_mask[:N_tune, c]
+        if not vm.any():
+            continue
+        gt_tune = gt_safe[:N_tune, c][vm]
+        # Prevalence: fraction of frames where component is "done" (== 1)
+        prevalence = float(gt_tune.mean()) if len(gt_tune) > 0 else 0.0
+        # Avoid division by zero or near-zero (component never done in tuning split)
+        if prevalence > 1e-6:
+            # threshold = base / sqrt(prevalence)
+            # Rare components (low prevalence) get lower thresholds
+            # Common components get thresholds closer to or above base
+            thresholds[c] = base_threshold * (1.0 / np.sqrt(prevalence))
+            # Clamp to reasonable range [0.05, 0.95]
+            thresholds[c] = float(np.clip(thresholds[c], 0.05, 0.95))
+
+    return thresholds
+
+
+def _compute_psr_metrics_with_thresholds(
+    pred_probs: np.ndarray,
+    gt_safe: np.ndarray,
+    valid_mask: np.ndarray,
+    per_component_thresholds: np.ndarray,
+    tolerance_frames: int = 3,
+) -> Dict[str, float]:
+    """
+    Compute PSR metrics with per-component thresholds.
+
+    Applies component-specific binarization thresholds, then computes F1@T
+    on the resulting binary predictions.
+
+    Args:
+        pred_probs: np.ndarray [N, C] sigmoid probabilities
+        gt_safe: np.ndarray [N, C] binary GT (invalid zeroed)
+        valid_mask: np.ndarray [N, C] boolean valid mask
+        per_component_thresholds: np.ndarray [C] per-component thresholds
+        tolerance_frames: tolerance for F1@T
+
+    Returns:
+        dict with threshold-calibrated PSR metrics
+    """
+    C = pred_probs.shape[1]
+    # Apply per-component thresholds
+    pred_binary_cal = np.zeros_like(pred_probs, dtype=np.int64)
+    for c in range(C):
+        pred_binary_cal[:, c] = (pred_probs[:, c] > per_component_thresholds[c]).astype(np.int64)
+
+    # Compute F1@T on calibrated predictions
+    cuda_available = torch.cuda.is_available()
+    if cuda_available:
+        fused = _compute_psr_f1_at_t_fused_cuda(
+            pred_binary_cal, gt_safe, valid_mask,
+            tolerances=(tolerance_frames, 5),
+            device=torch.device('cuda')
+        )
+        psr_f1_cal = fused['f1_t3'] if tolerance_frames == 3 else fused['f1_t5']
+        psr_f1_cal_t5 = fused['f1_t5'] if tolerance_frames == 3 else fused['f1_t3']
+    else:
+        psr_f1_cal, _, _ = _compute_psr_f1_at_t_vectorized(
+            pred_binary_cal, gt_safe, valid_mask, tolerance_frames
+        )
+        psr_f1_cal_t5, _, _ = _compute_psr_f1_at_t_vectorized(
+            pred_binary_cal, gt_safe, valid_mask, 5 if tolerance_frames != 5 else 3
+        )
+
+    return {
+        'psr_f1_calibrated': psr_f1_cal,
+        'psr_f1_calibrated_t5': psr_f1_cal_t5,
+    }
+
+
+# =============================================================================
+# [NEW METRIC Add 4 / Q43] Canonical-order POS baseline
+# =============================================================================
+
+def _compute_psr_pos_canonical(
+    gt_safe: np.ndarray,
+    valid_mask: np.ndarray,
+    canonical_order: Optional[List[int]] = None,
+) -> float:
+    """
+    Compute POS using a canonical-order blind baseline.
+
+    This is a non-visual baseline: it always predicts component states using
+    a fixed canonical procedure order (by default comp0, comp1, ..., comp10)
+    regardless of input. The number of components marked "done" at each frame
+    is taken from GT (same count), but WHICH components are done follows the
+    canonical order.
+
+    This bounds the contribution of visual evidence: if the canonical baseline
+    POS is high, the assembly process follows a stereotyped order and visual
+    cues add little ordering information. If it's low, ordering is non-trivial
+    and learned ordering matters.
+
+    Args:
+        gt_safe: np.ndarray [N, C] binary GT labels (invalid entries zeroed)
+        valid_mask: np.ndarray [N, C] boolean valid mask
+        canonical_order: list of component indices in canonical order.
+            Default is [0, 1, 2, ..., C-1] (numerical component order).
+
+    Returns:
+        float: POS score for the canonical-order baseline
+    """
+    N, C = gt_safe.shape
+    if N == 0 or C == 0:
+        return 0.0
+    if canonical_order is None:
+        canonical_order = list(range(C))
+
+    # Build canonical prediction: for each frame, count K = number of GT-done
+    # components (in valid frames), then mark the first K components in canonical
+    # order as done.
+    canon_pred = np.zeros_like(gt_safe, dtype=np.int64)
+
+    for t in range(N):
+        # Count valid GT-done components at this frame
+        k_done = 0
+        for c in range(C):
+            if valid_mask[t, c] and gt_safe[t, c] == 1:
+                k_done += 1
+        # Mark first k_done components in canonical order as done
+        for i in range(min(k_done, C)):
+            canon_pred[t, canonical_order[i]] = 1
+
+    # Compute POS between canonical prediction and GT
+    psr_pos_blind = _compute_psr_pos_vectorized(canon_pred, gt_safe, valid_mask)
+    return psr_pos_blind
+
+
 def compute_psr_metrics(
     pred_logits: np.ndarray,
     gt_labels: np.ndarray,
@@ -2599,6 +2847,49 @@ def compute_psr_metrics(
     # --- POS: Vectorized across all components ---
     psr_pos = _compute_psr_pos_vectorized(pred_binary, gt_safe, valid_mask)
 
+    # =========================================================================
+    # [NEW METRIC Add 3 / E2 Q44] PSR tau — per-frame transition delay
+    # =========================================================================
+    # Measures the average frame offset between predicted and GT transitions.
+    # Lower tau = temporally more precise predictions.
+    psr_tau = _compute_psr_tau(pred_binary, gt_safe, valid_mask)
+
+    # =========================================================================
+    # [NEW METRIC Add 4 / Q43] Canonical-order POS baseline (blind)
+    # =========================================================================
+    # Non-visual baseline: always predicts components in canonical order
+    # (comp0, comp1, ..., comp10). Bounds how much visual evidence contributes
+    # to ordering success.
+    psr_pos_blind = _compute_psr_pos_canonical(gt_safe, valid_mask)
+
+    # =========================================================================
+    # [NEW METRIC Add 2 / Q18] Per-component PSR threshold calibration
+    # =========================================================================
+    # When PSR_PER_COMPONENT_THRESHOLDS=True, calibrate per-component thresholds
+    # on a held-out portion of val, then compute F1@T with calibrated thresholds.
+    psr_calibrated_metrics = {}
+    try:
+        if getattr(C, 'PSR_PER_COMPONENT_THRESHOLDS', False):
+            tune_frac = getattr(C, 'PSR_THRESHOLD_TUNE_FRAC', 0.5)
+            # Calibrate on first half of data
+            per_comp_thresholds = _calibrate_psr_thresholds(
+                gt_safe, valid_mask, tune_frac=tune_frac, base_threshold=0.5
+            )
+            # Apply thresholds to the held-out second half for unbiased evaluation
+            holdout_start = max(1, int(gt_safe.shape[0] * tune_frac))
+            pred_probs_holdout = pred_probs[holdout_start:]
+            gt_safe_holdout = gt_safe[holdout_start:]
+            valid_mask_holdout = valid_mask[holdout_start:]
+            psr_calibrated_metrics = _compute_psr_metrics_with_thresholds(
+                pred_probs_holdout, gt_safe_holdout, valid_mask_holdout,
+                per_comp_thresholds, tolerance_frames=tolerance_frames,
+            )
+    except Exception:
+        psr_calibrated_metrics = {
+            'psr_f1_calibrated': 0.0,
+            'psr_f1_calibrated_t5': 0.0,
+        }
+
     return {
         'psr_overall_f1': overall_f1,
         'psr_f1_at_t': psr_f1_at_t,
@@ -2609,6 +2900,10 @@ def compute_psr_metrics(
         'psr_recall_at_t5': psr_recall_at_t5,
         'psr_edit_score': edit_score,
         'psr_pos': psr_pos,
+        'psr_tau': psr_tau,                              # [Add 3 / Q44]
+        'psr_pos_blind': psr_pos_blind,                   # [Add 4 / Q43]
+        'psr_f1_calibrated': psr_calibrated_metrics.get('psr_f1_calibrated', 0.0),       # [Add 2 / Q18]
+        'psr_f1_calibrated_t5': psr_calibrated_metrics.get('psr_f1_calibrated_t5', 0.0), # [Add 2 / Q18]
         'psr_per_component_f1': per_component_f1,
         'psr_num_valid_components': len(valid_components),
         'psr_num_samples': int(pred_logits.shape[0]),
@@ -3045,6 +3340,7 @@ def evaluate_all(
     use_flip_tta: bool = False,
     use_crop_tta: bool = False,
     epoch: int = 0,
+    predictions_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Full evaluation returning all metrics across 4 IndustReal tasks.
@@ -3059,6 +3355,7 @@ def evaluate_all(
         use_flip_tta: bool — horizontally flip each frame and average logits (Doc 2 F.1)
         use_crop_tta: bool — 5-crop TTA (4 corners + center) and average logits (Doc 2 F.2)
         epoch       : int — current epoch number, used to gate expensive per-epoch metrics
+        predictions_path: str or None — if set, save per-frame predictions to this JSON file
 
     Returns:
         dict with all metrics
@@ -3067,7 +3364,8 @@ def evaluate_all(
     # [FIX A] Publish epoch so efficiency gate can use it
     C._CURRENT_EPOCH = epoch
     device_obj = torch.device(device) if isinstance(device, str) else device
-    criterion.to(device_obj)
+    if criterion is not None:
+        criterion.to(device_obj)
 
     # [FIX A] Pre-warm numba JIT so first DL call isn't slow
     _get_dl_osa_numba()
@@ -3156,7 +3454,7 @@ def evaluate_all(
     _prev_recording_ids: List[str] = []
 
     for bi, (images, targets) in enumerate(loader):
-        if max_batches > 0 and bi >= max_batches:
+        if max_batches is not None and max_batches > 0 and bi >= max_batches:
             break
 
         # --- GPU memory snapshot at each eval batch (Bashara 2026-05-09) ---
@@ -3254,10 +3552,19 @@ def evaluate_all(
             else:
                 outputs[_k] = _v
 
-        loss, _ = criterion(outputs, targets)
-        if torch.isfinite(loss):
+        loss, _loss_dict = (None, {}) if criterion is None else criterion(outputs, targets)
+        if loss is not None and torch.isfinite(loss):
             total_loss += loss.float().item()
             lc += 1
+            # [FIX 2026-07-04 Opus 111 SS3.2] Accumulate unweighted per-head losses
+            # for Val: line so loss-vs-quality trends are not confounded by Kendall.
+            if lc == 1:
+                _per_head_sums = {k: 0.0 for k in ('det', 'pose', 'head_pose', 'activity', 'psr')}
+            for _k in _per_head_sums:
+                _per_head_sums[_k] += float(_loss_dict.get(_k, 0.0))
+        elif loss is None:
+            # criterion is None (inference-only mode): skip per-head accumulation
+            _per_head_sums = {k: 0.0 for k in ('det', 'pose', 'head_pose', 'activity', 'psr')}
 
         # --- Activity ---
         act_logits_batch = outputs['act_logits'].cpu().numpy()
@@ -3495,6 +3802,11 @@ def evaluate_all(
                 f'Proceeding with {non_empty_count} valid batches.'
             )
         results: Dict[str, Any] = {'loss': total_loss / max(lc, 1)}
+        # [FIX 2026-07-04 Opus 111 SS3.2] Add unweighted per-head val losses
+        # so Val: line can show them alongside Kendall-weighted combined metric.
+        if lc > 0:
+            for _k, _v in _per_head_sums.items():
+                results[f'val_loss_{_k}'] = _v / lc
 
     # -------------------------------------------------------------------------
     # Activity Metrics
@@ -3594,6 +3906,7 @@ def evaluate_all(
             logger.error(f'  Activity metrics FAILED: {_act_exc} -- using safe defaults')
             act_metrics = {
                 'act_macro_f1': 0.0, 'act_top5_accuracy': 0.0, 'act_frame_accuracy': 0.0,
+                'act_top1': 0.0,  # [NEW] Per-frame Top-1 accuracy (Add 1 / Q42)
                 'act_accuracy': 0.0, 'act_clip_accuracy': 0.0, 'act_weighted_f1': 0.0,
                 'act_accuracy_no_na': 0.0, 'act_macro_recall': 0.0,
                 'act_mean_per_class_acc': 0.0,
@@ -3601,6 +3914,7 @@ def evaluate_all(
     else:
         act_metrics = {
             'act_macro_f1': 0.0, 'act_top5_accuracy': 0.0, 'act_frame_accuracy': 0.0,
+            'act_top1': 0.0,  # [NEW] Per-frame Top-1 accuracy (Add 1 / Q42)
             'act_accuracy': 0.0, 'act_clip_accuracy': 0.0, 'act_weighted_f1': 0.0,
             'act_accuracy_no_na': 0.0, 'act_macro_recall': 0.0,
             'act_mean_per_class_acc': 0.0,
@@ -3789,6 +4103,9 @@ def evaluate_all(
                     'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
                     'psr_precision_at_t5': 0.0, 'psr_recall_at_t5': 0.0,
                     'psr_overall_f1_at5': _decoded['psr_f1'],
+                    # [NEW METRICS Add 2-4] Decoded path — compute separately if needed
+                    'psr_tau': 0.0, 'psr_pos_blind': 0.0,
+                    'psr_f1_calibrated': 0.0, 'psr_f1_calibrated_t5': 0.0,
                 }
             else:
                 psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
@@ -3800,6 +4117,9 @@ def evaluate_all(
                 'psr_f1_at_t': 0.0, 'psr_f1_at_t5': 0.0, 'psr_edit_score': 0.0,
                 'psr_overall_f1': 0.0, 'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
                 'psr_precision_at_t5': 0.0, 'psr_recall_at_t5': 0.0, 'psr_overall_f1_at5': 0.0,
+                # [NEW METRICS Add 2-4] Safe defaults
+                'psr_tau': 0.0, 'psr_pos_blind': 0.0,
+                'psr_f1_calibrated': 0.0, 'psr_f1_calibrated_t5': 0.0,
             }  # [OPUS v5] Include all Val-line keys to avoid cosmetic NaN
     except Exception as _psr_exc:
         logger.error(f'  [PSR METRICS] Failed: {_psr_exc} -- using safe defaults')
@@ -3808,11 +4128,17 @@ def evaluate_all(
             'psr_f1_at_t': 0.0, 'psr_f1_at_t5': 0.0, 'psr_edit_score': 0.0,
             'psr_overall_f1': 0.0, 'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
             'psr_precision_at_t5': 0.0, 'psr_recall_at_t5': 0.0, 'psr_overall_f1_at5': 0.0,
+            # [NEW METRICS Add 2-4] Safe defaults
+            'psr_tau': 0.0, 'psr_pos_blind': 0.0,
+            'psr_f1_calibrated': 0.0, 'psr_f1_calibrated_t5': 0.0,
         }
     results.update(psr_metrics)
     if getattr(C, 'TRAIN_PSR', True):
         results['psr_macro_f1'] = results.get('psr_overall_f1', 0.0)
         results['psr_overall_f1_at5'] = results.get('psr_overall_f1', 0.0)
+        # [NEW METRIC Add 3 / Q44] Log tau when available
+        _psr_tau = results.get('psr_tau', 0.0)
+        _tau_str = f'tau={_psr_tau:.2f}f' if not (isinstance(_psr_tau, float) and (np.isnan(_psr_tau) or np.isinf(_psr_tau))) else ''
         logger.info(
             f'  PSR — Overall F1: {results["psr_overall_f1"]:.4f}  '
             f'F1@±3: {results["psr_f1_at_t"]:.4f}  '
@@ -3822,7 +4148,9 @@ def evaluate_all(
             f'P@±5: {results["psr_precision_at_t5"]:.4f}  '
             f'R@±5: {results["psr_recall_at_t5"]:.4f}  '
             f'Edit: {results["psr_edit_score"]:.4f}  '
-            f'POS: {results["psr_pos"]:.4f}'
+            f'POS: {results["psr_pos"]:.4f}  '
+            f'POS_blind: {results.get("psr_pos_blind", 0.0):.4f}'  # [Add 4 / Q43]
+            + (f'  {_tau_str}' if _tau_str else '')  # [Add 3 / Q44]
         )
         # [FIX 2026-07-01 agent audit] Add per-component binary accuracy for go/no-go monitoring.
         try:
@@ -3908,18 +4236,30 @@ def evaluate_all(
         det_metrics = {
             'det_mAP50': 0.0,
             'det_mAP_50_95': 0.0,
+            'det_mAP50_pc': 0.0,
+            'det_mAP_50_95_pc': 0.0,
+            'det_n_present_classes': 0,
             'det_per_class_ap': {},
+            'det_per_class_gt': {},
+            'det_per_class': [],
             'det_mAP50_all_frames': 0.0,
             'det_per_class_ap_all_frames': {},
+            '_det_ap_protocol': 'coco',
         }
     elif getattr(C, 'SKIP_DET_METRICS_EVAL', False):
         logger.info('  [SKIP_DET] SKIP_DET_METRICS_EVAL=True — detection metrics skipped')
         det_metrics = {
             'det_mAP50': float('nan'),
             'det_mAP_50_95': float('nan'),
+            'det_mAP50_pc': float('nan'),
+            'det_mAP_50_95_pc': float('nan'),
+            'det_n_present_classes': 0,
             'det_per_class_ap': {},
+            'det_per_class_gt': {},
+            'det_per_class': [],
             'det_mAP50_all_frames': float('nan'),
             'det_per_class_ap_all_frames': {},
+            '_det_ap_protocol': 'coco',
         }
     elif getattr(C, 'DET_METRICS_EVERY_N', 0) > 0 and (epoch + 1) % C.DET_METRICS_EVERY_N != 0:
         # [OPUS v5] Eval cadence: full detection mAP only every N epochs.
@@ -3928,9 +4268,15 @@ def evaluate_all(
         det_metrics = {
             'det_mAP50': float('nan'),
             'det_mAP_50_95': float('nan'),
+            'det_mAP50_pc': float('nan'),
+            'det_mAP_50_95_pc': float('nan'),
+            'det_n_present_classes': 0,
             'det_per_class_ap': {},
+            'det_per_class_gt': {},
+            'det_per_class': [],
             'det_mAP50_all_frames': float('nan'),
             'det_per_class_ap_all_frames': {},
+            '_det_ap_protocol': 'coco',
         }
     else:
         # [DEBUG] Print detection boxes/scores statistics
@@ -3977,6 +4323,15 @@ def evaluate_all(
         results['det_confusion_matrix'] = det_cm
         results['det_cm_gt'] = det_cm_gt
         results['det_cm_miss'] = det_cm_miss
+
+    # [FIX 2026-07-05] Always merge det_metrics into results, regardless of which branch ran
+    # The 3 early-return branches above (gt_box_total==0, SKIP_DET_METRICS_EVAL, DET_METRICS_EVERY_N)
+    # define det_metrics but never call results.update() — leaving all det_* keys missing
+    # from metrics.json. This call ensures all 4 branches contribute their det_metrics.
+    if 'det_metrics' in dir() and det_metrics:
+        for k, v in det_metrics.items():
+            if k not in results:
+                results[k] = v
 
         # Save confusion matrix PNG if save_dir is set
         if save_dir is not None and not getattr(C, 'SKIP_DET_CONFUSION_PLOT', False):
@@ -4064,6 +4419,19 @@ def evaluate_all(
     if save_dir:
         _save_results_json(results, save_dir)
         _save_results_csv(results, save_dir)
+
+    # --- Per-frame prediction persistence (D3 experiment) --------------------
+    if predictions_path is not None:
+        try:
+            _save_predictions_file(
+                predictions_path,
+                dp_boxes, dp_scores, dp_labels,
+                dg_boxes, dg_labels,
+                all_act_pred, all_act_gt,
+                all_psr_logits,
+            )
+        except Exception as _pred_exc:
+            logger.warning(f'  [PRED_SAVE] Failed to save per-frame predictions: {_pred_exc}')
 
     return results
 
@@ -4154,6 +4522,68 @@ def _save_results_csv(results: Dict[str, Any], save_dir: str) -> None:
             w.writeheader()
         w.writerow(row)
     logger.info(f'  [RESULTS] CSV appended: {csv_path}')
+
+
+def _save_predictions_file(
+    predictions_path: str,
+    dp_boxes: list,
+    dp_scores: list,
+    dp_labels: list,
+    dg_boxes: list,
+    dg_labels: list,
+    all_act_pred: np.ndarray | None = None,
+    all_act_gt: np.ndarray | None = None,
+    all_psr_logits: np.ndarray | None = None,
+) -> None:
+    """Save per-frame predictions to a JSON file for offline analysis (D3).
+
+    Args:
+        predictions_path: path to write JSON
+        dp_boxes: list of [N, 4] predicted boxes per image
+        dp_scores: list of [N] predicted scores per image
+        dp_labels: list of [N] predicted labels per image
+        dg_boxes: list of [M, 4] ground-truth boxes per image
+        dg_labels: list of [M] ground-truth labels per image
+        all_act_pred: concatenated activity predictions [num_valid_frames]
+        all_act_gt: concatenated activity ground-truth [num_valid_frames]
+        all_psr_logits: concatenated PSR logits [num_frames, 11]
+    """
+    import time as _time
+
+    def _arr_to_list(arr: np.ndarray | None) -> list | None:
+        if arr is None:
+            return None
+        if isinstance(arr, np.ndarray):
+            return arr.tolist()
+        return arr
+
+    import json as _json
+
+    payload: dict = {
+        'num_images': len(dp_boxes),
+        'num_det_classes': C.NUM_DET_CLASSES,
+        'timestamp': _time.strftime('%Y-%m-%d %H:%M:%S'),
+        'det_pred_boxes': [_arr_to_list(b) for b in dp_boxes],
+        'det_pred_scores': [_arr_to_list(s) for s in dp_scores],
+        'det_pred_labels': [_arr_to_list(l) for l in dp_labels],
+        'det_gt_boxes': [_arr_to_list(b) for b in dg_boxes],
+        'det_gt_labels': [_arr_to_list(l) for l in dg_labels],
+    }
+    if all_act_pred is not None:
+        payload['act_pred'] = _arr_to_list(all_act_pred)
+    if all_act_gt is not None:
+        payload['act_gt'] = _arr_to_list(all_act_gt)
+    if all_psr_logits is not None:
+        payload['psr_logits'] = _arr_to_list(all_psr_logits)
+
+    Path(predictions_path).parent.mkdir(parents=True, exist_ok=True)
+    with open(predictions_path, 'w') as f:
+        _json.dump(payload, f, default=str)
+    logger.info(
+        '  [PRED_SAVE] Per-frame predictions written to %s (%d images, %.1f MB)',
+        predictions_path, len(dp_boxes),
+        Path(predictions_path).stat().st_size / 1024 / 1024,
+    )
 
 
 # =============================================================================
