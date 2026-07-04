@@ -37,7 +37,6 @@
 ### RF10 (Week 4 Jul) — Submission Baseline
 | Baseline | Achievable? | Notes |
 |---|---|---|
-| **At least one head competitive** | **Yes** | **Head pose — compare to OpenFace, 6DRepNet** |
 | Combined metric >0.40 | Likely | 0.40-0.55 expected at convergence |
 | YOLOv8m | No | Accept gap as multi-task cost |
 | B2 PSR | No | Accept as future work |
@@ -49,7 +48,6 @@
 | YOLOv8m + classifier | 0.838 | 0.50-0.60 | N/A | N/A | $2,500+ |
 | MViTv2 (12-way) | N/A | 0.6525 | N/A | N/A | $2,500+ |
 | B2 (PSR only) | N/A | N/A | 0.731 | N/A | $2,500+ |
-| OpenFace/6DRepNet | N/A | N/A | N/A | 6-10° | $299 |
 
 Narrative: **"80% of specialist performance at 12% of the GPU cost, plus head pose for free."**
 

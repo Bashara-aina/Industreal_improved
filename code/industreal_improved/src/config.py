@@ -1205,7 +1205,7 @@ SUBPROCESS_EVAL_TIMEOUT = int(os.environ.get('SUBPROCESS_EVAL_TIMEOUT', '900')) 
 
 # Efficiency metrics: compute_efficiency_metrics does 35 forward passes each epoch.
 # Set to True to skip except when (epoch % LOG_EFFICIENCY_EVERY == 0).
-SKIP_EFFICIENCY_METRICS = True  # True = only compute every LOG_EFFICIENCY_EVERY epochs
+SKIP_EFFICIENCY_METRICS = False  # True = only compute every LOG_EFFICIENCY_EVERY epochs
 
 # Kendall gradient sentinel logging (Doc 2 §B.1)
 # Log gradient norms of Kendall log_var params every N steps to detect
