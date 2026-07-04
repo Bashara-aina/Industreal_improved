@@ -1,6 +1,15 @@
 % ====================================================================
 % POPW: Zero filler. Every section has ONE job.
 % Target: ICHCIIS-26 Seoul, Oct 4, 2026
+% NOTES FROM MASTER EXECUTION PLAN (AAIML/MASTER-EXECUTION-PLAN.md):
+%   ✅ Publishable NOW: Ego-pose fwd MAE=8.14°, Up MAE=7.06° (first baseline)
+%   ✅ Publishable NOW: Detection mAP50_pc=0.506 (honest present-class metric)
+%   ⚠️ Detection mAP@0.5=0.317 vs YOLOv8m 0.838 — need D1 (YOLOv8m eval on our split, 2h)
+%   ⚠️ PSR POS=0.968 beats SOTA (0.812) — but different paradigm (per-frame vs transition)
+%   ⚠️ PSR F1=0.144 — need D4 (YOLOv8m→decoder swap, 2-3h) to make comparable
+%   ❌ Activity: per-frame MLP, cannot compare to MViTv2 temporal — need T2 (fresh run with ACTIVITY_HEAD_SIMPLE=False, 3-4 days) + T3 (MViTv2 remap 75→69, 1 day)
+%   ❌ "Blockchain micropayments" and "IEEE 7005-2021" — VERIFY these exist before submission
+%   All experiment details: AAIML/MASTER-EXECUTION-PLAN.md
 % ====================================================================
 \documentclass[10pt,twocolumn]{article}
 \usepackage[a4paper,margin=0.7in,columnsep=0.18in]{geometry}
@@ -30,6 +39,12 @@
 
 \need{¶1: Describe YOUR factory. Not generic "manufacturing." Your dimsum line, your workers, one real quality dispute. This is the hook.}
 
+% KEY NUMBERS (from epoch 11 val, PID 3432462):
+%   Ego-pose: 8.14° forward MAE, 7.06° up MAE ← FIRST INDUSTREAL BASELINE
+%   Detection: mAP50_pc=0.506 (present-class), mAP@0.5=0.317
+%   PSR: POS=0.968 (beats SOTA 0.812), F1=0.144 (needs backbone swap)
+%   Activity: macro-F1=0.110 (per-frame, 69-class — not comparable to MViTv2 temporal)
+%   Combined metric: 0.306 (RF4 gate passed at epoch 5)
 \need{¶2: "We built \popw{} (\$299 GPU). It does 5 tasks. We tested it with N workers for X days. Results: [best 3 numbers]."}
 
 % ====================================================================
@@ -68,11 +83,22 @@ Hardware cost & \$299\\\bottomrule
 % ====================================================================
 \section{Results}
 
-\need{Table 2: detection mAP, head pose MAE, activity Top-1. 3 rows.}
+% TABLE 2: CURRENT BEST METRICS (epoch 11 val)
+%   Detection mAP@0.5: 0.317 (ConvNeXt-Tiny, no pretrain, 4-task)
+%   vs YOLOv8m SOTA: 0.838 (needs D1: eval on our split for fair comparison)
+%   Detection mAP50_pc: 0.506 (honest present-class — no SOTA equivalent)
+%   Activity macro-F1: 0.110 per-frame, 0.?? temporal (need T2 experiment)
+%   vs MViTv2: 65.25% Top-1 (75-class, temporal — NOT comparable to our per-frame)
+%   PSR F1: 0.144 (per-frame), need D4 (YOLOv8m swap) for comparable number
+%   PSR POS: 0.968 (beats SOTA 0.812 — but must disclose paradigm difference)
+%   Ego-pose fwd MAE: 8.14° — FIRST BASELINE, NO COMPARISON NEEDED
+%   Ego-pose up MAE: 7.06°
+%   All experiment details: AAIML/MASTER-EXECUTION-PLAN.md
+\need{Table 2: detection mAP (0.317/0.506), ego-pose (8.14°), activity Top-1/macro-F1 (need T2). 3 rows.}
 \need{Figure 2: confusion matrix — annotate "\% 1-bit-adjacent".}
 \need{1 sentence: "This is fine-grained state discrimination, not detection failure."}
-\need{\textbf{Ablation A}: single vs multi-task. Δ = \need{fill}. Took \need{Xh}.}
-\need{\textbf{Ablation B}: FiLM on/off. Δ = \need{fill}. Took \need{Xh}.}
+\need{\textbf{Ablation A}: single vs multi-task. Δ = \need{fill from ablation_det_only (3060)}. Took \need{25 ep}.}
+\need{\textbf{Ablation B}: FiLM on/off. Δ = \need{fill}. Took \need{2 days}.}
 
 % ====================================================================
 \section{Blockchain}
