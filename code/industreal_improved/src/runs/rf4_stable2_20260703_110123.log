@@ -1,0 +1,7 @@
+TF32 disabled, benchmark disabled, V8 API disabled
+Traceback (most recent call last):
+  File "<string>", line 7, in <module>
+    exec(open('src/training/train.py').read())
+    ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "<string>", line 43, in <module>
+NameError: name '__file__' is not defined. Did you mean: '__name__'?

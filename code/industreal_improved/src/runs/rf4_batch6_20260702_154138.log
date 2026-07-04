@@ -1,0 +1,8 @@
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+usage: train.py [-h] [--preset PRESET] [--max-epochs MAX_EPOCHS]
+                [--batch-size BATCH_SIZE] [--resume RESUME] [--debug]
+                [--seed SEED] [--subset-ratio SUBSET_RATIO]
+                [--num-workers NUM_WORKERS] [--no-staged-training]
+                [--start-epoch START_EPOCH] [--reset-scheduler]
+                [--reinit-heads] [--detach-reg-fpn] [--detach-psr-fpn]
+train.py: error: unrecognized arguments: --val-every 2

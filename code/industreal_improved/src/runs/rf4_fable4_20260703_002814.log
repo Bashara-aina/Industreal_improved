@@ -1,0 +1,183 @@
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+[config] DET_GT_FRAME_FRACTION = 0.40 (train_det=True, train_act=True, train_psr=True)
+[config] Applied preset "stage_rf4": RF4: All heads + PSR transition (100% data, 20 ep, verb-grouping).
+[train] Applied preset: stage_rf4 (MIXED_PRECISION=False, STAGED_TRAINING=False, ZERO_DET_CONF_FOR_RECOVERY=False, USE_EMA=True, USE_MIXUP=False, BATCH_SIZE=6x4)
+[train] Stage preset detected — redirected OUTPUT_ROOT to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages
+[train] STAGED_TRAINING=False — all 5 heads active from epoch 0
+Config hash: 2f74b2215a553225  (seed=42)
+Config hash details: {"ALLOW_TF32": true, "BACKBONE": "convnext_tiny", "BASE_LR": 0.0005, "BATCH_SIZE": 6, "CUDNN_BENCHMARK": false, "CUDNN_DETERMINISTIC": false, "CUTMIX_ALPHA": 0.0, "EMA_DECAY": 0.995, "EPOCHS": 100, "F
+Config snapshot saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/config.py
+Device: cuda
+GPU : NVIDIA GeForce RTX 5060 Ti
+VRAM: 16.6 GB
+[LOCK] PID lock acquired: PID=1135006, GPU=0
+Could not log git commit: Command '['git', 'rev-parse', 'HEAD']' returned non-zero exit status 128.
+Library versions: torch=2.12.1+cu130  torchvision=2.12.1+cu130  CUDA=13.0  Python=3.13.13
+[CHECKLIST 34] Command and env vars saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/logs/run_command.txt
+Process nice level increased by +10.
+Torch CPU threads capped: intraop=12 interop=4
+CUDA memory fraction cap enabled: 0.95.
+Ablation: TRAIN_DET=True  TRAIN_HEAD_POSE=True  TRAIN_ACT=True  TRAIN_PSR=True  USE_KENDALL=True
+Config: DET_POS_IOU_THRESH=0.4  DET_POS_IOU_TOP_K=9  DET_POS_IOU_IOU_FLOOR=0.2  DET_OHEM_ENABLED=True  DET_ASYMMETRIC_GAMMA=True  DET_BIAS_LR_FACTOR=1.0  DET_LR_MULTIPLIER=1.0  KENDALL_HP_PREC_CAP=True  KENDALL_FIXED_WEIGHTS=False  KENDALL_HP_FIXED_LAMBDA=0.2  KENDALL_STAGED_TRAINING=False  DET_POS_ANCHOR_PROBE_EVERY=1000  _STAGE_NAME=
+[CHECKLIST 32] Resolved config dumped to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/logs/resolved_config.json (275 keys)
+[CHECKLIST 35] === Hyperparameter snapshot ===
+  BASE_LR = 0.0005
+  DET_LR_MULTIPLIER = 1.0
+  DET_BIAS_LR_FACTOR = 1.0
+  POSE_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  HEAD_POSE_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  ACT_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  PSR_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  WEIGHT_DECAY = 0.001
+  LR_SCHEDULER = None (not explicitly set — using training code default)
+  LR_WARMUP_EPOCHS = None (not explicitly set — using training code default)
+  LR_MIN_RATIO = None (not explicitly set — using training code default)
+  CLIP_GRAD_NORM = None (not explicitly set — using training code default)
+  BATCH_SIZE = 6
+  EFFECTIVE_BATCH = 24
+  GRAD_ACCUM_STEPS = 4
+  EPOCHS = 100
+  MIXED_PRECISION = False
+  USE_EMA = True
+  EMA_DECAY = 0.995
+  USE_MIXUP = False
+  LOSS_DET_CLASS_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_DET_BOX_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_DET_IOU_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_POSE_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_HEAD_POSE_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_ACT_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_PSR_WEIGHT = None (not explicitly set — using training code default)
+  DET_POS_IOU_THRESH = 0.4
+  DET_POS_IOU_TOP_K = 9
+  DET_NEG_IOU_THRESH = 0.4
+  DET_OHEM_ENABLED = True
+  DET_ASYMMETRIC_GAMMA = True
+  STAGED_TRAINING = False
+  SUBSET_RATIO = 1.0
+  NUM_WORKERS = 0
+  SEED = 42
+[CHECKLIST 35] All 36 hyperparameters validated — OK
+Building datasets ...
+[RAM_CACHE] Pre-loading 8000 train images as JPEG bytes (cap=8000)...
+[RAM_CACHE] 1000/8000 scanned — 1000 cached, 0s
+[RAM_CACHE] 2000/8000 scanned — 2000 cached, 0s
+[RAM_CACHE] 3000/8000 scanned — 3000 cached, 0s
+[RAM_CACHE] 4000/8000 scanned — 4000 cached, 0s
+[RAM_CACHE] 5000/8000 scanned — 5000 cached, 0s
+[RAM_CACHE] 6000/8000 scanned — 6000 cached, 0s
+[RAM_CACHE] 7000/8000 scanned — 7000 cached, 0s
+[RAM_CACHE] Cap reached (8000) — stopping cache fill
+[RAM_CACHE] Done — 8000 images cached in 0s (~2734.4MB estimated)
+[industreal_dataset] Loaded 26322 frames (split=train, recordings=all)
+[RAM_CACHE] Pre-loading 2000 val images as JPEG bytes (cap=2000)...
+[RAM_CACHE] 1000/2000 scanned — 1000 cached, 0s
+[RAM_CACHE] Cap reached (2000) — stopping cache fill
+[RAM_CACHE] Done — 2000 images cached in 0s (~683.6MB estimated)
+[industreal_dataset] Loaded 38036 frames (split=val, recordings=all)
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 4710/26322 (17.89%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~17.89% under base sampler).
+[get_sampler] effective per-class sampling mass: 67 classes present, max/min ratio=7.4x (uniform would be 1.0x), max=0.0323 vs uniform=0.0149. Top-5 sampled class ids=[12, 57, 24, 23, 28]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+[RAM_CACHE] Pre-loading 8000 train images as JPEG bytes (cap=8000)...
+[RAM_CACHE] 1000/8000 scanned — 1000 cached, 0s
+[RAM_CACHE] 2000/8000 scanned — 2000 cached, 0s
+[RAM_CACHE] 3000/8000 scanned — 3000 cached, 0s
+[RAM_CACHE] 4000/8000 scanned — 4000 cached, 0s
+[RAM_CACHE] 5000/8000 scanned — 5000 cached, 0s
+[RAM_CACHE] 6000/8000 scanned — 6000 cached, 0s
+[RAM_CACHE] 7000/8000 scanned — 7000 cached, 0s
+[RAM_CACHE] Cap reached (8000) — stopping cache fill
+[RAM_CACHE] Done — 8000 images cached in 0s (~2734.4MB estimated)
+[industreal_dataset] Sequence mode: 78679 windows (T=8, stride=1) across 36 recordings
+[industreal_dataset] Loaded 26322 frames (split=train, recordings=all)
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 4710/26322 (17.89%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~17.89% under base sampler).
+[get_sampler] effective per-class sampling mass: 67 classes present, max/min ratio=7.4x (uniform would be 1.0x), max=0.0323 vs uniform=0.0149. Top-5 sampled class ids=[12, 57, 24, 23, 28]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+[train] PSR sequence mode: len=78,679 samples (8 frames/window, stride=1)
+Training samples  : 26,322
+Validation samples: 38,036
+Train loader: batch=6 workers=0 prefetch=1
+Val   loader: batch=8 workers=0 prefetch=2
+Building model ...
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1589: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+[VRAM] Total=15.48GB Used=0.17GB Free=15.31GB Model=0.17GB Need>=2.00GB
+EMA enabled: decay=0.995
+Backbone type     : convnext_tiny
+HeadPoseFiLM      : True
+Hand-FiLM (PoseFiLM): True
+VideoMAE stream   : False
+Total parameters  : 46,468,910
+Trainable params  : 45,020,197
+  backbone       : 28,589,128
+  fpn            :  4,474,880
+  detection      :  5,305,596
+  pose_head      :  1,643,793
+  pose_film      :    841,216
+  headpose_film  :    400,896
+  activity_head  :    687,173
+  psr_head       :  3,077,515
+  feature_bank   :          0
+  videomae_stream:          0
+PSR per-component prevalence: [1.0, 0.8140000104904175, 0.8209999799728394, 0.5210000276565552, 0.19099999964237213, 0.6299999952316284, 0.6110000014305115, 0.44200000166893005, 0.44200000166893005, 0.34700000286102295, 0.22100000083446503]
+Optimizer: AdamW with differential LR (backbone=0.1x, det_head=1x, heads=1x, act=1x, psr=1x, det_head_bias=1x, bias=0.3x, WD=0.001, bias WD=0)
+Scheduler: OneCycleLR (pct_start=0.1, steps_per_epoch=1, peak_factor=0.75, max_lr=[3.75e-05, 3.75e-04, 3.75e-04, 3.75e-04, 3.75e-04, 3.75e-04, 1.12e-04, 0.00e+00, 3.75e-04])
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/training/train.py:3834: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=_amp_scaler_enabled())
+  Checkpoint load: 378/378 tensors loaded
+  All checkpoint keys loaded (no shape mismatches).
+  EMA shadow weights restored from checkpoint.
+  Optimizer state restored.
+  [F4b] Re-applied config OneCycleLR max_lr/initial_lr/min_lr after checkpoint state load (ONE_CYCLE_PEAK_FACTOR now effective).
+Resumed from epoch 2, best=0.0000
+  Restored _global_step=4388 from checkpoint (step-based val cadence)
+  Restored Kendall log_vars from checkpoint: det=0.004  head_pose=-1.000  act=-0.005  psr=-0.001
+  Keeping learned Kendall log_var params (epoch 2 >= warmup=2): det=0.004  head_pose=-1.000  act=-0.005  psr=-0.001
+============================================================
+Starting training
+  Epochs          : 100
+  Batch size      : 6 x 4 = 24
+  Learning rate   : backbone=5.0e-05, heads=5.0e-04
+  Grad clip norm  : 5.0
+  Mixed precision : False
+  Early stopping  : patience=10
+  Combined metric weights: det=0.3  act=0.35  pose=0.15  psr=0.2
+============================================================
+
+--- Epoch 2/99 ---
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 3102/38036 (8.16%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~8.16% under base sampler).
+[get_sampler] effective per-class sampling mass: 63 classes present, max/min ratio=21.7x (uniform would be 1.0x), max=0.0861 vs uniform=0.0159. Top-5 sampled class ids=[28, 42, 15, 9, 38]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+  [STEP VAL] Intra-epoch validation every 2500 steps (gated at 250 batches)
+Epoch 2 [no-staging]:   0%|          | 0/4387 [00:00<?, ?it/s]  [CRASH_RECOVERY] Saved epoch_start crash checkpoint to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth
+[PSR_DEBUG step=0] pre_linear:  mean=-0.0175 std=2.2350 min=-7.1836 max=7.8127
+[PSR_DEBUG step=0] post_linear64: mean=0.1955 std=1.4363 min=-4.1995 max=3.2998
+[PSR_DEBUG step=0] post_gelu:   mean=0.5875 std=0.8814 min=-0.1700 max=3.2983
+[PSR_DEBUG step=0] post_dropout: mean=0.6029 std=0.9305 min=-0.1808 max=3.5088
+  [SIGNAL] SIGTERM received at step=0 epoch=2 -- saving crash recovery and exiting gracefully
+  [CRASH_RECOVERY] Saved signal_SIGTERM crash checkpoint to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth
+Epoch 2 [no-staging]:   0%|          | 0/4387 [00:20<?, ?it/s]
+  [CRASH-RETRY] SystemExit caught from signal handler (epoch=2 attempt=1). Cleaning CUDA state and retrying.
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 3102/38036 (8.16%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~8.16% under base sampler).
+[get_sampler] effective per-class sampling mass: 63 classes present, max/min ratio=21.7x (uniform would be 1.0x), max=0.0861 vs uniform=0.0159. Top-5 sampled class ids=[28, 42, 15, 9, 38]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+  [STEP VAL] Intra-epoch validation every 2500 steps (gated at 250 batches)
+Epoch 2 [no-staging]:   0%|          | 0/4387 [00:00<?, ?it/s]  [CRASH_RECOVERY] Saved epoch_start crash checkpoint to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth
+[PSR_DEBUG step=1] pre_linear:  mean=0.0232 std=2.4673 min=-7.4342 max=8.3476
+[PSR_DEBUG step=1] post_linear64: mean=0.2090 std=1.5564 min=-3.9221 max=4.4829
+[PSR_DEBUG step=1] post_gelu:   mean=0.6411 std=1.0066 min=-0.1700 max=4.4829
+[PSR_DEBUG step=1] post_dropout: mean=0.6382 std=1.0422 min=-0.1808 max=4.7690
+Epoch 2 [no-staging]:   0%|          | 0/4387 [00:11<?, ?it/s, loss=5.7208 det=1.7804(c=1.7715,g=0.0044) pose=1.6804 act=1.1659 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 1/4387 [00:11<13:25:19, 11.02s/it, loss=5.7208 det=1.7804(c=1.7715,g=0.0044) pose=1.6804 act=1.1659 psr=0.0000 wd=0.30]  [KENDALL step=1] lv: det=0.004 pose=-1.000 act=-0.005 psr=-0.001 | prec(exp(-lv)): det=1.00 pose=2.72 act=1.00 psr=1.00 | lv_grad: det=0.5777 pose=0.0000 act=0.3262 psr=0.0000
+  [LIVENESS_GRAD step=1] detection_head:ALIVE[RMS=1.22e+00|n=36] | pose_head:ALIVE[RMS=3.60e-01|n=8] | head_pose_head:ALIVE[RMS=8.45e-01|n=20] | activity_head:ALIVE[RMS=2.04e-01|n=8] | psr_head:NO_GRAD | backbone:ALIVE[8.228e+00|n=178] | fpn:ALIVE[2.291e+00|n=16] | gpu_mem=1.33GB/9.69GB
+  [LIVENESS_GRAD step=1] detection_head:ALIVE[RMS=1.22e+00|n=36] | pose_head:ALIVE[RMS=3.60e-01|n=8] | head_pose_head:ALIVE[RMS=8.45e-01|n=20] | activity_head:ALIVE[RMS=2.04e-01|n=8] | psr_head:NO_GRAD | backbone:ALIVE[8.228e+00|n=178] | fpn:ALIVE[2.291e+00|n=16] | gpu_mem=1.33GB/9.69GB
+Epoch 2 [no-staging]:   0%|          | 1/4387 [00:13<13:25:19, 11.02s/it, loss=4.3659 det=2.5479(c=2.5368,g=0.0056) pose=0.1094 act=1.4279 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 2/4387 [00:13<7:06:44,  5.84s/it, loss=4.3659 det=2.5479(c=2.5368,g=0.0056) pose=0.1094 act=1.4279 psr=0.0000 wd=0.30] Epoch 2 [no-staging]:   0%|          | 2/4387 [00:15<7:06:44,  5.84s/it, loss=3.4998 det=1.2541(c=1.2455,g=0.0043) pose=0.1530 act=1.7836 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 3/4387 [00:15<5:14:42,  4.31s/it, loss=3.4998 det=1.2541(c=1.2455,g=0.0043) pose=0.1530 act=1.7836 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 3/4387 [00:18<5:14:42,  4.31s/it, loss=4.0833 det=1.3905(c=1.3804,g=0.0050) pose=0.2266 act=1.5650 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 4/4387 [00:18<4:24:01,  3.61s/it, loss=4.0833 det=1.3905(c=1.3804,g=0.0050) pose=0.2266 act=1.5650 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 4/4387 [00:19<4:24:01,  3.61s/it, loss=5.053 det=0.000 pose=0.000 act=0.000 psr=5.053 seq=1]                          Epoch 2 [no-staging]:   0%|          | 5/4387 [00:19<3:23:17,  2.78s/it, loss=5.053 det=0.000 pose=0.000 act=0.000 psr=5.053 seq=1]Epoch 2 [no-staging]:   0%|          | 5/4387 [00:22<3:23:17,  2.78s/it, loss=4.2753 det=1.5033(c=1.4901,g=0.0066) pose=0.1420 act=1.3894 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 6/4387 [00:22<3:14:22,  2.66s/it, loss=4.2753 det=1.5033(c=1.4901,g=0.0066) pose=0.1420 act=1.3894 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 6/4387 [00:24<3:14:22,  2.66s/it, loss=6.0893 det=1.5723(c=1.5570,g=0.0076) pose=2.6007 act=1.2360 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 7/4387 [00:24<3:07:16,  2.57s/it, loss=6.0893 det=1.5723(c=1.5570,g=0.0076) pose=2.6007 act=1.2360 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 7/4387 [00:26<3:07:16,  2.57s/it, loss=5.7129 det=1.4896(c=1.4709,g=0.0093) pose=2.5432 act=1.3929 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 8/4387 [00:26<3:01:42,  2.49s/it, loss=5.7129 det=1.4896(c=1.4709,g=0.0093) pose=2.5432 act=1.3929 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 8/4387 [00:27<3:01:42,  2.49s/it, loss=4.479 det=0.000 pose=0.000 act=0.000 psr=4.479 seq=1]                          Epoch 2 [no-staging]:   0%|          | 9/4387 [00:27<2:24:56,  1.99s/it, loss=4.479 det=0.000 pose=0.000 act=0.000 psr=4.479 seq=1][PSR_DEBUG step=10] pre_linear:  mean=0.0030 std=2.3311 min=-7.2348 max=7.5812
+[PSR_DEBUG step=10] post_linear64: mean=0.1970 std=1.5295 min=-3.8892 max=4.2598
+[PSR_DEBUG step=10] post_gelu:   mean=0.6304 std=0.9892 min=-0.1700 max=4.2598
+[PSR_DEBUG step=10] post_dropout: mean=0.6474 std=1.0396 min=-0.1808 max=4.5317
+Epoch 2 [no-staging]:   0%|          | 9/4387 [00:29<2:24:56,  1.99s/it, loss=4.5445 det=1.3969(c=1.3771,g=0.0099) pose=1.3641 act=1.6961 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 10/4387 [00:29<2:33:32,  2.10s/it, loss=4.5445 det=1.3969(c=1.3771,g=0.0099) pose=1.3641 act=1.6961 psr=0.0000 wd=0.30]  [GPU mem] step=10  allocated=1.27GB  reserved=9.65GB
+  [Epoch 2 batch 10/4387] elapsed=30s  speed=0.3 batch/s
+  [DEBUG epoch=2 step=10] total=4.6615 det=1.7759 det_cls=1.7610 det_reg=0.0074 pose=2.2937 head_pose=0.1664 act=1.6398 psr=0.0000
+Epoch 2 [no-staging]:   0%|          | 10/4387 [00:32<2:33:32,  2.10s/it, loss=4.6615 det=1.7759(c=1.7610,g=0.0074) pose=0.1664 act=1.6398 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 11/4387 [00:32<2:45:44,  2.27s/it, loss=4.6615 det=1.7759(c=1.7610,g=0.0074) pose=0.1664 act=1.6398 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 11/4387 [00:34<2:45:44,  2.27s/it, loss=5.0414 det=1.3151(c=1.2985,g=0.0083) pose=1.4237 act=2.0461 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 12/4387 [00:34<2:48:04,  2.31s/it, loss=5.0414 det=1.3151(c=1.2985,g=0.0083) pose=1.4237 act=2.0461 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 12/4387 [00:35<2:48:04,  2.31s/it, loss=5.613 det=0.000 pose=0.000 act=0.000 psr=5.613 seq=1]                          Epoch 2 [no-staging]:   0%|          | 13/4387 [00:35<2:16:36,  1.87s/it, loss=5.613 det=0.000 pose=0.000 act=0.000 psr=5.613 seq=1]Epoch 2 [no-staging]:   0%|          | 13/4387 [00:38<2:16:36,  1.87s/it, loss=3.7428 det=1.5536(c=1.5335,g=0.0101) pose=0.1964 act=1.8580 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 14/4387 [00:38<2:26:03,  2.00s/it, loss=3.7428 det=1.5536(c=1.5335,g=0.0101) pose=0.1964 act=1.8580 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 14/4387 [00:40<2:26:03,  2.00s/it, loss=4.0963 det=1.7078(c=1.6880,g=0.0099) pose=0.2302 act=1.4922 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 15/4387 [00:40<2:35:14,  2.13s/it, loss=4.0963 det=1.7078(c=1.6880,g=0.0099) pose=0.2302 act=1.4922 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 15/4387 [00:43<2:35:14,  2.13s/it, loss=6.0037 det=1.8309(c=1.8090,g=0.0109) pose=2.4912 act=1.3982 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 16/4387 [00:43<2:42:10,  2.23s/it, loss=6.0037 det=1.8309(c=1.8090,g=0.0109) pose=2.4912 act=1.3982 psr=0.0000 wd=0.30]Epoch 2 [no-staging]:   0%|          | 16/4387 [00:44<2:42:10,  2.23s/it, loss=5.250 det=0.000 pose=0.000 act=0.000 psr=5.250 seq=1]                          Epoch 2 [no-staging]:   0%|          | 17/4387 [00:44<2:20:10,  1.92s/it, loss=5.250 det=0.000 pose=0.000 act=0.000 psr=5.250 seq=1]  [SIGNAL] SIGTERM received at step=17 epoch=2 -- saving crash recovery and exiting gracefully
+  [CRASH_RECOVERY] Saved signal_SIGTERM crash checkpoint to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth
+Epoch 2 [no-staging]:   0%|          | 17/4387 [00:54<3:52:03,  3.19s/it, loss=5.250 det=0.000 pose=0.000 act=0.000 psr=5.250 seq=1]
+  [CRASH-RETRY] SystemExit caught from signal handler (epoch=2 attempt=2). Cleaning CUDA state and retrying.
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 3102/38036 (8.16%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~8.16% under base sampler).
+[get_sampler] effective per-class sampling mass: 63 classes present, max/min ratio=21.7x (uniform would be 1.0x), max=0.0861 vs uniform=0.0159. Top-5 sampled class ids=[28, 42, 15, 9, 38]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+  [STEP VAL] Intra-epoch validation every 2500 steps (gated at 250 batches)
+Epoch 2 [no-staging]:   0%|          | 0/4387 [00:00<?, ?it/s]  [CRASH_RECOVERY] Saved epoch_start crash checkpoint to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth

@@ -1,0 +1,454 @@
+[W704 16:23:31.832662318 Context.cpp:444] Warning: torch.backends.cuda.preferred_linalg_library is an experimental feature. If you see any error or unexpected behavior when this flag is set please file an issue on GitHub. (function operator())
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+[config] DET_GT_FRAME_FRACTION = 0.40 (train_det=True, train_act=True, train_psr=True)
+[config] Applied preset "stage_rf4": RF4: All heads + PSR transition (100% data, 20 ep, verb-grouping).
+[train] Applied preset: stage_rf4 (MIXED_PRECISION=False, STAGED_TRAINING=False, ZERO_DET_CONF_FOR_RECOVERY=False, USE_EMA=True, USE_MIXUP=False, BATCH_SIZE=4x4)
+[train] Stage preset detected — redirected OUTPUT_ROOT to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages
+[train] STAGED_TRAINING=False — all 5 heads active from epoch 0
+Config hash: 226e157782e2f614  (seed=42)
+Config hash details: {"ALLOW_TF32": true, "BACKBONE": "convnext_tiny", "BASE_LR": 0.0005, "BATCH_SIZE": 4, "CUDNN_BENCHMARK": false, "CUDNN_DETERMINISTIC": false, "CUTMIX_ALPHA": 0.0, "EMA_DECAY": 0.995, "EPOCHS": 100, "F
+Config snapshot saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/config.py
+Device: cuda
+GPU : NVIDIA GeForce RTX 5060 Ti
+VRAM: 16.6 GB
+[LOCK] Stale PID 3419424 still running: python3 -u src/training/train.py --preset stage_rf4 --no-staged-training --resume src/runs/rf_stages/checkpoints/latest.pth  — killing
+[LOCK] Killed stale PID 3419424
+[LOCK] PID lock acquired: PID=3420164, GPU=0
+Could not log git commit: Command '['git', 'rev-parse', 'HEAD']' returned non-zero exit status 128.
+Library versions: torch=2.12.1+cu130  torchvision=2.12.1+cu130  CUDA=13.0  Python=3.13.13
+[CHECKLIST 34] Command and env vars saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/logs/run_command.txt
+Process nice level increased by +10.
+Torch CPU threads capped: intraop=12 interop=4
+CUDA memory fraction cap enabled: 0.95.
+Ablation: TRAIN_DET=True  TRAIN_HEAD_POSE=True  TRAIN_ACT=True  TRAIN_PSR=True  USE_KENDALL=True
+Config: DET_POS_IOU_THRESH=0.4  DET_POS_IOU_TOP_K=9  DET_POS_IOU_IOU_FLOOR=0.2  DET_OHEM_ENABLED=True  DET_ASYMMETRIC_GAMMA=True  DET_BIAS_LR_FACTOR=1.0  DET_LR_MULTIPLIER=1.0  KENDALL_HP_PREC_CAP=True  KENDALL_FIXED_WEIGHTS=False  KENDALL_HP_FIXED_LAMBDA=0.2  KENDALL_STAGED_TRAINING=False  DET_POS_ANCHOR_PROBE_EVERY=1000  _STAGE_NAME=
+[CHECKLIST 32] Resolved config dumped to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/logs/resolved_config.json (275 keys)
+[CHECKLIST 35] === Hyperparameter snapshot ===
+  BASE_LR = 0.0005
+  DET_LR_MULTIPLIER = 1.0
+  DET_BIAS_LR_FACTOR = 1.0
+  POSE_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  HEAD_POSE_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  ACT_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  PSR_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  WEIGHT_DECAY = 0.001
+  LR_SCHEDULER = None (not explicitly set — using training code default)
+  LR_WARMUP_EPOCHS = None (not explicitly set — using training code default)
+  LR_MIN_RATIO = None (not explicitly set — using training code default)
+  CLIP_GRAD_NORM = None (not explicitly set — using training code default)
+  BATCH_SIZE = 4
+  EFFECTIVE_BATCH = 16
+  GRAD_ACCUM_STEPS = 4
+  EPOCHS = 100
+  MIXED_PRECISION = False
+  USE_EMA = True
+  EMA_DECAY = 0.995
+  USE_MIXUP = False
+  LOSS_DET_CLASS_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_DET_BOX_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_DET_IOU_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_POSE_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_HEAD_POSE_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_ACT_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_PSR_WEIGHT = None (not explicitly set — using training code default)
+  DET_POS_IOU_THRESH = 0.4
+  DET_POS_IOU_TOP_K = 9
+  DET_NEG_IOU_THRESH = 0.4
+  DET_OHEM_ENABLED = True
+  DET_ASYMMETRIC_GAMMA = True
+  STAGED_TRAINING = False
+  SUBSET_RATIO = 1.0
+  NUM_WORKERS = 0
+  SEED = 42
+[CHECKLIST 35] All 36 hyperparameters validated — OK
+Building datasets ...
+[RAM_CACHE] Pre-loading 8000 train images as JPEG bytes (cap=8000)...
+[RAM_CACHE] 1000/8000 scanned — 1000 cached, 0s
+[RAM_CACHE] 2000/8000 scanned — 2000 cached, 0s
+[RAM_CACHE] 3000/8000 scanned — 3000 cached, 0s
+[RAM_CACHE] 4000/8000 scanned — 4000 cached, 0s
+[RAM_CACHE] 5000/8000 scanned — 5000 cached, 0s
+[RAM_CACHE] 6000/8000 scanned — 6000 cached, 0s
+[RAM_CACHE] 7000/8000 scanned — 7000 cached, 0s
+[RAM_CACHE] Cap reached (8000) — stopping cache fill
+[RAM_CACHE] Done — 8000 images cached in 0s (~2734.4MB estimated)
+[industreal_dataset] Loaded 26322 frames (split=train, recordings=all)
+[RAM_CACHE] Pre-loading 2000 val images as JPEG bytes (cap=2000)...
+[RAM_CACHE] 1000/2000 scanned — 1000 cached, 0s
+[RAM_CACHE] Cap reached (2000) — stopping cache fill
+[RAM_CACHE] Done — 2000 images cached in 0s (~683.6MB estimated)
+[industreal_dataset] Loaded 38036 frames (split=val, recordings=all)
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 4710/26322 (17.89%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~17.89% under base sampler).
+[get_sampler] effective per-class sampling mass: 67 classes present, max/min ratio=7.4x (uniform would be 1.0x), max=0.0323 vs uniform=0.0149. Top-5 sampled class ids=[12, 57, 24, 23, 28]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+[RAM_CACHE] Pre-loading 8000 train images as JPEG bytes (cap=8000)...
+[RAM_CACHE] 1000/8000 scanned — 1000 cached, 0s
+[RAM_CACHE] 2000/8000 scanned — 2000 cached, 0s
+[RAM_CACHE] 3000/8000 scanned — 3000 cached, 0s
+[RAM_CACHE] 4000/8000 scanned — 4000 cached, 0s
+[RAM_CACHE] 5000/8000 scanned — 5000 cached, 0s
+[RAM_CACHE] 6000/8000 scanned — 6000 cached, 0s
+[RAM_CACHE] 7000/8000 scanned — 7000 cached, 0s
+[RAM_CACHE] Cap reached (8000) — stopping cache fill
+[RAM_CACHE] Done — 8000 images cached in 0s (~2734.4MB estimated)
+[industreal_dataset] Sequence mode: 78679 windows (T=8, stride=1) across 36 recordings
+[industreal_dataset] Loaded 26322 frames (split=train, recordings=all)
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 4710/26322 (17.89%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~17.89% under base sampler).
+[get_sampler] effective per-class sampling mass: 67 classes present, max/min ratio=7.4x (uniform would be 1.0x), max=0.0323 vs uniform=0.0149. Top-5 sampled class ids=[12, 57, 24, 23, 28]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+[train] PSR sequence mode: len=78,679 samples (8 frames/window, stride=1)
+Training samples  : 26,322
+Validation samples: 38,036
+Train loader: batch=4 workers=0 prefetch=1
+Val   loader: batch=4 workers=0 prefetch=2
+Building model ...
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1589: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+[VRAM] Total=15.48GB Used=0.20GB Free=15.28GB Model=0.20GB Need>=2.00GB
+EMA enabled: decay=0.995
+Backbone type     : convnext_tiny
+HeadPoseFiLM      : True
+Hand-FiLM (PoseFiLM): True
+VideoMAE stream   : False
+Total parameters  : 53,977,902
+Trainable params  : 52,529,189
+  backbone       : 28,589,128
+  fpn            :  4,474,880
+  detection      :  5,305,596
+  pose_head      :  1,643,793
+  pose_film      :    841,216
+  headpose_film  :    400,896
+  activity_head  :  8,196,165
+  psr_head       :  3,077,515
+  feature_bank   :          0
+  videomae_stream:          0
+PSR per-component prevalence: [1.0, 0.8140000104904175, 0.8209999799728394, 0.5210000276565552, 0.19099999964237213, 0.6299999952316284, 0.6110000014305115, 0.44200000166893005, 0.44200000166893005, 0.34700000286102295, 0.22100000083446503]
+Optimizer: AdamW with differential LR (backbone=0.1x, det_head=1x, heads=1x, act=1x, psr=1x, det_head_bias=1x, bias=0.3x, WD=0.001, bias WD=0)
+Scheduler: OneCycleLR (pct_start=0.1, steps_per_epoch=1, peak_factor=0.5, max_lr=[2.50e-05, 2.50e-04, 2.50e-04, 2.50e-04, 2.50e-04, 2.50e-04, 7.50e-05, 0.00e+00, 2.50e-04])
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/training/train.py:3865: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=_amp_scaler_enabled())
+  Checkpoint load: 372/421 tensors loaded
+  MISSING (activity_head): ['activity_head.cls_token', 'activity_head.tcn.norm.weight', 'activity_head.tcn.norm.bias', 'activity_head.tcn.depthwise_conv.weight', 'activity_head.tcn.depthwise_conv.bias', 'activity_head.tcn.pointwise_conv.weight', 'activity_head.tcn.pointwise_conv.bias', 'activity_head.vit.0.pos_embed', 'activity_head.vit.0.norm1.weight', 'activity_head.vit.0.norm1.bias', 'activity_head.vit.0.norm2.weight', 'activity_head.vit.0.norm2.bias', 'activity_head.vit.0.q_proj.weight', 'activity_head.vit.0.q_proj.bias', 'activity_head.vit.0.k_proj.weight', 'activity_head.vit.0.k_proj.bias', 'activity_head.vit.0.v_proj.weight', 'activity_head.vit.0.v_proj.bias', 'activity_head.vit.0.out_proj.weight', 'activity_head.vit.0.out_proj.bias', 'activity_head.vit.0.ffn.0.weight', 'activity_head.vit.0.ffn.0.bias', 'activity_head.vit.0.ffn.1.weight', 'activity_head.vit.0.ffn.1.bias', 'activity_head.vit.0.ffn.4.weight', 'activity_head.vit.0.ffn.4.bias', 'activity_head.vit.1.pos_embed', 'activity_head.vit.1.norm1.weight', 'activity_head.vit.1.norm1.bias', 'activity_head.vit.1.norm2.weight', 'activity_head.vit.1.norm2.bias', 'activity_head.vit.1.q_proj.weight', 'activity_head.vit.1.q_proj.bias', 'activity_head.vit.1.k_proj.weight', 'activity_head.vit.1.k_proj.bias', 'activity_head.vit.1.v_proj.weight', 'activity_head.vit.1.v_proj.bias', 'activity_head.vit.1.out_proj.weight', 'activity_head.vit.1.out_proj.bias', 'activity_head.vit.1.ffn.0.weight', 'activity_head.vit.1.ffn.0.bias', 'activity_head.vit.1.ffn.1.weight', 'activity_head.vit.1.ffn.1.bias', 'activity_head.vit.1.ffn.4.weight', 'activity_head.vit.1.ffn.4.bias', 'activity_head.activity_classifier.0.weight', 'activity_head.activity_classifier.0.bias', 'activity_head.activity_classifier.2.weight', 'activity_head.activity_classifier.2.bias']
+  Skipped 300 checkpoint key(s) (shape mismatch):
+    total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.0.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.0.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.2.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.2.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.4.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.4.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.6.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.6.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.classifier.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.classifier.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.classifier.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.classifier.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    fpn.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    fpn.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.7.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.7.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.10.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.10.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.7.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.7.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.10.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.10.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    anchor_gen.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    anchor_gen.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_head.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_head.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_head.upsample.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_head.upsample.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_head.soft_argmax.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_head.soft_argmax.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_film.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_film.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    headpose_film.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    headpose_film.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    headpose_film.gamma_net.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    headpose_film.gamma_net.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    headpose_film.beta_net.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    headpose_film.beta_net.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    head_pose_head.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    head_pose_head.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    activity_head.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    activity_head.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    activity_head.simple_classifier.0.weight: ckpt=torch.Size([512])  model=NOT IN MODEL -> re-initialized
+    activity_head.simple_classifier.0.bias: ckpt=torch.Size([512])  model=NOT IN MODEL -> re-initialized
+    activity_head.simple_classifier.1.weight: ckpt=torch.Size([256, 512])  model=NOT IN MODEL -> re-initialized
+    activity_head.simple_classifier.1.bias: ckpt=torch.Size([256])  model=NOT IN MODEL -> re-initialized
+    activity_head.simple_classifier.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    activity_head.simple_classifier.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    activity_head.simple_classifier.4.weight: ckpt=torch.Size([69, 256])  model=NOT IN MODEL -> re-initialized
+    activity_head.simple_classifier.4.bias: ckpt=torch.Size([69])  model=NOT IN MODEL -> re-initialized
+    psr_head.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.per_frame_mlp.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.per_frame_mlp.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.0.self_attn.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.0.self_attn.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.0.self_attn.out_proj.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.0.self_attn.out_proj.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.1.self_attn.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.1.self_attn.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.1.self_attn.out_proj.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.1.self_attn.out_proj.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.2.self_attn.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.2.self_attn.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.2.self_attn.out_proj.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.2.self_attn.out_proj.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.0.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.0.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.1.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.1.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.2.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.2.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.3.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.3.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.4.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.4.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.5.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.5.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.6.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.6.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.7.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.7.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.8.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.8.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.9.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.9.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.10.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.10.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    feature_bank.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    feature_bank.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+  Missing keys (new in model, using init): ['activity_head.cls_token', 'activity_head.tcn.norm.weight', 'activity_head.tcn.norm.bias', 'activity_head.tcn.depthwise_conv.weight', 'activity_head.tcn.depthwise_conv.bias', 'activity_head.tcn.pointwise_conv.weight', 'activity_head.tcn.pointwise_conv.bias', 'activity_head.vit.0.pos_embed', 'activity_head.vit.0.norm1.weight', 'activity_head.vit.0.norm1.bias', 'activity_head.vit.0.norm2.weight', 'activity_head.vit.0.norm2.bias', 'activity_head.vit.0.q_proj.weight', 'activity_head.vit.0.q_proj.bias', 'activity_head.vit.0.k_proj.weight', 'activity_head.vit.0.k_proj.bias', 'activity_head.vit.0.v_proj.weight', 'activity_head.vit.0.v_proj.bias', 'activity_head.vit.0.out_proj.weight', 'activity_head.vit.0.out_proj.bias', 'activity_head.vit.0.ffn.0.weight', 'activity_head.vit.0.ffn.0.bias', 'activity_head.vit.0.ffn.1.weight', 'activity_head.vit.0.ffn.1.bias', 'activity_head.vit.0.ffn.4.weight', 'activity_head.vit.0.ffn.4.bias', 'activity_head.vit.1.pos_embed', 'activity_head.vit.1.norm1.weight', 'activity_head.vit.1.norm1.bias', 'activity_head.vit.1.norm2.weight', 'activity_head.vit.1.norm2.bias', 'activity_head.vit.1.q_proj.weight', 'activity_head.vit.1.q_proj.bias', 'activity_head.vit.1.k_proj.weight', 'activity_head.vit.1.k_proj.bias', 'activity_head.vit.1.v_proj.weight', 'activity_head.vit.1.v_proj.bias', 'activity_head.vit.1.out_proj.weight', 'activity_head.vit.1.out_proj.bias', 'activity_head.vit.1.ffn.0.weight', 'activity_head.vit.1.ffn.0.bias', 'activity_head.vit.1.ffn.1.weight', 'activity_head.vit.1.ffn.1.bias', 'activity_head.vit.1.ffn.4.weight', 'activity_head.vit.1.ffn.4.bias', 'activity_head.activity_classifier.0.weight', 'activity_head.activity_classifier.0.bias', 'activity_head.activity_classifier.2.weight', 'activity_head.activity_classifier.2.bias']
+  EMA shadow weights restored from checkpoint.
+  Could not restore optimizer state (loaded state dict contains a parameter group that doesn't match the size of optimizer's group). Re-initialized -- LR schedule continues.
+Resumed from epoch 12, best=0.3628
+  Restored _global_step=53748 from checkpoint (step-based val cadence)
+  Restored Kendall log_vars from checkpoint: det=-0.165  head_pose=-0.998  act=0.521  psr=-0.371
+  Keeping learned Kendall log_var params (epoch 12 >= warmup=2): det=-0.165  head_pose=-0.998  act=0.521  psr=-0.371
+============================================================
+Starting training
+  Epochs          : 100
+  Batch size      : 4 x 4 = 16
+  Learning rate   : backbone=5.0e-05, heads=5.0e-04
+  Grad clip norm  : 5.0
+  Mixed precision : False
+  Early stopping  : patience=10
+  Combined metric weights: det=0.3  act=0.35  pose=0.15  psr=0.2
+============================================================
+
+--- Epoch 12/99 ---
+Epoch 12 [no-staging]:   0%|          | 0/6580 [00:00<?, ?it/s]  [CRASH_RECOVERY] Saved epoch_start crash checkpoint to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth
+[PSR_DEBUG step=0] pre_linear:  mean=0.0368 std=5.4108 min=-19.1281 max=20.9741
+[PSR_DEBUG step=0] post_linear64: mean=-3.1952 std=5.9420 min=-16.5548 max=15.7969
+[PSR_DEBUG step=0] post_gelu:   mean=1.1768 std=2.8845 min=-0.1693 max=15.7969
+[PSR_DEBUG step=0] post_dropout: mean=1.1656 std=2.9150 min=-0.1801 max=16.8052

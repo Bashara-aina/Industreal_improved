@@ -1,0 +1,50 @@
+13:17:52 [INFO] swarm.main: Initialized 20 agents for RF2 monitoring swarm
+13:17:52 [INFO] swarm.runner: Swarm runner started — 20 agents, interval=300s, oneshot=False
+13:17:52 [INFO] swarm.runner: ============================================================
+13:17:52 [INFO] swarm.runner: Cycle 1 starting — gathering data...
+13:17:53 [INFO] swarm.runner: Epoch=0 step=None pid_alive=False
+13:17:53 [INFO] swarm.coordinator: Agent gate_tracker: 10 checks, worst=FAIL, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent probe_analyzer: 5 checks, worst=SKIP, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent head_health: 10 checks, worst=SKIP, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent loss_health: 7 checks, worst=SKIP, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent convergence: 6 checks, worst=WARN, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent data_pipeline: 10 checks, worst=WARN, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent checkpoint: 9 checks, worst=WARN, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent gpu_resource: 1 checks, worst=FAIL, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent validation: 7 checks, worst=FAIL, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent head_recovery: 9 checks, worst=WARN, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent gate_predictor: 6 checks, worst=SKIP, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent metrics_logger: 1 checks, worst=FAIL, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent nan_detector: 4 checks, worst=PASS, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent process_health: 3 checks, worst=CRIT, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent epoch_tracker: 5 checks, worst=WARN, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent cuda_health: 6 checks, worst=FAIL, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent config_validator: 7 checks, worst=SKIP, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent summary: 3 checks, worst=CRIT, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent blocker_assessment: 3 checks, worst=CRIT, 0.0s
+13:17:53 [INFO] swarm.coordinator: Agent log_anomaly: 6 checks, worst=FAIL, 0.0s
+13:17:53 [ERROR] swarm.alerting: [CRIT] blocker_assessment/p0_blockers: P0 blockers: 1 — []
+13:17:53 [ERROR] swarm.alerting: [CRIT] blocker_assessment/overall_health: Training health: CRITICAL (epoch 0, best=0.462, gate=0.4)
+13:17:53 [WARNING] swarm.alerting: [WARN] checkpoint/latest_ckpt_age: No checkpoint files found
+13:17:53 [WARNING] swarm.alerting: [WARN] convergence/learning_rate: No LR mentioned in log tail
+13:17:53 [WARNING] swarm.alerting: [FAIL] cuda_health/gpu_visibility: nvidia-smi failed: could not convert string to float: '132.36\n34'
+13:17:53 [WARNING] swarm.alerting: [WARN] data_pipeline/augmentation_active: Augmentation log lines: 0
+13:17:53 [WARNING] swarm.alerting: [WARN] data_pipeline/data_freshness: No metrics data available
+13:17:53 [WARNING] swarm.alerting: [WARN] epoch_tracker/epoch_progress: Epoch data not available
+13:17:53 [WARNING] swarm.alerting: [WARN] gate_tracker/gate_passed: Gate passed: False
+13:17:53 [WARNING] swarm.alerting: [FAIL] gate_tracker/best_det_mAP50_vs_gate: best_mAP50=0.207, target=0.4, gap=0.193
+13:17:53 [WARNING] swarm.alerting: [WARN] gate_tracker/best_mAP50_95_vs_gate: mAP50_95 not tracked in state yet
+13:17:53 [WARNING] swarm.alerting: [WARN] gate_tracker/val_activity: No validation log lines in tail
+13:17:53 [WARNING] swarm.alerting: [FAIL] gpu_resource/gpu_query: nvidia-smi failed: could not convert string to float: '132.36\n34'
+13:17:53 [WARNING] swarm.alerting: [WARN] head_recovery/optimizer_active: No optimizer references in log tail
+13:17:53 [WARNING] swarm.alerting: [FAIL] log_anomaly/log_silence: No active training signals in last log lines
+13:17:53 [WARNING] swarm.alerting: [WARN] log_anomaly/log_activity_rate: No LIVENESS lines — log format may have changed
+13:17:53 [WARNING] swarm.alerting: [FAIL] metrics_logger/metrics_data_available: No metrics.jsonl entries found
+13:17:53 [ERROR] swarm.alerting: [CRIT] process_health/pid_alive: PID 361404: DEAD
+13:17:53 [WARNING] swarm.alerting: [WARN] process_health/heartbeat_freshness: No heartbeat timestamp in state
+13:17:53 [WARNING] swarm.alerting: [FAIL] process_health/training_activity: No training activity (only 1 log lines)
+13:17:53 [ERROR] swarm.alerting: [CRIT] summary/recommended_actions: 4 action items: MAE gate already met (9.2° ≤ 60.0°); CRITICAL: Training process is dead — restart immediately; Moderate gate gap (0.193) — review LR schedule and head balance; DET head gradient near zero (0.00e+00) —
+13:17:53 [ERROR] swarm.alerting: [CRIT] summary/executive_health_score: Health score: 0/100 (epoch 0, best=0.207, gate=0.4)
+13:17:53 [WARNING] swarm.alerting: [FAIL] validation/validation_active: No validation log lines
+13:17:53 [INFO] swarm.runner: Cycle 1 done — 12 FAIL/CRIT checks
+13:17:53 [INFO] swarm.runner: Cycle 1 complete. Next cycle in 300s.

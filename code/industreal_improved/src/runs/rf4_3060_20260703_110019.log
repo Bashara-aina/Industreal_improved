@@ -1,0 +1,175 @@
+NVIDIA GeForce RTX 5060 Ti
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+[config] DET_GT_FRAME_FRACTION = 0.40 (train_det=True, train_act=True, train_psr=True)
+[config] Applied preset "stage_rf4": RF4: All heads + PSR transition (100% data, 20 ep, verb-grouping).
+[train] Applied preset: stage_rf4 (MIXED_PRECISION=False, STAGED_TRAINING=False, ZERO_DET_CONF_FOR_RECOVERY=False, USE_EMA=True, USE_MIXUP=False, BATCH_SIZE=4x4)
+[train] Stage preset detected — redirected OUTPUT_ROOT to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages
+[train] STAGED_TRAINING=False — all 5 heads active from epoch 0
+Config hash: 226e157782e2f614  (seed=42)
+Config hash details: {"ALLOW_TF32": true, "BACKBONE": "convnext_tiny", "BASE_LR": 0.0005, "BATCH_SIZE": 4, "CUDNN_BENCHMARK": false, "CUDNN_DETERMINISTIC": false, "CUTMIX_ALPHA": 0.0, "EMA_DECAY": 0.995, "EPOCHS": 100, "F
+Config snapshot saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/config.py
+Device: cuda
+GPU : NVIDIA GeForce RTX 5060 Ti
+VRAM: 16.6 GB
+[LOCK] Stale PID 2877562 still running: python3 -u src/training/train.py --preset stage_rf4 --no-staged-training --resume src/runs/rf_stages/checkpoints/latest.pth  — killing
+[LOCK] Killed stale PID 2877562
+[LOCK] PID lock acquired: PID=2881031, GPU=0
+Could not log git commit: Command '['git', 'rev-parse', 'HEAD']' returned non-zero exit status 128.
+Library versions: torch=2.12.1+cu130  torchvision=2.12.1+cu130  CUDA=13.0  Python=3.13.13
+[CHECKLIST 34] Command and env vars saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/logs/run_command.txt
+Process nice level increased by +10.
+Torch CPU threads capped: intraop=12 interop=4
+CUDA memory fraction cap enabled: 0.95.
+Ablation: TRAIN_DET=True  TRAIN_HEAD_POSE=True  TRAIN_ACT=True  TRAIN_PSR=True  USE_KENDALL=True
+Config: DET_POS_IOU_THRESH=0.4  DET_POS_IOU_TOP_K=9  DET_POS_IOU_IOU_FLOOR=0.2  DET_OHEM_ENABLED=True  DET_ASYMMETRIC_GAMMA=True  DET_BIAS_LR_FACTOR=1.0  DET_LR_MULTIPLIER=1.0  KENDALL_HP_PREC_CAP=True  KENDALL_FIXED_WEIGHTS=False  KENDALL_HP_FIXED_LAMBDA=0.2  KENDALL_STAGED_TRAINING=False  DET_POS_ANCHOR_PROBE_EVERY=1000  _STAGE_NAME=
+[CHECKLIST 32] Resolved config dumped to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/logs/resolved_config.json (275 keys)
+[CHECKLIST 35] === Hyperparameter snapshot ===
+  BASE_LR = 0.0005
+  DET_LR_MULTIPLIER = 1.0
+  DET_BIAS_LR_FACTOR = 1.0
+  POSE_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  HEAD_POSE_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  ACT_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  PSR_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  WEIGHT_DECAY = 0.001
+  LR_SCHEDULER = None (not explicitly set — using training code default)
+  LR_WARMUP_EPOCHS = None (not explicitly set — using training code default)
+  LR_MIN_RATIO = None (not explicitly set — using training code default)
+  CLIP_GRAD_NORM = None (not explicitly set — using training code default)
+  BATCH_SIZE = 4
+  EFFECTIVE_BATCH = 16
+  GRAD_ACCUM_STEPS = 4
+  EPOCHS = 100
+  MIXED_PRECISION = False
+  USE_EMA = True
+  EMA_DECAY = 0.995
+  USE_MIXUP = False
+  LOSS_DET_CLASS_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_DET_BOX_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_DET_IOU_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_POSE_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_HEAD_POSE_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_ACT_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_PSR_WEIGHT = None (not explicitly set — using training code default)
+  DET_POS_IOU_THRESH = 0.4
+  DET_POS_IOU_TOP_K = 9
+  DET_NEG_IOU_THRESH = 0.4
+  DET_OHEM_ENABLED = True
+  DET_ASYMMETRIC_GAMMA = True
+  STAGED_TRAINING = False
+  SUBSET_RATIO = 1.0
+  NUM_WORKERS = 0
+  SEED = 42
+[CHECKLIST 35] All 36 hyperparameters validated — OK
+Building datasets ...
+[RAM_CACHE] Pre-loading 8000 train images as JPEG bytes (cap=8000)...
+[RAM_CACHE] 1000/8000 scanned — 1000 cached, 0s
+[RAM_CACHE] 2000/8000 scanned — 2000 cached, 0s
+[RAM_CACHE] 3000/8000 scanned — 3000 cached, 0s
+[RAM_CACHE] 4000/8000 scanned — 4000 cached, 0s
+[RAM_CACHE] 5000/8000 scanned — 5000 cached, 0s
+[RAM_CACHE] 6000/8000 scanned — 6000 cached, 0s
+[RAM_CACHE] 7000/8000 scanned — 7000 cached, 0s
+[RAM_CACHE] Cap reached (8000) — stopping cache fill
+[RAM_CACHE] Done — 8000 images cached in 0s (~2734.4MB estimated)
+[industreal_dataset] Loaded 26322 frames (split=train, recordings=all)
+[RAM_CACHE] Pre-loading 2000 val images as JPEG bytes (cap=2000)...
+[RAM_CACHE] 1000/2000 scanned — 1000 cached, 0s
+[RAM_CACHE] Cap reached (2000) — stopping cache fill
+[RAM_CACHE] Done — 2000 images cached in 0s (~683.6MB estimated)
+[industreal_dataset] Loaded 38036 frames (split=val, recordings=all)
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 4710/26322 (17.89%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~17.89% under base sampler).
+[get_sampler] effective per-class sampling mass: 67 classes present, max/min ratio=7.4x (uniform would be 1.0x), max=0.0323 vs uniform=0.0149. Top-5 sampled class ids=[12, 57, 24, 23, 28]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+[RAM_CACHE] Pre-loading 8000 train images as JPEG bytes (cap=8000)...
+[RAM_CACHE] 1000/8000 scanned — 1000 cached, 0s
+[RAM_CACHE] 2000/8000 scanned — 2000 cached, 0s
+[RAM_CACHE] 3000/8000 scanned — 3000 cached, 0s
+[RAM_CACHE] 4000/8000 scanned — 4000 cached, 0s
+[RAM_CACHE] 5000/8000 scanned — 5000 cached, 0s
+[RAM_CACHE] 6000/8000 scanned — 6000 cached, 0s
+[RAM_CACHE] 7000/8000 scanned — 7000 cached, 0s
+[RAM_CACHE] Cap reached (8000) — stopping cache fill
+[RAM_CACHE] Done — 8000 images cached in 0s (~2734.4MB estimated)
+[industreal_dataset] Sequence mode: 78679 windows (T=8, stride=1) across 36 recordings
+[industreal_dataset] Loaded 26322 frames (split=train, recordings=all)
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 4710/26322 (17.89%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~17.89% under base sampler).
+[get_sampler] effective per-class sampling mass: 67 classes present, max/min ratio=7.4x (uniform would be 1.0x), max=0.0323 vs uniform=0.0149. Top-5 sampled class ids=[12, 57, 24, 23, 28]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+[train] PSR sequence mode: len=78,679 samples (8 frames/window, stride=1)
+Training samples  : 26,322
+Validation samples: 38,036
+Train loader: batch=4 workers=0 prefetch=1
+Val   loader: batch=4 workers=0 prefetch=2
+Building model ...
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1589: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+[VRAM] Total=15.48GB Used=0.17GB Free=15.31GB Model=0.17GB Need>=2.00GB
+EMA enabled: decay=0.995
+Backbone type     : convnext_tiny
+HeadPoseFiLM      : True
+Hand-FiLM (PoseFiLM): True
+VideoMAE stream   : False
+Total parameters  : 46,468,910
+Trainable params  : 45,020,197
+  backbone       : 28,589,128
+  fpn            :  4,474,880
+  detection      :  5,305,596
+  pose_head      :  1,643,793
+  pose_film      :    841,216
+  headpose_film  :    400,896
+  activity_head  :    687,173
+  psr_head       :  3,077,515
+  feature_bank   :          0
+  videomae_stream:          0
+PSR per-component prevalence: [1.0, 0.8140000104904175, 0.8209999799728394, 0.5210000276565552, 0.19099999964237213, 0.6299999952316284, 0.6110000014305115, 0.44200000166893005, 0.44200000166893005, 0.34700000286102295, 0.22100000083446503]
+Optimizer: AdamW with differential LR (backbone=0.1x, det_head=1x, heads=1x, act=1x, psr=1x, det_head_bias=1x, bias=0.3x, WD=0.001, bias WD=0)
+Scheduler: OneCycleLR (pct_start=0.1, steps_per_epoch=1, peak_factor=0.75, max_lr=[3.75e-05, 3.75e-04, 3.75e-04, 3.75e-04, 3.75e-04, 3.75e-04, 1.12e-04, 0.00e+00, 3.75e-04])
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/training/train.py:3834: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=_amp_scaler_enabled())
+  Checkpoint load: 378/378 tensors loaded
+  All checkpoint keys loaded (no shape mismatches).
+  EMA shadow weights restored from checkpoint.
+  Optimizer state restored.
+Resumed from epoch 5, best=0.1825
+  Restored _global_step=19196 from checkpoint (step-based val cadence)
+  Restored Kendall log_vars from checkpoint: det=0.074  head_pose=-1.000  act=0.112  psr=-0.013
+  Keeping learned Kendall log_var params (epoch 5 >= warmup=2): det=0.074  head_pose=-1.000  act=0.112  psr=-0.013
+============================================================
+Starting training
+  Epochs          : 100
+  Batch size      : 4 x 4 = 16
+  Learning rate   : backbone=5.0e-05, heads=5.0e-04
+  Grad clip norm  : 5.0
+  Mixed precision : False
+  Early stopping  : patience=10
+  Combined metric weights: det=0.3  act=0.35  pose=0.15  psr=0.2
+============================================================
+
+--- Epoch 5/99 ---
+Epoch 5 [no-staging]:   0%|          | 0/6580 [00:00<?, ?it/s]  [CRASH_RECOVERY] Saved epoch_start crash checkpoint to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth
+[PSR_DEBUG step=0] pre_linear:  mean=-0.0214 std=2.0386 min=-7.0330 max=7.5756
+[PSR_DEBUG step=0] post_linear64: mean=-0.0229 std=1.3759 min=-3.9939 max=3.4616
+[PSR_DEBUG step=0] post_gelu:   mean=0.4330 std=0.7898 min=-0.1700 max=3.4607
+[PSR_DEBUG step=0] post_dropout: mean=0.4404 std=0.8266 min=-0.1808 max=3.6815
+Epoch 5 [no-staging]:   0%|          | 0/6580 [00:04<?, ?it/s, loss=2.8101 det=1.5209(c=0.8318,g=0.3446) pose=0.0479 act=0.7486 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 1/6580 [00:04<7:23:37,  4.05s/it, loss=2.8101 det=1.5209(c=0.8318,g=0.3446) pose=0.0479 act=0.7486 psr=0.0000 wd=0.29][PSR_DEBUG step=1] pre_linear:  mean=-0.0010 std=2.5715 min=-10.8819 max=8.9463
+[PSR_DEBUG step=1] post_linear64: mean=-0.0431 std=1.7855 min=-5.2791 max=4.5723
+[PSR_DEBUG step=1] post_gelu:   mean=0.5790 std=1.0280 min=-0.1700 max=4.5723
+[PSR_DEBUG step=1] post_dropout: mean=0.6098 std=1.0922 min=-0.1808 max=4.8642
+  [KENDALL step=1] lv: det=0.074 pose=-1.000 act=0.112 psr=-0.013 | prec(exp(-lv)): det=0.93 pose=2.72 act=0.89 psr=1.01 | lv_grad: det=0.0400 pose=0.0000 act=0.4206 psr=0.0000
+  [LIVENESS_GRAD step=1] detection_head:ALIVE[RMS=7.17e-01|n=36] | pose_head:ALIVE[RMS=1.87e-01|n=8] | head_pose_head:ALIVE[RMS=7.24e-01|n=20] | activity_head:ALIVE[RMS=1.03e-01|n=8] | psr_head:NO_GRAD | backbone:ALIVE[2.034e+01|n=178] | fpn:ALIVE[2.602e+00|n=16] | gpu_mem=1.25GB/8.15GB
+  [LIVENESS_GRAD step=1] detection_head:ALIVE[RMS=7.17e-01|n=36] | pose_head:ALIVE[RMS=1.87e-01|n=8] | head_pose_head:ALIVE[RMS=7.24e-01|n=20] | activity_head:ALIVE[RMS=1.03e-01|n=8] | psr_head:NO_GRAD | backbone:ALIVE[2.034e+01|n=178] | fpn:ALIVE[2.602e+00|n=16] | gpu_mem=1.25GB/8.15GB
+Epoch 5 [no-staging]:   0%|          | 1/6580 [00:05<7:23:37,  4.05s/it, loss=2.4927 det=0.8056(c=0.7969,g=0.0043) pose=0.0411 act=0.5838 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 2/6580 [00:05<5:05:43,  2.79s/it, loss=2.4927 det=0.8056(c=0.7969,g=0.0043) pose=0.0411 act=0.5838 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 2/6580 [00:07<5:05:43,  2.79s/it, loss=4.1123 det=0.9436(c=0.9343,g=0.0046) pose=0.0709 act=0.5531 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 3/6580 [00:07<4:20:53,  2.38s/it, loss=4.1123 det=0.9436(c=0.9343,g=0.0046) pose=0.0709 act=0.5531 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 3/6580 [00:09<4:20:53,  2.38s/it, loss=2.5875 det=1.0548(c=1.0476,g=0.0036) pose=0.0901 act=0.9126 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 4/6580 [00:09<4:03:38,  2.22s/it, loss=2.5875 det=1.0548(c=1.0476,g=0.0036) pose=0.0901 act=0.9126 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 4/6580 [00:10<4:03:38,  2.22s/it, loss=3.324 det=0.000 pose=0.000 act=0.000 psr=3.324 seq=1]                          Epoch 5 [no-staging]:   0%|          | 5/6580 [00:10<3:18:48,  1.81s/it, loss=3.324 det=0.000 pose=0.000 act=0.000 psr=3.324 seq=1]Epoch 5 [no-staging]:   0%|          | 5/6580 [00:12<3:18:48,  1.81s/it, loss=2.3709 det=1.2746(c=1.2675,g=0.0036) pose=0.0389 act=0.3784 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 6/6580 [00:12<3:21:20,  1.84s/it, loss=2.3709 det=1.2746(c=1.2675,g=0.0036) pose=0.0389 act=0.3784 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 6/6580 [00:14<3:21:20,  1.84s/it, loss=1.9045 det=0.6151(c=0.6060,g=0.0046) pose=0.0425 act=0.5476 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 7/6580 [00:14<3:21:59,  1.84s/it, loss=1.9045 det=0.6151(c=0.6060,g=0.0046) pose=0.0425 act=0.5476 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 7/6580 [00:16<3:21:59,  1.84s/it, loss=2.9330 det=0.7254(c=0.7125,g=0.0065) pose=0.0763 act=0.9427 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 8/6580 [00:16<3:25:53,  1.88s/it, loss=2.9330 det=0.7254(c=0.7125,g=0.0065) pose=0.0763 act=0.9427 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 8/6580 [00:17<3:25:53,  1.88s/it, loss=3.220 det=0.000 pose=0.000 act=0.000 psr=3.220 seq=1]                          Epoch 5 [no-staging]:   0%|          | 9/6580 [00:17<2:59:28,  1.64s/it, loss=3.220 det=0.000 pose=0.000 act=0.000 psr=3.220 seq=1]Epoch 5 [no-staging]:   0%|          | 9/6580 [00:19<2:59:28,  1.64s/it, loss=1.9203 det=0.4330(c=0.4233,g=0.0049) pose=0.0447 act=0.7641 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 10/6580 [00:19<3:07:28,  1.71s/it, loss=1.9203 det=0.4330(c=0.4233,g=0.0049) pose=0.0447 act=0.7641 psr=0.0000 wd=0.29]  [GPU mem] step=10  allocated=1.27GB  reserved=8.15GB
+  [Epoch 5 batch 10/6580] elapsed=20s  speed=0.5 batch/s
+[PSR_DEBUG step=10] pre_linear:  mean=0.0074 std=2.5169 min=-9.9832 max=7.9957
+[PSR_DEBUG step=10] post_linear64: mean=-0.0303 std=1.7986 min=-5.4200 max=4.6546
+[PSR_DEBUG step=10] post_gelu:   mean=0.5906 std=1.0680 min=-0.1699 max=4.6546
+[PSR_DEBUG step=10] post_dropout: mean=0.5694 std=1.0913 min=-0.1807 max=4.9517
+  [DEBUG epoch=5 step=10] total=2.4206 det=0.6459 det_cls=0.6331 det_reg=0.0064 pose=1.5279 head_pose=0.0152 act=0.5359 psr=0.0000
+Epoch 5 [no-staging]:   0%|          | 10/6580 [00:21<3:07:28,  1.71s/it, loss=2.4206 det=0.6459(c=0.6331,g=0.0064) pose=0.0152 act=0.5359 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 11/6580 [00:21<3:14:24,  1.78s/it, loss=2.4206 det=0.6459(c=0.6331,g=0.0064) pose=0.0152 act=0.5359 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 11/6580 [00:23<3:14:24,  1.78s/it, loss=2.1564 det=0.6604(c=0.6510,g=0.0047) pose=0.1172 act=1.6906 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 12/6580 [00:23<3:20:35,  1.83s/it, loss=2.1564 det=0.6604(c=0.6510,g=0.0047) pose=0.1172 act=1.6906 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 12/6580 [00:24<3:20:35,  1.83s/it, loss=0.542 det=0.000 pose=0.000 act=0.000 psr=0.542 seq=1]                          Epoch 5 [no-staging]:   0%|          | 13/6580 [00:24<3:02:28,  1.67s/it, loss=0.542 det=0.000 pose=0.000 act=0.000 psr=0.542 seq=1]Epoch 5 [no-staging]:   0%|          | 13/6580 [00:26<3:02:28,  1.67s/it, loss=2.7607 det=1.1539(c=1.1283,g=0.0128) pose=0.0694 act=1.3102 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 14/6580 [00:26<3:12:44,  1.76s/it, loss=2.7607 det=1.1539(c=1.1283,g=0.0128) pose=0.0694 act=1.3102 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 14/6580 [00:28<3:12:44,  1.76s/it, loss=2.3377 det=0.5559(c=0.5401,g=0.0079) pose=0.0276 act=0.5789 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 15/6580 [00:28<3:20:26,  1.83s/it, loss=2.3377 det=0.5559(c=0.5401,g=0.0079) pose=0.0276 act=0.5789 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 15/6580 [00:30<3:20:26,  1.83s/it, loss=1.3885 det=0.0993(c=0.0993,g=0.0000) pose=0.0330 act=0.8857 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 16/6580 [00:30<3:24:35,  1.87s/it, loss=1.3885 det=0.0993(c=0.0993,g=0.0000) pose=0.0330 act=0.8857 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 16/6580 [00:31<3:24:35,  1.87s/it, loss=0.561 det=0.000 pose=0.000 act=0.000 psr=0.561 seq=1]                          Epoch 5 [no-staging]:   0%|          | 17/6580 [00:31<2:59:10,  1.64s/it, loss=0.561 det=0.000 pose=0.000 act=0.000 psr=0.561 seq=1]Epoch 5 [no-staging]:   0%|          | 17/6580 [00:33<2:59:10,  1.64s/it, loss=1.1141 det=0.0268(c=0.0268,g=0.0000) pose=0.0172 act=0.7434 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 18/6580 [00:33<3:03:41,  1.68s/it, loss=1.1141 det=0.0268(c=0.0268,g=0.0000) pose=0.0172 act=0.7434 psr=0.0000 wd=0.29]  [SIGNAL] SIGTERM received at step=18 epoch=5 -- saving crash recovery and exiting gracefully
+  [CRASH_RECOVERY] Saved signal_SIGTERM crash checkpoint to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth
+Epoch 5 [no-staging]:   0%|          | 18/6580 [00:41<4:10:51,  2.29s/it, loss=1.1141 det=0.0268(c=0.0268,g=0.0000) pose=0.0172 act=0.7434 psr=0.0000 wd=0.29]
+  [CRASH-RETRY] SystemExit caught from signal handler (epoch=5 attempt=1). Cleaning CUDA state and retrying.
+Epoch 5 [no-staging]:   0%|          | 0/6580 [00:00<?, ?it/s]  [CRASH_RECOVERY] Saved epoch_start crash checkpoint to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth
+Epoch 5 [no-staging]:   0%|          | 0/6580 [00:09<?, ?it/s, loss=2.2139 det=0.7825(c=0.7658,g=0.0083) pose=0.0182 act=1.5451 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 1/6580 [00:09<17:32:11,  9.60s/it, loss=2.2139 det=0.7825(c=0.7658,g=0.0083) pose=0.0182 act=1.5451 psr=0.0000 wd=0.29]  [KENDALL step=1] lv: det=0.074 pose=-1.000 act=0.112 psr=-0.013 | prec(exp(-lv)): det=0.93 pose=2.72 act=0.89 psr=1.01 | lv_grad: det=0.1901 pose=0.0000 act=0.3770 psr=0.0000
+  [LIVENESS_GRAD step=1] detection_head:ALIVE[RMS=4.84e-01|n=36] | pose_head:ALIVE[RMS=9.46e-02|n=8] | head_pose_head:ALIVE[RMS=4.96e-01|n=20] | activity_head:ALIVE[RMS=1.33e-01|n=8] | psr_head:NO_GRAD | backbone:ALIVE[9.498e+00|n=178] | fpn:ALIVE[1.586e+00|n=16] | gpu_mem=1.42GB/8.31GB
+  [LIVENESS_GRAD step=1] detection_head:ALIVE[RMS=4.84e-01|n=36] | pose_head:ALIVE[RMS=9.46e-02|n=8] | head_pose_head:ALIVE[RMS=4.96e-01|n=20] | activity_head:ALIVE[RMS=1.33e-01|n=8] | psr_head:NO_GRAD | backbone:ALIVE[9.498e+00|n=178] | fpn:ALIVE[1.586e+00|n=16] | gpu_mem=1.42GB/8.31GB
+Epoch 5 [no-staging]:   0%|          | 1/6580 [00:11<17:32:11,  9.60s/it, loss=2.2652 det=0.5528(c=0.5332,g=0.0098) pose=0.0232 act=0.5180 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 2/6580 [00:11<9:20:22,  5.11s/it, loss=2.2652 det=0.5528(c=0.5332,g=0.0098) pose=0.0232 act=0.5180 psr=0.0000 wd=0.29] Epoch 5 [no-staging]:   0%|          | 2/6580 [00:13<9:20:22,  5.11s/it, loss=3.4368 det=1.2244(c=1.2052,g=0.0096) pose=0.0615 act=1.2321 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 3/6580 [00:13<6:41:17,  3.66s/it, loss=3.4368 det=1.2244(c=1.2052,g=0.0096) pose=0.0615 act=1.2321 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 3/6580 [00:15<6:41:17,  3.66s/it, loss=2.5045 det=0.8245(c=0.8000,g=0.0122) pose=0.0284 act=1.0926 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 4/6580 [00:15<5:29:46,  3.01s/it, loss=2.5045 det=0.8245(c=0.8000,g=0.0122) pose=0.0284 act=1.0926 psr=0.0000 wd=0.29]Epoch 5 [no-staging]:   0%|          | 4/6580 [00:16<5:29:46,  3.01s/it, loss=1.686 det=0.000 pose=0.000 act=0.000 psr=1.686 seq=1]                          Epoch 5 [no-staging]:   0%|          | 5/6580 [00:16<4:19:40,  2.37s/it, loss=1.686 det=0.000 pose=0.000 act=0.000 psr=1.686 seq=1]

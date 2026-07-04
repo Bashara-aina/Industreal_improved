@@ -1,0 +1,171 @@
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+[config] DET_GT_FRAME_FRACTION = 0.40 (train_det=True, train_act=True, train_psr=True)
+[config] Applied preset "stage_rf4": RF4: All heads + PSR transition (100% data, 20 ep, verb-grouping).
+[train] Applied preset: stage_rf4 (MIXED_PRECISION=True, STAGED_TRAINING=False, ZERO_DET_CONF_FOR_RECOVERY=False, USE_EMA=True, USE_MIXUP=False, BATCH_SIZE=4x4)
+[train] Stage preset detected — redirected OUTPUT_ROOT to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages
+[train] STAGED_TRAINING=False — all 5 heads active from epoch 0
+Config hash: 2e1bfcfbc0c156c1  (seed=42)
+Config hash details: {"ALLOW_TF32": true, "BACKBONE": "convnext_tiny", "BASE_LR": 0.0005, "BATCH_SIZE": 4, "CUDNN_BENCHMARK": true, "CUDNN_DETERMINISTIC": false, "CUTMIX_ALPHA": 0.0, "EMA_DECAY": 0.995, "EPOCHS": 100, "FE
+Config snapshot saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/config.py
+Device: cuda
+GPU : NVIDIA GeForce RTX 5060 Ti
+VRAM: 16.6 GB
+[LOCK] Stale lock from dead PID 2832778 — cleaning up
+[LOCK] PID lock acquired: PID=2870793, GPU=0
+Could not log git commit: Command '['git', 'rev-parse', 'HEAD']' returned non-zero exit status 128.
+Library versions: torch=2.12.1+cu130  torchvision=2.12.1+cu130  CUDA=13.0  Python=3.13.13
+[CHECKLIST 34] Command and env vars saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/logs/run_command.txt
+Process nice level increased by +10.
+Torch CPU threads capped: intraop=12 interop=4
+CUDA memory fraction cap enabled: 0.95.
+Ablation: TRAIN_DET=True  TRAIN_HEAD_POSE=True  TRAIN_ACT=True  TRAIN_PSR=True  USE_KENDALL=True
+Config: DET_POS_IOU_THRESH=0.4  DET_POS_IOU_TOP_K=9  DET_POS_IOU_IOU_FLOOR=0.2  DET_OHEM_ENABLED=True  DET_ASYMMETRIC_GAMMA=True  DET_BIAS_LR_FACTOR=1.0  DET_LR_MULTIPLIER=1.0  KENDALL_HP_PREC_CAP=True  KENDALL_FIXED_WEIGHTS=False  KENDALL_HP_FIXED_LAMBDA=0.2  KENDALL_STAGED_TRAINING=False  DET_POS_ANCHOR_PROBE_EVERY=1000  _STAGE_NAME=
+[CHECKLIST 32] Resolved config dumped to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/logs/resolved_config.json (272 keys)
+[CHECKLIST 35] === Hyperparameter snapshot ===
+  BASE_LR = 0.0005
+  DET_LR_MULTIPLIER = 1.0
+  DET_BIAS_LR_FACTOR = 1.0
+  POSE_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  HEAD_POSE_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  ACT_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  PSR_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  WEIGHT_DECAY = 0.001
+  LR_SCHEDULER = None (not explicitly set — using training code default)
+  LR_WARMUP_EPOCHS = None (not explicitly set — using training code default)
+  LR_MIN_RATIO = None (not explicitly set — using training code default)
+  CLIP_GRAD_NORM = None (not explicitly set — using training code default)
+  BATCH_SIZE = 4
+  EFFECTIVE_BATCH = 16
+  GRAD_ACCUM_STEPS = 4
+  EPOCHS = 100
+  MIXED_PRECISION = True
+  USE_EMA = True
+  EMA_DECAY = 0.995
+  USE_MIXUP = False
+  LOSS_DET_CLASS_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_DET_BOX_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_DET_IOU_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_POSE_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_HEAD_POSE_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_ACT_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_PSR_WEIGHT = None (not explicitly set — using training code default)
+  DET_POS_IOU_THRESH = 0.4
+  DET_POS_IOU_TOP_K = 9
+  DET_NEG_IOU_THRESH = 0.4
+  DET_OHEM_ENABLED = True
+  DET_ASYMMETRIC_GAMMA = True
+  STAGED_TRAINING = False
+  SUBSET_RATIO = 1.0
+  NUM_WORKERS = 0
+  SEED = 42
+[CHECKLIST 35] All 36 hyperparameters validated — OK
+Building datasets ...
+[RAM_CACHE] Pre-loading 8000 train images as JPEG bytes (cap=8000)...
+[RAM_CACHE] 1000/8000 scanned — 1000 cached, 0s
+[RAM_CACHE] 2000/8000 scanned — 2000 cached, 0s
+[RAM_CACHE] 3000/8000 scanned — 3000 cached, 0s
+[RAM_CACHE] 4000/8000 scanned — 4000 cached, 0s
+[RAM_CACHE] 5000/8000 scanned — 5000 cached, 0s
+[RAM_CACHE] 6000/8000 scanned — 6000 cached, 0s
+[RAM_CACHE] 7000/8000 scanned — 7000 cached, 0s
+[RAM_CACHE] Cap reached (8000) — stopping cache fill
+[RAM_CACHE] Done — 8000 images cached in 0s (~2734.4MB estimated)
+[industreal_dataset] Loaded 26322 frames (split=train, recordings=all)
+[RAM_CACHE] Pre-loading 2000 val images as JPEG bytes (cap=2000)...
+[RAM_CACHE] 1000/2000 scanned — 1000 cached, 0s
+[RAM_CACHE] Cap reached (2000) — stopping cache fill
+[RAM_CACHE] Done — 2000 images cached in 0s (~683.6MB estimated)
+[industreal_dataset] Loaded 38036 frames (split=val, recordings=all)
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 4710/26322 (17.89%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~17.89% under base sampler).
+[get_sampler] effective per-class sampling mass: 67 classes present, max/min ratio=7.4x (uniform would be 1.0x), max=0.0323 vs uniform=0.0149. Top-5 sampled class ids=[12, 57, 24, 23, 28]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+[RAM_CACHE] Pre-loading 8000 train images as JPEG bytes (cap=8000)...
+[RAM_CACHE] 1000/8000 scanned — 1000 cached, 0s
+[RAM_CACHE] 2000/8000 scanned — 2000 cached, 0s
+[RAM_CACHE] 3000/8000 scanned — 3000 cached, 0s
+[RAM_CACHE] 4000/8000 scanned — 4000 cached, 0s
+[RAM_CACHE] 5000/8000 scanned — 5000 cached, 0s
+[RAM_CACHE] 6000/8000 scanned — 6000 cached, 0s
+[RAM_CACHE] 7000/8000 scanned — 7000 cached, 0s
+[RAM_CACHE] Cap reached (8000) — stopping cache fill
+[RAM_CACHE] Done — 8000 images cached in 0s (~2734.4MB estimated)
+[industreal_dataset] Sequence mode: 78679 windows (T=8, stride=1) across 36 recordings
+[industreal_dataset] Loaded 26322 frames (split=train, recordings=all)
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 4710/26322 (17.89%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~17.89% under base sampler).
+[get_sampler] effective per-class sampling mass: 67 classes present, max/min ratio=7.4x (uniform would be 1.0x), max=0.0323 vs uniform=0.0149. Top-5 sampled class ids=[12, 57, 24, 23, 28]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+[train] PSR sequence mode: len=78,679 samples (8 frames/window, stride=1)
+Training samples  : 26,322
+Validation samples: 38,036
+Train loader: batch=4 workers=0 prefetch=1
+Val   loader: batch=4 workers=0 prefetch=2
+Building model ...
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1589: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+[VRAM] Total=15.48GB Used=0.17GB Free=15.31GB Model=0.17GB Need>=2.00GB
+EMA enabled: decay=0.995
+Backbone type     : convnext_tiny
+HeadPoseFiLM      : True
+Hand-FiLM (PoseFiLM): True
+VideoMAE stream   : False
+Total parameters  : 46,468,910
+Trainable params  : 45,020,197
+  backbone       : 28,589,128
+  fpn            :  4,474,880
+  detection      :  5,305,596
+  pose_head      :  1,643,793
+  pose_film      :    841,216
+  headpose_film  :    400,896
+  activity_head  :    687,173
+  psr_head       :  3,077,515
+  feature_bank   :          0
+  videomae_stream:          0
+PSR per-component prevalence: [1.0, 0.8140000104904175, 0.8209999799728394, 0.5210000276565552, 0.19099999964237213, 0.6299999952316284, 0.6110000014305115, 0.44200000166893005, 0.44200000166893005, 0.34700000286102295, 0.22100000083446503]
+Optimizer: AdamW with differential LR (backbone=0.1x, det_head=1x, heads=1x, act=1x, psr=1x, det_head_bias=1x, bias=0.3x, WD=0.001, bias WD=0)
+Scheduler: OneCycleLR (pct_start=0.1, steps_per_epoch=1, max_lr=[2.50e-05, 2.50e-04, 2.50e-04, 2.50e-04, 2.50e-04, 2.50e-04, 7.50e-05, 0.00e+00, 2.50e-04])
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/training/train.py:3733: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=C.MIXED_PRECISION)
+============================================================
+Starting training
+  Epochs          : 100
+  Batch size      : 4 x 4 = 16
+  Learning rate   : backbone=5.0e-05, heads=5.0e-04
+  Grad clip norm  : 5.0
+  Mixed precision : True
+  Early stopping  : patience=10
+  Combined metric weights: det=0.3  act=0.35  pose=0.15  psr=0.2
+============================================================
+
+--- Epoch 0/99 ---
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 3102/38036 (8.16%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~8.16% under base sampler).
+[get_sampler] effective per-class sampling mass: 63 classes present, max/min ratio=21.7x (uniform would be 1.0x), max=0.0861 vs uniform=0.0159. Top-5 sampled class ids=[28, 42, 15, 9, 38]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+  [STEP VAL] Intra-epoch validation every 2500 steps (gated at 200 batches)
+Epoch 0 [no-staging]:   0%|          | 0/6580 [00:00<?, ?it/s]  [CRASH_RECOVERY] Saved epoch_start crash checkpoint to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth
+  [LIVENESS_GRAD step=0] detection_head:ALIVE[RMS=7.96e+04|n=36] | pose_head:ALIVE[RMS=5.49e+03|n=8] | head_pose_head:ALIVE[RMS=inf|n=20] | activity_head:ALIVE[RMS=1.63e+03|n=8] | psr_head:ALIVE[RMS=inf|n=88] | psr_heads:[h0=2.21e+05[ALIVE],h1=1.92e+05[ALIVE],h2=2.41e+05[ALIVE],h3=2.30e+05[ALIVE],h4=2.66e+05[ALIVE],h5=2.11e+05[ALIVE],h6=2.64e+05[ALIVE],h7=2.48e+05[ALIVE],h8=2.48e+05[ALIVE],h9=2.76e+05[ALIVE],h10=2.61e+05[ALIVE]] | backbone:ALIVE[1.363e+05|n=178] | fpn:ALIVE[6.113e+04|n=16] | gpu_mem=0.73GB/1.10GB
+[PSR_DEBUG step=0] pre_linear:  mean=-0.0002 std=1.4953 min=-5.5240 max=5.1696
+[PSR_DEBUG step=0] post_linear64: mean=0.0454 std=0.9243 min=-2.7070 max=2.6797
+[PSR_DEBUG step=0] post_gelu:   mean=0.2698 std=0.5776 min=-0.1699 max=2.6699
+[PSR_DEBUG step=0] post_dropout: mean=0.2771 std=0.6094 min=-0.1808 max=2.8398
+  [LIVENESS_GRAD step=0] detection_head:ALIVE[RMS=7.96e+04|n=36] | pose_head:ALIVE[RMS=5.49e+03|n=8] | head_pose_head:ALIVE[RMS=inf|n=20] | activity_head:ALIVE[RMS=1.63e+03|n=8] | psr_head:ALIVE[RMS=inf|n=88] | psr_heads:[h0=2.21e+05[ALIVE],h1=1.92e+05[ALIVE],h2=2.41e+05[ALIVE],h3=2.30e+05[ALIVE],h4=2.66e+05[ALIVE],h5=2.11e+05[ALIVE],h6=2.64e+05[ALIVE],h7=2.48e+05[ALIVE],h8=2.48e+05[ALIVE],h9=2.76e+05[ALIVE],h10=2.61e+05[ALIVE]] | backbone:ALIVE[1.363e+05|n=178] | fpn:ALIVE[6.113e+04|n=16] | gpu_mem=0.73GB/1.10GB
+Epoch 0 [no-staging]:   0%|          | 0/6580 [00:30<?, ?it/s, loss=30.1629 det=4.5908(c=2.9845,g=0.8032) pose=7.9423 act=0.9619 psr=0.7738 wd=0.24]Epoch 0 [no-staging]:   0%|          | 1/6580 [00:30<55:37:13, 30.44s/it, loss=30.1629 det=4.5908(c=2.9845,g=0.8032) pose=7.9423 act=0.9619 psr=0.7738 wd=0.24]Epoch 0 [no-staging]:   0%|          | 1/6580 [00:31<55:37:13, 30.44s/it, loss=30.4878 det=2.8738(c=2.8566,g=0.0086) pose=8.2780 act=0.9216 psr=0.8379 wd=0.24]Epoch 0 [no-staging]:   0%|          | 2/6580 [00:31<23:48:50, 13.03s/it, loss=30.4878 det=2.8738(c=2.8566,g=0.0086) pose=8.2780 act=0.9216 psr=0.8379 wd=0.24]Epoch 0 [no-staging]:   0%|          | 2/6580 [00:39<23:48:50, 13.03s/it, loss=2.411 det=0.000 pose=0.000 act=0.000 psr=2.411 seq=1]                           Epoch 0 [no-staging]:   0%|          | 3/6580 [00:40<20:13:23, 11.07s/it, loss=2.411 det=0.000 pose=0.000 act=0.000 psr=2.411 seq=1]  [GRAD_NAN] epoch 0 step 4 — pg2[torch.Size([512, 1152])]=0.00%; pg2[torch.Size([6, 256])]=0.91%; pg4[torch.Size([256, 512])]=0.00%; zeroing grads ([RC-29] 1/1 windows skipped so far)
+Epoch 0 [no-staging]:   0%|          | 3/6580 [00:40<20:13:23, 11.07s/it, loss=29.4764 det=3.4384(c=3.4174,g=0.0105) pose=8.5398 act=1.0450 psr=0.7822 wd=0.24]Epoch 0 [no-staging]:   0%|          | 4/6580 [00:40<12:52:27,  7.05s/it, loss=29.4764 det=3.4384(c=3.4174,g=0.0105) pose=8.5398 act=1.0450 psr=0.7822 wd=0.24]Epoch 0 [no-staging]:   0%|          | 4/6580 [00:41<12:52:27,  7.05s/it, loss=5.420 det=0.000 pose=0.000 act=0.000 psr=5.420 seq=1]                           Epoch 0 [no-staging]:   0%|          | 5/6580 [00:41<8:47:59,  4.82s/it, loss=5.420 det=0.000 pose=0.000 act=0.000 psr=5.420 seq=1] Epoch 0 [no-staging]:   0%|          | 5/6580 [00:42<8:47:59,  4.82s/it, loss=31.2431 det=3.0068(c=2.9842,g=0.0113) pose=8.3952 act=0.8684 psr=0.9104 wd=0.24]Epoch 0 [no-staging]:   0%|          | 6/6580 [00:42<6:17:55,  3.45s/it, loss=31.2431 det=3.0068(c=2.9842,g=0.0113) pose=8.3952 act=0.8684 psr=0.9104 wd=0.24]Epoch 0 [no-staging]:   0%|          | 6/6580 [00:43<6:17:55,  3.45s/it, loss=2.602 det=0.000 pose=0.000 act=0.000 psr=2.602 seq=1]                           Epoch 0 [no-staging]:   0%|          | 7/6580 [00:43<4:38:37,  2.54s/it, loss=2.602 det=0.000 pose=0.000 act=0.000 psr=2.602 seq=1]Epoch 0 [no-staging]:   0%|          | 7/6580 [00:44<11:31:52,  6.32s/it, loss=2.602 det=0.000 pose=0.000 act=0.000 psr=2.602 seq=1]
+[PSR_DEBUG step=1] pre_linear:  mean=-0.0234 std=1.6143 min=-5.0733 max=5.8753
+[PSR_DEBUG step=1] post_linear64: mean=0.0425 std=0.9365 min=-2.1543 max=2.7617
+[PSR_DEBUG step=1] post_gelu:   mean=0.2712 std=0.5928 min=-0.1699 max=2.7539
+[PSR_DEBUG step=1] post_dropout: mean=0.2581 std=0.5977 min=-0.1808 max=2.9297
+Traceback (most recent call last):
+  File "/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/training/train.py", line 5427, in <module>
+    main(args)
+    ~~~~^^^^^^
+  File "/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/training/train.py", line 4286, in main
+    train_metrics = train_one_epoch(
+        model,
+    ...<14 lines>...
+        distill_loss_fn=distill_loss_fn,
+    )
+  File "/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/training/train.py", line 1783, in train_one_epoch
+    scaler.unscale_(optimizer)
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^
+  File "/home/newadmin/miniconda3/lib/python3.13/site-packages/torch/amp/grad_scaler.py", line 342, in unscale_
+    raise RuntimeError(
+        "unscale_() has already been called on this optimizer since the last update()."
+    )
+RuntimeError: unscale_() has already been called on this optimizer since the last update().

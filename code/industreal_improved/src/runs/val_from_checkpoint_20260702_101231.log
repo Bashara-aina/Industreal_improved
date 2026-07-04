@@ -1,0 +1,23 @@
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1589: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+Traceback (most recent call last):
+  File "<string>", line 45, in <module>
+    metrics = evaluate_all(
+        model, criterion=None, loader=val_loader, device=device,
+        max_batches=200, epoch=epoch,
+    )
+  File "/home/newadmin/miniconda3/lib/python3.13/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+  File "/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/evaluation/evaluate.py", line 3013, in evaluate_all
+    criterion.to(device_obj)
+    ^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'to'
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+Loading checkpoint...
+  epoch=1 step=150
+Device: cuda (NVIDIA GeForce RTX 5060 Ti)
+Building model...
+  Model loaded.
+Loading validation dataset...
+Running evaluation (max 200 batches)...

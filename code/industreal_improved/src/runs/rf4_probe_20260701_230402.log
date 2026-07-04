@@ -1,0 +1,60 @@
+[config] hybrid mode: cannot load dataset (), falling back to pure verb
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] hybrid mode: loaded 20578 labeled frames from dataset
+[config] DET_GT_FRAME_FRACTION = 0.40 (train_det=True, train_act=True, train_psr=True)
+[config] Applied preset "stage_rf4": RF4: All heads + PSR transition (100% data, 20 ep, verb-grouping).
+[train] Applied preset: stage_rf4 (MIXED_PRECISION=False, STAGED_TRAINING=False, ZERO_DET_CONF_FOR_RECOVERY=False, USE_EMA=True, USE_MIXUP=False, BATCH_SIZE=4x8)
+[train] Stage preset detected — redirected OUTPUT_ROOT to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages
+[train] TRAIN_MAX_STEPS=50 — will early-stop at this step count
+[train] STAGED_TRAINING=False — all 5 heads active from epoch 0
+Config hash: d1d56a891edd1511  (seed=42)
+Config hash details: {"ALLOW_TF32": true, "BACKBONE": "convnext_tiny", "BASE_LR": 0.0005, "BATCH_SIZE": 4, "CUDNN_BENCHMARK": true, "CUDNN_DETERMINISTIC": false, "CUTMIX_ALPHA": 0.0, "EMA_DECAY": 0.995, "EPOCHS": 2, "FEAT
+Config snapshot saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/config.py
+Device: cuda
+GPU : NVIDIA GeForce RTX 5060 Ti
+VRAM: 16.6 GB
+[LOCK] PID lock acquired: PID=700015, GPU=0
+Could not log git commit: Command '['git', 'rev-parse', 'HEAD']' returned non-zero exit status 128.
+Library versions: torch=2.12.1+cu130  torchvision=2.12.1+cu130  CUDA=13.0  Python=3.13.13
+[CHECKLIST 34] Command and env vars saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/logs/run_command.txt
+Process nice level increased by +10.

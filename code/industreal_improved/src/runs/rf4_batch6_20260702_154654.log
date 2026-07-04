@@ -1,0 +1,496 @@
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+[config] DET_GT_FRAME_FRACTION = 0.40 (train_det=True, train_act=True, train_psr=True)
+[config] Applied preset "stage_rf4": RF4: All heads + PSR transition (100% data, 20 ep, verb-grouping).
+[train] Applied preset: stage_rf4 (MIXED_PRECISION=False, STAGED_TRAINING=False, ZERO_DET_CONF_FOR_RECOVERY=False, USE_EMA=True, USE_MIXUP=False, BATCH_SIZE=6x8)
+[train] Stage preset detected — redirected OUTPUT_ROOT to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages
+[train] STAGED_TRAINING=False — all 5 heads active from epoch 0
+Config hash: 9d565a5da271cc54  (seed=42)
+Config hash details: {"ALLOW_TF32": true, "BACKBONE": "convnext_tiny", "BASE_LR": 0.0005, "BATCH_SIZE": 6, "CUDNN_BENCHMARK": true, "CUDNN_DETERMINISTIC": false, "CUTMIX_ALPHA": 0.0, "EMA_DECAY": 0.995, "EPOCHS": 100, "FE
+Config snapshot saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/config.py
+Device: cuda
+GPU : NVIDIA GeForce RTX 5060 Ti
+VRAM: 16.6 GB
+[LOCK] Stale PID 4029626 still running: python3 -u src/training/train.py --preset stage_rf4 --no-staged-training  — killing
+[LOCK] Killed stale PID 4029626
+[LOCK] PID lock acquired: PID=4040724, GPU=0
+Could not log git commit: Command '['git', 'rev-parse', 'HEAD']' returned non-zero exit status 128.
+Library versions: torch=2.12.1+cu130  torchvision=2.12.1+cu130  CUDA=13.0  Python=3.13.13
+[CHECKLIST 34] Command and env vars saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/logs/run_command.txt
+Process nice level increased by +10.
+Torch CPU threads capped: intraop=12 interop=4
+CUDA memory fraction cap enabled: 0.95.
+Ablation: TRAIN_DET=True  TRAIN_HEAD_POSE=True  TRAIN_ACT=True  TRAIN_PSR=True  USE_KENDALL=True
+Config: DET_POS_IOU_THRESH=0.4  DET_POS_IOU_TOP_K=9  DET_POS_IOU_IOU_FLOOR=0.2  DET_OHEM_ENABLED=True  DET_ASYMMETRIC_GAMMA=True  DET_BIAS_LR_FACTOR=1.0  DET_LR_MULTIPLIER=1.0  KENDALL_HP_PREC_CAP=True  KENDALL_FIXED_WEIGHTS=False  KENDALL_HP_FIXED_LAMBDA=0.2  KENDALL_STAGED_TRAINING=False  DET_POS_ANCHOR_PROBE_EVERY=1000  _STAGE_NAME=
+[CHECKLIST 32] Resolved config dumped to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/logs/resolved_config.json (272 keys)
+[CHECKLIST 35] === Hyperparameter snapshot ===
+  BASE_LR = 0.0005
+  DET_LR_MULTIPLIER = 1.0
+  DET_BIAS_LR_FACTOR = 1.0
+  POSE_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  HEAD_POSE_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  ACT_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  PSR_LR_MULTIPLIER = None (not explicitly set — using training code default)
+  WEIGHT_DECAY = 0.001
+  LR_SCHEDULER = None (not explicitly set — using training code default)
+  LR_WARMUP_EPOCHS = None (not explicitly set — using training code default)
+  LR_MIN_RATIO = None (not explicitly set — using training code default)
+  CLIP_GRAD_NORM = None (not explicitly set — using training code default)
+  BATCH_SIZE = 6
+  EFFECTIVE_BATCH = 48
+  GRAD_ACCUM_STEPS = 8
+  EPOCHS = 100
+  MIXED_PRECISION = False
+  USE_EMA = True
+  EMA_DECAY = 0.995
+  USE_MIXUP = False
+  LOSS_DET_CLASS_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_DET_BOX_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_DET_IOU_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_POSE_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_HEAD_POSE_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_ACT_WEIGHT = None (not explicitly set — using training code default)
+  LOSS_PSR_WEIGHT = None (not explicitly set — using training code default)
+  DET_POS_IOU_THRESH = 0.4
+  DET_POS_IOU_TOP_K = 9
+  DET_NEG_IOU_THRESH = 0.4
+  DET_OHEM_ENABLED = True
+  DET_ASYMMETRIC_GAMMA = True
+  STAGED_TRAINING = False
+  SUBSET_RATIO = 1.0
+  NUM_WORKERS = 0
+  SEED = 42
+[CHECKLIST 35] All 36 hyperparameters validated — OK
+Building datasets ...
+[RAM_CACHE] Pre-loading 8000 train images as JPEG bytes (cap=8000)...
+[RAM_CACHE] 1000/8000 scanned — 1000 cached, 0s
+[RAM_CACHE] 2000/8000 scanned — 2000 cached, 0s
+[RAM_CACHE] 3000/8000 scanned — 3000 cached, 0s
+[RAM_CACHE] 4000/8000 scanned — 4000 cached, 0s
+[RAM_CACHE] 5000/8000 scanned — 5000 cached, 0s
+[RAM_CACHE] 6000/8000 scanned — 6000 cached, 0s
+[RAM_CACHE] 7000/8000 scanned — 7000 cached, 0s
+[RAM_CACHE] Cap reached (8000) — stopping cache fill
+[RAM_CACHE] Done — 8000 images cached in 0s (~2734.4MB estimated)
+[industreal_dataset] Loaded 26322 frames (split=train, recordings=all)
+[RAM_CACHE] Pre-loading 2000 val images as JPEG bytes (cap=2000)...
+[RAM_CACHE] 1000/2000 scanned — 1000 cached, 0s
+[RAM_CACHE] Cap reached (2000) — stopping cache fill
+[RAM_CACHE] Done — 2000 images cached in 0s (~683.6MB estimated)
+[industreal_dataset] Loaded 38036 frames (split=val, recordings=all)
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 4710/26322 (17.89%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~17.89% under base sampler).
+[get_sampler] effective per-class sampling mass: 67 classes present, max/min ratio=7.4x (uniform would be 1.0x), max=0.0323 vs uniform=0.0149. Top-5 sampled class ids=[12, 57, 24, 23, 28]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+[RAM_CACHE] Pre-loading 8000 train images as JPEG bytes (cap=8000)...
+[RAM_CACHE] 1000/8000 scanned — 1000 cached, 0s
+[RAM_CACHE] 2000/8000 scanned — 2000 cached, 0s
+[RAM_CACHE] 3000/8000 scanned — 3000 cached, 0s
+[RAM_CACHE] 4000/8000 scanned — 4000 cached, 0s
+[RAM_CACHE] 5000/8000 scanned — 5000 cached, 0s
+[RAM_CACHE] 6000/8000 scanned — 6000 cached, 0s
+[RAM_CACHE] 7000/8000 scanned — 7000 cached, 0s
+[RAM_CACHE] Cap reached (8000) — stopping cache fill
+[RAM_CACHE] Done — 8000 images cached in 0s (~2734.4MB estimated)
+[industreal_dataset] Sequence mode: 78679 windows (T=8, stride=1) across 36 recordings
+[industreal_dataset] Loaded 26322 frames (split=train, recordings=all)
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 4710/26322 (17.89%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~17.89% under base sampler).
+[get_sampler] effective per-class sampling mass: 67 classes present, max/min ratio=7.4x (uniform would be 1.0x), max=0.0323 vs uniform=0.0149. Top-5 sampled class ids=[12, 57, 24, 23, 28]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+[train] PSR sequence mode: len=78,679 samples (8 frames/window, stride=1)
+Training samples  : 26,322
+Validation samples: 38,036
+Train loader: batch=6 workers=0 prefetch=1
+Val   loader: batch=8 workers=0 prefetch=2
+Building model ...
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1589: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+[VRAM] Total=15.48GB Used=0.17GB Free=15.31GB Model=0.17GB Need>=2.00GB
+EMA enabled: decay=0.995
+Backbone type     : convnext_tiny
+HeadPoseFiLM      : True
+Hand-FiLM (PoseFiLM): True
+VideoMAE stream   : False
+Total parameters  : 46,468,910
+Trainable params  : 45,020,197
+  backbone       : 28,589,128
+  fpn            :  4,474,880
+  detection      :  5,305,596
+  pose_head      :  1,643,793
+  pose_film      :    841,216
+  headpose_film  :    400,896
+  activity_head  :    687,173
+  psr_head       :  3,077,515
+  feature_bank   :          0
+  videomae_stream:          0
+PSR per-component prevalence: [1.0, 0.8140000104904175, 0.8209999799728394, 0.5210000276565552, 0.19099999964237213, 0.6299999952316284, 0.6110000014305115, 0.44200000166893005, 0.44200000166893005, 0.34700000286102295, 0.22100000083446503]
+Optimizer: AdamW with differential LR (backbone=0.1x, det_head=1x, heads=1x, act=1x, psr=1x, det_head_bias=1x, bias=0.3x, WD=0.001, bias WD=0)
+Scheduler: OneCycleLR (pct_start=0.1, steps_per_epoch=1, max_lr=[2.50e-05, 2.50e-04, 2.50e-04, 2.50e-04, 2.50e-04, 2.50e-04, 7.50e-05, 0.00e+00, 2.50e-04])
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/training/train.py:3733: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  scaler = torch.cuda.amp.GradScaler(enabled=C.MIXED_PRECISION)
+  Checkpoint load: 378/378 tensors loaded
+  Skipped 294 checkpoint key(s) (shape mismatch):
+    total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.0.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.0.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.0.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.1.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.1.2.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.2.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.2.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.0.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.1.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.3.2.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.4.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.4.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.0.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.1.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.2.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.3.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.4.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.5.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.6.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.7.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.5.8.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.6.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.6.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.0.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.1.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.block.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.block.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.block.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.block.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.block.6.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.block.6.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.stochastic_depth.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.features.7.2.stochastic_depth.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.classifier.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.classifier.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.classifier.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    backbone.model.classifier.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    fpn.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    fpn.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.7.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.7.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.10.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.cls_subnet.10.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.4.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.4.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.7.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.7.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.10.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    detection_head.reg_subnet.10.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    anchor_gen.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    anchor_gen.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_head.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_head.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_head.upsample.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_head.upsample.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_head.soft_argmax.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_head.soft_argmax.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_film.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    pose_film.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    headpose_film.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    headpose_film.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    headpose_film.gamma_net.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    headpose_film.gamma_net.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    headpose_film.beta_net.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    headpose_film.beta_net.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    head_pose_head.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    head_pose_head.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    activity_head.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    activity_head.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    activity_head.simple_classifier.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    activity_head.simple_classifier.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.per_frame_mlp.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.per_frame_mlp.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.0.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.0.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.0.self_attn.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.0.self_attn.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.0.self_attn.out_proj.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.0.self_attn.out_proj.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.1.self_attn.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.1.self_attn.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.1.self_attn.out_proj.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.1.self_attn.out_proj.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.2.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.2.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.2.self_attn.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.2.self_attn.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.2.self_attn.out_proj.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.transformer.layers.2.self_attn.out_proj.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.0.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.0.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.1.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.1.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.2.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.2.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.3.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.3.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.4.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.4.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.5.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.5.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.6.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.6.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.7.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.7.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.8.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.8.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.9.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.9.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.10.1.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    psr_head.output_heads.10.1.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    feature_bank.total_ops: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+    feature_bank.total_params: ckpt=torch.Size([1])  model=NOT IN MODEL -> re-initialized
+  EMA shadow weights restored from checkpoint.
+  Optimizer state restored.
+Resumed from epoch 1, best=0.0000
+  Restored _global_step=2194 from checkpoint (step-based val cadence)
+  Restored Kendall log_vars from checkpoint: det=0.001  head_pose=0.000  act=-0.001  psr=0.000
+  Reset Kendall log_var params (early epoch resume): det=0.0  head_pose=-1.0  act=0.0  psr=0.0
+============================================================
+Starting training
+  Epochs          : 100
+  Batch size      : 6 x 8 = 48
+  Learning rate   : backbone=5.0e-05, heads=5.0e-04
+  Grad clip norm  : 5.0
+  Mixed precision : False
+  Early stopping  : patience=10
+  Combined metric weights: det=0.3  act=0.35  pose=0.15  psr=0.2
+============================================================
+
+--- Epoch 1/99 ---
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 3102/38036 (8.16%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~8.16% under base sampler).
+[get_sampler] effective per-class sampling mass: 63 classes present, max/min ratio=21.7x (uniform would be 1.0x), max=0.0861 vs uniform=0.0159. Top-5 sampled class ids=[28, 42, 15, 9, 38]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+  [STEP VAL] Intra-epoch validation every 2500 steps (gated at 200 batches)
+Epoch 1 [no-staging]:   0%|          | 0/4387 [00:00<?, ?it/s]  [CRASH_RECOVERY] Saved epoch_start crash checkpoint to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth
+[PSR_DEBUG step=0] pre_linear:  mean=-0.0140 std=1.8957 min=-5.6718 max=6.0900
+[PSR_DEBUG step=0] post_linear64: mean=-0.0036 std=1.1977 min=-2.8983 max=2.8658
+[PSR_DEBUG step=0] post_gelu:   mean=0.3793 std=0.7370 min=-0.1700 max=2.8598
+[PSR_DEBUG step=0] post_dropout: mean=0.3892 std=0.7692 min=-0.1808 max=3.0424
+  [LIVENESS_GRAD step=0] detection_head:ALIVE[RMS=2.48e-01|n=36] | pose_head:ALIVE[RMS=9.32e-03|n=8] | head_pose_head:ALIVE[RMS=1.55e+00|n=20] | activity_head:ALIVE[RMS=1.18e-02|n=8] | psr_head:ALIVE[RMS=1.90e+00|n=88] | psr_heads:[h0=1.48e+00[ALIVE],h1=1.96e+00[ALIVE],h2=1.85e+00[ALIVE],h3=1.73e+00[ALIVE],h4=1.73e+00[ALIVE],h5=1.68e+00[ALIVE],h6=1.75e+00[ALIVE],h7=1.95e+00[ALIVE],h8=1.44e+00[ALIVE],h9=1.81e+00[ALIVE],h10=1.41e+00[ALIVE]] | backbone:ALIVE[1.254e+00|n=178] | fpn:ALIVE[2.141e-01|n=16] | gpu_mem=1.34GB/1.85GB
+  [LIVENESS_GRAD step=0] detection_head:ALIVE[RMS=2.48e-01|n=36] | pose_head:ALIVE[RMS=9.32e-03|n=8] | head_pose_head:ALIVE[RMS=1.55e+00|n=20] | activity_head:ALIVE[RMS=1.18e-02|n=8] | psr_head:ALIVE[RMS=1.90e+00|n=88] | psr_heads:[h0=1.48e+00[ALIVE],h1=1.96e+00[ALIVE],h2=1.85e+00[ALIVE],h3=1.73e+00[ALIVE],h4=1.73e+00[ALIVE],h5=1.68e+00[ALIVE],h6=1.75e+00[ALIVE],h7=1.95e+00[ALIVE],h8=1.44e+00[ALIVE],h9=1.81e+00[ALIVE],h10=1.41e+00[ALIVE]] | backbone:ALIVE[1.254e+00|n=178] | fpn:ALIVE[2.141e-01|n=16] | gpu_mem=1.34GB/1.85GB
+Epoch 1 [no-staging]:   0%|          | 0/4387 [02:20<?, ?it/s, loss=23.9559 det=2.7644(c=1.8243,g=0.4701) pose=4.3524 act=0.8504 psr=0.7226 wd=0.24]Epoch 1 [no-staging]:   0%|          | 1/4387 [02:20<170:38:04, 140.06s/it, loss=23.9559 det=2.7644(c=1.8243,g=0.4701) pose=4.3524 act=0.8504 psr=0.7226 wd=0.24][PSR_DEBUG step=1] pre_linear:  mean=0.0135 std=1.9801 min=-5.9527 max=6.7480
+[PSR_DEBUG step=1] post_linear64: mean=-0.0162 std=1.1971 min=-3.5638 max=4.1066
+[PSR_DEBUG step=1] post_gelu:   mean=0.3673 std=0.7421 min=-0.1700 max=4.1065
+[PSR_DEBUG step=1] post_dropout: mean=0.3482 std=0.7555 min=-0.1808 max=4.3686
+Epoch 1 [no-staging]:   0%|          | 1/4387 [02:21<170:38:04, 140.06s/it, loss=17.8499 det=1.6216(c=1.6116,g=0.0050) pose=3.6573 act=0.9066 psr=0.4794 wd=0.24]Epoch 1 [no-staging]:   0%|          | 2/4387 [02:21<71:24:18, 58.62s/it, loss=17.8499 det=1.6216(c=1.6116,g=0.0050) pose=3.6573 act=0.9066 psr=0.4794 wd=0.24]  Epoch 1 [no-staging]:   0%|          | 2/4387 [02:47<71:24:18, 58.62s/it, loss=2.011 det=0.000 pose=0.000 act=0.000 psr=2.011 seq=1]                           Epoch 1 [no-staging]:   0%|          | 3/4387 [02:47<53:16:04, 43.74s/it, loss=2.011 det=0.000 pose=0.000 act=0.000 psr=2.011 seq=1]Epoch 1 [no-staging]:   0%|          | 3/4387 [02:49<53:16:04, 43.74s/it, loss=18.7299 det=1.8565(c=1.8465,g=0.0050) pose=3.3988 act=0.8781 psr=0.5981 wd=0.24]Epoch 1 [no-staging]:   0%|          | 4/4387 [02:49<32:59:19, 27.10s/it, loss=18.7299 det=1.8565(c=1.8465,g=0.0050) pose=3.3988 act=0.8781 psr=0.5981 wd=0.24]Epoch 1 [no-staging]:   0%|          | 4/4387 [02:49<32:59:19, 27.10s/it, loss=5.173 det=0.000 pose=0.000 act=0.000 psr=5.173 seq=1]                           Epoch 1 [no-staging]:   0%|          | 5/4387 [02:49<21:23:20, 17.57s/it, loss=5.173 det=0.000 pose=0.000 act=0.000 psr=5.173 seq=1]Epoch 1 [no-staging]:   0%|          | 5/4387 [02:51<21:23:20, 17.57s/it, loss=18.2565 det=1.7029(c=1.6902,g=0.0064) pose=3.5748 act=0.9764 psr=0.5489 wd=0.24]Epoch 1 [no-staging]:   0%|          | 6/4387 [02:51<14:46:19, 12.14s/it, loss=18.2565 det=1.7029(c=1.6902,g=0.0064) pose=3.5748 act=0.9764 psr=0.5489 wd=0.24]Epoch 1 [no-staging]:   0%|          | 6/4387 [02:52<14:46:19, 12.14s/it, loss=2.472 det=0.000 pose=0.000 act=0.000 psr=2.472 seq=1]                           Epoch 1 [no-staging]:   0%|          | 7/4387 [02:52<10:12:55,  8.40s/it, loss=2.472 det=0.000 pose=0.000 act=0.000 psr=2.472 seq=1]Epoch 1 [no-staging]:   0%|          | 7/4387 [02:54<10:12:55,  8.40s/it, loss=18.6037 det=1.6364(c=1.6218,g=0.0073) pose=3.4929 act=1.1433 psr=0.5770 wd=0.24]Epoch 1 [no-staging]:   0%|          | 8/4387 [02:54<7:38:44,  6.29s/it, loss=18.6037 det=1.6364(c=1.6218,g=0.0073) pose=3.4929 act=1.1433 psr=0.5770 wd=0.24] Epoch 1 [no-staging]:   0%|          | 8/4387 [02:54<7:38:44,  6.29s/it, loss=3.744 det=0.000 pose=0.000 act=0.000 psr=3.744 seq=1]                           Epoch 1 [no-staging]:   0%|          | 9/4387 [02:54<5:31:00,  4.54s/it, loss=3.744 det=0.000 pose=0.000 act=0.000 psr=3.744 seq=1]Epoch 1 [no-staging]:   0%|          | 9/4387 [02:56<5:31:00,  4.54s/it, loss=21.0259 det=2.0501(c=2.0323,g=0.0089) pose=5.2436 act=0.8821 psr=0.5764 wd=0.24]Epoch 1 [no-staging]:   0%|          | 10/4387 [02:56<4:25:10,  3.63s/it, loss=21.0259 det=2.0501(c=2.0323,g=0.0089) pose=5.2436 act=0.8821 psr=0.5764 wd=0.24]  [GPU mem] step=10  allocated=1.27GB  reserved=7.73GB
+  [Epoch 1 batch 10/4387] elapsed=176s  speed=0.1 batch/s
+[PSR_DEBUG_seq step=10] pre_linear:  mean=-0.0033 std=1.9212 min=-5.6206 max=6.1373
+[PSR_DEBUG_seq step=10] post_linear64: mean=-0.0369 std=1.1779 min=-2.8425 max=3.4838
+[PSR_DEBUG_seq step=10] post_gelu:   mean=0.3559 std=0.7242 min=-0.1700 max=3.4829
+Epoch 1 [no-staging]:   0%|          | 10/4387 [02:56<4:25:10,  3.63s/it, loss=4.016 det=0.000 pose=0.000 act=0.000 psr=4.016 seq=1]                           Epoch 1 [no-staging]:   0%|          | 11/4387 [02:57<3:19:12,  2.73s/it, loss=4.016 det=0.000 pose=0.000 act=0.000 psr=4.016 seq=1]Epoch 1 [no-staging]:   0%|          | 11/4387 [02:58<3:19:12,  2.73s/it, loss=18.4533 det=1.2435(c=1.2220,g=0.0107) pose=3.2418 act=0.9470 psr=0.6169 wd=0.24]Epoch 1 [no-staging]:   0%|          | 12/4387 [02:58<2:53:36,  2.38s/it, loss=18.4533 det=1.2435(c=1.2220,g=0.0107) pose=3.2418 act=0.9470 psr=0.6169 wd=0.24]Epoch 1 [no-staging]:   0%|          | 12/4387 [02:59<2:53:36,  2.38s/it, loss=1.849 det=0.000 pose=0.000 act=0.000 psr=1.849 seq=1]                           Epoch 1 [no-staging]:   0%|          | 13/4387 [02:59<2:16:07,  1.87s/it, loss=1.849 det=0.000 pose=0.000 act=0.000 psr=1.849 seq=1]Epoch 1 [no-staging]:   0%|          | 13/4387 [03:00<2:16:07,  1.87s/it, loss=18.5418 det=1.7304(c=1.7085,g=0.0110) pose=3.9139 act=0.9103 psr=0.5754 wd=0.24]Epoch 1 [no-staging]:   0%|          | 14/4387 [03:00<2:10:03,  1.78s/it, loss=18.5418 det=1.7304(c=1.7085,g=0.0110) pose=3.9139 act=0.9103 psr=0.5754 wd=0.24]Epoch 1 [no-staging]:   0%|          | 14/4387 [03:01<2:10:03,  1.78s/it, loss=2.012 det=0.000 pose=0.000 act=0.000 psr=2.012 seq=1]                           Epoch 1 [no-staging]:   0%|          | 15/4387 [03:01<1:46:25,  1.46s/it, loss=2.012 det=0.000 pose=0.000 act=0.000 psr=2.012 seq=1]Epoch 1 [no-staging]:   0%|          | 15/4387 [03:03<1:46:25,  1.46s/it, loss=22.0696 det=2.3724(c=2.3493,g=0.0116) pose=4.8788 act=0.8671 psr=0.6546 wd=0.24]Epoch 1 [no-staging]:   0%|          | 16/4387 [03:03<1:50:42,  1.52s/it, loss=22.0696 det=2.3724(c=2.3493,g=0.0116) pose=4.8788 act=0.8671 psr=0.6546 wd=0.24]Epoch 1 [no-staging]:   0%|          | 16/4387 [03:03<1:50:42,  1.52s/it, loss=2.391 det=0.000 pose=0.000 act=0.000 psr=2.391 seq=1]                           Epoch 1 [no-staging]:   0%|          | 17/4387 [03:03<1:32:28,  1.27s/it, loss=2.391 det=0.000 pose=0.000 act=0.000 psr=2.391 seq=1]Epoch 1 [no-staging]:   0%|          | 17/4387 [03:05<1:32:28,  1.27s/it, loss=19.0505 det=2.3213(c=2.2976,g=0.0118) pose=2.9378 act=0.8402 psr=0.6003 wd=0.24]Epoch 1 [no-staging]:   0%|          | 18/4387 [03:05<1:39:20,  1.36s/it, loss=19.0505 det=2.3213(c=2.2976,g=0.0118) pose=2.9378 act=0.8402 psr=0.6003 wd=0.24]Epoch 1 [no-staging]:   0%|          | 18/4387 [03:06<1:39:20,  1.36s/it, loss=3.373 det=0.000 pose=0.000 act=0.000 psr=3.373 seq=1]                           Epoch 1 [no-staging]:   0%|          | 19/4387 [03:06<1:24:33,  1.16s/it, loss=3.373 det=0.000 pose=0.000 act=0.000 psr=3.373 seq=1]Epoch 1 [no-staging]:   0%|          | 19/4387 [03:07<1:24:33,  1.16s/it, loss=17.8184 det=1.2714(c=1.2445,g=0.0135) pose=3.2345 act=1.0115 psr=0.5784 wd=0.24]Epoch 1 [no-staging]:   0%|          | 20/4387 [03:07<1:34:03,  1.29s/it, loss=17.8184 det=1.2714(c=1.2445,g=0.0135) pose=3.2345 act=1.0115 psr=0.5784 wd=0.24]  [GPU mem] step=20  allocated=1.27GB  reserved=7.72GB
+  [Epoch 1 batch 20/4387] elapsed=188s  speed=0.1 batch/s
+Epoch 1 [no-staging]:   0%|          | 20/4387 [03:08<1:34:03,  1.29s/it, loss=4.809 det=0.000 pose=0.000 act=0.000 psr=4.809 seq=1]                           Epoch 1 [no-staging]:   0%|          | 21/4387 [03:08<1:20:48,  1.11s/it, loss=4.809 det=0.000 pose=0.000 act=0.000 psr=4.809 seq=1]Epoch 1 [no-staging]:   0%|          | 21/4387 [03:10<1:20:48,  1.11s/it, loss=20.5342 det=2.6458(c=2.6133,g=0.0162) pose=2.7654 act=0.8242 psr=0.6488 wd=0.24]Epoch 1 [no-staging]:   1%|          | 22/4387 [03:10<1:31:00,  1.25s/it, loss=20.5342 det=2.6458(c=2.6133,g=0.0162) pose=2.7654 act=0.8242 psr=0.6488 wd=0.24]Epoch 1 [no-staging]:   1%|          | 22/4387 [03:10<1:31:00,  1.25s/it, loss=4.901 det=0.000 pose=0.000 act=0.000 psr=4.901 seq=1]                           Epoch 1 [no-staging]:   1%|          | 23/4387 [03:10<1:18:38,  1.08s/it, loss=4.901 det=0.000 pose=0.000 act=0.000 psr=4.901 seq=1]Epoch 1 [no-staging]:   1%|          | 23/4387 [03:12<1:18:38,  1.08s/it, loss=19.5130 det=1.6836(c=1.6549,g=0.0144) pose=3.7212 act=1.1070 psr=0.6162 wd=0.24]Epoch 1 [no-staging]:   1%|          | 24/4387 [03:12<1:31:29,  1.26s/it, loss=19.5130 det=1.6836(c=1.6549,g=0.0144) pose=3.7212 act=1.1070 psr=0.6162 wd=0.24]Epoch 1 [no-staging]:   1%|          | 24/4387 [03:13<1:31:29,  1.26s/it, loss=3.387 det=0.000 pose=0.000 act=0.000 psr=3.387 seq=1]                           Epoch 1 [no-staging]:   1%|          | 25/4387 [03:13<1:18:56,  1.09s/it, loss=3.387 det=0.000 pose=0.000 act=0.000 psr=3.387 seq=1]Epoch 1 [no-staging]:   1%|          | 25/4387 [03:14<1:18:56,  1.09s/it, loss=18.5724 det=2.8915(c=2.8539,g=0.0188) pose=3.1953 act=1.0297 psr=0.5438 wd=0.24]Epoch 1 [no-staging]:   1%|          | 26/4387 [03:14<1:29:55,  1.24s/it, loss=18.5724 det=2.8915(c=2.8539,g=0.0188) pose=3.1953 act=1.0297 psr=0.5438 wd=0.24]Epoch 1 [no-staging]:   1%|          | 26/4387 [03:15<1:29:55,  1.24s/it, loss=1.966 det=0.000 pose=0.000 act=0.000 psr=1.966 seq=1]                           Epoch 1 [no-staging]:   1%|          | 27/4387 [03:15<1:17:54,  1.07s/it, loss=1.966 det=0.000 pose=0.000 act=0.000 psr=1.966 seq=1]Epoch 1 [no-staging]:   1%|          | 27/4387 [03:17<1:17:54,  1.07s/it, loss=16.1881 det=0.3678(c=0.3678,g=0.0000) pose=2.9659 act=0.9550 psr=0.5709 wd=0.24]Epoch 1 [no-staging]:   1%|          | 28/4387 [03:17<1:33:36,  1.29s/it, loss=16.1881 det=0.3678(c=0.3678,g=0.0000) pose=2.9659 act=0.9550 psr=0.5709 wd=0.24]Epoch 1 [no-staging]:   1%|          | 28/4387 [03:17<1:33:36,  1.29s/it, loss=3.437 det=0.000 pose=0.000 act=0.000 psr=3.437 seq=1]                           Epoch 1 [no-staging]:   1%|          | 29/4387 [03:18<1:24:18,  1.16s/it, loss=3.437 det=0.000 pose=0.000 act=0.000 psr=3.437 seq=1]Epoch 1 [no-staging]:   1%|          | 29/4387 [03:19<1:24:18,  1.16s/it, loss=20.8210 det=2.6498(c=2.6115,g=0.0192) pose=3.2860 act=1.1089 psr=0.6703 wd=0.24]Epoch 1 [no-staging]:   1%|          | 30/4387 [03:19<1:35:24,  1.31s/it, loss=20.8210 det=2.6498(c=2.6115,g=0.0192) pose=3.2860 act=1.1089 psr=0.6703 wd=0.24]  [GPU mem] step=30  allocated=1.27GB  reserved=7.80GB
+  [Epoch 1 batch 30/4387] elapsed=200s  speed=0.2 batch/s
+Epoch 1 [no-staging]:   1%|          | 30/4387 [03:20<1:35:24,  1.31s/it, loss=2.842 det=0.000 pose=0.000 act=0.000 psr=2.842 seq=1]                           Epoch 1 [no-staging]:   1%|          | 31/4387 [03:20<1:22:15,  1.13s/it, loss=2.842 det=0.000 pose=0.000 act=0.000 psr=2.842 seq=1]Epoch 1 [no-staging]:   1%|          | 31/4387 [03:22<1:22:15,  1.13s/it, loss=18.6720 det=2.3386(c=2.2969,g=0.0208) pose=3.0744 act=1.0357 psr=0.5569 wd=0.24]Epoch 1 [no-staging]:   1%|          | 32/4387 [03:22<1:35:55,  1.32s/it, loss=18.6720 det=2.3386(c=2.2969,g=0.0208) pose=3.0744 act=1.0357 psr=0.5569 wd=0.24]Epoch 1 [no-staging]:   1%|          | 32/4387 [03:22<1:35:55,  1.32s/it, loss=4.414 det=0.000 pose=0.000 act=0.000 psr=4.414 seq=1]                           Epoch 1 [no-staging]:   1%|          | 33/4387 [03:22<1:23:15,  1.15s/it, loss=4.414 det=0.000 pose=0.000 act=0.000 psr=4.414 seq=1]Epoch 1 [no-staging]:   1%|          | 33/4387 [03:24<1:23:15,  1.15s/it, loss=17.7678 det=1.6470(c=1.6091,g=0.0190) pose=2.9060 act=0.8827 psr=0.5876 wd=0.24]Epoch 1 [no-staging]:   1%|          | 34/4387 [03:24<1:33:36,  1.29s/it, loss=17.7678 det=1.6470(c=1.6091,g=0.0190) pose=2.9060 act=0.8827 psr=0.5876 wd=0.24]Epoch 1 [no-staging]:   1%|          | 34/4387 [03:25<1:33:36,  1.29s/it, loss=2.192 det=0.000 pose=0.000 act=0.000 psr=2.192 seq=1]                           Epoch 1 [no-staging]:   1%|          | 35/4387 [03:25<1:22:06,  1.13s/it, loss=2.192 det=0.000 pose=0.000 act=0.000 psr=2.192 seq=1]Epoch 1 [no-staging]:   1%|          | 35/4387 [03:27<1:22:06,  1.13s/it, loss=17.4386 det=2.7442(c=2.7026,g=0.0208) pose=2.7352 act=0.9727 psr=0.5069 wd=0.24]Epoch 1 [no-staging]:   1%|          | 36/4387 [03:27<1:34:56,  1.31s/it, loss=17.4386 det=2.7442(c=2.7026,g=0.0208) pose=2.7352 act=0.9727 psr=0.5069 wd=0.24]Epoch 1 [no-staging]:   1%|          | 36/4387 [03:27<1:34:56,  1.31s/it, loss=2.464 det=0.000 pose=0.000 act=0.000 psr=2.464 seq=1]                           Epoch 1 [no-staging]:   1%|          | 37/4387 [03:27<1:23:32,  1.15s/it, loss=2.464 det=0.000 pose=0.000 act=0.000 psr=2.464 seq=1]Epoch 1 [no-staging]:   1%|          | 37/4387 [03:29<1:23:32,  1.15s/it, loss=20.1521 det=1.9240(c=1.8832,g=0.0204) pose=3.0565 act=1.2151 psr=0.6184 wd=0.24]Epoch 1 [no-staging]:   1%|          | 38/4387 [03:29<1:33:55,  1.30s/it, loss=20.1521 det=1.9240(c=1.8832,g=0.0204) pose=3.0565 act=1.2151 psr=0.6184 wd=0.24]Epoch 1 [no-staging]:   1%|          | 38/4387 [03:30<1:33:55,  1.30s/it, loss=2.790 det=0.000 pose=0.000 act=0.000 psr=2.790 seq=1]                           Epoch 1 [no-staging]:   1%|          | 39/4387 [03:30<1:23:27,  1.15s/it, loss=2.790 det=0.000 pose=0.000 act=0.000 psr=2.790 seq=1]Epoch 1 [no-staging]:   1%|          | 39/4387 [03:32<1:23:27,  1.15s/it, loss=18.1358 det=2.2652(c=2.2203,g=0.0224) pose=3.0089 act=1.0208 psr=0.5521 wd=0.24]Epoch 1 [no-staging]:   1%|          | 40/4387 [03:32<1:39:42,  1.38s/it, loss=18.1358 det=2.2652(c=2.2203,g=0.0224) pose=3.0089 act=1.0208 psr=0.5521 wd=0.24]  [GPU mem] step=40  allocated=1.10GB  reserved=7.43GB
+  [Epoch 1 batch 40/4387] elapsed=212s  speed=0.2 batch/s
+Epoch 1 [no-staging]:   1%|          | 40/4387 [03:32<1:39:42,  1.38s/it, loss=2.357 det=0.000 pose=0.000 act=0.000 psr=2.357 seq=1]                           Epoch 1 [no-staging]:   1%|          | 41/4387 [03:32<1:26:46,  1.20s/it, loss=2.357 det=0.000 pose=0.000 act=0.000 psr=2.357 seq=1]Epoch 1 [no-staging]:   1%|          | 41/4387 [03:34<1:26:46,  1.20s/it, loss=19.4986 det=1.3881(c=1.3387,g=0.0247) pose=3.3871 act=0.9080 psr=0.6608 wd=0.24]Epoch 1 [no-staging]:   1%|          | 42/4387 [03:34<1:39:47,  1.38s/it, loss=19.4986 det=1.3881(c=1.3387,g=0.0247) pose=3.3871 act=0.9080 psr=0.6608 wd=0.24]Epoch 1 [no-staging]:   1%|          | 42/4387 [03:35<1:39:47,  1.38s/it, loss=2.629 det=0.000 pose=0.000 act=0.000 psr=2.629 seq=1]                           Epoch 1 [no-staging]:   1%|          | 43/4387 [03:35<1:26:05,  1.19s/it, loss=2.629 det=0.000 pose=0.000 act=0.000 psr=2.629 seq=1]Epoch 1 [no-staging]:   1%|          | 43/4387 [03:37<1:26:05,  1.19s/it, loss=18.3657 det=1.7576(c=1.7078,g=0.0249) pose=3.7806 act=0.9132 psr=0.5747 wd=0.24]Epoch 1 [no-staging]:   1%|          | 44/4387 [03:37<1:39:39,  1.38s/it, loss=18.3657 det=1.7576(c=1.7078,g=0.0249) pose=3.7806 act=0.9132 psr=0.5747 wd=0.24]Epoch 1 [no-staging]:   1%|          | 44/4387 [03:38<1:39:39,  1.38s/it, loss=3.545 det=0.000 pose=0.000 act=0.000 psr=3.545 seq=1]                           Epoch 1 [no-staging]:   1%|          | 45/4387 [03:38<1:26:11,  1.19s/it, loss=3.545 det=0.000 pose=0.000 act=0.000 psr=3.545 seq=1]Epoch 1 [no-staging]:   1%|          | 45/4387 [03:39<1:26:11,  1.19s/it, loss=17.8840 det=1.5589(c=1.5066,g=0.0261) pose=3.9642 act=0.8440 psr=0.5471 wd=0.24]Epoch 1 [no-staging]:   1%|          | 46/4387 [03:39<1:39:26,  1.37s/it, loss=17.8840 det=1.5589(c=1.5066,g=0.0261) pose=3.9642 act=0.8440 psr=0.5471 wd=0.24]Epoch 1 [no-staging]:   1%|          | 46/4387 [03:40<1:39:26,  1.37s/it, loss=6.237 det=0.000 pose=0.000 act=0.000 psr=6.237 seq=1]                           Epoch 1 [no-staging]:   1%|          | 47/4387 [03:40<1:27:36,  1.21s/it, loss=6.237 det=0.000 pose=0.000 act=0.000 psr=6.237 seq=1]Epoch 1 [no-staging]:   1%|          | 47/4387 [03:42<1:27:36,  1.21s/it, loss=16.5449 det=1.4235(c=1.3688,g=0.0274) pose=2.9961 act=1.0338 psr=0.5187 wd=0.24]Epoch 1 [no-staging]:   1%|          | 48/4387 [03:42<1:44:55,  1.45s/it, loss=16.5449 det=1.4235(c=1.3688,g=0.0274) pose=2.9961 act=1.0338 psr=0.5187 wd=0.24]Epoch 1 [no-staging]:   1%|          | 48/4387 [03:43<1:44:55,  1.45s/it, loss=5.372 det=0.000 pose=0.000 act=0.000 psr=5.372 seq=1]                           Epoch 1 [no-staging]:   1%|          | 49/4387 [03:43<1:31:06,  1.26s/it, loss=5.372 det=0.000 pose=0.000 act=0.000 psr=5.372 seq=1]Epoch 1 [no-staging]:   1%|          | 49/4387 [03:45<1:31:06,  1.26s/it, loss=16.7321 det=1.3513(c=1.3015,g=0.0249) pose=2.9517 act=1.1013 psr=0.5764 wd=0.24]  [CPU RAM] step=50  avail=42.4GB  buffers=2696GB  cached=33071GB
+Epoch 1 [no-staging]:   1%|          | 50/4387 [03:45<1:44:12,  1.44s/it, loss=16.7321 det=1.3513(c=1.3015,g=0.0249) pose=2.9517 act=1.1013 psr=0.5764 wd=0.24]  [GPU mem] step=50  allocated=1.27GB  reserved=7.72GB
+  [Epoch 1 batch 50/4387] elapsed=225s  speed=0.2 batch/s
+Epoch 1 [no-staging]:   1%|          | 50/4387 [03:46<1:44:12,  1.44s/it, loss=1.810 det=0.000 pose=0.000 act=0.000 psr=1.810 seq=1]                           Epoch 1 [no-staging]:   1%|          | 51/4387 [03:46<1:30:21,  1.25s/it, loss=1.810 det=0.000 pose=0.000 act=0.000 psr=1.810 seq=1]Epoch 1 [no-staging]:   1%|          | 51/4387 [03:48<1:30:21,  1.25s/it, loss=18.9453 det=1.2860(c=1.2226,g=0.0317) pose=3.2705 act=1.0561 psr=0.6293 wd=0.24]Epoch 1 [no-staging]:   1%|          | 52/4387 [03:48<1:43:07,  1.43s/it, loss=18.9453 det=1.2860(c=1.2226,g=0.0317) pose=3.2705 act=1.0561 psr=0.6293 wd=0.24]Epoch 1 [no-staging]:   1%|          | 52/4387 [03:48<1:43:07,  1.43s/it, loss=1.828 det=0.000 pose=0.000 act=0.000 psr=1.828 seq=1]                           Epoch 1 [no-staging]:   1%|          | 53/4387 [03:48<1:30:21,  1.25s/it, loss=1.828 det=0.000 pose=0.000 act=0.000 psr=1.828 seq=1]Epoch 1 [no-staging]:   1%|          | 53/4387 [03:50<1:30:21,  1.25s/it, loss=18.9984 det=2.1546(c=2.1023,g=0.0262) pose=2.8715 act=1.0990 psr=0.5961 wd=0.24]Epoch 1 [no-staging]:   1%|          | 54/4387 [03:50<1:43:41,  1.44s/it, loss=18.9984 det=2.1546(c=2.1023,g=0.0262) pose=2.8715 act=1.0990 psr=0.5961 wd=0.24]Epoch 1 [no-staging]:   1%|          | 54/4387 [03:51<1:43:41,  1.44s/it, loss=1.791 det=0.000 pose=0.000 act=0.000 psr=1.791 seq=1]                           Epoch 1 [no-staging]:   1%|▏         | 55/4387 [03:51<1:30:41,  1.26s/it, loss=1.791 det=0.000 pose=0.000 act=0.000 psr=1.791 seq=1]Epoch 1 [no-staging]:   1%|▏         | 55/4387 [03:53<1:30:41,  1.26s/it, loss=19.6185 det=1.6967(c=1.6322,g=0.0322) pose=3.6300 act=0.9257 psr=0.6338 wd=0.24]Epoch 1 [no-staging]:   1%|▏         | 56/4387 [03:53<1:48:37,  1.50s/it, loss=19.6185 det=1.6967(c=1.6322,g=0.0322) pose=3.6300 act=0.9257 psr=0.6338 wd=0.24]Epoch 1 [no-staging]:   1%|▏         | 56/4387 [03:54<1:48:37,  1.50s/it, loss=1.952 det=0.000 pose=0.000 act=0.000 psr=1.952 seq=1]                           Epoch 1 [no-staging]:   1%|▏         | 57/4387 [03:54<1:37:33,  1.35s/it, loss=1.952 det=0.000 pose=0.000 act=0.000 psr=1.952 seq=1]Epoch 1 [no-staging]:   1%|▏         | 57/4387 [03:56<1:37:33,  1.35s/it, loss=18.8652 det=1.8310(c=1.7646,g=0.0332) pose=3.1623 act=0.8764 psr=0.6120 wd=0.24]Epoch 1 [no-staging]:   1%|▏         | 58/4387 [03:56<1:49:37,  1.52s/it, loss=18.8652 det=1.8310(c=1.7646,g=0.0332) pose=3.1623 act=0.8764 psr=0.6120 wd=0.24]Epoch 1 [no-staging]:   1%|▏         | 58/4387 [03:57<1:49:37,  1.52s/it, loss=3.657 det=0.000 pose=0.000 act=0.000 psr=3.657 seq=1]                           Epoch 1 [no-staging]:   1%|▏         | 59/4387 [03:57<1:33:09,  1.29s/it, loss=3.657 det=0.000 pose=0.000 act=0.000 psr=3.657 seq=1]Epoch 1 [no-staging]:   1%|▏         | 59/4387 [03:59<1:33:09,  1.29s/it, loss=17.0708 det=1.7878(c=1.7247,g=0.0315) pose=2.7104 act=1.1490 psr=0.5805 wd=0.25]Epoch 1 [no-staging]:   1%|▏         | 60/4387 [03:59<1:43:11,  1.43s/it, loss=17.0708 det=1.7878(c=1.7247,g=0.0315) pose=2.7104 act=1.1490 psr=0.5805 wd=0.25]  [GPU mem] step=60  allocated=1.27GB  reserved=7.39GB
+  [Epoch 1 batch 60/4387] elapsed=239s  speed=0.3 batch/s
+Epoch 1 [no-staging]:   1%|▏         | 60/4387 [03:59<1:43:11,  1.43s/it, loss=3.351 det=0.000 pose=0.000 act=0.000 psr=3.351 seq=1]                           Epoch 1 [no-staging]:   1%|▏         | 61/4387 [03:59<1:29:05,  1.24s/it, loss=3.351 det=0.000 pose=0.000 act=0.000 psr=3.351 seq=1]Epoch 1 [no-staging]:   1%|▏         | 61/4387 [04:01<1:29:05,  1.24s/it, loss=17.7710 det=2.1749(c=2.1127,g=0.0311) pose=2.6773 act=1.1035 psr=0.5899 wd=0.25]Epoch 1 [no-staging]:   1%|▏         | 62/4387 [04:01<1:41:42,  1.41s/it, loss=17.7710 det=2.1749(c=2.1127,g=0.0311) pose=2.6773 act=1.1035 psr=0.5899 wd=0.25]Epoch 1 [no-staging]:   1%|▏         | 62/4387 [04:02<1:41:42,  1.41s/it, loss=2.789 det=0.000 pose=0.000 act=0.000 psr=2.789 seq=1]                           Epoch 1 [no-staging]:   1%|▏         | 63/4387 [04:02<1:28:07,  1.22s/it, loss=2.789 det=0.000 pose=0.000 act=0.000 psr=2.789 seq=1]Epoch 1 [no-staging]:   1%|▏         | 63/4387 [04:04<1:28:07,  1.22s/it, loss=18.2676 det=2.3040(c=2.2407,g=0.0316) pose=3.3987 act=0.9206 psr=0.5744 wd=0.25]Epoch 1 [no-staging]:   1%|▏         | 64/4387 [04:04<1:44:13,  1.45s/it, loss=18.2676 det=2.3040(c=2.2407,g=0.0316) pose=3.3987 act=0.9206 psr=0.5744 wd=0.25]Epoch 1 [no-staging]:   1%|▏         | 64/4387 [04:05<1:44:13,  1.45s/it, loss=3.495 det=0.000 pose=0.000 act=0.000 psr=3.495 seq=1]                           Epoch 1 [no-staging]:   1%|▏         | 65/4387 [04:05<1:30:22,  1.25s/it, loss=3.495 det=0.000 pose=0.000 act=0.000 psr=3.495 seq=1]Epoch 1 [no-staging]:   1%|▏         | 65/4387 [04:07<1:30:22,  1.25s/it, loss=19.2120 det=1.6435(c=1.5727,g=0.0354) pose=4.7011 act=0.8405 psr=0.5709 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 66/4387 [04:07<1:43:09,  1.43s/it, loss=19.2120 det=1.6435(c=1.5727,g=0.0354) pose=4.7011 act=0.8405 psr=0.5709 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 66/4387 [04:07<1:43:09,  1.43s/it, loss=5.092 det=0.000 pose=0.000 act=0.000 psr=5.092 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 67/4387 [04:07<1:29:56,  1.25s/it, loss=5.092 det=0.000 pose=0.000 act=0.000 psr=5.092 seq=1]Epoch 1 [no-staging]:   2%|▏         | 67/4387 [04:09<1:29:56,  1.25s/it, loss=16.0450 det=1.3945(c=1.3218,g=0.0364) pose=3.0235 act=0.9052 psr=0.5119 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 68/4387 [04:09<1:43:57,  1.44s/it, loss=16.0450 det=1.3945(c=1.3218,g=0.0364) pose=3.0235 act=0.9052 psr=0.5119 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 68/4387 [04:10<1:43:57,  1.44s/it, loss=3.316 det=0.000 pose=0.000 act=0.000 psr=3.316 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 69/4387 [04:10<1:29:59,  1.25s/it, loss=3.316 det=0.000 pose=0.000 act=0.000 psr=3.316 seq=1]Epoch 1 [no-staging]:   2%|▏         | 69/4387 [04:12<1:29:59,  1.25s/it, loss=19.2121 det=1.6125(c=1.5396,g=0.0364) pose=3.0668 act=1.0192 psr=0.6520 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 70/4387 [04:12<1:43:25,  1.44s/it, loss=19.2121 det=1.6125(c=1.5396,g=0.0364) pose=3.0668 act=1.0192 psr=0.6520 wd=0.25]  [GPU mem] step=70  allocated=1.27GB  reserved=7.74GB
+  [Epoch 1 batch 70/4387] elapsed=253s  speed=0.3 batch/s
+Epoch 1 [no-staging]:   2%|▏         | 70/4387 [04:13<1:43:25,  1.44s/it, loss=1.805 det=0.000 pose=0.000 act=0.000 psr=1.805 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 71/4387 [04:13<1:31:02,  1.27s/it, loss=1.805 det=0.000 pose=0.000 act=0.000 psr=1.805 seq=1]Epoch 1 [no-staging]:   2%|▏         | 71/4387 [04:15<1:31:02,  1.27s/it, loss=16.4403 det=1.6662(c=1.5866,g=0.0398) pose=2.5538 act=1.1772 psr=0.5296 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 72/4387 [04:15<1:45:20,  1.46s/it, loss=16.4403 det=1.6662(c=1.5866,g=0.0398) pose=2.5538 act=1.1772 psr=0.5296 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 72/4387 [04:15<1:45:20,  1.46s/it, loss=2.471 det=0.000 pose=0.000 act=0.000 psr=2.471 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 73/4387 [04:16<1:29:52,  1.25s/it, loss=2.471 det=0.000 pose=0.000 act=0.000 psr=2.471 seq=1]Epoch 1 [no-staging]:   2%|▏         | 73/4387 [04:17<1:29:52,  1.25s/it, loss=17.3416 det=1.3222(c=1.2492,g=0.0365) pose=2.8228 act=1.0875 psr=0.6356 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 74/4387 [04:17<1:41:08,  1.41s/it, loss=17.3416 det=1.3222(c=1.2492,g=0.0365) pose=2.8228 act=1.0875 psr=0.6356 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 74/4387 [04:18<1:41:08,  1.41s/it, loss=4.760 det=0.000 pose=0.000 act=0.000 psr=4.760 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 75/4387 [04:18<1:29:50,  1.25s/it, loss=4.760 det=0.000 pose=0.000 act=0.000 psr=4.760 seq=1]Epoch 1 [no-staging]:   2%|▏         | 75/4387 [04:20<1:29:50,  1.25s/it, loss=18.1035 det=2.5255(c=2.4429,g=0.0413) pose=3.2462 act=1.0809 psr=0.5407 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 76/4387 [04:20<1:41:47,  1.42s/it, loss=18.1035 det=2.5255(c=2.4429,g=0.0413) pose=3.2462 act=1.0809 psr=0.5407 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 76/4387 [04:21<1:41:47,  1.42s/it, loss=2.978 det=0.000 pose=0.000 act=0.000 psr=2.978 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 77/4387 [04:21<1:27:55,  1.22s/it, loss=2.978 det=0.000 pose=0.000 act=0.000 psr=2.978 seq=1]Epoch 1 [no-staging]:   2%|▏         | 77/4387 [04:23<1:27:55,  1.22s/it, loss=17.9143 det=1.2519(c=1.1631,g=0.0444) pose=3.2690 act=1.1027 psr=0.6063 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 78/4387 [04:23<1:40:59,  1.41s/it, loss=17.9143 det=1.2519(c=1.1631,g=0.0444) pose=3.2690 act=1.1027 psr=0.6063 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 78/4387 [04:23<1:40:59,  1.41s/it, loss=4.769 det=0.000 pose=0.000 act=0.000 psr=4.769 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 79/4387 [04:23<1:29:01,  1.24s/it, loss=4.769 det=0.000 pose=0.000 act=0.000 psr=4.769 seq=1]Epoch 1 [no-staging]:   2%|▏         | 79/4387 [04:25<1:29:01,  1.24s/it, loss=17.9579 det=1.8306(c=1.7453,g=0.0426) pose=3.1685 act=1.0877 psr=0.5904 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 80/4387 [04:25<1:45:16,  1.47s/it, loss=17.9579 det=1.8306(c=1.7453,g=0.0426) pose=3.1685 act=1.0877 psr=0.5904 wd=0.25]  [GPU mem] step=80  allocated=1.10GB  reserved=7.53GB
+  [Epoch 1 batch 80/4387] elapsed=266s  speed=0.3 batch/s
+Epoch 1 [no-staging]:   2%|▏         | 80/4387 [04:26<1:45:16,  1.47s/it, loss=3.512 det=0.000 pose=0.000 act=0.000 psr=3.512 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 81/4387 [04:26<1:30:27,  1.26s/it, loss=3.512 det=0.000 pose=0.000 act=0.000 psr=3.512 seq=1]Epoch 1 [no-staging]:   2%|▏         | 81/4387 [04:28<1:30:27,  1.26s/it, loss=16.4225 det=1.3291(c=1.2502,g=0.0395) pose=2.4884 act=1.0808 psr=0.5814 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 82/4387 [04:28<1:41:50,  1.42s/it, loss=16.4225 det=1.3291(c=1.2502,g=0.0395) pose=2.4884 act=1.0808 psr=0.5814 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 82/4387 [04:29<1:41:50,  1.42s/it, loss=3.434 det=0.000 pose=0.000 act=0.000 psr=3.434 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 83/4387 [04:29<1:28:27,  1.23s/it, loss=3.434 det=0.000 pose=0.000 act=0.000 psr=3.434 seq=1]Epoch 1 [no-staging]:   2%|▏         | 83/4387 [04:31<1:28:27,  1.23s/it, loss=18.4163 det=3.1021(c=3.0097,g=0.0462) pose=2.7142 act=0.9160 psr=0.5549 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 84/4387 [04:31<1:40:20,  1.40s/it, loss=18.4163 det=3.1021(c=3.0097,g=0.0462) pose=2.7142 act=0.9160 psr=0.5549 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 84/4387 [04:31<1:40:20,  1.40s/it, loss=4.763 det=0.000 pose=0.000 act=0.000 psr=4.763 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 85/4387 [04:31<1:27:04,  1.21s/it, loss=4.763 det=0.000 pose=0.000 act=0.000 psr=4.763 seq=1]Epoch 1 [no-staging]:   2%|▏         | 85/4387 [04:33<1:27:04,  1.21s/it, loss=17.3648 det=1.4859(c=1.3928,g=0.0466) pose=3.1857 act=1.1297 psr=0.5958 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 86/4387 [04:33<1:39:43,  1.39s/it, loss=17.3648 det=1.4859(c=1.3928,g=0.0466) pose=3.1857 act=1.1297 psr=0.5958 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 86/4387 [04:34<1:39:43,  1.39s/it, loss=3.471 det=0.000 pose=0.000 act=0.000 psr=3.471 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 87/4387 [04:34<1:26:07,  1.20s/it, loss=3.471 det=0.000 pose=0.000 act=0.000 psr=3.471 seq=1]Epoch 1 [no-staging]:   2%|▏         | 87/4387 [04:36<1:26:07,  1.20s/it, loss=20.5134 det=1.9917(c=1.9036,g=0.0441) pose=3.9111 act=0.8427 psr=0.6231 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 88/4387 [04:36<1:43:12,  1.44s/it, loss=20.5134 det=1.9917(c=1.9036,g=0.0441) pose=3.9111 act=0.8427 psr=0.6231 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 88/4387 [04:37<1:43:12,  1.44s/it, loss=1.844 det=0.000 pose=0.000 act=0.000 psr=1.844 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 89/4387 [04:37<1:30:21,  1.26s/it, loss=1.844 det=0.000 pose=0.000 act=0.000 psr=1.844 seq=1]Epoch 1 [no-staging]:   2%|▏         | 89/4387 [04:39<1:30:21,  1.26s/it, loss=16.3604 det=1.4090(c=1.3078,g=0.0506) pose=2.6819 act=0.9043 psr=0.5778 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 90/4387 [04:39<1:40:57,  1.41s/it, loss=16.3604 det=1.4090(c=1.3078,g=0.0506) pose=2.6819 act=0.9043 psr=0.5778 wd=0.25]  [GPU mem] step=90  allocated=1.27GB  reserved=7.60GB
+  [Epoch 1 batch 90/4387] elapsed=279s  speed=0.3 batch/s
+Epoch 1 [no-staging]:   2%|▏         | 90/4387 [04:39<1:40:57,  1.41s/it, loss=2.510 det=0.000 pose=0.000 act=0.000 psr=2.510 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 91/4387 [04:39<1:28:25,  1.23s/it, loss=2.510 det=0.000 pose=0.000 act=0.000 psr=2.510 seq=1]Epoch 1 [no-staging]:   2%|▏         | 91/4387 [04:41<1:28:25,  1.23s/it, loss=21.0282 det=2.4059(c=2.3041,g=0.0509) pose=3.7842 act=0.8713 psr=0.6781 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 92/4387 [04:41<1:41:55,  1.42s/it, loss=21.0282 det=2.4059(c=2.3041,g=0.0509) pose=3.7842 act=0.8713 psr=0.6781 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 92/4387 [04:42<1:41:55,  1.42s/it, loss=2.106 det=0.000 pose=0.000 act=0.000 psr=2.106 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 93/4387 [04:42<1:28:47,  1.24s/it, loss=2.106 det=0.000 pose=0.000 act=0.000 psr=2.106 seq=1]Epoch 1 [no-staging]:   2%|▏         | 93/4387 [04:44<1:28:47,  1.24s/it, loss=16.9735 det=1.7403(c=1.6528,g=0.0437) pose=2.7255 act=1.1966 psr=0.5642 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 94/4387 [04:44<1:42:55,  1.44s/it, loss=16.9735 det=1.7403(c=1.6528,g=0.0437) pose=2.7255 act=1.1966 psr=0.5642 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 94/4387 [04:45<1:42:55,  1.44s/it, loss=3.094 det=0.000 pose=0.000 act=0.000 psr=3.094 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 95/4387 [04:45<1:30:34,  1.27s/it, loss=3.094 det=0.000 pose=0.000 act=0.000 psr=3.094 seq=1]Epoch 1 [no-staging]:   2%|▏         | 95/4387 [04:47<1:30:34,  1.27s/it, loss=17.2654 det=2.1325(c=2.0220,g=0.0553) pose=3.4231 act=1.0202 psr=0.5444 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 96/4387 [04:47<1:46:06,  1.48s/it, loss=17.2654 det=2.1325(c=2.0220,g=0.0553) pose=3.4231 act=1.0202 psr=0.5444 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 96/4387 [04:48<1:46:06,  1.48s/it, loss=2.537 det=0.000 pose=0.000 act=0.000 psr=2.537 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 97/4387 [04:48<1:32:34,  1.29s/it, loss=2.537 det=0.000 pose=0.000 act=0.000 psr=2.537 seq=1]Epoch 1 [no-staging]:   2%|▏         | 97/4387 [04:50<1:32:34,  1.29s/it, loss=16.2958 det=1.8340(c=1.7346,g=0.0497) pose=2.5454 act=0.9814 psr=0.5514 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 98/4387 [04:50<1:44:45,  1.47s/it, loss=16.2958 det=1.8340(c=1.7346,g=0.0497) pose=2.5454 act=0.9814 psr=0.5514 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 98/4387 [04:50<1:44:45,  1.47s/it, loss=2.480 det=0.000 pose=0.000 act=0.000 psr=2.480 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 99/4387 [04:50<1:30:38,  1.27s/it, loss=2.480 det=0.000 pose=0.000 act=0.000 psr=2.480 seq=1]Epoch 1 [no-staging]:   2%|▏         | 99/4387 [04:52<1:30:38,  1.27s/it, loss=17.4102 det=2.4289(c=2.3341,g=0.0474) pose=2.6673 act=0.9534 psr=0.5982 wd=0.25]  [CPU RAM] step=100  avail=42.5GB  buffers=2696GB  cached=33060GB
+Epoch 1 [no-staging]:   2%|▏         | 100/4387 [04:52<1:43:27,  1.45s/it, loss=17.4102 det=2.4289(c=2.3341,g=0.0474) pose=2.6673 act=0.9534 psr=0.5982 wd=0.25]  [GPU mem] step=100  allocated=1.27GB  reserved=7.54GB
+  [Epoch 1 batch 100/4387] elapsed=293s  speed=0.3 batch/s
+[PSR_DEBUG_seq step=100] pre_linear:  mean=-0.0123 std=1.8675 min=-6.1496 max=6.5985
+[PSR_DEBUG_seq step=100] post_linear64: mean=0.0245 std=1.1998 min=-2.8508 max=3.5723
+[PSR_DEBUG_seq step=100] post_gelu:   mean=0.3972 std=0.7375 min=-0.1700 max=3.5717
+Epoch 1 [no-staging]:   2%|▏         | 100/4387 [04:53<1:43:27,  1.45s/it, loss=3.315 det=0.000 pose=0.000 act=0.000 psr=3.315 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 101/4387 [04:53<1:28:36,  1.24s/it, loss=3.315 det=0.000 pose=0.000 act=0.000 psr=3.315 seq=1]Epoch 1 [no-staging]:   2%|▏         | 101/4387 [04:55<1:28:36,  1.24s/it, loss=16.8241 det=2.4189(c=2.3135,g=0.0527) pose=2.9263 act=0.9989 psr=0.5093 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 102/4387 [04:55<1:40:52,  1.41s/it, loss=16.8241 det=2.4189(c=2.3135,g=0.0527) pose=2.9263 act=0.9989 psr=0.5093 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 102/4387 [04:55<1:40:52,  1.41s/it, loss=3.130 det=0.000 pose=0.000 act=0.000 psr=3.130 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 103/4387 [04:56<1:26:34,  1.21s/it, loss=3.130 det=0.000 pose=0.000 act=0.000 psr=3.130 seq=1]Epoch 1 [no-staging]:   2%|▏         | 103/4387 [04:57<1:26:34,  1.21s/it, loss=18.2955 det=3.0889(c=2.9814,g=0.0538) pose=2.6526 act=0.9855 psr=0.5676 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 104/4387 [04:57<1:41:23,  1.42s/it, loss=18.2955 det=3.0889(c=2.9814,g=0.0538) pose=2.6526 act=0.9855 psr=0.5676 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 104/4387 [04:58<1:41:23,  1.42s/it, loss=1.779 det=0.000 pose=0.000 act=0.000 psr=1.779 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 105/4387 [04:58<1:28:12,  1.24s/it, loss=1.779 det=0.000 pose=0.000 act=0.000 psr=1.779 seq=1]Epoch 1 [no-staging]:   2%|▏         | 105/4387 [05:00<1:28:12,  1.24s/it, loss=15.3364 det=1.7079(c=1.6082,g=0.0498) pose=3.0749 act=1.0381 psr=0.4555 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 106/4387 [05:00<1:40:18,  1.41s/it, loss=15.3364 det=1.7079(c=1.6082,g=0.0498) pose=3.0749 act=1.0381 psr=0.4555 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 106/4387 [05:01<1:40:18,  1.41s/it, loss=3.266 det=0.000 pose=0.000 act=0.000 psr=3.266 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 107/4387 [05:01<1:26:12,  1.21s/it, loss=3.266 det=0.000 pose=0.000 act=0.000 psr=3.266 seq=1]Epoch 1 [no-staging]:   2%|▏         | 107/4387 [05:02<1:26:12,  1.21s/it, loss=16.3151 det=1.7946(c=1.6892,g=0.0527) pose=3.1042 act=1.0106 psr=0.5264 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 108/4387 [05:02<1:37:06,  1.36s/it, loss=16.3151 det=1.7946(c=1.6892,g=0.0527) pose=3.1042 act=1.0106 psr=0.5264 wd=0.25]Epoch 1 [no-staging]:   2%|▏         | 108/4387 [05:03<1:37:06,  1.36s/it, loss=2.299 det=0.000 pose=0.000 act=0.000 psr=2.299 seq=1]                           Epoch 1 [no-staging]:   2%|▏         | 109/4387 [05:03<1:24:15,  1.18s/it, loss=2.299 det=0.000 pose=0.000 act=0.000 psr=2.299 seq=1]Epoch 1 [no-staging]:   2%|▏         | 109/4387 [05:05<1:24:15,  1.18s/it, loss=18.9460 det=2.2027(c=2.0821,g=0.0603) pose=4.2815 act=1.0687 psr=0.5972 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 110/4387 [05:05<1:36:32,  1.35s/it, loss=18.9460 det=2.2027(c=2.0821,g=0.0603) pose=4.2815 act=1.0687 psr=0.5972 wd=0.25]  [GPU mem] step=110  allocated=1.27GB  reserved=7.53GB
+  [Epoch 1 batch 110/4387] elapsed=306s  speed=0.4 batch/s
+Epoch 1 [no-staging]:   3%|▎         | 110/4387 [05:06<1:36:32,  1.35s/it, loss=2.226 det=0.000 pose=0.000 act=0.000 psr=2.226 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 111/4387 [05:06<1:24:41,  1.19s/it, loss=2.226 det=0.000 pose=0.000 act=0.000 psr=2.226 seq=1]Epoch 1 [no-staging]:   3%|▎         | 111/4387 [05:08<1:24:41,  1.19s/it, loss=15.9048 det=1.9080(c=1.7932,g=0.0574) pose=2.3134 act=1.1010 psr=0.5588 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 112/4387 [05:08<1:40:54,  1.42s/it, loss=15.9048 det=1.9080(c=1.7932,g=0.0574) pose=2.3134 act=1.1010 psr=0.5588 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 112/4387 [05:09<1:40:54,  1.42s/it, loss=2.349 det=0.000 pose=0.000 act=0.000 psr=2.349 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 113/4387 [05:09<1:27:45,  1.23s/it, loss=2.349 det=0.000 pose=0.000 act=0.000 psr=2.349 seq=1]Epoch 1 [no-staging]:   3%|▎         | 113/4387 [05:10<1:27:45,  1.23s/it, loss=16.0513 det=1.9320(c=1.8160,g=0.0580) pose=3.1747 act=0.8832 psr=0.5415 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 114/4387 [05:10<1:38:34,  1.38s/it, loss=16.0513 det=1.9320(c=1.8160,g=0.0580) pose=3.1747 act=0.8832 psr=0.5415 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 114/4387 [05:11<1:38:34,  1.38s/it, loss=3.371 det=0.000 pose=0.000 act=0.000 psr=3.371 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 115/4387 [05:11<1:26:27,  1.21s/it, loss=3.371 det=0.000 pose=0.000 act=0.000 psr=3.371 seq=1]Epoch 1 [no-staging]:   3%|▎         | 115/4387 [05:13<1:26:27,  1.21s/it, loss=16.2349 det=1.4178(c=1.2871,g=0.0653) pose=3.7711 act=0.8342 psr=0.5126 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 116/4387 [05:13<1:41:53,  1.43s/it, loss=16.2349 det=1.4178(c=1.2871,g=0.0653) pose=3.7711 act=0.8342 psr=0.5126 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 116/4387 [05:14<1:41:53,  1.43s/it, loss=1.672 det=0.000 pose=0.000 act=0.000 psr=1.672 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 117/4387 [05:14<1:28:39,  1.25s/it, loss=1.672 det=0.000 pose=0.000 act=0.000 psr=1.672 seq=1]Epoch 1 [no-staging]:   3%|▎         | 117/4387 [05:16<1:28:39,  1.25s/it, loss=16.8385 det=2.6492(c=2.5120,g=0.0686) pose=2.0963 act=1.1016 psr=0.5971 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 118/4387 [05:16<1:42:03,  1.43s/it, loss=16.8385 det=2.6492(c=2.5120,g=0.0686) pose=2.0963 act=1.1016 psr=0.5971 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 118/4387 [05:17<1:42:03,  1.43s/it, loss=2.176 det=0.000 pose=0.000 act=0.000 psr=2.176 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 119/4387 [05:17<1:29:36,  1.26s/it, loss=2.176 det=0.000 pose=0.000 act=0.000 psr=2.176 seq=1]Epoch 1 [no-staging]:   3%|▎         | 119/4387 [05:19<1:29:36,  1.26s/it, loss=16.7108 det=2.0443(c=1.9212,g=0.0615) pose=3.3002 act=0.9485 psr=0.5520 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 120/4387 [05:19<1:45:21,  1.48s/it, loss=16.7108 det=2.0443(c=1.9212,g=0.0615) pose=3.3002 act=0.9485 psr=0.5520 wd=0.25]  [GPU mem] step=120  allocated=1.10GB  reserved=7.56GB
+  [Epoch 1 batch 120/4387] elapsed=319s  speed=0.4 batch/s
+Epoch 1 [no-staging]:   3%|▎         | 120/4387 [05:19<1:45:21,  1.48s/it, loss=3.841 det=0.000 pose=0.000 act=0.000 psr=3.841 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 121/4387 [05:19<1:31:23,  1.29s/it, loss=3.841 det=0.000 pose=0.000 act=0.000 psr=3.841 seq=1]Epoch 1 [no-staging]:   3%|▎         | 121/4387 [05:21<1:31:23,  1.29s/it, loss=17.2481 det=2.4689(c=2.3463,g=0.0613) pose=1.8079 act=0.9332 psr=0.6148 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 122/4387 [05:21<1:46:05,  1.49s/it, loss=17.2481 det=2.4689(c=2.3463,g=0.0613) pose=1.8079 act=0.9332 psr=0.6148 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 122/4387 [05:22<1:46:05,  1.49s/it, loss=3.139 det=0.000 pose=0.000 act=0.000 psr=3.139 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 123/4387 [05:22<1:36:29,  1.36s/it, loss=3.139 det=0.000 pose=0.000 act=0.000 psr=3.139 seq=1]Epoch 1 [no-staging]:   3%|▎         | 123/4387 [05:24<1:36:29,  1.36s/it, loss=18.4457 det=2.3520(c=2.2264,g=0.0628) pose=2.8492 act=0.9205 psr=0.6283 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 124/4387 [05:24<1:47:16,  1.51s/it, loss=18.4457 det=2.3520(c=2.2264,g=0.0628) pose=2.8492 act=0.9205 psr=0.6283 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 124/4387 [05:25<1:47:16,  1.51s/it, loss=1.769 det=0.000 pose=0.000 act=0.000 psr=1.769 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 125/4387 [05:25<1:32:13,  1.30s/it, loss=1.769 det=0.000 pose=0.000 act=0.000 psr=1.769 seq=1]Epoch 1 [no-staging]:   3%|▎         | 125/4387 [05:27<1:32:13,  1.30s/it, loss=19.4186 det=2.6253(c=2.4955,g=0.0649) pose=2.5931 act=1.0070 psr=0.6764 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 126/4387 [05:27<1:44:17,  1.47s/it, loss=19.4186 det=2.6253(c=2.4955,g=0.0649) pose=2.5931 act=1.0070 psr=0.6764 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 126/4387 [05:28<1:44:17,  1.47s/it, loss=2.853 det=0.000 pose=0.000 act=0.000 psr=2.853 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 127/4387 [05:28<1:30:07,  1.27s/it, loss=2.853 det=0.000 pose=0.000 act=0.000 psr=2.853 seq=1]Epoch 1 [no-staging]:   3%|▎         | 127/4387 [05:30<1:30:07,  1.27s/it, loss=16.2140 det=1.6893(c=1.5618,g=0.0638) pose=2.3035 act=0.9291 psr=0.5761 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 128/4387 [05:30<1:43:17,  1.46s/it, loss=16.2140 det=1.6893(c=1.5618,g=0.0638) pose=2.3035 act=0.9291 psr=0.5761 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 128/4387 [05:30<1:43:17,  1.46s/it, loss=4.211 det=0.000 pose=0.000 act=0.000 psr=4.211 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 129/4387 [05:30<1:29:14,  1.26s/it, loss=4.211 det=0.000 pose=0.000 act=0.000 psr=4.211 seq=1]Epoch 1 [no-staging]:   3%|▎         | 129/4387 [05:32<1:29:14,  1.26s/it, loss=20.3446 det=2.0330(c=1.8958,g=0.0686) pose=2.8409 act=0.8537 psr=0.7004 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 130/4387 [05:32<1:42:56,  1.45s/it, loss=20.3446 det=2.0330(c=1.8958,g=0.0686) pose=2.8409 act=0.8537 psr=0.7004 wd=0.25]  [GPU mem] step=130  allocated=1.27GB  reserved=7.44GB
+  [Epoch 1 batch 130/4387] elapsed=333s  speed=0.4 batch/s
+Epoch 1 [no-staging]:   3%|▎         | 130/4387 [05:33<1:42:56,  1.45s/it, loss=4.465 det=0.000 pose=0.000 act=0.000 psr=4.465 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 131/4387 [05:33<1:31:46,  1.29s/it, loss=4.465 det=0.000 pose=0.000 act=0.000 psr=4.465 seq=1]Epoch 1 [no-staging]:   3%|▎         | 131/4387 [05:35<1:31:46,  1.29s/it, loss=14.9369 det=1.8502(c=1.7267,g=0.0618) pose=2.1126 act=0.8819 psr=0.4991 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 132/4387 [05:35<1:43:17,  1.46s/it, loss=14.9369 det=1.8502(c=1.7267,g=0.0618) pose=2.1126 act=0.8819 psr=0.4991 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 132/4387 [05:36<1:43:17,  1.46s/it, loss=3.116 det=0.000 pose=0.000 act=0.000 psr=3.116 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 133/4387 [05:36<1:27:34,  1.24s/it, loss=3.116 det=0.000 pose=0.000 act=0.000 psr=3.116 seq=1]Epoch 1 [no-staging]:   3%|▎         | 133/4387 [05:38<1:27:34,  1.24s/it, loss=17.7203 det=2.0494(c=1.9189,g=0.0653) pose=2.1481 act=1.0294 psr=0.6250 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 134/4387 [05:38<1:40:40,  1.42s/it, loss=17.7203 det=2.0494(c=1.9189,g=0.0653) pose=2.1481 act=1.0294 psr=0.6250 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 134/4387 [05:38<1:40:40,  1.42s/it, loss=1.706 det=0.000 pose=0.000 act=0.000 psr=1.706 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 135/4387 [05:39<1:28:26,  1.25s/it, loss=1.706 det=0.000 pose=0.000 act=0.000 psr=1.706 seq=1]Epoch 1 [no-staging]:   3%|▎         | 135/4387 [05:41<1:28:26,  1.25s/it, loss=18.4735 det=1.4953(c=1.3621,g=0.0666) pose=3.4425 act=0.7978 psr=0.6618 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 136/4387 [05:41<1:45:34,  1.49s/it, loss=18.4735 det=1.4953(c=1.3621,g=0.0666) pose=3.4425 act=0.7978 psr=0.6618 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 136/4387 [05:41<1:45:34,  1.49s/it, loss=1.743 det=0.000 pose=0.000 act=0.000 psr=1.743 seq=1]                           Epoch 1 [no-staging]:   3%|▎         | 137/4387 [05:41<1:31:55,  1.30s/it, loss=1.743 det=0.000 pose=0.000 act=0.000 psr=1.743 seq=1]Epoch 1 [no-staging]:   3%|▎         | 137/4387 [05:43<1:31:55,  1.30s/it, loss=16.7909 det=1.9034(c=1.7704,g=0.0665) pose=3.7851 act=0.8120 psr=0.4917 wd=0.25]Epoch 1 [no-staging]:   3%|▎         | 138/4387 [05:43<1:44:42,  1.48s/it, loss=16.7909 det=1.9034(c=1.7704,g=0.0665) pose=3.7851 act=0.8120 psr=0.4917 wd=0.25]  [SIGNAL] SIGTERM received at step=138 epoch=1 -- saving crash recovery and exiting gracefully
+  [CRASH_RECOVERY] Saved signal_SIGTERM crash checkpoint to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth
+Epoch 1 [no-staging]:   3%|▎         | 138/4387 [05:54<3:01:47,  2.57s/it, loss=16.7909 det=1.9034(c=1.7704,g=0.0665) pose=3.7851 act=0.8120 psr=0.4917 wd=0.25]
+  [CRASH-RETRY] SystemExit caught from signal handler (epoch=1 attempt=1). Cleaning CUDA state and retrying.
+[get_sampler] DET_GT_FRAME_FRACTION=0.40: 3102/38036 (8.16%) frames carry GT boxes -> reweighted so ~40% of every batch is GT-bearing (was ~8.16% under base sampler).
+[get_sampler] effective per-class sampling mass: 63 classes present, max/min ratio=21.7x (uniform would be 1.0x), max=0.0861 vs uniform=0.0159. Top-5 sampled class ids=[28, 42, 15, 9, 38]. Ratio >> 1 means DET_GT/task-aware reweighting is distorting activity balance.
+  [STEP VAL] Intra-epoch validation every 2500 steps (gated at 200 batches)
+Epoch 1 [no-staging]:   0%|          | 0/4387 [00:00<?, ?it/s]  [CRASH_RECOVERY] Saved epoch_start crash checkpoint to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth
