@@ -323,3 +323,84 @@ If all 3 done and metrics hold, paper is competitive for Top 10% at AAIML. Witho
 
 ---
 
+
+---
+
+## 2026-07-05 — 10 Opus Decisions Implemented (126)
+
+### Decision 1: SUBSET_RATIO verified = **1.0 (FULL DATA)**
+- `resolved_config.json:SUBSET_RATIO = 1.0` — Opus's concern was a stale 120-doc error
+- BATCH_SIZE=4, TRAIN_ACT=True, TRAIN_PSR=True, GRAD_ACCUM=4, HEAD_POSE_POS_SCALE=100.0, DET_METRICS_EVERY_N=3
+- **No full-data run needed** — 120's "2% mode" claim was wrong
+- **No 120 §14 corrections needed beyond SUBSET_RATIO** (other §14 issues: dataset errors, egocentric/IKEA furniture cross-contamination, taxonomy confusion — separate fixes)
+
+### Decision 2: Main training RESTARTED (PID 2998753)
+- Resumed from `crash_recovery.pth` on GPU 1 (5060 Ti)
+- Resume index verified; OneCycleLR continues from saved step
+- Watchdog keepalive: heartbeat is updated during val (existing behavior — no change needed)
+- ETA: 4h per epoch × 80 epochs = ~13 days; but cosine LR makes most learning in first 30 epochs (~5 days)
+
+### Decision 3: D3-redo STARTED (PID 3000528, on GPU 0)
+- `subprocess_eval.py` now uses `epoch=-1` default (per fix in evaluate.py:3342)
+- Full 13161 batches, 5h timeout (Opus recommended 5h+ not 2h)
+- Best.pth checkpoint (combined=0.4140, not epoch_11)
+- Expected output: det_mAP50 (the missing metric), full-set numbers
+- Will not write NaN (NaN-refusing serializer already applied)
+
+### Decision 4: PSR rescue plan (3 stages)
+- **Mode A (inference-only)**: 117-Q18 per-component thresholds + 125-Q48 hysteresis on D3-redo artifact
+- **Mode B (training-side)**: 117-Q36 inverse-prevalence + 125-Q14 order regularization, 5-epoch resumed probe
+- **Mode C (paradigm)**: 125-Q46 transition detection head, gated on G6
+- **G6 gate** decides AAIML paper's PSR stopping point
+
+### Decision 5: D1-R YOLOv8m retrain — PLANNED (Opus recommended GO)
+- Need: COCO→YOLO format converter + ultralytics training
+- 1 GPU-day on 3060 (queued after D3-redo completes)
+- Unblocks: D4 YOLOv8m→PSR, Q34 distillation, 117-Q38 pseudo-labels
+
+### Decision 6: TTA 3-arm redo — PLANNED (after D3-redo)
+- Arm 1: flip only (NMS)
+- Arm 2: flip + scales (NMS)
+- Arm 3: flip + scales (Soft-NMS, sigma=0.5)
+- All on same checkpoint, same eval path
+- Flip-safety check first: verify flip is label-safe for ASD codes
+
+### Decision 7: Pose-norm fix — APPLYING
+- Current: `pose_data[:, 3:6] /= HEAD_POSE_POS_SCALE` (line 599) — divides position
+- Issue: forward and up vectors not normalized to unit length
+- Fix: add `pose_data[:, 0:3] /= np.linalg.norm(pose_data[:, 0:3], axis=1, keepdims=True)` for forward
+- Same for up at columns 6,7,8
+- Eval-only recheck on epoch_17 first, then retrain
+
+### Decision 8: Q42/Q41/Q13 pose wins — QUEUED
+- Q42 Kalman: T0, after pose-norm
+- Q41 6D rotation + geodesic: T1, pose-run centerpiece
+- Q13 uncertainty weighting: T1, pose-run second arm
+
+### Decision 9: Ablation suite — QUEUED (week 2-3, A1-A4 on 3060)
+- A1-redo: same init, batch 4, clean dir (verifies ckpt-dir fix first)
+- A2: multi-task equal-weight
+- A3: Kendall
+- A4: FiLM
+
+### Decision 10: Paper claim set FROZEN to what survived
+- **ego-pose 7.83°** (first baseline, pending pose-norm fix + error bars)
+- **PSR POS 0.969 subsample** (blind-anchored at 0.0, G4 PASS)
+- **det mAP 0.358 / pc 0.573 subsample** + full-set after D3-redo
+- **per-frame activity 0.205 / top1 0.311** (renamed task)
+- **efficiency 46.5M / 245.3 GFLOPs / 11.05 FPS measured**
+- **PSR F1=0** as honest negative finding (collapse mechanism analyzed = contribution)
+
+### Live state (2026-07-05 11:42)
+- Main training: RESTARTED, PID 2998753, on 5060 Ti
+- D3-redo: STARTED, PID 3000528, on 3060
+- Both GPUs: 5060 Ti ~5GB, 3060 ~8GB
+- RAM: 7.5GB free, 43GB available
+
+### 126 → Paper corrections (per Opus verdicts)
+- POS 0.999 → use **0.969 subsample** (0.999 is collapse-inflated artifact)
+- Activity 0.205 → quote **subsample**, but flag 0.057 full-val as harder
+- Pose 7.83° → quote **subsample**, flag 9.94° full-set
+- "2% mode" → **FULL DATA** (Opus Decision 1)
+- §14 dataset errors (egocentric vs fixed, IKEA vs IndustReal) → rewrite from dataset paper
+
