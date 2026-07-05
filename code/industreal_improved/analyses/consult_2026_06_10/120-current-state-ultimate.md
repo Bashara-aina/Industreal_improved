@@ -110,7 +110,7 @@ All metrics from the subsample validation (250 batches, ~2.6% of full set) durin
 | Anomaly 2 `_s()` int-float bug | 0–16 | `det_n_present_classes=0` in all Val: lines due to `isinstance(v, float)` rejecting ints. Fixed at train.py:5035. |
 | Anomaly 2 fix verified | 17 | `det_n_present=15` appears correctly for the first time. |
 | Detection ceiling broken | 8→11 | mAP50 rises 0.208→0.317 (52% improvement in 3 epochs), exceeding the historic ResNet-50 ceiling (0.207). |
-| PSR cross-head signal | 8→11 | PSR F1 climbs 0→0.144 while detection mAP climbs 0.208→0.317. |
+| PSR cross-head signal (subsample only — Opus 126 §3.5 softened) | 8→11 | PSR F1 climbs 0→0.144 on subsample while detection mAP climbs 0.208→0.317. F1-trajectory claim withdrawn post-collapse; paper uses comp_acc + liveness + s2-architecture instead. |
 
 **Source:** `popw_aaiml2027.tex:225-231` (detection ceiling evidence); `119-progress-log.md:186-201` (epoch 17 breakthrough)
 
@@ -378,7 +378,7 @@ Epoch 11: 0.3165  (+52% in 3 epochs — breaks the ceiling)
 Epoch 17: 0.3584  (+13% over epoch 11, +72% over epoch 7)
 ```
 
-The detection head broke through a ceiling that had held for weeks. The breakthrough coincides with PSR F1 climbing from 0 (epoch 8) to 0.144 (epoch 11), providing direct evidence of the cross-head gradient signal.
+The detection head broke through a ceiling that had held for weeks. The breakthrough coincides with PSR F1 climbing from 0 (epoch 8) to 0.144 (epoch 11) on the subsample, but **Opus 126 §3.5 instructs softening this causal claim**: the 6.4× "elasticity" was computed on subsample F1 values now known to sit on a degenerate decoder (PSR F1=0 on full val per D3). The honest version of the cross-head claim rests on (a) psr_comp_acc=0.567 on full val (per-frame state recognition works and tracks detection), (b) gradient-liveness records (PSR sub-heads went DEAD→ALIVE as detection matured), and (c) the architecture dependency (s2 features from detection boxes). The F1-trajectory version of the claim does not appear in the paper.
 
 **Source:** `popw_aaiml2027.tex:223-231`
 
@@ -1045,14 +1045,15 @@ The pilot is underpowered for definitive inference: 80% power to detect Cohen's 
 | FPN neck (P3–P7) | 256ch feature pyramid | 4,474,880 | 5.5 | 17ms |
 | Detection head (RetinaNet-style) | 4 conv layers each for cls + reg, 5.3M | 5,305,596 | 5.0 | 11ms |
 | Head pose head (MLP, 9-DoF) | GAP(C4||C5) -> MLP(1152->512->256->9) | 400,896 (+headpose_film) | 0.3 | 4ms |
-| Activity head (per-frame MLP) | Per-frame 69-class classifier, 0.7M | 672,267 | 0.1 | 3ms |
+| Activity head (per-frame MLP) | Per-frame 69-class classifier, 0.7M | 687,173 (single-source: 111/116 value, vs 120's 672,267) | 0.1 | 3ms |
 | PSR head (3-layer Transformer) | 3-layer causal encoder, 11 binary classifiers | 3,077,515 | 1.9 | 10ms |
 | Body pose head (heatmap decoder, aux) | Wing Loss on pseudo-keypoints from det boxes | 1,643,793 | 1.2 | 8ms |
 | FiLM conditioning (pose->C5) | Modulates C5 features from body pose | 841,216 (+headpose_film) | 0.1 | 3ms |
 | Kendall log-vars (4 learnable) | 4 scalar log-variances | 4 | 0.0 | 0ms |
-| **Total** | | **46,454,004** (= 46.47M) | **245.3** | **90.7ms (11.02 FPS)** |
+| **Total** | | **46,468,910 (= 46.47M, D3-measured)** | **245.3** | **90.7ms (11.02 FPS)** |
 
-**Source:** `popw_aaiml2027.tex:74-90`
+**Source:** `popw_aaiml2027.tex:74-90`; D3 measured total from `src/runs/rf_stages/checkpoints/d3_full_eval/metrics.json:eff_params_m=46.4689`
+**Note (Opus 126 §1.14):** Activity head 672,267 (120) vs 687,173 (111/116) reconciled to 687,173 (the 69-class output layer count); total 46,454,004 (120) vs 46,468,910 (112) reconciled to 46,468,910 (D3-measured).
 
 ### Detection Head Detail
 
@@ -1334,15 +1335,19 @@ The paper draft is at 353 lines, targeting AAIML 2027 (IEEE Int'l Conf on Advanc
 
 **Source:** `119-progress-log.md:131-136`
 
-### Honest Disclosures in Paper
+### Honest Disclosures in Paper (Opus 126 §3.6 amended)
 
-1. POS paradigm difference (per-frame vs transition detection) — disclosed with Q43
-2. n_present=15/24 vs 24/24 — resolved by full-set D3
-3. Per-frame vs temporal activity — reframe as baseline
-4. $299 promotional vs $429 MSRP — use "sub-$450 consumer GPU"
-5. COCO-pretrained YOLOv8m doesn't transfer (D1=0.0 result)
+1. **POS paradigm difference** (per-frame vs transition detection) — disclosed with Q43
+2. **PSR POS subsample vs full-val**: report 0.969 (subsample) for the headline; flag 0.999 (full val) as collapse-inflated artifact (Opus 126 §1.6)
+3. **n_present=15/24** in subsample vs 18/24 in full val — D3-redo confirms
+4. **Per-frame vs temporal activity** — reframe per-frame as baseline
+5. **PSR F1=0** is a real model collapse (87% all-ones, six flat components) — disclosed with full root-cause analysis (per-frame focal + no transition loss + frozen head)
+6. **Subsample vs full-set activity gap** (0.205 vs 0.057) and pose gap (7.83° vs 9.94°) — disclose
+7. **$299 promotional vs $429 MSRP** — use "sub-$450 consumer GPU"
+8. **COCO-pretrained YOLOv8m doesn't transfer** to IndustReal's 24-class ASD (D1=0.0 result, Microsoft repo 404, no public IndustReal-trained weights)
+9. **D1-R YOLOv8m retraining in progress** (Opus 126 Decision 5) — to give honest same-split detection comparison
 
-**Source:** `119-progress-log.md:138-143`
+**Source:** `119-progress-log.md:138-143`; `analyses/consult_2026_06_10/126-opus-answers-120-125.md` §3.6 (disclosure amendments)
 
 ### Three Training Pathologies (Paper Sections)
 
