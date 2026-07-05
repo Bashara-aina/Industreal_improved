@@ -995,42 +995,41 @@ The pilot is underpowered for definitive inference: 80% power to detect Cohen's 
 | Validation frames used | 38,036 (full set) |
 | Subsample frames | ~2.5K (250 batches x ~10 frames/batch aggregate) |
 | Resolution | 720x1280 |
-| Assembly type | IKEA furniture (Kallax shelf) |
-| Sensor | Fixed RGB camera (not egocentric) |
-| Annotation types | Detection (24-class ASD), activity (75 fine-grained, 69 verb-grouped), head pose (9-DoF HoloLens 2), PSR (11 component states) |
+| Assembly type | **Toy construction (STEM, NOT IKEA furniture)** — correction to original §14 |
+| Sensor | **Egocentric HoloLens 2 RGB camera (with depth, ambient light, gaze)** — correction to original §14 |
+| Annotation types | Detection (24-class ASD binary codes), activity (75 fine-grained, 69 verb-grouped, "hybrid" mode), head pose (9-DoF HoloLens 2), PSR (11 component binary states) |
 | Published papers | P1 (WACV 2024): detection + activity, P2 (CVIU 2025): STORM-PSR, P3 (arXiv 2024): ASD Rep Learning, P4 (PhD thesis 2024) |
 
 ### Dataset Split in POPW
 
 | Split | Recordings | Frames (approx) | Purpose |
 |-------|-----------|-----------------|---------|
-| Training | 58 | ~170K | All 4 heads training (subsampled to 2% for 2pct mode) |
+| Training | 58 | ~170K | **All 4 heads training, FULL DATA (SUBSET_RATIO=1.0)** — correction to "2pct mode" |
 | Validation | 13 | 38,036 | All metrics reported here |
 | Test | 13 | ~90K | Held out (not used in this work) |
 
 ### Class Distribution (Activity)
 
-- 69 verb-grouped classes (reduced from 75 fine-grained)
+- 69 verb-grouped classes (reduced from 75 fine-grained via "hybrid" verb-grouping)
 - 46 of 69 classes have <1% representation (long tail)
 - Top-5 classes by frequency: check_instruction (19.8%), tighten_nut (7.2%), browse_instruction (5.3%), take_objects (3.5%), loosen_nut (2.5%)
 - 10 most frequent classes account for ~55% of all frames
 
 ### Class Distribution (Detection — 24 ASD States)
 
-- 24 classes representing 11-bit assembly state codes
-- 6 classes have ZERO ground-truth instances in the validation subsample (2pct mode)
-- 18 classes have at least 1 GT instance (TTA confirms 18 present on full set)
-- Most frequent class: 10010110000 (state 4, 324 GT in subsample)
-- Rarest present class: 11100000000 (state 5, 18 GT)
+- 24 classes representing 11-bit assembly state codes (e.g., 11110111111 = all 11 components placed)
+- D3 v3 on full set confirmed 18 of 24 classes have at least 1 GT instance (channels 1, 2, 3, 14, 15, 23 are zero in val split)
+- Most frequent class: 10010110000 (state 4, 324 GT in subsample; 18 classes present on full set per D3 v3)
+- Rarest present class: 11100000000 (state 5, 18 GT in subsample)
 
 ### Head Pose (9-DoF)
 
-- Source: HoloLens 2 head tracking
+- Source: HoloLens 2 head tracking (egocentric, real GT)
 - 9-DoF: forward gaze (3), up vector (3), position (3)
-- Warning: position has undocumented unit scale (DO NOT USE per evaluate.py:1918-1926)
-- Forward vector mean norm is ~0.02 (not ~1.0), indicating a unit scale issue in the raw pose.csv (warnings in train.log at epoch 0)
+- Warning: position has undocumented unit scale (DO NOT USE per evaluate.py:1918-1926; report 6-DoF orientation only)
+- **Forward/up vectors NOW unit-normalized at load time** (Opus 126 §1.13 fix in `src/data/industreal_dataset.py:600-608`); the prior "~0.02 norm" warning is now resolved
 
-**Source:** `popw_aaiml2027.tex:44-46` (dataset description); `train.log:189-199` (pose vector norm warnings)
+**Source:** `popw_aaiml2027.tex:44-46` (dataset description); `train.log:189-199` (pose vector norm warnings pre-fix); `src/data/industreal_dataset.py:600-608` (pose-norm fix)
 
 ---
 
@@ -1112,7 +1111,7 @@ Where norm() is min-max scaling to [0, 1] based on validation-set range. Pose te
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
-| BATCH_SIZE | 4 | Effective batch: 4 x 8 accum = 32 |
+| BATCH_SIZE | 4 | **Effective batch: 4 x 4 accum = 16** (correction: GRAD_ACCUM=4, not 8) |
 | EPOCHS | 100 | OneCycleLR schedule |
 | BASE_LR | 0.0005 | Head learning rate |
 | Backbone LR | 0.1x = 5e-5 | 0.1x multiplier vs head LR |
@@ -1126,7 +1125,7 @@ Where norm() is min-max scaling to [0, 1] based on validation-set range. Pose te
 | USE_MIXUP | False | |
 | NUM_WORKERS | 0 | OOM mitigation |
 | SEED | 42 | |
-| SUBSET_RATIO | 0.02 | 2pct mode (36→4 training recs) |
+| **SUBSET_RATIO** | **1.0** | **Full data (Opus 126 Decision 1 verified; "2pct mode" claim was stale)** |
 
 ### Detection-Specific Configuration
 
