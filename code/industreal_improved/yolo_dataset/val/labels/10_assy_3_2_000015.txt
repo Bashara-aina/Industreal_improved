@@ -1,0 +1,1 @@
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/yolo_dataset/labels/10_assy_3_2_000015.txt
