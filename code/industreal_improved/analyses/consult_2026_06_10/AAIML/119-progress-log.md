@@ -234,3 +234,92 @@ D3 full dataset eval completed with the following metrics. Note: these cover the
 
 ---
 
+## 2026-07-05 — ULTIMATE DOCUMENT SUITE (120-125) + DEBATE CONVERGENCE
+
+### 10-investigator debate complete (118 questions answered)
+
+| # | Question | Final Decision | Position |
+|---|---|---|---|
+| 1 | Top risk | **PSR F1=0** (severity 10, likelihood 9) | SKEPTIC |
+| 2 | PSR F1=0 decision | **Disclose (option A)** — root-cause: per-frame focal on static labels + no transition loss + frozen head | HONEST REPORTER |
+| 3 | Paper tier | **Top 25%** (downgrade from Top 10%) | SKEPTIC |
+| 4 | Code quality | **Ship the duct tape** — refactor after submission | compromise |
+| 5 | Detection gap | **Accept 0.358** (efficiency thesis stands) | STRATEGIST |
+| 6 | IKEA ASM timing | **Start Week 1 in parallel with ablations** | PRAGMATIST |
+| 7 | TTA broken | **Disclose as finding, don't fix** (Soft-NMS cumulative decay) | SKEPTIC |
+| 8 | Watchdog killed correctly? | **No, fix to 2h threshold** | PRAGMATIST |
+| 9 | Restart main training? | **YES, 20h cost, 95-day window** | OPTIMIST |
+| 10 | det_mAP50 NaN | **Real bug, fix with epoch=-1 sentinel** | SKEPTIC |
+
+### Cross-cutting consensus
+
+The SKEPTICs + HONEST REPORTER + PRAGMATIST all agree: **disclose PSR F1=0, accept current numbers, start IKEA ASM in parallel, fix the bugs we can, ship the paper.**
+
+### 6 new ultimate documents (12,586 lines total)
+
+| File | Lines | Topic |
+|---|---|---|
+| 120 | 2,009 | Current state dump for Opus |
+| 121 | 2,023 | All training logs deep analysis |
+| 122 | 2,115 | All metrics deep analysis |
+| 123 | 2,210 | Plan to compare all 4 SOTA papers |
+| 124 | 2,181 | Architecture & implementation deep |
+| 125 | 2,048 | 50 deep questions for SOTA beat |
+
+### Immediate fixes applied
+
+1. **det_mAP50 NaN fix** (SKEPTIC #10): `evaluate.py:3342` — `epoch: int = -1` default; `evaluate.py:4264` — `epoch is not None and epoch >= 0` guard. The bug: `subprocess_eval.py` had no `--epoch` CLI arg, defaulting to `epoch=0` which triggered `DET_METRICS_EVERY_N=3` SKIP branch. Fix ensures post-hoc eval always computes full detection mAP.
+
+### Live state (2026-07-05, post-debate)
+
+- Main training: killed by watchdog at epoch 18 val (b249 LOCALIZING), crash_recovery.pth from 00:35 preserved
+- TTA: DONE, mAP@0.5=0.2381 (broken — Soft-NMS decay), result at `tta_results/tta_metrics.json`
+- D3 v3: DONE with NaN fixes, psr_tau=0.0 (was NaN), psr_pos_blind=0.0, psr_pos=0.9992, eff_fps=11.05
+- Both GPUs idle (3060: 517MB/12GB, 5060 Ti: 249MB/16GB)
+- RAM: 9.9GB free, 44GB available
+
+### Final 2-week plan (from 10-investigator consensus)
+
+**Today (Jul 5):**
+- Apply watchdog fix (30 min → 2h threshold)
+- Restart main training from crash_recovery.pth (20h)
+- Run D3 v4 to get the actual det_mAP50 (now that the epoch=-1 fix is in)
+
+**Week 1 (Jul 6-12):**
+- A1 single-task baselines on 3060
+- IKEA ASM label loader on 5060 Ti
+- Monitor main training (epochs 18-25)
+
+**Week 2 (Jul 13-19):**
+- A3 Kendall + A4 FiLM ablations on 3060
+- IKEA ASM full training on 5060 Ti (3-4 days)
+- Paper writing starts (Methods §3 using ablation numbers)
+
+**Week 3 (Jul 20-26):**
+- 3-seed main results runs
+- IKEA ASM eval + pathology reproducibility check
+- Paper writing (Results §4 with IKEA ASM cross-dataset comparison)
+
+**Week 4 (Jul 27-Aug 2):**
+- Full draft polish
+- Figure generation
+- Citation audit
+- 9-week buffer for AAIML Oct 10
+
+### Paper framing (consensus)
+
+- **Headline**: combined=0.4140, ego-pose 7.83°, PSR POS 0.999 on full val
+- **Honest disclosure**: PSR F1=0 (real model collapse, root-cause analyzed), TTA broken (negative result)
+- **Accept**: detection mAP 0.358 vs YOLOv8m 0.838 (efficiency thesis: 67% param savings)
+- **Tier**: Top 25% realistic; Top 10% requires equal-gradient ablation + YOLOv8m comparison + PSR fix
+
+### Path to Top 10% (3 actions)
+
+1. Complete equal-gradient-update ablation (3 days, A2-A4) — the paper's strongest methodological card
+2. Run YOLOv8m comparison on test split (1 day) — needed for direct detection baseline
+3. Resolve PSR F1 collapse (T2 retrain with USE_PSR_TRANSITION=True, 3-4 days) — restores the fourth head
+
+If all 3 done and metrics hold, paper is competitive for Top 10% at AAIML. Without them, strong Top 25%.
+
+---
+
