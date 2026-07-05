@@ -2388,15 +2388,17 @@ def _compute_psr_f1_at_t_fused_cuda(
         n_gt = len(gt_changes)
         n_pred = len(pred_changes)
 
-# No transitions in GT AND no transitions in predictions = uninformative case.
-        # Return 0.0 (consistent with _symmetric_prf_at_t fallback at line 1402).
-        # Using NaN would propagate into psr_f1_at_t through np.nanmean over all-NA list.
+        # [FIX 2026-07-05] Same protocol as STORM-PSR (CVIU 2025 Tab 1).
+        # - Both n_gt=0 AND n_pred=0: model correctly predicted no transitions.
+        #   SKIP this component (don't add 0.0 which would unfairly lower the F1 mean).
+        #   The component has no transitions to detect, so it should not contribute.
+        # - One of n_gt=0 OR n_pred=0: missing transitions on one side → 0.0 F1.
+        #   This is correct: the model either missed real transitions or hallucinated.
         if n_gt == 0 and n_pred == 0:
-            f1_t3.append(0.0); prec_t3.append(0.0); rec_t3.append(0.0)
-            f1_t5.append(0.0); prec_t5.append(0.0); rec_t5.append(0.0)
+            # SKIP — correct behavior, no transitions to detect
             continue
-        # Only GT transitions missing OR only predicted transitions missing → zero match possible
         if n_gt == 0 or n_pred == 0:
+            # One side has no transitions → 0.0 F1
             f1_t3.append(0.0); prec_t3.append(0.0); rec_t3.append(0.0)
             f1_t5.append(0.0); prec_t5.append(0.0); rec_t5.append(0.0)
             continue
