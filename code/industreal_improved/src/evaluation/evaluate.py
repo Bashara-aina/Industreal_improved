@@ -2962,6 +2962,10 @@ def compute_psr_metrics(
         'psr_precision_at_t5': psr_precision_at_t5,
         'psr_recall_at_t5': psr_recall_at_t5,
         'psr_edit_score': edit_score,
+        # [FIX 2026-07-05] Companion metric: number of unique binary prediction patterns.
+        # If this is <=5, the model is collapsed (producing all-ones or near-all-ones).
+        # Critical for honest fair-comparison disclosure.
+        'psr_n_unique_binary_patterns': int(_unique_binary.shape[0]) if _unique_binary.size > 0 else 0,
         'psr_pos': psr_pos,
         'psr_tau': psr_tau,                              # [Add 3 / Q44]
         'psr_pos_blind': psr_pos_blind,                   # [Add 4 / Q43]
