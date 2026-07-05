@@ -3531,6 +3531,8 @@ def evaluate_all(
             _b_res = torch.cuda.memory_reserved(device) / 1024**3
             logger.info(f'  [EVAL batch {bi}/{max_batches}] GPU alloc={_b_alloc:.2f}GB  reserved={_b_res:.2f}GB')
 
+
+
         images = _prepare_images(images, device)
 
         # Doc 2 §C.4: PSR cache reset at recording boundaries.
