@@ -4315,6 +4315,21 @@ def evaluate_all(
         )
         results.update(det_av_metrics)
 
+        # [FIX 2026-07-05 Opus 126 §1.7] n_present invariant assertion. The pattern
+        # (n_present == 0) == (mAP50_pc is NaN/0) has been violated through 2+ code
+        # paths (train.py _s() filtering ints; subprocess epoch-gating). Asserting
+        # it here prevents the third class of bug from shipping silently.
+        _n_present = det_metrics.get('det_n_present_classes', 0)
+        _mAP50_pc = det_metrics.get('det_mAP50_pc', 0.0)
+        _mAP50_pc_is_finite = (not (isinstance(_mAP50_pc, float) and (_mAP50_pc != _mAP50_pc)))  # not NaN
+        _invariant_holds = (_n_present == 0) == (not _mAP50_pc_is_finite or _mAP50_pc == 0.0)
+        if not _invariant_holds:
+            logger.error(
+                f'  [EVAL_INVARIANT_VIOLATION] n_present={_n_present} but mAP50_pc={_mAP50_pc} '
+                f'(expected: n_present==0 ↔ mAP50_pc NaN/0). This is the same class of bug '
+                f'that caused the D3 NaN. Investigate compute_det_metrics_extended.'
+            )
+
         # Detection confusion matrix: 24×24 (GT class × predicted class at IoU≥0.5)
         det_cm, det_cm_gt, det_cm_miss = compute_det_confusion_matrix(
             dp_boxes, dp_scores, dp_labels,

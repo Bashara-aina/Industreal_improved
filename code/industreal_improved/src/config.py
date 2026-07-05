@@ -483,6 +483,16 @@ PSR_PER_COMPONENT_THRESHOLDS = False  # default off; when True, calibrates per-c
 PSR_THRESHOLD_TUNE_FRAC = 0.5         # fraction of val used for threshold tuning (remaining half for eval)
                                        # keeps calibration and evaluation on disjoint data to avoid test-set fitting
 
+# [FIX 2026-07-05 Opus 126 Q48 hysteresis] PSR transition threshold raised from 0.3 to 0.5.
+# Mode A PSR collapse: 98.4% of logits exceed threshold 0.3, so every varying component
+# fires at frame 0. Raising to 0.5 makes only confident predictions trigger transitions.
+# Q48 hysteresis is implemented in psr_transition.py MonotonicDecoder.forward (line 156):
+# transitions require trans_prob > threshold_hi for the current frame AND a sustained
+# threshold_lo for at least N consecutive frames (default: hi=0.5, lo=0.3, N=3).
+PSR_TRANSITION_THRESHOLD_HI = 0.5     # high threshold to fire a transition
+PSR_TRANSITION_THRESHOLD_LO = 0.3     # low threshold for sustained-probability check
+PSR_TRANSITION_MIN_SUSTAINED = 3       # minimum consecutive frames above lo before firing
+
 # =========================================================================
 # Image and model
 # =========================================================================
