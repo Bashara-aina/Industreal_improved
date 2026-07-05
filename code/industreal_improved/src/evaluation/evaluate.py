@@ -3339,7 +3339,7 @@ def evaluate_all(
     save_dir: Optional[str] = None,
     use_flip_tta: bool = False,
     use_crop_tta: bool = False,
-    epoch: int = 0,
+    epoch: int = -1,  # [FIX 2026-07-05] Default -1 = post-hoc eval, computes everything. Training loop passes real epoch (0, 1, 2, ...).
     predictions_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
@@ -4261,7 +4261,7 @@ def evaluate_all(
             'det_per_class_ap_all_frames': {},
             '_det_ap_protocol': 'coco',
         }
-    elif getattr(C, 'DET_METRICS_EVERY_N', 0) > 0 and (epoch + 1) % C.DET_METRICS_EVERY_N != 0:
+    elif epoch is not None and epoch >= 0 and getattr(C, 'DET_METRICS_EVERY_N', 0) > 0 and (epoch + 1) % C.DET_METRICS_EVERY_N != 0:
         # [OPUS v5] Eval cadence: full detection mAP only every N epochs.
         # On other epochs, run gate-only eval (mAP@0.5 b-boxed, capped batches).
         logger.info(f'  [SKIP_DET] DET_METRICS_EVERY_N={C.DET_METRICS_EVERY_N} — skipping full mAP (epoch {epoch})')
