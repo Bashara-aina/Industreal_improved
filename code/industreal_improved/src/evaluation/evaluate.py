@@ -2888,6 +2888,42 @@ def compute_psr_metrics(
     psr_pos_blind = _compute_psr_pos_canonical(gt_safe, valid_mask)
 
     # =========================================================================
+    # [FIX 2026-07-05] FAIR COMPARISON: per-frame PSR metrics at threshold=0.5.
+    # The current psr_f1=0 and psr_pos=0.999 are computed from raw sigmoid
+    # predictions thresholded at 0.5 — the model has learned all-ones on 87%
+    # of frames even before the MonotonicDecoder. These metrics are the honest
+    # SOTA-comparable numbers (same computation protocol as STORM-PSR / WACV B3).
+    # Label them as '_raw_t05' to distinguish from decoder-smoothed variants.
+    # Re-ran at 0.3 to capture the 98.4% > 0.3 frames (Mode A collapse threshold).
+    # =========================================================================
+    pred_binary_t03 = (pred_probs > 0.3).astype(np.int64)
+    try:
+        psr_pos_raw = _compute_psr_pos_vectorized(pred_binary, gt_safe, valid_mask)
+    except Exception:
+        psr_pos_raw = 0.0
+    try:
+        f1_raw, prec_raw, rec_raw = _compute_psr_f1_at_t_vectorized(
+            pred_binary, gt_safe, valid_mask, tolerance_frames
+        )
+    except Exception:
+        f1_raw, prec_raw, rec_raw = 0.0, 0.0, 0.0
+    try:
+        edit_raw = _compute_psr_edit_score_vectorized(pred_binary, gt_safe, valid_mask)
+    except Exception:
+        edit_raw = 0.0
+    # Same at threshold=0.3 (for Mode A diagnosis)
+    try:
+        psr_pos_t03 = _compute_psr_pos_vectorized(pred_binary_t03, gt_safe, valid_mask)
+    except Exception:
+        psr_pos_t03 = 0.0
+    try:
+        f1_t03, _, _ = _compute_psr_f1_at_t_vectorized(
+            pred_binary_t03, gt_safe, valid_mask, tolerance_frames
+        )
+    except Exception:
+        f1_t03 = 0.0
+
+    # =========================================================================
     # [NEW METRIC Add 2 / Q18] Per-component PSR threshold calibration
     # =========================================================================
     # When PSR_PER_COMPONENT_THRESHOLDS=True, calibrate per-component thresholds
@@ -2929,6 +2965,11 @@ def compute_psr_metrics(
         'psr_pos_blind': psr_pos_blind,                   # [Add 4 / Q43]
         'psr_f1_calibrated': psr_calibrated_metrics.get('psr_f1_calibrated', 0.0),       # [Add 2 / Q18]
         'psr_f1_calibrated_t5': psr_calibrated_metrics.get('psr_f1_calibrated_t5', 0.0), # [Add 2 / Q18]
+        'psr_pos_raw_t05': psr_pos_raw,               # [FAIR COMPARE] per-frame binary at 0.5, no decoder
+        'psr_f1_raw_t05': f1_raw,                      # [FAIR COMPARE] per-frame binary at 0.5, no decoder
+        'psr_edit_raw_t05': edit_raw,                  # [FAIR COMPARE] per-frame binary at 0.5, no decoder
+        'psr_pos_raw_t03': psr_pos_t03,                # [FAIR COMPARE] per-frame binary at 0.3, no decoder
+        'psr_f1_raw_t03': f1_t03,                      # [FAIR COMPARE] per-frame binary at 0.3, no decoder
         'psr_per_component_f1': per_component_f1,
         'psr_num_valid_components': len(valid_components),
         'psr_num_samples': int(pred_logits.shape[0]),
