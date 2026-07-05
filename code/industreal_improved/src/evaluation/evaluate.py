@@ -5,6 +5,28 @@ from collections import defaultdict
 from pathlib import Path
 import numpy as np
 
+# [FIX 2026-07-05 Opus 126 §5.4] NaN-guard counter infrastructure. Every guard
+# (NaN→0.0, None→0.0, etc.) increments a per-location counter. Guards firing at
+# a nonzero steady rate is a bug signal that is currently invisible. Counters
+# are logged at end of evaluate_all and can also be queried via
+# `get_nan_guard_counters()`. Reset by `reset_nan_guard_counters()`.
+_NAN_GUARD_COUNTERS = defaultdict(int)
+
+
+def get_nan_guard_counters() -> dict:
+    """Return a copy of the NaN-guard counter dict (per-location firing count)."""
+    return dict(_NAN_GUARD_COUNTERS)
+
+
+def reset_nan_guard_counters() -> None:
+    """Reset all NaN-guard counters to 0."""
+    _NAN_GUARD_COUNTERS.clear()
+
+
+def _nan_guard_fire(location: str) -> None:
+    """Called by every guard when it fires. Increments the per-location counter."""
+    _NAN_GUARD_COUNTERS[location] += 1
+
 # Match train.py's path setup so all imports resolve identically
 # src/evaluation/evaluate.py → parent.parent = src/ → parent = project root
 _SRC = Path(__file__).resolve().parent.parent  # src/
@@ -2252,6 +2274,7 @@ def _compute_psr_edit_score_vectorized(
     for c in range(num_components):
         vm = valid_mask[:, c]
         if not vm.any():
+            _nan_guard_fire('psr_tau.no_valid_components')
             continue
         # Guard: if gt_safe has 0 rows but vm selects rows, handle separately
         # (empty GT + non-empty pred = worst case = 1.0, empty GT + empty pred = 0.0)
@@ -2503,7 +2526,7 @@ def _compute_psr_pos_vectorized(
 
         pos_vals.append(correct_pairs / total_pairs if total_pairs > 0 else 0.0)
 
-    return float(np.mean(pos_vals)) if pos_vals else 0.0
+    return float(np.mean(pos_vals)) if pos_vals else (_nan_guard_fire('psr_pos_vectorized.empty'), 0.0)[1]
 
 
 # Backward-compatible alias
@@ -2557,6 +2580,7 @@ def _compute_psr_tau(
         pred_changes = np.where(np.diff(pred_c) != 0)[0]
 
         if len(gt_changes) == 0 or len(pred_changes) == 0:
+            _nan_guard_fire('psr_tau.no_transitions')
             # No transitions in either — perfect temporal alignment (tau=0)
             # Only one side has transitions — cannot compute meaningful delay
             continue
@@ -2712,6 +2736,7 @@ def _compute_psr_pos_canonical(
     """
     N, C = gt_safe.shape
     if N == 0 or C == 0:
+        _nan_guard_fire('psr_pos_canonical.empty')
         return 0.0
     if canonical_order is None:
         canonical_order = list(range(C))
