@@ -15,6 +15,10 @@
 | `psr_f1_raw_t05` (NEW) | F1@±3 (STORM-PSR Tab 1) | 0.901 | ✅ Raw transitions, ±3 frame tolerance |
 | `psr_edit_raw_t05` (NEW) | Edit (STORM-PSR) | not reported | ✅ Raw binary, normalized DL |
 
+**AUDIT FINDING (2026-07-05):** Verified the original `psr_pos` and `psr_f1_at_t` in `evaluate.py:2873, 2836` use the SAME `pred_binary = (sigmoid > 0.5)` input as the new raw metrics — they are **already fair** (same protocol as SOTA). The MonotonicDecoder path at line 4146 is gated by `USE_PSR_TRANSITION` and runs a SEPARATE eval. The D3 v3 metrics are fair but predate the new `psr_pos_raw_t05` keys; D3 v4 (rerun) will include the new keys.
+
+**The "fair" gap is real but small:** PSR raw metrics at 0.5 are identical to the old `psr_pos`/`psr_f1_at_t`/`psr_edit_score`. The new fields `psr_pos_raw_t03` and `psr_f1_raw_t03` are the only genuinely new information — they test the Mode A collapse threshold (0.3) where 98.4% of frames are above.
+
 ## ⚠️ FAIR AFTER CODE — same protocol, already coded
 
 | Our Metric | SOTA Metric | SOTA Value | Protocol matched by |
