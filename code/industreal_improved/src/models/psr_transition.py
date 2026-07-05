@@ -134,6 +134,16 @@ class MonotonicDecoder(nn.Module):
         # Initialize: all components start at 0
         states = torch.zeros(B, T, C, device=device)
         current_state = torch.zeros(B, C, device=device)  # [B, C] — current per-component state
+        # [FIX 2026-07-05 Opus 126 Q48] Hysteresis state: per-component counter of
+        # consecutive frames above PSR_TRANSITION_THRESHOLD_LO. When the counter
+        # reaches PSR_TRANSITION_MIN_SUSTAINED AND the current frame's prob is
+        # above PSR_TRANSITION_THRESHOLD_HI, the component fires. This addresses
+        # the Mode A PSR collapse (98.4% of logits above 0.3 firing at frame 0):
+        # requiring sustained evidence before firing suppresses one-frame spikes.
+        sustain_hi = float(getattr(C, 'PSR_TRANSITION_THRESHOLD_HI', 0.5))
+        sustain_lo = float(getattr(C, 'PSR_TRANSITION_THRESHOLD_LO', 0.3))
+        sustain_min = int(getattr(C, 'PSR_TRANSITION_MIN_SUSTAINED', 3))
+        sustain_counter = torch.zeros(B, C, device=device)  # [B, C]
 
         for t in range(T):
             # Get transition probabilities at frame t
@@ -152,8 +162,14 @@ class MonotonicDecoder(nn.Module):
             predecessors_placed = (current_state.unsqueeze(2) >= order_constraint).all(dim=1)
             can_transition = can_transition & predecessors_placed
 
-            # Decide transitions
-            transition = (trans_prob > threshold) & can_transition  # [B, C] bool
+            # [Q48 hysteresis] Update sustain counter: count consecutive frames
+            # above sustain_lo. Reset if below. This is the temporal filter.
+            above_lo = (trans_prob > sustain_lo).float()  # [B, C]
+            sustain_counter = sustain_counter * above_lo + above_lo  # resets on low-prob frame
+            # Component fires only if sustained AND current frame's prob is high
+            sustained = (sustain_counter >= sustain_min)  # [B, C] bool
+            high_now = (trans_prob > sustain_hi)  # [B, C] bool
+            transition = (high_now & sustained & can_transition)  # [B, C] bool
             # Once placed, stays placed — use addition+clamp instead of bitwise OR
             # to avoid NotImplementedError: 'bitwise_or' not implemented for Float on CPU
             current_state = (current_state + transition.float()).clamp(max=1.0)

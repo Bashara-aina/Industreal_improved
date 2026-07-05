@@ -598,6 +598,20 @@ class _PerRecordingCache:
         if C.HEAD_POSE_POS_SCALE != 0.0:
             pose_data[:, 3:6] /= C.HEAD_POSE_POS_SCALE
 
+        # [FIX 2026-07-05 Opus 126 Decision 7] Unit-normalize forward and up vectors.
+        # HoloLens pose.csv records 9-D vectors that are NEAR-unit but not exact
+        # (mean norm observed ~1.0 with 5-10% drift per Opus 121 §23.2). The pose
+        # head's loss assumes unit length; non-unit inputs silently corrupt the
+        # forward-MAE and pose-POS comparisons. Normalize on load.
+        if pose_data.shape[0] > 0:
+            fwd_norms = np.linalg.norm(pose_data[:, 0:3], axis=1, keepdims=True)
+            up_norms = np.linalg.norm(pose_data[:, 6:9], axis=1, keepdims=True)
+            # Avoid div-by-zero: only normalize rows with non-zero norm
+            fwd_safe = np.where(fwd_norms > 1e-6, fwd_norms, 1.0)
+            up_safe = np.where(up_norms > 1e-6, up_norms, 1.0)
+            pose_data[:, 0:3] = pose_data[:, 0:3] / fwd_safe
+            pose_data[:, 6:9] = pose_data[:, 6:9] / up_safe
+
         # Bug F fix — sanity-check pose schema at load time. The eval pipeline
         # multiplies position residuals by 1000 (assumes metres in pose.csv); a
         # change in CSV units would silently corrupt position_MAE_mm.
