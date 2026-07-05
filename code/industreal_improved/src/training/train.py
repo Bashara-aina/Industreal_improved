@@ -5084,6 +5084,9 @@ def main(args):
                         f'psr_f1={_s(val_metrics.get("psr_f1_at_t")):.4f}  '
                         f'psr_edit={_s(val_metrics.get("psr_edit_score")):.4f}  '
                         f'psr_pos={_s(val_metrics.get("psr_pos")):.4f}  '
+                        f'psrF1raw={_s(val_metrics.get("psr_f1_raw_t05")):.4f}  '   # [FAIR] SOTA-comparable F1@±3 at t=0.5, NO MonotonicDecoder
+                        f'psrPosRaw={_s(val_metrics.get("psr_pos_raw_t05")):.4f}  ' # [FAIR] SOTA-comparable POS at t=0.5, NO MonotonicDecoder
+                        f'psrF1t03={_s(val_metrics.get("psr_f1_raw_t03")):.4f}  '   # [FAIR] F1 at t=0.3 (Mode A collapse threshold)
                         f'psr_pos_blind={_s(val_metrics.get("psr_pos_blind")):.4f}  '  # [Add 4] Canonical-order POS baseline
                         f'psr_tau={_s(val_metrics.get("psr_tau", float("nan")), alt=float("nan")):.2f}  '  # [Add 3] Frame delay
                         # [FIX 2026-07-04 Opus 111 SS3.2] Unweighted per-head val losses
