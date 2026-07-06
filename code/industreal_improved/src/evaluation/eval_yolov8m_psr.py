@@ -305,7 +305,7 @@ def decode_and_score_psr_from_logits(
 
         pred_tr = (pred_states[1:] - pred_states[:-1]).clamp(min=0).cpu().numpy()
         gt_np = np.asarray(gt)
-        gt_tr = (gt_np[1:] - gt_np[:-1]).clamp(min=0)
+        gt_tr = np.clip(gt_np[1:] - gt_np[:-1], a_min=0, a_max=None)
 
         f1s.append(_event_f1(pred_tr, gt_tr, tol=tol_frames))
         poss.append(
@@ -388,10 +388,11 @@ def run_yolov8m_psr_eval(
 
         B = images.shape[0]
 
-        # Convert to numpy HWC for YOLOv8.
+        # Convert to numpy HWC BGR for YOLOv8 (IndustReal model trained on BGR).
         batch_imgs_np = []
         for i in range(B):
             img = images[i].permute(1, 2, 0).cpu().numpy()
+            img = img[:, :, ::-1].copy()  # RGB -> BGR
             batch_imgs_np.append(img)
 
         # YOLOv8m inference.

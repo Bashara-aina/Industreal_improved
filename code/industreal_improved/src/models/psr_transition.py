@@ -25,6 +25,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple
 
+from src import config as _C  # [FIX 2026-07-25] Config import for Q48 hysteresis thresholds
+
+
 # ============================================================================
 # Gaussian Transition Target
 # ============================================================================
@@ -128,22 +131,22 @@ class MonotonicDecoder(nn.Module):
             # A 2-D input to a TEMPORAL decoder can only sensibly mean one
             # recording [T,C]; decode it as a single batch element.
             logits = logits.unsqueeze(0)  # [T,C] -> [1,T,C]
-        B, T, C = logits.shape
+        B, T, n_comp = logits.shape
         device = logits.device
 
         # Initialize: all components start at 0
-        states = torch.zeros(B, T, C, device=device)
-        current_state = torch.zeros(B, C, device=device)  # [B, C] — current per-component state
+        states = torch.zeros(B, T, n_comp, device=device)
+        current_state = torch.zeros(B, n_comp, device=device)  # [B, C] — current per-component state
         # [FIX 2026-07-05 Opus 126 Q48] Hysteresis state: per-component counter of
         # consecutive frames above PSR_TRANSITION_THRESHOLD_LO. When the counter
         # reaches PSR_TRANSITION_MIN_SUSTAINED AND the current frame's prob is
         # above PSR_TRANSITION_THRESHOLD_HI, the component fires. This addresses
         # the Mode A PSR collapse (98.4% of logits above 0.3 firing at frame 0):
         # requiring sustained evidence before firing suppresses one-frame spikes.
-        sustain_hi = float(getattr(C, 'PSR_TRANSITION_THRESHOLD_HI', 0.5))
-        sustain_lo = float(getattr(C, 'PSR_TRANSITION_THRESHOLD_LO', 0.3))
-        sustain_min = int(getattr(C, 'PSR_TRANSITION_MIN_SUSTAINED', 3))
-        sustain_counter = torch.zeros(B, C, device=device)  # [B, C]
+        sustain_hi = float(getattr(_C, 'PSR_TRANSITION_THRESHOLD_HI', 0.5))
+        sustain_lo = float(getattr(_C, 'PSR_TRANSITION_THRESHOLD_LO', 0.3))
+        sustain_min = int(getattr(_C, 'PSR_TRANSITION_MIN_SUSTAINED', 3))
+        sustain_counter = torch.zeros(B, n_comp, device=device)  # [B, C]
 
         for t in range(T):
             # Get transition probabilities at frame t
