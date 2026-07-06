@@ -13,7 +13,7 @@
 | 2 | Remove OpenFace/6DRepNet comparisons from all docs | ✅ Done | Removed from 99-aaiml-viability-benchmarking.md (already gone from 98/103/104/106) |
 | 3 | Fix parameter arithmetic: "31% fewer params" → "67% fewer params" | ✅ Done | Fixed in AAIML/industreal-all-papers-benchmarks.md |
 | 4 | Enable efficiency metrics: SKIP_EFFICIENCY_METRICS=False | ✅ Done | src/config.py line 1208 |
-| 5 | Position units: confirmed unreliable | ✅ Documented | evaluate.py:1918-1926 — "DO NOT USE FOR REPORTING" |
+| 5 | Position units: confirmed unreliable | ✅ Documented | evaluate.py:1969 — "DO NOT USE FOR REPORTING" |
 | 6 | act_top1 (act_clip) already in eval output | ✅ Confirmed | Already logged as act_clip= in Val: lines |
 
 ---

@@ -19,7 +19,7 @@
 | Up MAE | **7.06°** | — | — | — | — |
 
 **Constraints:**
-- Position values (mm) are UNRELIABLE — code explicitly says "DO NOT USE FOR REPORTING" (evaluate.py:1918-1926)
+- Position values (mm) are UNRELIABLE — code explicitly says "DO NOT USE FOR REPORTING" (evaluate.py:1969)
 - This is ego-pose (HoloLens wearer), NOT face-based head pose — do NOT compare to OpenFace/6DRepNet
 
 ---

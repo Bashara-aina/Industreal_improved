@@ -1,0 +1,106 @@
+{
+  "checkpoint": "src/runs/rf_stages/checkpoints/best.pth",
+  "n_batches": 38036,
+  "psr": {
+    "comp0": {
+      "f1": 1.0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "valid": 38036,
+      "pred_pos": 38036,
+      "true_pos": 38036
+    },
+    "comp1": {
+      "f1": 0.9511216512471218,
+      "precision": 0.906798822168472,
+      "recall": 1.0,
+      "valid": 38036,
+      "pred_pos": 38036,
+      "true_pos": 34491
+    },
+    "comp2": {
+      "f1": 0.9511216512471218,
+      "precision": 0.906798822168472,
+      "recall": 1.0,
+      "valid": 38036,
+      "pred_pos": 38036,
+      "true_pos": 34491
+    },
+    "comp3": {
+      "f1": 0.7361145724301783,
+      "precision": 0.5824219160795037,
+      "recall": 1.0,
+      "valid": 38036,
+      "pred_pos": 38036,
+      "true_pos": 22153
+    },
+    "comp4": {
+      "f1": 0.19794381011038992,
+      "precision": 0.10984330634136082,
+      "recall": 1.0,
+      "valid": 38036,
+      "pred_pos": 38036,
+      "true_pos": 4178
+    },
+    "comp5": {
+      "f1": 0.7919326663490551,
+      "precision": 0.6555368598170155,
+      "recall": 1.0,
+      "valid": 38036,
+      "pred_pos": 38036,
+      "true_pos": 24934
+    },
+    "comp6": {
+      "f1": 0.7213715438272125,
+      "precision": 0.5641760437480282,
+      "recall": 1.0,
+      "valid": 38036,
+      "pred_pos": 38036,
+      "true_pos": 21459
+    },
+    "comp7": {
+      "f1": 0.6224330882619246,
+      "precision": 0.45183510358607637,
+      "recall": 1.0,
+      "valid": 38036,
+      "pred_pos": 38036,
+      "true_pos": 17186
+    },
+    "comp8": {
+      "f1": 0.607352079671939,
+      "precision": 0.43611315595751393,
+      "recall": 1.0,
+      "valid": 38036,
+      "pred_pos": 38036,
+      "true_pos": 16588
+    },
+    "comp9": {
+      "f1": 0.4720509369915842,
+      "precision": 0.30894415816594806,
+      "recall": 1.0,
+      "valid": 38036,
+      "pred_pos": 38036,
+      "true_pos": 11751
+    },
+    "comp10": {
+      "f1": 0.3990571795357451,
+      "precision": 0.2492638552949837,
+      "recall": 1.0,
+      "valid": 38036,
+      "pred_pos": 38036,
+      "true_pos": 9481
+    },
+    "macro_f1": 0.6773181072429338
+  },
+  "activity": {
+    "top1": 0.0191134714481018,
+    "top1_valid": 0.023288592753948168,
+    "n_total": 38036,
+    "n_valid": 31217
+  },
+  "head_pose": {
+    "forward_angular_MAE_deg": 9.13548627653025,
+    "up_angular_MAE_deg": 26.201267649450067,
+    "n": 38036
+  }
+}

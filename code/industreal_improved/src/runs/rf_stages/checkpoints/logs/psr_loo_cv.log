@@ -1,0 +1,19 @@
+Loading src/runs/rf_stages/checkpoints/best.pth...
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1589: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+  processed 2000 frames...
+  processed 4000 frames...
+
+Collected 5000 frames across 3 recordings
+Running LOO-CV across 3 recordings...
+
+Results saved to src/runs/rf_stages/checkpoints/psr_loo_cv/loo_cv_results.json
+Full-data global F1: 0.7013
+Full-data optimal F1: 0.7810
+Full-data improvement: 0.0797
+LOO-CV global F1: 0.6827
+LOO-CV optimal F1: 0.7186
+LOO-CV improvement (mean): 0.0358
+LOO-CV improvement (std): 0.0216
+>>> LOO-CV improvement persists — threshold is real

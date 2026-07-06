@@ -117,11 +117,11 @@ def main():
         if outputs.get("head_pose") is not None and targets.get("head_pose") is not None:
             hp_p = outputs["head_pose"].cpu()
             hp_l = targets["head_pose"].cpu()
-            # Forward (cols 0-2), Up (cols 3-5)
+            # Forward (cols 0-2), position (3-5), Up (6-8)
             fwd_p = hp_p[:, :3]
             fwd_l = hp_l[:, :3]
-            up_p = hp_p[:, 3:6]
-            up_l = hp_l[:, 3:6]
+            up_p = hp_p[:, 6:9]
+            up_l = hp_l[:, 6:9]
             fwd_pn = fwd_p / (fwd_p.norm(dim=-1, keepdim=True) + 1e-8)
             fwd_ln = fwd_l / (fwd_l.norm(dim=-1, keepdim=True) + 1e-8)
             up_pn = up_p / (up_p.norm(dim=-1, keepdim=True) + 1e-8)

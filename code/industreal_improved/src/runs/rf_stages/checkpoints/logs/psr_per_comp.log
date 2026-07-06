@@ -1,0 +1,45 @@
+Loading src/runs/rf_stages/checkpoints/best.pth...
+Epoch: 18
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1589: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+Using thresholds: None
+  processed 1000...
+  processed 2000...
+  processed 3000...
+  processed 4000...
+  processed 5000...
+
+Processed 5000 frames
+
+--- Bias calibration: target = mean prevalence per component ---
+  comp0: pos_frac=1.000, pred_pos=0.493, bias=-13.842
+  comp1: pos_frac=0.927, pred_pos=0.391, bias=-2.977
+  comp2: pos_frac=0.927, pred_pos=0.330, bias=-3.244
+  comp3: pos_frac=0.541, pred_pos=0.878, bias=1.807
+  comp4: pos_frac=0.112, pred_pos=0.776, bias=3.312
+  comp5: pos_frac=0.541, pred_pos=0.510, bias=-0.125
+  comp6: pos_frac=0.454, pred_pos=0.486, bias=0.129
+  comp7: pos_frac=0.733, pred_pos=0.927, bias=1.536
+  comp8: pos_frac=0.733, pred_pos=0.914, bias=1.350
+  comp9: pos_frac=0.617, pred_pos=0.736, bias=0.550
+  comp10: pos_frac=0.055, pred_pos=0.667, bias=3.535
+
+Calibrated thresholds (all 0.5 after bias): [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5]
+
+--- Per-component F1 (threshold_set=calibrated) ---
+  comp0: F1=1.0000 (P=1.000, R=1.000, thresh=0.50, true_pos=5000/5000)
+  comp1: F1=0.9619 (P=0.927, R=1.000, thresh=0.50, true_pos=4633/5000)
+  comp2: F1=0.9619 (P=0.927, R=1.000, thresh=0.50, true_pos=4633/5000)
+  comp3: F1=0.7009 (P=0.592, R=0.860, thresh=0.50, true_pos=2706/5000)
+  comp4: F1=0.0000 (P=0.000, R=0.000, thresh=0.50, true_pos=562/5000)
+  comp5: F1=0.7048 (P=0.544, R=1.000, thresh=0.50, true_pos=2706/5000)
+  comp6: F1=0.0000 (P=0.000, R=0.000, thresh=0.50, true_pos=2271/5000)
+  comp7: F1=0.8461 (P=0.733, R=1.000, thresh=0.50, true_pos=3666/5000)
+  comp8: F1=0.8461 (P=0.733, R=1.000, thresh=0.50, true_pos=3666/5000)
+  comp9: F1=0.7628 (P=0.617, R=1.000, thresh=0.50, true_pos=3083/5000)
+  comp10: F1=0.0000 (P=0.000, R=0.000, thresh=0.50, true_pos=276/5000)
+
+  Macro-avg F1: 0.6168
+
+Saved to /tmp/psr_per_comp_calibrated/metrics_calibrated.json

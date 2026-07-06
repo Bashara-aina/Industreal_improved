@@ -167,8 +167,7 @@ def main():
         if hp_preds.dim() > 2:
             hp_preds = hp_preds.view(-1, hp_preds.shape[-1])
             hp_labels = hp_labels.view(-1, hp_labels.shape[-1])
-        # Forward vector: positions 0-2, Up: 3-5, Pos: 6-8
-        # Angular MAE for forward
+        # Forward vector: [0:3], position: [3:6], up vector: [6:9]
         def angular_mae(pred, target):
             pred_n = pred / (pred.norm(dim=-1, keepdim=True) + 1e-8)
             targ_n = target / (target.norm(dim=-1, keepdim=True) + 1e-8)
@@ -176,7 +175,7 @@ def main():
             return torch.rad2deg(torch.acos(cos)).mean().item()
 
         fwd_mae = angular_mae(hp_preds[:, :3], hp_labels[:, :3])
-        up_mae = angular_mae(hp_preds[:, 3:6], hp_labels[:, 3:6])
+        up_mae = angular_mae(hp_preds[:, 6:9], hp_labels[:, 6:9])
         results['head_pose'] = {
             'forward_angular_MAE_deg': fwd_mae,
             'up_angular_MAE_deg': up_mae,

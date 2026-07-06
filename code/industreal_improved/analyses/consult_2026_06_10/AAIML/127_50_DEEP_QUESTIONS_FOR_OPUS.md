@@ -188,7 +188,7 @@
 
 (a) The eval code explicitly says "DO NOT USE FOR REPORTING" on position (mm/cm). The unit ambiguity (HEAD_POSE_POS_SCALE=100 → meters→cm? or loss-weighting?) must be resolved.
 (b) Reporting position without resolution is a self-inflicted reviewer attack.
-(c) `src/evaluation/evaluate.py:1918-1926` "DO NOT USE FOR REPORTING".
+(c) `src/evaluation/evaluate.py:1969` "DO NOT USE FOR REPORTING".
 (d) Confirmation from HoloLens SDK or IndustReal authors on position units.
 
 ### HP-4: Category Error with Face-Based Estimators (OpenFace, 6DRepNet)
@@ -538,7 +538,7 @@
 | ACT-7 | Activity | Per-frame SOTA | `analyses/consult_2026_06_10/AAIML/industreal-sota-benchmarks.md` |
 | HP-1 | Head Pose | Forward MAE | `src/runs/rf_stages/checkpoints/SOTA_STATUS.md` |
 | HP-2 | Head Pose | Up-vector | `analyses/consult_2026_06_10/AAIML/day1-checkpoint-done-and-next-steps.md` |
-| HP-3 | Head Pose | Position units | `src/evaluation/evaluate.py:1918-1926` |
+| HP-3 | Head Pose | Position units | `src/evaluation/evaluate.py:1969` |
 | HP-4 | Head Pose | OpenFace category error | `analyses/consult_2026_06_10/AAIML/reviewer-4-ego-pose-contribution.md` |
 | HP-5 | Head Pose | FiLM contribution | `src/models/model.py` FiLM layers |
 | HP-6 | Head Pose | Single-frame vs temporal | `analyses/consult_2026_06_10/AAIML/04_BEST_PAPER_FORMULA.md` |

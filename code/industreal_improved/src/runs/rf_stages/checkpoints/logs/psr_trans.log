@@ -1,0 +1,15 @@
+Loading src/runs/rf_stages/checkpoints/best.pth...
+Epoch: 18
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1589: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+  processed 2000 frames...
+  processed 4000 frames...
+
+Collected 5000 frames across 3 recordings
+
+Results saved to src/runs/rf_stages/checkpoints/psr_per_vs_trans/per_frame_vs_transition.json
+Per-frame macro F1: 0.3633
+Transition macro F1 (tol=3): 0.0000
+Macro POS: 0.9988
+Macro Edit: 0.9886

@@ -1,0 +1,10 @@
+{
+  "psr_f1": 0.0,
+  "psr_pos": 0.9993104198998851,
+  "psr_edit": 0.9937144609332171,
+  "_model": "yolov8m -> s2 -> MonotonicDecoder",
+  "_detection_thresh": 0.05,
+  "_num_frames": 38036,
+  "_num_recordings": 16,
+  "_weight_source": "src/runs/rf_stages/checkpoints/yolov8m_industreal.pt"
+}

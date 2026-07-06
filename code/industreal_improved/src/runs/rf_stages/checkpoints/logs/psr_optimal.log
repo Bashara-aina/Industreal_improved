@@ -1,0 +1,31 @@
+Loading src/runs/rf_stages/checkpoints/best.pth...
+Epoch: 18
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1589: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+  processed 2000...
+  processed 4000...
+  processed 6000...
+  processed 8000...
+  processed 10000...
+
+Processed 10000 frames
+
+--- Optimal per-component thresholds ---
+  comp0: gt_pos=1.000, best_thresh=0.05, F1=1.0000
+  comp1: gt_pos=0.911, best_thresh=0.20, F1=0.9627
+  comp2: gt_pos=0.911, best_thresh=0.15, F1=0.9578
+  comp3: gt_pos=0.545, best_thresh=0.85, F1=0.7480
+  comp4: gt_pos=0.142, best_thresh=0.80, F1=0.3455
+  comp5: gt_pos=0.631, best_thresh=0.50, F1=0.7793
+  comp6: gt_pos=0.544, best_thresh=0.45, F1=0.7057
+  comp7: gt_pos=0.667, best_thresh=0.90, F1=0.8041
+  comp8: gt_pos=0.667, best_thresh=0.90, F1=0.8536
+  comp9: gt_pos=0.527, best_thresh=0.05, F1=0.6900
+  comp10: gt_pos=0.183, best_thresh=0.70, F1=0.4020
+
+Optimal macro F1 (with per-comp thresholds): 0.7499
+
+--- Comparison ---
+Global 0.10 macro F1: 0.7217
+Saved to src/runs/rf_stages/checkpoints/psr_optimal_thr/optimal_thresholds.json

@@ -1,0 +1,38 @@
+Device: NVIDIA GeForce RTX 3060
+Remap: 75 -> 69 groups
+
+Loading /media/newadmin/master/POPW/datasets/industreal/action_recognition_model_weights/mvit_rgb_meccano_pretrained.pyth...
+  Loaded 397/397 keys
+  Params: 34,287,819
+
+Clips: 916 in val/
+Evaluating 916 clips...
+
+  [1/916] 75: 100.0% 69: 100.0%
+  [50/916] 75: 60.0% 69: 60.0%
+  [100/916] 75: 68.0% 69: 68.0%
+  [150/916] 75: 66.7% 69: 66.7%
+  [200/916] 75: 68.0% 69: 68.0%
+  [250/916] 75: 67.2% 69: 67.2%
+  [300/916] 75: 65.3% 69: 65.3%
+  [350/916] 75: 65.7% 69: 65.7%
+  [400/916] 75: 65.2% 69: 65.2%
+  [450/916] 75: 65.3% 69: 65.3%
+  [500/916] 75: 64.4% 69: 64.4%
+  [550/916] 75: 64.7% 69: 64.7%
+  [600/916] 75: 64.3% 69: 64.3%
+  [650/916] 75: 64.2% 69: 64.2%
+  [700/916] 75: 63.3% 69: 63.3%
+  [750/916] 75: 61.9% 69: 61.9%
+  [800/916] 75: 61.6% 69: 61.6%
+  [850/916] 75: 61.5% 69: 61.5%
+  [900/916] 75: 61.8% 69: 61.8%
+
+============================================================
+T3: MViTv2-S (Meccano) on val
+============================================================
+Clips: 916
+75-class Top-1: 62.23%
+69-class Top-1: 62.23%
+
+Saved to /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/t3_full_eval.json
