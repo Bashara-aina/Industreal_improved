@@ -127,6 +127,19 @@ The linear probe experiment answers Opus Q4: "Does the frozen ConvNeXt backbone 
 - Added gradient clipping (max_norm=1.0)
 - Pre-extracted all backbone features in one pass (36 min) then trained on cached features at batch_size=256 (5 epochs in 2 seconds)
 
+## Training loss index verification (refutes 137 debate worst-case)
+
+The 137 debate raised the worst-case hypothesis: "If the training loss used [3:6] (position data) as the up-vector target, the corrected eval results are meaningless." **Verified false at `src/training/losses.py:951-952`**:
+
+```python
+fwd_p, pos_p, up_p = pred[:, 0:3], pred[:, 3:6], pred[:, 6:9]
+fwd_t, pos_t, up_t = target[:, 0:3], target[:, 3:6], target[:, 6:9]
+```
+
+The training loss correctly slices `up = pred[:, 6:9]` and matches GT at `target[:, 6:9]`. The model was trained to predict the up-vector at the correct indices. The corrected 7.78° up-vector MAE (and 5.82° per-recording median) reflects genuine model performance, not index-mismatch artifacts.
+
+The 3.5-month index bug was in the EVAL scripts (full_eval.py, full_eval_stream.py, full_eval_inprocess.py, head_pose_diag.py), NOT in the training loss. The model is well-formed; the measurement was wrong.
+
 ## §5.4 disclosure: Head pose Kalman smoothing (RTS smoother)
 
 The head pose Kalman smoothing experiment evaluates whether RTS (Rauch-Tung-Striebel) offline smoothing of per-frame head pose predictions reduces angular MAE relative to ground truth. A 1D per-channel Kalman filter with constant-velocity dynamics was applied independently to the 3 channels of the forward vector and the 3 channels of the up-vector, followed by unit-length renormalization.
