@@ -165,7 +165,7 @@ def _verify_class_mapping(
         # The dataset returns uint8 [3, H, W] images under images['rgb'].
         # Convert to numpy for YOLOv8 inference (HWC uint8).
         img_tensor = sample["images"]["rgb"]  # [3, H, W]
-        img_np = img_tensor.permute(1, 2, 0).cpu().numpy()  # [H, W, 3]
+        img_np = img_tensor.permute(1, 2, 0).cpu().numpy()[:, :, ::-1].copy()  # BGR for YOLOv8
         results = yolo_model(img_np, verbose=False)
         if len(results) > 0 and results[0].boxes is not None:
             cls_ids = results[0].boxes.cls.cpu().numpy().astype(int)
@@ -327,7 +327,7 @@ def run_yolov8m_eval(
         # Convert dataset's [B, 3, H, W] uint8 tensors to numpy HWC images.
         batch_imgs_np = []
         for i in range(B):
-            img = images[i].permute(1, 2, 0).cpu().numpy()  # [H, W, 3]
+            img = images[i].permute(1, 2, 0).cpu().numpy()[:, :, ::-1].copy()  # BGR for YOLOv8
             batch_imgs_np.append(img)
 
         # YOLOv8 inference on the batch.
@@ -337,6 +337,9 @@ def run_yolov8m_eval(
         boxes_list, scores_list, labels_list = _yolo_to_eval_format(
             results, img_w=C.IMG_WIDTH, img_h=C.IMG_HEIGHT,
         )
+        # Both YOLOv8 and the dataset's gt_classes are 0-indexed
+        # (dataset converts COCO 1-indexed -> 0-indexed via -1).
+        # No shift needed.
 
         dp_boxes.extend(boxes_list)
         dp_scores.extend(scores_list)
