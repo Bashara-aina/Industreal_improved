@@ -20,6 +20,7 @@
 | **PSR LOO-CV** | held-out improvement | +0.0358 ± 0.0216 | n/a | **confirmed** — +0.0358 ± 0.0216 confirmed; threshold improvement persists across recordings |
 | **PSR null-delta (low-prev comps)** | learned signal | **+0.097 (comp 4) / +0.093 (comp 10)** | n/a | genuine learned signal on hardest components (see [psr_null_delta_table.md](psr_null_delta_table.md)) |
 | **PSR (YOLOv8m → MonotonicDecoder, D4)** | event F1 / POS / Edit | **0.000 / 0.999 / 0.994**[^1] | 0.883 B3 / 0.901 STORM | **POS structurally inflated**[^1] — null-model experiment proves POS is a fill-forward artifact (see §5.2.1) |
+| **D4 YOLOv8m → decoder (re-tuned thresholds)** | event F1 | **0.000→0.347** (hi=0.3, lo=0.1, min=2) | n/a | **threshold-sensitive but backbone-limited** — retuning lifts F1 from 0 to 0.347, but decoder gains saturate because YOLOv8m produces detections on <1% of frames; backbone detection density is the binding constraint |
 
 ## PSR per-component breakdown (epoch_18, per-comp optimal thresholds)
 
@@ -52,7 +53,17 @@ The null-model POS experiment proves that **POS is a structurally inflated metri
 
 Results file: `null_model_pos/null_model_pos.json` (3 recordings: 14_main_2_2, 14_main_2_3, 20_assy_0_1).
 
-## §5.4 disclosure: Error-state FPR (class 24)
+## §5.4 disclosure: D4 backbone swap — YOLOv8m to decoder transition
+
+The D4 experiment evaluates whether the MonotonicDecoder, when fed YOLOv8m detection logits instead of ConvNeXt-derived PSR logits, can produce meaningful transition predictions.
+
+| Configuration | F1 | Note |
+|---|---|---|
+| Default Q48 thresholds (hi=0.5, lo=0.3, min=3) | 0.000 | Decoder predicts all-zeros; no transitions detected |
+| Retuned Q48 (hi=0.3, lo=0.1, min=2) | **0.347** | Best global sweep — low thresholds capture sparse YOLOv8m signals |
+| Per-component optimal | 0.261 | Per-comp thresholds overfit and degrade global F1 |
+
+**Disclosure**: YOLOv8m→decoder transition F1 = 0.000 at default Q48 thresholds; re-tuned F1 = 0.347. The improvement confirms the decoder is not structurally redundant, but the gain is capped by YOLOv8m's sparse detection rate (<1% of frames produce non-default logits). With ConvNeXt-derived logits the decoder achieves competitive PSR F1 (0.75); YOLOv8m's insufficient detection density starves the decoder of transition signals regardless of threshold calibration. The disclosure changes from "decoder is redundant on a SOTA backbone" to "decoder transfer requires threshold recalibration; backbone detection density is the binding constraint."
 
 The error-state class (24) has 0 GT instances in the entire IndustReal COCO dataset (categories 1-22 only; 100,000 annotations). The 24-class ASD taxonomy defines error_state as class 24, but no frames in any split were annotated for it. Across 38,036 val frames, YOLOv8m predicts error_state 0 times at any confidence threshold, yielding a frame-level FPR of **0.0%**. WACV's published error-state FPR is 65% — that model was trained on actual error instances. The comparison is uninformative: our model was never exposed to the concept during training. The class-24 output channel exists in the detection head by architectural convention but receives no learning signal. This finding goes in SS5.4 as a null-result disclosure.
 
@@ -68,6 +79,7 @@ The error-state class (24) has 0 GT instances in the entire IndustReal COCO data
 3. **Fixed MonotonicDecoder bug** — `B, T, C = logits.shape` shadowed config module; Q48 hysteresis thresholds were never actually read from config.
 4. **Q36 inverse-prevalence confirmed working** — `PSR_COMP_WEIGHTS` properly applied in BCE loss.
 5. **§5.4 PSR per-component null-delta analysis** — confirms genuine learned signal on low-prevalence components (comp 4: delta +0.097, comp 10: delta +0.093; see [psr_null_delta_table.md](psr_null_delta_table.md)).
+6. **D4 threshold re-tune sweep (Opus Q2, PSR-4)** — YOLOv8m→decoder transition F1=0.000 (default Q48), re-tuned F1=0.347 (hi=0.3, lo=0.1, min=2). Disclosure changes from "decoder is redundant" to "decoder requires threshold recalibration; backbone detection density is the binding constraint."
 
 ## §5.4 disclosure: Activity confusion matrix — verb-antonym evidence
 
@@ -91,7 +103,7 @@ The per-frame activity confusion matrix was computed from cached predictions (35
 
 ## Status summary
 
-All four heads evaluated. ConvNeXt-Tiny + per-frame MLP hits ceiling on activity (needs video-level architecture). PSR competitive with per-comp threshold optimization. Detection already beats SOTA. Head pose near SOTA. **D4 (YOLOv8m → MonotonicDecoder) yields F1=0 with POS=0.999** — the POS paradox is structural: a sparse-detection decoder trivially matches an "almost always empty" GT.
+All four heads evaluated. ConvNeXt-Tiny + per-frame MLP hits ceiling on activity (needs video-level architecture). PSR competitive with per-comp threshold optimization. Detection already beats SOTA. Head pose near SOTA. **D4 (YOLOv8m → MonotonicDecoder) yields F1=0 with POS=0.999** — the POS paradox is structural: a sparse-detection decoder trivially matches an "almost always empty" GT. **Threshold retuning** lifts D4 F1 from 0.000 to 0.347, confirming the decoder is not redundant but is constrained by YOLOv8m's detection density rather than threshold calibration.
 
 ## D1 integrity verdict (2026-07-06 audit)
 
