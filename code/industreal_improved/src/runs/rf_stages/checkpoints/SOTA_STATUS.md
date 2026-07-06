@@ -36,6 +36,20 @@
 | 10 | 0.183 | 0.70 | 0.4020 |
 | **Macro F1** | | | **0.7499** |
 
+## Null-model POS experiment (§5.2.1 disclosure)
+
+The null-model POS experiment proves that **POS is a structurally inflated metric** under monotonic fill-forward decoding. Both null models achieve POS ≈ 0.998, indistinguishable from our 0.9988, across 3 recordings (5000 frames total).
+
+| Model | POS (mean) | Interpretation |
+|---|---|---|
+| Ours (ConvNeXt) | 0.9988 | Real predictions |
+| Null all-zeros | 0.9995 | Trivially "perfect" |
+| Null copy-prev | 0.9984 | Trivially "perfect" |
+
+[^1]: POS is a structurally inflated metric under monotonic fill-forward decoding. The null-model POS experiment proves both null models achieve POS ≈ 0.998, indistinguishable from our 0.9988. POS moves to a footnote/appendix; per-frame F1 and transition F1 are the primary PSR metrics.
+
+Results file: `null_model_pos/null_model_pos.json` (3 recordings: 14_main_2_2, 14_main_2_3, 20_assy_0_1).
+
 ## Key wins (this session)
 
 1. **Discovered best.pth was a bad checkpoint** — epoch 11's "best" was due to NaN-inflated combined metric. Epoch 18 is the real best with PSR F1=0.83.
