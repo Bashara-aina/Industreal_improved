@@ -77,15 +77,15 @@ def main():
             ch_mae[8] += torch.abs(hp_p[0, 8] - hp_l[0, 8]).item()
             ch_n += 1
 
-            # Angular for forward, up
-            for vi, (s, e) in enumerate([(0, 3), (3, 6)]):
+            # Angular for forward, up  (forward[0:3], position[3:6], up[6:9])
+            for vi, (s, e) in enumerate([(0, 3), (6, 9)]):
                 p = hp_p[0, s:e]
                 l = hp_l[0, s:e]
                 p_n = p / (p.norm() + 1e-8)
                 l_n = l / (l.norm() + 1e-8)
                 cos = (p_n * l_n).sum().clamp(-1, 1)
                 vec_mae[vi] += torch.rad2deg(torch.acos(cos)).item()
-            vec_mae[2] += ((hp_p[0, 6:9] - hp_l[0, 6:9]).norm() * 1000).item()  # mm
+            vec_mae[2] += ((hp_p[0, 3:6] - hp_l[0, 3:6]).norm() * 1000).item()  # mm (position, do not report)
             vec_n += 1
 
         print(f"  Per-dim MAE (raw units):")
