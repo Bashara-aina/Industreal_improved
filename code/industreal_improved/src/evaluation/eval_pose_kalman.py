@@ -1,48 +1,44 @@
-"""Pose-norm eval + Q42 Kalman smoothing on epoch_17 checkpoint.
+"""Head pose Kalman smoothing eval — single-frame vs smoothed MAE.
 
-[Opus 126 §0.2 #7 and #8] Two inference-only tasks on the 5060 Ti, parallel
-to main training.
+Runs model inference over the full val dataset, computes single-frame
+angular MAE for forward and up-vector, then applies per-recording
+Kalman smoothing (RTS smoother) and recomputes MAE.
 
-Task 1: Eval-only with the new pose-norm fix applied (src/data/industreal_dataset.py:600-608).
-Measures the impact of unit-normalizing forward and up vectors.
-
-Task 2: Q42 Kalman smoothing on forward/up direction.
-Expected: -0.3 to -0.8 deg on forward MAE.
-
-Usage: python3 src/evaluation/eval_pose_kalman.py
+Usage:
+    CUDA_VISIBLE_DEVICES=1 python3 src/evaluation/eval_pose_kalman.py
 """
-import sys
 import json
-import time
+import sys
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 import torch
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src import config as C
-# POPWMultiTaskModel import deferred — used for full eval, not for methodology test
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+_IMAGENET_MEAN = (0.485, 0.456, 0.406)
+_IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
-def kalman_smooth(forward: np.ndarray, up: np.ndarray, process_noise: float = 0.01,
-                 measurement_noise: float = 0.05) -> np.ndarray:
-    """Simple 1D Kalman smoother per component for forward direction.
+def kalman_smooth(seq: np.ndarray, process_noise: float = 0.01,
+                  measurement_noise: float = 0.05) -> np.ndarray:
+    """Simple 1D Kalman smoother (RTS) per channel.
 
     Args:
-        forward: [N, 3] forward unit vectors (after pose-norm fix)
-        up: [N, 3] up unit vectors
+        seq: [N, D] sequence of D-dimensional unit vectors
         process_noise: Q (per-step variance)
         measurement_noise: R (observation variance)
 
     Returns:
-        smoothed_forward: [N, 3] Kalman-smoothed forward
+        smoothed: [N, D] smoothed unit vectors
     """
-    N = forward.shape[0]
-    smoothed = np.zeros_like(forward)
-    # Simple Kalman per channel
-    for c in range(3):
-        z = forward[:, c]
-        # State: z_t, velocity (constant)
+    N, D = seq.shape
+    if N < 3:
+        return seq.copy()
+    smoothed = np.zeros_like(seq)
+    for c in range(D):
+        z = seq[:, c]
         x = np.array([z[0], 0.0])
         P = np.array([[1.0, 0.0], [0.0, 1.0]])
         F = np.array([[1.0, 1.0], [0.0, 1.0]])
@@ -53,10 +49,8 @@ def kalman_smooth(forward: np.ndarray, up: np.ndarray, process_noise: float = 0.
         # Forward pass
         estimates = []
         for t in range(N):
-            # Predict
             x = F @ x
             P = F @ P @ F.T + Q
-            # Update
             y = z[t] - (H @ x)[0]
             S = (H @ P @ H.T)[0, 0] + R[0, 0]
             K = (P @ H.T) / S
@@ -72,10 +66,8 @@ def kalman_smooth(forward: np.ndarray, up: np.ndarray, process_noise: float = 0.
         for t in range(N - 2, -1, -1):
             x_p = np.array([estimates[t], 0.0])
             P_p = np.eye(2) * 0.1
-            # Predict
             x_f = F @ x_p
             P_f = F @ P_p @ F.T + Q
-            # Smoother gain
             C = P_p @ F.T @ np.linalg.inv(P_f)
             x_b = x_p + C @ (x_b - x_f)
             P_b = P_p + C @ (P_b - P_f) @ C.T
@@ -97,99 +89,247 @@ def angular_error_deg(pred: np.ndarray, gt: np.ndarray) -> float:
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--checkpoint",
+                        default="src/runs/rf_stages/checkpoints/best.pth")
+    parser.add_argument("--max-batches", type=int, default=200000)
+    parser.add_argument("--save-dir",
+                        default="src/runs/rf_stages/checkpoints/pose_kalman_eval")
+    parser.add_argument("--process-noise", type=float, default=0.01)
+    parser.add_argument("--measurement-noise", type=float, default=0.05)
+    args = parser.parse_args()
+
+    save_dir = Path(args.save_dir)
+    save_dir.mkdir(parents=True, exist_ok=True)
+
     print("=" * 60)
-    print("[Opus 126 §0.2 #7+8] Pose-norm + Q42 Kalman eval on epoch_17")
+    print("Head Pose Kalman Smoothing Eval")
     print("=" * 60)
-    ckpt_path = "src/runs/rf_stages/checkpoints/best.pth"
-    print(f"Loading {ckpt_path}...")
-    ckpt = torch.load(ckpt_path, map_location="cuda", weights_only=False)
+    print(f"Checkpoint: {args.checkpoint}")
+    print(f"Process noise (Q): {args.process_noise}")
+    print(f"Measurement noise (R): {args.measurement_noise}")
+    print()
+
+    # Load checkpoint
+    print("Loading checkpoint...")
+    ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     print(f"  epoch: {ckpt.get('epoch', 'unknown')}")
-    print(f"  combined: {ckpt.get('best_combined', 'unknown')}")
+    print(f"  global_step: {ckpt.get('global_step', 'unknown')}")
 
-    # Note: we don't actually load POPWMultiTaskModel here because that requires
-    # a working CUDA setup and dataset. The pose-norm fix and Kalman smoother
-    # are independent of the model forward pass — they operate on the
-    # ground-truth pose data alone, validating the DATA QUALITY of the fix
-    # and the MAGNITUDE of expected Kalman improvement.
-    #
-    # This script is a METHODOLOGY test, not a model eval. The real eval
-    # happens in D3-redo (running) and in the next main-training val.
+    # Load model
+    from src.models.model import POPWMultiTaskModel
+    from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
 
-    # Validate pose-norm fix on ground-truth pose.csv (direct read, no dataset class needed)
-    import csv
-    pose_dir = Path("/media/newadmin/master/POPW/datasets/industreal/recordings/val")
-    recs = sorted([d for d in pose_dir.iterdir() if d.is_dir()])[:3]
-    print(f"\nValidating pose-norm on {len(recs)} val recordings:")
+    print("Building model...")
+    model = POPWMultiTaskModel(
+        pretrained=True, backbone_type='convnext_tiny',
+        use_hand_film=True, use_headpose_film=True,
+        use_videomae=False, train_pose=True,
+    )
+    state_dict = {k: v for k, v in ckpt["model"].items()
+                  if 'total_ops' not in k and 'total_params' not in k}
+    model.load_state_dict(state_dict, strict=False)
+    model._seq_len = 1
+    model = model.cuda().eval()
+    print("Model loaded and in eval mode.")
 
-    all_pre_fix_norms = []
-    all_post_fix_norms = []
-    all_forward = []
-    all_up = []
-    all_pos = []
-    for rec in recs:
-        pose_csv = rec / "pose.csv"
-        if not pose_csv.exists():
-            print(f"  {rec.name}: no pose.csv")
+    # Dataset
+    print("Loading val dataset...")
+    val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
+    val_loader = torch.utils.data.DataLoader(
+        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False,
+    )
+    print(f"Val dataset: {len(val_ds)} frames")
+
+    # Run inference — collect predictions grouped by recording
+    recording_preds = defaultdict(list)
+    n = 0
+    for i, batch in enumerate(val_loader):
+        if i >= args.max_batches:
+            break
+        images, targets = batch
+        if images.shape[0] == 0:
             continue
-        try:
-            rows = []
-            with open(pose_csv) as f:
-                rdr = csv.reader(f)
-                header = next(rdr)
-                for r in rdr:
-                    if len(r) >= 10:
-                        rows.append([float(x) for x in r[1:10]])
-            pose_data = np.array(rows, dtype=np.float32)
-            if pose_data.shape[0] == 0:
-                continue
-            fwd_pre = pose_data[:, 0:3]
-            fwd_norms_pre = np.linalg.norm(fwd_pre, axis=1)
-            all_pre_fix_norms.extend(fwd_norms_pre.tolist())
-            all_forward.append(fwd_pre)
-            all_pos.append(pose_data[:, 3:6])
-            all_up.append(pose_data[:, 6:9])
-            # Apply fix: normalize forward and up
-            fwd_norms = np.linalg.norm(fwd_pre, axis=1, keepdims=True)
-            up_norms = np.linalg.norm(pose_data[:, 6:9], axis=1, keepdims=True)
-            fwd_safe = np.where(fwd_norms > 1e-6, fwd_norms, 1.0)
-            up_safe = np.where(up_norms > 1e-6, up_norms, 1.0)
-            fwd_post = fwd_pre / fwd_safe
-            up_post = pose_data[:, 6:9] / up_safe
-            all_post_fix_norms.extend(np.linalg.norm(fwd_post, axis=1).tolist())
-            print(f"  {rec.name}: forward norm pre-fix mean={fwd_norms_pre.mean():.3f}, post-fix mean={np.linalg.norm(fwd_post, axis=1).mean():.3f}")
-        except Exception as e:
-            print(f"  {rec.name}: ERROR {e}")
+        images_f = images.cuda().float()
+        if images_f.max() > 1.0:
+            images_f = images_f.div_(255.0)
+        mean = torch.tensor(_IMAGENET_MEAN, device=images_f.device).view(1, 3, 1, 1)
+        std = torch.tensor(_IMAGENET_STD, device=images_f.device).view(1, 3, 1, 1)
+        images_n = (images_f - mean) / std
 
-    print(f"\n=== Pose-norm fix validation ===")
-    print(f"  Pre-fix forward norm: mean={np.mean(all_pre_fix_norms):.4f}, std={np.std(all_pre_fix_norms):.4f}")
-    print(f"  Post-fix forward norm: mean={np.mean(all_post_fix_norms):.4f}, std={np.std(all_post_fix_norms):.4f}")
-    print(f"  Pre-fix range: [{min(all_pre_fix_norms):.3f}, {max(all_pre_fix_norms):.3f}]")
-    print(f"  Post-fix range: [{min(all_post_fix_norms):.3f}, {max(all_post_fix_norms):.3f}]")
-    drift_pre = np.std(all_pre_fix_norms) / np.mean(all_pre_fix_norms) * 100
-    drift_post = np.std(all_post_fix_norms) / np.mean(all_post_fix_norms) * 100
-    print(f"  Drift %: pre={drift_pre:.2f}%, post={drift_post:.2f}% (lower is better)")
+        with torch.no_grad():
+            outputs = model(images_n)
 
-    # Q42 Kalman smoothing demo
-    if all_forward:
-        forward = np.concatenate(all_forward, axis=0)
-        up = np.concatenate(all_up, axis=0)
-        pos = np.concatenate(all_pos, axis=0)
+        hp = outputs.get("head_pose")
+        gt_hp = targets.get("head_pose")
+        if hp is None or gt_hp is None:
+            continue
 
-        # Compute baseline MAE (no smoothing)
-        # Note: we need GT to compute MAE — use the same data as "pred" for the
-        # methodology test, simulating the smoothing effect
-        baseline_mae = angular_error_deg(forward, forward)  # should be 0 (self vs self)
-        smoothed = kalman_smooth(forward, up, process_noise=0.01, measurement_noise=0.05)
-        smoothed_mae = angular_error_deg(smoothed, forward)
-        print(f"\n=== Q42 Kalman smoothing demo (forward self-comparison) ===")
-        print(f"  Baseline MAE (self vs self): {baseline_mae:.4f} deg")
-        print(f"  Smoothed MAE (self vs self): {smoothed_mae:.4f} deg")
-        print(f"  Kalman process_noise=0.01, measurement_noise=0.05")
-        print(f"  Note: on real val data, smoothed forward is expected to be 0.3-0.8 deg closer to GT than raw")
+        # head_pose is [B, 9] = forward[0:3] + position[3:6] + up[6:9]
+        pred_fwd = hp[0, :3].cpu().numpy()
+        pred_up = hp[0, 6:9].cpu().numpy()
+        gt_fwd = gt_hp[0, :3].cpu().numpy()
+        gt_up = gt_hp[0, 6:9].cpu().numpy()
 
+        meta = targets.get("metadata", [])
+        rec_id = meta[0].get("recording_id", "unknown")
+
+        recording_preds[rec_id].append({
+            "pred_fwd": pred_fwd,
+            "pred_up": pred_up,
+            "gt_fwd": gt_fwd,
+            "gt_up": gt_up,
+        })
+        n += 1
+        if n % 2000 == 0:
+            print(f"  processed {n} frames across {len(recording_preds)} recordings...")
+
+    print(f"\nProcessed {n} total frames across {len(recording_preds)} recordings.")
+
+    # Per-recording eval
+    per_recording_results = {}
+    all_single_fwd_errors = []
+    all_single_up_errors = []
+    all_smoothed_fwd_errors = []
+    all_smoothed_up_errors = []
+
+    for rec_id in sorted(recording_preds.keys()):
+        frames = recording_preds[rec_id]
+        N = len(frames)
+        if N < 3:
+            print(f"  {rec_id}: only {N} frames, skipping smoothing")
+            continue
+
+        pred_fwd = np.array([f["pred_fwd"] for f in frames])
+        pred_up = np.array([f["pred_up"] for f in frames])
+        gt_fwd = np.array([f["gt_fwd"] for f in frames])
+        gt_up = np.array([f["gt_up"] for f in frames])
+
+        # Single-frame errors
+        sf_fwd = angular_error_deg(pred_fwd, gt_fwd)
+        sf_up = angular_error_deg(pred_up, gt_up)
+
+        # Smoothed errors
+        smooth_fwd = kalman_smooth(pred_fwd, args.process_noise, args.measurement_noise)
+        smooth_up = kalman_smooth(pred_up, args.process_noise, args.measurement_noise)
+        sm_fwd = angular_error_deg(smooth_fwd, gt_fwd)
+        sm_up = angular_error_deg(smooth_up, gt_up)
+
+        all_single_fwd_errors.append(sf_fwd)
+        all_single_up_errors.append(sf_up)
+        all_smoothed_fwd_errors.append(sm_fwd)
+        all_smoothed_up_errors.append(sm_up)
+
+        per_recording_results[rec_id] = {
+            "n": N,
+            "single_frame_fwd_MAE_deg": float(sf_fwd),
+            "single_frame_up_MAE_deg": float(sf_up),
+            "smoothed_fwd_MAE_deg": float(sm_fwd),
+            "smoothed_up_MAE_deg": float(sm_up),
+            "fwd_improvement_deg": float(sf_fwd - sm_fwd),
+            "up_improvement_deg": float(sf_up - sm_up),
+        }
+
+    sf_fwd_arr = np.array(all_single_fwd_errors)
+    sf_up_arr = np.array(all_single_up_errors)
+    sm_fwd_arr = np.array(all_smoothed_fwd_errors)
+    sm_up_arr = np.array(all_smoothed_up_errors)
+
+    # Aggregate: weighted by frame count per recording
+    total_frames_all = sum(r["n"] for r in per_recording_results.values()) or 1
+    weighted_sf_fwd = sum(r["single_frame_fwd_MAE_deg"] * r["n"]
+                          for r in per_recording_results.values()) / total_frames_all
+    weighted_sf_up = sum(r["single_frame_up_MAE_deg"] * r["n"]
+                         for r in per_recording_results.values()) / total_frames_all
+    weighted_sm_fwd = sum(r["smoothed_fwd_MAE_deg"] * r["n"]
+                          for r in per_recording_results.values()) / total_frames_all
+    weighted_sm_up = sum(r["smoothed_up_MAE_deg"] * r["n"]
+                         for r in per_recording_results.values()) / total_frames_all
+
+    summary = {
+        "checkpoint": args.checkpoint,
+        "n_frames_total": n,
+        "n_recordings": len(per_recording_results),
+        "kalman_params": {
+            "process_noise": args.process_noise,
+            "measurement_noise": args.measurement_noise,
+        },
+        "per_recording": per_recording_results,
+        "single_frame": {
+            "forward_MAE_deg": float(np.mean(sf_fwd_arr)),
+            "forward_MAE_deg_weighted": float(weighted_sf_fwd),
+            "forward_MAE_deg_median": float(np.median(sf_fwd_arr)),
+            "forward_MAE_deg_std": float(np.std(sf_fwd_arr)),
+            "up_MAE_deg": float(np.mean(sf_up_arr)),
+            "up_MAE_deg_weighted": float(weighted_sf_up),
+            "up_MAE_deg_median": float(np.median(sf_up_arr)),
+            "up_MAE_deg_std": float(np.std(sf_up_arr)),
+        },
+        "smoothed": {
+            "forward_MAE_deg": float(np.mean(sm_fwd_arr)),
+            "forward_MAE_deg_weighted": float(weighted_sm_fwd),
+            "forward_MAE_deg_median": float(np.median(sm_fwd_arr)),
+            "forward_MAE_deg_std": float(np.std(sm_fwd_arr)),
+            "up_MAE_deg": float(np.mean(sm_up_arr)),
+            "up_MAE_deg_weighted": float(weighted_sm_up),
+            "up_MAE_deg_median": float(np.median(sm_up_arr)),
+            "up_MAE_deg_std": float(np.std(sm_up_arr)),
+        },
+        "improvement": {
+            "forward_deg": float(weighted_sf_fwd - weighted_sm_fwd),
+            "forward_pct": float((weighted_sf_fwd - weighted_sm_fwd) / weighted_sf_fwd * 100)
+                          if weighted_sf_fwd > 0 else 0.0,
+            "up_deg": float(weighted_sf_up - weighted_sm_up),
+            "up_pct": float((weighted_sf_up - weighted_sm_up) / weighted_sf_up * 100)
+                      if weighted_sf_up > 0 else 0.0,
+        },
+    }
+
+    # Save
+    out_path = save_dir / "pose_kalman_results.json"
+    with open(out_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"\nResults saved to {out_path}")
+
+    # Print report
     print("\n" + "=" * 60)
-    print("Done. Pose-norm fix is in code; will be evaluated when main training")
-    print("next validates. Q42 Kalman will be tested in full pose-run (Q41).")
+    print("HEAD POSE KALMAN SMOOTHING RESULTS")
+    print("=" * 60)
+
+    print(f"\nSingle-frame (deployment-honest) — per-recording mean:")
+    print(f"  Forward MAE:  {np.mean(sf_fwd_arr):.2f} deg  (weighted: {weighted_sf_fwd:.2f} deg)")
+    print(f"  Up-vector MAE: {np.mean(sf_up_arr):.2f} deg  (weighted: {weighted_sf_up:.2f} deg)")
+    print(f"  Forward median: {np.median(sf_fwd_arr):.2f} deg")
+    print(f"  Up-vector median: {np.median(sf_up_arr):.2f} deg")
+
+    print(f"\nKalman-smoothed — per-recording mean:")
+    print(f"  Forward MAE:  {np.mean(sm_fwd_arr):.2f} deg  (weighted: {weighted_sm_fwd:.2f} deg)")
+    print(f"  Up-vector MAE: {np.mean(sm_up_arr):.2f} deg  (weighted: {weighted_sm_up:.2f} deg)")
+    print(f"  Forward median: {np.median(sm_fwd_arr):.2f} deg")
+    print(f"  Up-vector median: {np.median(sm_up_arr):.2f} deg")
+
+    print(f"\nImprovement from smoothing:")
+    fwd_imp = weighted_sf_fwd - weighted_sm_fwd
+    up_imp = weighted_sf_up - weighted_sm_up
+    fwd_pct = fwd_imp / weighted_sf_fwd * 100 if weighted_sf_fwd > 0 else 0
+    up_pct = up_imp / weighted_sf_up * 100 if weighted_sf_up > 0 else 0
+    print(f"  Forward:  -{fwd_imp:.2f} deg ({fwd_pct:.1f}%)")
+    print(f"  Up-vector: -{up_imp:.2f} deg ({up_pct:.1f}%)")
+
+    print(f"\nProcessed {n} frames across {len(per_recording_results)} recordings")
+    print(f"Kalman params: Q={args.process_noise}, R={args.measurement_noise}")
+
+    # Print per-recording table
+    print(f"\n{'='*60}")
+    print(f"Per-recording breakdown:")
+    print(f"{'Recording':>20s}  {'N':>5s}  {'SF-fwd':>8s}  {'SM-fwd':>8s}  {'SF-up':>8s}  {'SM-up':>8s}")
+    print(f"{'-'*60}")
+    for rid in sorted(per_recording_results.keys()):
+        r = per_recording_results[rid]
+        print(f"{rid:>20s}  {r['n']:5d}  {r['single_frame_fwd_MAE_deg']:8.2f}  "
+              f"{r['smoothed_fwd_MAE_deg']:8.2f}  {r['single_frame_up_MAE_deg']:8.2f}  "
+              f"{r['smoothed_up_MAE_deg']:8.2f}")
     print("=" * 60)
 
 
