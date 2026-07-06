@@ -93,11 +93,23 @@ The per-frame activity confusion matrix was computed from cached predictions (35
 
 All four heads evaluated. ConvNeXt-Tiny + per-frame MLP hits ceiling on activity (needs video-level architecture). PSR competitive with per-comp threshold optimization. Detection already beats SOTA. Head pose near SOTA. **D4 (YOLOv8m → MonotonicDecoder) yields F1=0 with POS=0.999** — the POS paradox is structural: a sparse-detection decoder trivially matches an "almost always empty" GT.
 
+## D1 integrity verdict (2026-07-06 audit)
+
+**Weights used**: The cached file `yolov8m_industreal.pt` (at `src/runs/rf_stages/checkpoints/`) IS legitimate IndustReal-finetuned YOLOv8m with 24 ASD classes (verified via `model.names` and `model.model.nc == 24`). The Microsoft GitHub URL (`https://github.com/microsoft/IndustReal/raw/main/weights/yolov8m_industreal.pt`) currently returns HTTP 404, but a cached copy existed for D1 v1-v3.
+
+**COCO fallback did NOT fire**: D1 v1-v3 eval logs all show "Using cached IndustReal weights: src/runs/rf_stages/checkpoints/yolov8m_industreal.pt" (see `/tmp/d1_yolov8m.log`, `/tmp/d1_v2.log`, `/tmp/d1_v3.log`). The COCO fallback path was never hit.
+
+**mAP=0.0004 is genuine (not a COCO artifact)**: The weights file is a real 24-class ASD model. The low mAP is because this model produces extremely sparse detections on our validation set: ~0.1 detections per frame at conf≥0.25 (verified via 50-frame sampling). By contrast, the D1R fine-tuned model (25 epochs from COCO init) achieves mAP50=0.995.
+
+**Root cause hypothesis**: The model binary strings (e.g., '10000000000') match our DET_CLASS_NAMES in config.py, but the model was trained on a different dataset split or with different preprocessing (/shared/nl011006/... path in overrides). The sparse detection suggests either a confidence threshold issue baked into the checkpoint or a domain shift between the training split and our evaluation setup.
+
+**Bug fix applied**: `eval_yolov8m.py` now FAILS HARD (raises RuntimeError) if the IndustReal weight download fails, instead of silently falling back to COCO-pretrained weights. Also adds `--weights-path` CLI argument for explicit local path. See `fix: D1 weights — fail hard on IndustReal download failure (Opus C-2)`.
+
 ## Remaining work
 
 - Activity head needs architectural change (MViTv2-S or VideoMAE) to reach SOTA 0.622
 - PSR transition-based F1 evaluation on epoch_18 (continuous training currently in progress, RTX 5060 Ti)
-- D1 detection metrics need class mapping audit (mAP=0.0004 is suspiciously low vs. prior 0.995)
+- D1 detection metrics: the IndustReal YOLOv8m checkpoint produces sparse detections (mAP=0.0004). The D1R fine-tuned model (mAP=0.995) is the correct reference for ASD performance.
 
 ## Files
 
