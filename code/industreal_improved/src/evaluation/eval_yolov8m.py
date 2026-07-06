@@ -62,10 +62,10 @@ def _download_weights(
     url: str,
     save_path: Optional[Path] = None,
 ) -> Path:
-    """Download weights from a URL, falling back to Ultralytics default.
+    """Download weights from a URL.
 
-    First tries the IndustReal-specific weights. If that fails, falls back
-    to the COCO-pretrained YOLOv8m.pt from Ultralytics.
+    First tries the IndustReal-specific weights. If that fails, raises
+    a RuntimeError — no silent COCO fallback (Opus C-2 fix).
 
     Args:
         url: URL of the IndustReal weights.
@@ -74,6 +74,9 @@ def _download_weights(
 
     Returns:
         Path to the downloaded weight file.
+
+    Raises:
+        RuntimeError: If the download fails and no cached copy exists.
     """
     if save_path is None:
         save_path = Path(
@@ -82,24 +85,26 @@ def _download_weights(
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Try IndustReal-specific weights first.
-    if not save_path.exists():
-        logger.info("Downloading IndustReal weights from %s ...", url)
-        try:
-            import urllib.request
-
-            urllib.request.urlretrieve(url, str(save_path))
-            logger.info("Downloaded to %s", save_path)
-        except Exception as exc:
-            logger.warning(
-                "IndustReal download failed: %s. Falling back to COCO-pretrained %s.",
-                exc,
-                COCO_WEIGHT_NAME,
-            )
-            # Don't save a local copy; let Ultralytics handle its cache.
-            save_path = None
-    else:
+    # Try cached copy first.
+    if save_path.exists():
         logger.info("Using cached IndustReal weights: %s", save_path)
+        return save_path
+
+    # Download IndustReal-specific weights.
+    logger.info("Downloading IndustReal weights from %s ...", url)
+    try:
+        import urllib.request
+
+        urllib.request.urlretrieve(url, str(save_path))
+        logger.info("Downloaded to %s", save_path)
+    except Exception as exc:
+        raise RuntimeError(
+            f"IndustReal weight download FAILED from {url}: {exc}. "
+            f"No cached copy at {save_path}. "
+            "Place the weights file manually or check the URL. "
+            "Refusing to fall back to COCO-pretrained weights "
+            "(Opus C-2: silent fallback corrupts class mapping)."
+        ) from exc
 
     return save_path
 
@@ -110,7 +115,9 @@ def _build_yolo_model(
     """Load or download the YOLOv8m model via the ultralytics API.
 
     Args:
-        weight_path: Path to a custom weight file, or None for COCO-pretrained.
+        weight_path: Path to a custom weight file, or None to use
+                     the model's default (COCO-pretrained). Should only
+                     be None during interactive/sanity-check use.
 
     Returns:
         YOLO model instance.
@@ -125,12 +132,17 @@ def _build_yolo_model(
     if weight_path is not None and weight_path.exists():
         logger.info("Loading YOLOv8m from: %s", weight_path)
         model = YOLO(str(weight_path))
-    else:
-        logger.info(
-            "Loading COCO-pretrained YOLOv8m (Ultralytics cache): %s",
-            COCO_WEIGHT_NAME,
+    elif weight_path is not None:
+        raise FileNotFoundError(
+            f"Weight path {weight_path} does not exist. "
+            "Use --weights-path to point to a valid IndustReal weights file."
         )
-        model = YOLO(COCO_WEIGHT_NAME)
+    else:
+        raise RuntimeError(
+            "No weights path provided and no default weights found. "
+            "Use --weights-path to specify IndustReal weights. "
+            "COCO-pretrained fallback is disabled (Opus C-2)."
+        )
 
     return model
 
@@ -259,6 +271,7 @@ def _yolo_to_eval_format(
 
 def run_yolov8m_eval(
     weight_url: str = INDUSTREAL_WEIGHT_URL,
+    weights_path: Optional[str] = None,
     batch_size: int = 16,
     max_batches: int = 0,
     device: str = "cuda",
@@ -268,6 +281,8 @@ def run_yolov8m_eval(
 
     Args:
         weight_url: URL of the IndustReal-specific YOLOv8m weights.
+        weights_path: Explicit local path to weights file. Overrides
+                      URL-based download.
         batch_size: YOLOv8 inference batch size.
         max_batches: Cap on number of batches (0 = unlimited).
         device: Target device string.
@@ -277,7 +292,11 @@ def run_yolov8m_eval(
         dict with detection metrics (det_mAP50, det_per_class_ap, etc.).
     """
     # ── Download / load YOLOv8m ─────────────────────────────────────────
-    weight_path = _download_weights(weight_url)
+    if weights_path is not None:
+        weight_path = Path(weights_path)
+        logger.info("Using explicit weights path: %s", weight_path)
+    else:
+        weight_path = _download_weights(weight_url)
     yolo = _build_yolo_model(weight_path)
 
     # ── Build val dataset ───────────────────────────────────────────────
@@ -384,6 +403,8 @@ def run_yolov8m_eval(
     )
     det_metrics["_num_images"] = len(dp_boxes)
     det_metrics["_class_mapping_verified"] = mapping_ok
+    det_metrics["_model_nc"] = yolo.model.nc if hasattr(yolo.model, 'nc') else -1
+    det_metrics["_model_names"] = str(yolo.names) if hasattr(yolo, 'names') else ""
 
     logger.info(
         "YOLOv8m results — mAP@0.5: %.4f  mAP@[0.5:0.95]: %.4f  mAP50_pc: %.4f",
@@ -416,6 +437,13 @@ def main() -> None:
         type=str,
         default=INDUSTREAL_WEIGHT_URL,
         help="URL for IndustReal-specific YOLOv8m weights",
+    )
+    parser.add_argument(
+        "--weights_path",
+        type=str,
+        default=None,
+        help="Explicit local path to IndustReal weights .pt file. "
+             "Overrides --weight_url and download.",
     )
     parser.add_argument(
         "--verify_frames",
@@ -452,6 +480,7 @@ def main() -> None:
 
     metrics = run_yolov8m_eval(
         weight_url=args.weight_url,
+        weights_path=args.weights_path,
         batch_size=args.batch_size,
         max_batches=args.max_batches,
         device=args.device,
