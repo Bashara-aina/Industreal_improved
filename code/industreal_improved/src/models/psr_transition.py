@@ -192,14 +192,25 @@ class PSRTransitionPredictor(nn.Module):
     per-component transition events, and decodes with monotonic constraints.
 
     This can replace the per-frame BCE PSR head (Tier 2.7 point 7 design).
+
+    PSR HEAD REPAIR (2026-07-06):
+    The original per-component heads had three architectural issues:
+      1. ReLU activation causes dead neuron saturation when pre-activations go negative.
+      2. Output bias=-1.0 biases toward "no transition" (sigmoid(-1)=0.27), which
+         helps class imbalance but kills gradient for transition-positive examples.
+      3. Normal(0, 0.01) init leads to vanishing gradients in deeper layers.
+    Fix: use_repaired_head=True activates LeakyReLU(0.01) + bias=0.0 + Xavier init.
+    Toggle via config.PSR_HEAD_REPAIR env var (PSR_HEAD_REPAIR=1).
     """
 
     def __init__(self, input_dim: int = 512, hidden_dim: int = 256,
                  num_components: int = 11, num_heads: int = 4,
-                 num_layers: int = 3, dropout: float = 0.1):
+                 num_layers: int = 3, dropout: float = 0.1,
+                 use_repaired_head: bool = False):
         super().__init__()
         self.num_components = num_components
         self.hidden_dim = hidden_dim
+        self.use_repaired_head = use_repaired_head
 
         # Input projection
         self.input_proj = nn.Linear(input_dim, hidden_dim)
@@ -213,10 +224,13 @@ class PSRTransitionPredictor(nn.Module):
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
         # Transition logit heads (one per component — binary transition prediction)
+        # [PSR HEAD REPAIR 2026-07-06] use_repaired_head=True uses:
+        #   LeakyReLU(0.01) instead of ReLU(inplace=True)
+        #   Xavier init + bias=0.0 (was normal(0,0.01) + bias=-1.0)
         self.transition_heads = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(hidden_dim, hidden_dim // 2),
-                nn.ReLU(inplace=True),
+                nn.LeakyReLU(negative_slope=0.01) if use_repaired_head else nn.ReLU(inplace=True),
                 nn.Linear(hidden_dim // 2, 1),
             ) for _ in range(num_components)
         ])
@@ -230,11 +244,19 @@ class PSRTransitionPredictor(nn.Module):
         nn.init.normal_(self.input_proj.weight, std=0.02)
         nn.init.zeros_(self.input_proj.bias)
         for head in self.transition_heads:
-            nn.init.normal_(head[0].weight, std=0.01)
-            nn.init.zeros_(head[0].bias)
-            nn.init.normal_(head[2].weight, std=0.01)
-            # Bias toward "no transition" — sigmoid(-1) ≈ 0.27
-            nn.init.constant_(head[2].bias, -1.0)
+            if self.use_repaired_head:
+                # [PSR HEAD REPAIR 2026-07-06]
+                # Xavier/Glorot uniform init for all linear layers
+                nn.init.xavier_uniform_(head[0].weight, gain=1.0)
+                nn.init.zeros_(head[0].bias)
+                nn.init.xavier_uniform_(head[2].weight, gain=1.0)
+                nn.init.zeros_(head[2].bias)  # bias=0.0 (was -1.0)
+            else:
+                nn.init.normal_(head[0].weight, std=0.01)
+                nn.init.zeros_(head[0].bias)
+                nn.init.normal_(head[2].weight, std=0.01)
+                # Bias toward "no transition" — sigmoid(-1) ≈ 0.27
+                nn.init.constant_(head[2].bias, -1.0)
 
     def forward(self, features: torch.Tensor,
                 return_states: bool = False) -> Dict[str, torch.Tensor]:
