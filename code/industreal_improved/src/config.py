@@ -95,6 +95,15 @@ KENDALL_HP_PREC_CAP = True
 # stage_manager may still toggle the module attribute per-stage at runtime.
 KENDALL_FIXED_WEIGHTS = os.environ.get('KENDALL_FIXED_WEIGHTS', '0') == '1'
 
+# [PSR HEAD REPAIR 2026-07-06] Env-toggle for repaired PSR transition heads.
+# When enabled, PSRTransitionPredictor uses:
+#   - LeakyReLU(0.01) instead of ReLU(inplace=True) — avoids dead neuron saturation
+#   - Output bias=0.0 instead of -1.0 — no longer biases toward "no transition"
+#   - Xavier/Glorot uniform init instead of normal(0, 0.01) — better gradient flow
+# See psr_transition.py PSRTransitionPredictor for implementation.
+# Usage: PSR_HEAD_REPAIR=1 python src/training/train.py ...
+PSR_HEAD_REPAIR = os.environ.get('PSR_HEAD_REPAIR', '0') == '1'
+
 # (2) KENDALL_STAGED_TRAINING — kill the double curriculum (Opus v8 §3 Fix 3).
 #     The RF stage manager already controls which heads train. The epoch-indexed
 #     Kendall staging in losses.py (STAGE1_EPOCHS=5, STAGE2_EPOCHS=10) duplicates
