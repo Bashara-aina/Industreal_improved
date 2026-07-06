@@ -15,8 +15,9 @@
 | **Head Pose up** | angular MAE | 26.20° (eval) / 13.5° (300-subset) | ~15° | mixed |
 | **PSR (global thresh 0.10)** | macro F1 | **0.7217** | 0.901 STORM | competitive |
 | **PSR (per-comp optimal)** | macro F1 | **0.7499** (full) / **0.7810** (5k subset) | 0.901 STORM | **near SOTA** |
-| **PSR LOO-CV** | held-out improvement | +0.0358 ± 0.0216 | n/a | **threshold is real** — improvement persists across recordings |
-| **PSR (YOLOv8m → MonotonicDecoder, D4)** | event F1 / POS / Edit | **0.000 / 0.999 / 0.994** | 0.883 B3 / 0.901 STORM | **POS paradox confirmed** — F1=0 with high POS because YOLOv8m detected on <1% of frames; decoder sees mostly empty state |
+| **PSR LOO-CV** | held-out improvement | +0.0358 ± 0.0216 | n/a | **confirmed** — +0.0358 ± 0.0216 confirmed; threshold improvement persists across recordings |
+| **PSR null-delta (low-prev comps)** | learned signal | **+0.097 (comp 4) / +0.093 (comp 10)** | n/a | genuine learned signal on hardest components (see [psr_null_delta_table.md](psr_null_delta_table.md)) |
+| **PSR (YOLOv8m → MonotonicDecoder, D4)** | event F1 / POS / Edit | **0.000 / 0.999 / 0.994**[^1] | 0.883 B3 / 0.901 STORM | **POS structurally inflated**[^1] — null-model experiment proves POS is a fill-forward artifact (see §5.2.1) |
 
 ## PSR per-component breakdown (epoch_18, per-comp optimal thresholds)
 
@@ -41,6 +42,7 @@
 2. **Promoted epoch_18 → best.pth** — current best macro-F1 = 0.7499 (per-comp optimal).
 3. **Fixed MonotonicDecoder bug** — `B, T, C = logits.shape` shadowed config module; Q48 hysteresis thresholds were never actually read from config.
 4. **Q36 inverse-prevalence confirmed working** — `PSR_COMP_WEIGHTS` properly applied in BCE loss.
+5. **§5.4 PSR per-component null-delta analysis** — confirms genuine learned signal on low-prevalence components (comp 4: delta +0.097, comp 10: delta +0.093; see [psr_null_delta_table.md](psr_null_delta_table.md)).
 
 ## Status summary
 
