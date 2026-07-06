@@ -14,8 +14,10 @@
 | **Activity (clip-level)** | top1 (16-frame majority) | **0.028** | 0.622 (MViTv2-S) | broken — per-frame MLP can't do temporal reasoning |
 | **Activity linear probe (frozen ConvNeXt)** | per-frame top1 | **0.2169** | 0.2217 (majority class) | **BACKBONE HAS SIGNAL** — 0.2169 > 0.05 threshold; 0.2169 ≈ baseline 0.2217, signal is extremely weak at frame level. Frozen ConvNeXt C5 features are NOT linearly separable for actions; temporal modeling required. |
 | **Activity T3 baseline** | top1_69 | 0.6223 | 0.622 | matches |
-| **Head Pose forward** | angular MAE | **9.14°** | ~15° | **near SOTA** |
-| **Head Pose up** | angular MAE | 26.20° (eval) / 13.5° (300-subset) | ~15° | mixed |
+| **Head Pose forward** | angular MAE (single-frame) | **9.14°** | ~15° | **near SOTA** |
+| **Head Pose up** | angular MAE (single-frame) | **7.78°** [+](pose_kalman_eval/pose_kalman_results.json) | ~15° | **near SOTA** — index [6:9] fix confirmed |
+| **Head Pose forward** | angular MAE (Kalman smoothed) | **9.00°** [+](pose_kalman_eval/pose_kalman_results.json) | ~15° | **near SOTA** — +0.14° (1.5%) from RTS smoother |
+| **Head Pose up** | angular MAE (Kalman smoothed) | **7.58°** [+](pose_kalman_eval/pose_kalman_results.json) | ~15° | **near SOTA** — +0.21° (2.7%) from RTS smoother |
 | **PSR (global thresh 0.10)** | macro F1 | **0.7217** | 0.901 STORM | competitive |
 | **PSR (per-comp optimal)** | macro F1 | **0.7499** (full) / **0.7810** (5k subset) | 0.901 STORM | **near SOTA** |
 | **PSR LOO-CV** | held-out improvement | +0.0358 ± 0.0216 | n/a | **confirmed** — +0.0358 ± 0.0216 confirmed; threshold improvement persists across recordings |
@@ -82,6 +84,8 @@ The error-state class (24) has 0 GT instances in the entire IndustReal COCO data
 5. **§5.4 PSR per-component null-delta analysis** — confirms genuine learned signal on low-prevalence components (comp 4: delta +0.097, comp 10: delta +0.093; see [psr_null_delta_table.md](psr_null_delta_table.md)).
 6. **D4 threshold re-tune sweep (Opus Q2, PSR-4)** — YOLOv8m→decoder transition F1=0.000 (default Q48), re-tuned F1=0.347 (hi=0.3, lo=0.1, min=2). Disclosure changes from "decoder is redundant" to "decoder requires threshold recalibration; backbone detection density is the binding constraint."
 7. **Fixed activity linear probe NaN bug** — CrossEntropyLoss(ignore_index=-1) with ALL -1 labels divides by 0. Fixed by filtering -1 samples at batch level during feature pre-extraction. Also added gradient clipping and feature caching (36 min vs ~10 hours). Result: probe val acc 0.2169, majority baseline 0.2217 — **backbone encodes weak signal**. Temporal modeling required for competitive activity performance.
+8. **Confirmed head pose up-vector index fix** — up-vector angular MAE dropped from 26.20° (buggy indices [3:6]) to **7.78°** (corrected [6:9]), confirming the 3.5-month-old index bug was responsible for inflated up-vector errors.
+9. **RTS Kalman smoothing eval complete** — single-frame forward MAE 9.14°, up MAE 7.78°. Kalman-smoothed forward MAE 9.00° (+0.14°, 1.5%), up MAE 7.58° (+0.21°, 2.7%). Improvement is modest because model predictions are already temporally smooth (see §5.4).
 
 ## §5.4 disclosure: Activity confusion matrix — verb-antonym evidence
 
@@ -123,7 +127,24 @@ The linear probe experiment answers Opus Q4: "Does the frozen ConvNeXt backbone 
 - Added gradient clipping (max_norm=1.0)
 - Pre-extracted all backbone features in one pass (36 min) then trained on cached features at batch_size=256 (5 epochs in 2 seconds)
 
-## Status summary
+## §5.4 disclosure: Head pose Kalman smoothing (RTS smoother)
+
+The head pose Kalman smoothing experiment evaluates whether RTS (Rauch-Tung-Striebel) offline smoothing of per-frame head pose predictions reduces angular MAE relative to ground truth. A 1D per-channel Kalman filter with constant-velocity dynamics was applied independently to the 3 channels of the forward vector and the 3 channels of the up-vector, followed by unit-length renormalization.
+
+**Parameters**: process noise Q=0.005, measurement noise R=0.200 (selected via grid sweep from R/Q ∈ [0.1, 1000]).
+
+| Metric | Single-frame | Kalman-smoothed | Improvement |
+|---|---|---|---|
+| Forward angular MAE (deg) | 9.14° | **9.00°** | +0.14° (1.5%) |
+| Up-vector angular MAE (deg) | 7.78° | **7.58°** | +0.21° (2.7%) |
+
+**Key findings:**
+- The up-vector MAE of 7.78° (vs. previously reported 26.20°) confirms the index [6:9] bug fix was correct. The 26.20° was inflated by reading positional data [3:6] as up-vector. With correct indices, up-vector performance is competitive with SOTA (~15°).
+- Kalman smoothing provides consistent but modest improvement across all 16 validation recordings (forward: +0.06° to +0.41° per recording, up: +0.02° to +0.80°).
+- The improvement is smaller than the 0.3-0.8° expected by Opus 126, because the ConvNeXt-Tiny backbone already produces temporally consistent per-frame predictions. Adjacent frames have similar visual content, so the per-frame MLP head produces smooth output trajectories, leaving limited room for temporal smoothing.
+- A proper orientation smoother (e.g., on quaternions or rotation matrices) might yield larger gains by respecting the SO(3) manifold, but this is left for future work.
+
+**Output**: [`pose_kalman_eval/pose_kalman_results.json`](pose_kalman_eval/pose_kalman_results.json) (16 recordings, 38,036 frames, 38036 total).
 
 All four heads evaluated. ConvNeXt-Tiny + per-frame MLP hits ceiling on activity (needs video-level architecture). Activity linear probe (frozen ConvNeXt) achieves 0.2169 val top-1 ≈ majority-class baseline (0.2217) — backbone encodes weak frame-level signal; temporal modeling required. PSR competitive with per-comp threshold optimization. Detection already beats SOTA. Head pose near SOTA. **D4 (YOLOv8m → MonotonicDecoder) yields F1=0 with POS=0.999** — the POS paradox is structural: a sparse-detection decoder trivially matches an "almost always empty" GT. **Threshold retuning** lifts D4 F1 from 0.000 to 0.347, confirming the decoder is not redundant but is constrained by YOLOv8m's detection density rather than threshold calibration.
 
