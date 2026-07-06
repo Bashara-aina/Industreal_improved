@@ -2,6 +2,8 @@
 
 **Goal:** Beat SOTA on all four heads (Detection, Activity, PSR, Head Pose).
 
+**Freeze checkpoint:** `best.pth` (sha256: `59cb88ec85311bfcfff91f000bd08005675e3a882bec9f24ccd5ee0cbe89f9a8`)
+
 ## Current results (epoch_18 promoted to best.pth)
 
 | Head | Metric | Our | SOTA | Status |
@@ -49,6 +51,15 @@ The null-model POS experiment proves that **POS is a structurally inflated metri
 [^1]: POS is a structurally inflated metric under monotonic fill-forward decoding. The null-model POS experiment proves both null models achieve POS ≈ 0.998, indistinguishable from our 0.9988. POS moves to a footnote/appendix; per-frame F1 and transition F1 are the primary PSR metrics.
 
 Results file: `null_model_pos/null_model_pos.json` (3 recordings: 14_main_2_2, 14_main_2_3, 20_assy_0_1).
+
+## §5.4 disclosure: Error-state FPR (class 24)
+
+The error-state class (24) has 0 GT instances in the entire IndustReal COCO dataset (categories 1-22 only; 100,000 annotations). The 24-class ASD taxonomy defines error_state as class 24, but no frames in any split were annotated for it. Across 38,036 val frames, YOLOv8m predicts error_state 0 times at any confidence threshold, yielding a frame-level FPR of **0.0%**. WACV's published error-state FPR is 65% — that model was trained on actual error instances. The comparison is uninformative: our model was never exposed to the concept during training. The class-24 output channel exists in the detection head by architectural convention but receives no learning signal. This finding goes in SS5.4 as a null-result disclosure.
+
+| Model | Error-state FPR | GT instances in train | Published anchor |
+|---|---|---|---|
+| Our YOLOv8m | 0.0% | 0 (never trained) | — |
+| WACV 2024 (Meccano) | 65% | present | WACV §5.4 |
 
 ## Key wins (this session)
 
