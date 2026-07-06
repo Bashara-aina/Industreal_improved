@@ -1,0 +1,258 @@
+{
+  "det_mAP50": 0.0,
+  "det_mAP_50_95": 0.0,
+  "det_mAP50_pc": 0.0,
+  "det_mAP_50_95_pc": 0.0,
+  "det_n_present_classes": 18,
+  "det_per_class_ap": {
+    "0": 0.0,
+    "1": 0.0,
+    "2": 0.0,
+    "3": 0.0,
+    "4": 0.0,
+    "5": 0.0,
+    "6": 0.0,
+    "7": 0.0,
+    "8": 0.0,
+    "9": 0.0,
+    "10": 0.0,
+    "11": 0.0,
+    "12": 0.0,
+    "13": 0.0,
+    "14": 0.0,
+    "15": 0.0,
+    "16": 0.0,
+    "17": 0.0,
+    "18": 0.0,
+    "19": 0.0,
+    "20": 0.0,
+    "21": 0.0,
+    "22": 0.0,
+    "23": 0.0
+  },
+  "det_per_class_gt": {
+    "0": 331,
+    "1": 0,
+    "2": 0,
+    "3": 0,
+    "4": 324,
+    "5": 18,
+    "6": 115,
+    "7": 380,
+    "8": 20,
+    "9": 88,
+    "10": 251,
+    "11": 68,
+    "12": 430,
+    "13": 57,
+    "14": 0,
+    "15": 0,
+    "16": 27,
+    "17": 263,
+    "18": 47,
+    "19": 39,
+    "20": 91,
+    "21": 175,
+    "22": 378,
+    "23": 0
+  },
+  "det_per_class": [
+    {
+      "channel": 0,
+      "category_id": 1,
+      "name": "background",
+      "gt": 331,
+      "ap": 0.0,
+      "is_background": true
+    },
+    {
+      "channel": 1,
+      "category_id": 2,
+      "name": "10000000000",
+      "gt": 0,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 2,
+      "category_id": 3,
+      "name": "10010010000",
+      "gt": 0,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 3,
+      "category_id": 4,
+      "name": "10010100000",
+      "gt": 0,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 4,
+      "category_id": 5,
+      "name": "10010110000",
+      "gt": 324,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 5,
+      "category_id": 6,
+      "name": "11100000000",
+      "gt": 18,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 6,
+      "category_id": 7,
+      "name": "11110010000",
+      "gt": 115,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 7,
+      "category_id": 8,
+      "name": "11110100000",
+      "gt": 380,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 8,
+      "category_id": 9,
+      "name": "11110110000",
+      "gt": 20,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 9,
+      "category_id": 10,
+      "name": "11110111100",
+      "gt": 88,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 10,
+      "category_id": 11,
+      "name": "11110111110",
+      "gt": 251,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 11,
+      "category_id": 12,
+      "name": "11110110001",
+      "gt": 68,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 12,
+      "category_id": 13,
+      "name": "11110111101",
+      "gt": 430,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 13,
+      "category_id": 14,
+      "name": "11110111111",
+      "gt": 57,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 14,
+      "category_id": 15,
+      "name": "11110101111",
+      "gt": 0,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 15,
+      "category_id": 16,
+      "name": "11110011111",
+      "gt": 0,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 16,
+      "category_id": 17,
+      "name": "11110011110",
+      "gt": 27,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 17,
+      "category_id": 18,
+      "name": "11110101110",
+      "gt": 263,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 18,
+      "category_id": 19,
+      "name": "11100001110",
+      "gt": 47,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 19,
+      "category_id": 20,
+      "name": "11101101110",
+      "gt": 39,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 20,
+      "category_id": 21,
+      "name": "11101011110",
+      "gt": 91,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 21,
+      "category_id": 22,
+      "name": "11101111110",
+      "gt": 175,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 22,
+      "category_id": 23,
+      "name": "11101111111",
+      "gt": 378,
+      "ap": 0.0,
+      "is_background": false
+    },
+    {
+      "channel": 23,
+      "category_id": 24,
+      "name": "error_state",
+      "gt": 0,
+      "ap": 0.0,
+      "is_background": false
+    }
+  ],
+  "_det_ap_protocol": "coco",
+  "_model": "yolov8m",
+  "_weight_source": "src/runs/rf_stages/checkpoints/yolov8m_industreal.pt",
+  "_num_images": 38036,
+  "_class_mapping_verified": true
+}

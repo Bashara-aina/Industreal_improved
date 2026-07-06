@@ -1,3 +1,5 @@
+> **SUPERSEDED** by `AAIML/132_OPUS_ANSWERS.md` and `AAIML/133_OPUS_COMPLETE_ANSWERS.md`. This supplementary file contains a stale attribution (mAP=0.995 attributed to ConvNeXt head instead of separately-trained YOLOv8m) and head-pose numbers from a pre-fix era. See C-1 and C-5 in 133 §0.
+
 # 128 — Agent Debates: SOTA Comparison
 
 **Generated:** 2026-07-06

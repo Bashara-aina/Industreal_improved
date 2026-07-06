@@ -102,7 +102,7 @@ Each name encodes an 11-bit PSR component state as a binary string. Source: `src
 | PSR_FOCAL_GAMMA | 0.5 | `src/config.py` |
 | PSR_COMP_WEIGHTS | [1.0, 1.21, 1.20, 1.98, 5.03, 1.61, 1.66, 2.20, 2.20, 2.75, 4.61] | `src/config.py` |
 | KENDALL_HP_PREC_CAP | True | `src/config.py` |
-| KENDALL_FIXED_WEIGHTS | False | `src/config.py` |
+| KENDALL_FIXED_WEIGHTS | False | env var (KENDALL_FIXED_WEIGHTS=1) |
 | KENDALL_HP_FIXED_LAMBDA | 0.2 | `src/config.py` |
 | ACTIVITY_HEAD_SIMPLE | True | `src/config.py` |
 | ACTIVITY_GRAD_BLEND_RATIO | 1.0 | `src/config.py` |
@@ -301,7 +301,7 @@ Each name encodes an 11-bit PSR component state as a binary string. Source: `src
 - Verb grouping: `src/config.py` ACT_CLASS_GROUPING='hybrid'
 
 ### 13.4 Head Pose (`full_eval_ep18_stream/metrics.json`)
-- Eval code: `src/evaluation/evaluate.py:1918-1926` (with "DO NOT USE FOR REPORTING" comment)
+- Eval code: `src/evaluation/evaluate.py:1969` (with "DO NOT USE FOR REPORTING" comment)
 - Diagnostic: `src/evaluation/head_pose_diag.py`
 
 ### 13.5 Training (`train.log`, `metrics.jsonl`)

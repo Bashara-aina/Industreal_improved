@@ -38,7 +38,7 @@
 **Expected impact:** F1 from 0.7499 → ~0.82 (estimate based on observed gradient starvation).
 
 **Files:**
-- `src/config.py` — toggle KENDALL_FIXED_WEIGHTS=True
+- `env var` — `KENDALL_FIXED_WEIGHTS=1` (no code edit needed)
 - `src/training/train.py` — verify loss path with fixed weights
 - `src/runs/full_multi_task_tma_tbank_benchmark/checkpoints/crash_recovery.pth` — resume point
 
@@ -141,7 +141,7 @@
 **Expected impact:** PSR F1 from 0.7499 → ~0.80.
 
 **Files:**
-- `src/config.py` KENDALL_FIXED_WEIGHTS
+- `env var` `KENDALL_FIXED_WEIGHTS=1`
 
 **Source:** PSR-3, debate 2.3.
 
@@ -277,7 +277,7 @@
 **Expected impact:** Either confirm mm or drop position claims.
 
 **Files:**
-- `src/evaluation/evaluate.py:1918-1926`
+- `src/evaluation/evaluate.py:1969`
 
 **Source:** HP-3.
 
@@ -489,7 +489,7 @@ Both GPUs can run in parallel. P1.1 (training) on 5060 Ti, P1.2/P1.3 (eval) on 3
 | P1.3 | `src/training/train.py` (toggle) |
 | P1.4 | `src/config.py` (ACTIVITY_HEAD_SIMPLE), `src/models/model.py` |
 | P2.1 | `src/training/train.py` (distillation loss) |
-| P2.2 | `src/config.py` (KENDALL_FIXED_WEIGHTS) |
+| P2.2 | env var (`KENDALL_FIXED_WEIGHTS=1`) |
 | P2.3 | Documentation only |
 | P2.4 | `src/evaluation/head_pose_diag.py` |
 | P2.5 | `src/evaluation/psr_optimal_thresholds.py` |

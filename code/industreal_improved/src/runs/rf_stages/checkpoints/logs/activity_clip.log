@@ -1,0 +1,117 @@
+Loading src/runs/rf_stages/checkpoints/best.pth...
+Epoch: 18
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1589: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+  processed 2000 frames (batch 1999)...
+  processed 4000 frames (batch 3999)...
+  [CHECKPOINT] saved src/runs/rf_stages/checkpoints/activity_clip_ep18/checkpoint_5000frames.pkl (5000 frames)
+  processed 6000 frames (batch 5999)...
+  processed 8000 frames (batch 7999)...
+  processed 10000 frames (batch 9999)...
+  [CHECKPOINT] saved src/runs/rf_stages/checkpoints/activity_clip_ep18/checkpoint_10000frames.pkl (10000 frames)
+  processed 12000 frames (batch 11999)...
+  processed 14000 frames (batch 13999)...
+  [CHECKPOINT] saved src/runs/rf_stages/checkpoints/activity_clip_ep18/checkpoint_15000frames.pkl (15000 frames)
+  processed 16000 frames (batch 15999)...
+  processed 18000 frames (batch 17999)...
+  processed 20000 frames (batch 19999)...
+  [CHECKPOINT] saved src/runs/rf_stages/checkpoints/activity_clip_ep18/checkpoint_20000frames.pkl (20000 frames)
+  processed 22000 frames (batch 21999)...
+  processed 24000 frames (batch 23999)...
+  [CHECKPOINT] saved src/runs/rf_stages/checkpoints/activity_clip_ep18/checkpoint_25000frames.pkl (25000 frames)
+  processed 26000 frames (batch 25999)...
+  processed 28000 frames (batch 27999)...
+  processed 30000 frames (batch 29999)...
+  [CHECKPOINT] saved src/runs/rf_stages/checkpoints/activity_clip_ep18/checkpoint_30000frames.pkl (30000 frames)
+  processed 32000 frames (batch 31999)...
+  processed 34000 frames (batch 33999)...
+  [CHECKPOINT] saved src/runs/rf_stages/checkpoints/activity_clip_ep18/checkpoint_35000frames.pkl (35000 frames)
+  processed 36000 frames (batch 35999)...
+  processed 38000 frames (batch 37999)...
+
+Collected 38036 frames across 16 recordings
+Frames per recording: [('14_main_2_2', 1404), ('14_main_2_3', 1679), ('20_assy_0_1', 2854), ('20_main_0_1', 2066), ('05_assy_0_1', 2918), ('20_assy_3_6', 2967), ('05_assy_2_2', 2323), ('14_assy_0_1', 3005), ('24_assy_2_4', 2952), ('14_main_0_1', 1685), ('24_assy_0_1', 2158), ('05_main_0_1', 1380), ('26_assy_0_1', 3093), ('24_main_0_1', 1371), ('26_assy_1_5', 4587), ('26_main_0_1', 1594)]
+  14_main_2_2: 1404 frames, 165 clips
+  14_main_2_3: 1679 frames, 198 clips
+  20_assy_0_1: 2854 frames, 289 clips
+  20_main_0_1: 2066 frames, 234 clips
+  05_assy_0_1: 2918 frames, 344 clips
+  20_assy_3_6: 2967 frames, 345 clips
+  05_assy_2_2: 2323 frames, 282 clips
+  14_assy_0_1: 3005 frames, 369 clips
+  24_assy_2_4: 2952 frames, 348 clips
+  14_main_0_1: 1685 frames, 198 clips
+  24_assy_0_1: 2158 frames, 255 clips
+  05_main_0_1: 1380 frames, 171 clips
+  26_assy_0_1: 3093 frames, 379 clips
+  24_main_0_1: 1371 frames, 161 clips
+  26_assy_1_5: 4587 frames, 512 clips
+  26_main_0_1: 1594 frames, 186 clips
+
+Clip-level Top-1 (majority vote, valid clips): 0.0282
+  Total clips: 4436, valid: 4436
+
+Per-class:
+  class 0: top1=0.672 (n=122)
+  class 1: top1=0.077 (n=26)
+  class 2: top1=0.000 (n=20)
+  class 3: top1=0.000 (n=277)
+  class 4: top1=0.000 (n=130)
+  class 5: top1=0.000 (n=145)
+  class 6: top1=0.000 (n=125)
+  class 7: top1=0.000 (n=131)
+  class 8: top1=0.000 (n=345)
+  class 9: top1=0.013 (n=1002)
+  class 10: top1=0.033 (n=92)
+  class 11: top1=0.000 (n=39)
+  class 12: top1=1.000 (n=2)
+  class 13: top1=0.474 (n=19)
+  class 14: top1=0.000 (n=6)
+  class 15: top1=0.077 (n=13)
+  class 16: top1=0.000 (n=30)
+  class 17: top1=0.000 (n=85)
+  class 18: top1=0.000 (n=22)
+  class 19: top1=0.000 (n=51)
+  class 20: top1=0.000 (n=24)
+  class 21: top1=0.000 (n=74)
+  class 22: top1=0.037 (n=27)
+  class 23: top1=0.059 (n=17)
+  class 24: top1=0.000 (n=6)
+  class 25: top1=0.000 (n=39)
+  class 27: top1=0.000 (n=98)
+  class 28: top1=0.026 (n=39)
+  class 29: top1=0.006 (n=177)
+  class 30: top1=0.000 (n=89)
+  class 31: top1=0.000 (n=9)
+  class 32: top1=0.000 (n=184)
+  class 33: top1=0.000 (n=3)
+  class 34: top1=0.000 (n=36)
+  class 35: top1=0.000 (n=4)
+  class 36: top1=0.000 (n=27)
+  class 37: top1=0.000 (n=41)
+  class 38: top1=0.000 (n=12)
+  class 39: top1=0.000 (n=173)
+  class 40: top1=0.024 (n=124)
+  class 41: top1=0.000 (n=71)
+  class 42: top1=0.000 (n=30)
+  class 43: top1=0.000 (n=20)
+  class 44: top1=0.000 (n=9)
+  class 46: top1=0.000 (n=79)
+  class 47: top1=0.059 (n=34)
+  class 50: top1=0.000 (n=17)
+  class 51: top1=0.000 (n=55)
+  class 52: top1=0.000 (n=22)
+  class 53: top1=0.000 (n=20)
+  class 54: top1=0.000 (n=8)
+  class 56: top1=0.308 (n=13)
+  class 57: top1=0.000 (n=3)
+  class 58: top1=0.000 (n=7)
+  class 59: top1=0.000 (n=10)
+  class 60: top1=0.000 (n=7)
+  class 61: top1=0.000 (n=8)
+  class 62: top1=0.000 (n=8)
+  class 63: top1=0.000 (n=20)
+  class 65: top1=0.000 (n=110)
+
+Saved to src/runs/rf_stages/checkpoints/activity_clip_ep18/activity_clip.json

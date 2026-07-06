@@ -1,0 +1,22 @@
+Loading src/runs/rf_stages/checkpoints/best.pth...
+[config] hybrid mode: counted 188111 labeled frames from AR_labels.csv
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1589: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.norm_first was True
+  self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
+  processed 2000 frames...
+Traceback (most recent call last):
+  File "/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/evaluation/null_model_pos.py", line 160, in <module>
+    main()
+    ~~~~^^
+  File "/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/evaluation/null_model_pos.py", line 62, in main
+    for i, batch in enumerate(val_loader):
+                    ~~~~~~~~~^^^^^^^^^^^^
+  File "/home/newadmin/miniconda3/lib/python3.13/site-packages/torch/utils/data/dataloader.py", line 718, in __next__
+    data = self._next_data()
+  File "/home/newadmin/miniconda3/lib/python3.13/site-packages/torch/utils/data/dataloader.py", line 778, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+  File "/home/newadmin/miniconda3/lib/python3.13/site-packages/torch/utils/data/_utils/fetch.py", line 57, in fetch
+    return self.collate_fn(data)
+           ~~~~~~~~~~~~~~~^^^^^^
+  File "/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/data/industreal_dataset.py", line 1584, in collate_fn
+    images = torch.stack([item['images']['rgb'] for item in batch], dim=0)
+RuntimeError: [enforce fail at alloc_cpu.cpp:127] err == 0. DefaultCPUAllocator: can't allocate memory: you tried to allocate 2764800 bytes. Error code 12 (Cannot allocate memory)

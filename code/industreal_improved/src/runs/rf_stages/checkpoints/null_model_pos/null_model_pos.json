@@ -1,0 +1,29 @@
+{
+  "checkpoint": "src/runs/rf_stages/checkpoints/best.pth",
+  "n_frames": 5000,
+  "n_recordings": 3,
+  "ours_pos_mean": 0.998802713841478,
+  "null_all_zeros_pos_mean": 0.9995394491992863,
+  "null_copy_prev_pos_mean": 0.9984302148860528,
+  "interpretation": "If null_copy_prev_pos is similar to ours_pos, POS is a fill-forward artifact, not a real metric. Drop POS from headline. Use per-component F1 (and transition F1 if available) as primary PSR metric.",
+  "per_recording": {
+    "14_main_2_2": {
+      "ours_pos": 0.9994168340568911,
+      "null_all_zeros_pos": 0.9995464264886931,
+      "null_copy_prev_pos": 0.9989632605455842,
+      "n_frames": 1404
+    },
+    "14_main_2_3": {
+      "ours_pos": 0.9990789901397767,
+      "null_all_zeros_pos": 0.9994040524433849,
+      "null_copy_prev_pos": 0.9986997507855673,
+      "n_frames": 1679
+    },
+    "20_assy_0_1": {
+      "ours_pos": 0.9979123173277662,
+      "null_all_zeros_pos": 0.999667868665781,
+      "null_copy_prev_pos": 0.997627633327007,
+      "n_frames": 1917
+    }
+  }
+}

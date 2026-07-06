@@ -1,0 +1,6 @@
+{
+  "model": "MViTv2-S (SlowFast arch, WACV 2024 Meccano)",
+  "total_clips": 916,
+  "top1_75": 0.6223,
+  "top1_69": 0.6223
+}
