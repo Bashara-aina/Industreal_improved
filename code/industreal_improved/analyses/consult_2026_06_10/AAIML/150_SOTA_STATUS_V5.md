@@ -3,12 +3,12 @@
 **Date:** 2026-07-07
 **Cycle:** Opus 140/141 + implementation fixes + MViTv2-S probe breakthrough
 
-## Head Pose — 2/2 BEATS SOTA (first baseline)
+## Head Pose — FIRST BASELINE (no published SOTA on IndustReal to beat)
 - Forward MAE 9.14° [CI 7.74-10.87°]
 - Up-vector MAE 7.78° [CI 6.89-8.81°]
 
 ## Detection — BEATS SOTA (single-task) / BROKEN (multi-task)
-- D1R single-task YOLOv8m: 0.995 mAP50 (BEATS WACV 0.95, **cross-architecture single-task**)
+- D1R single-task YOLOv8m: 0.995 mAP50 (BEATS WACV 0.838 (annotated-frames, like-for-like; 0.641 entire-video is conservative), **cross-architecture single-task**)
 - D3 multi-task ConvNeXt-T: 0.00009 (impl bug, 4 fixes applied, V4 validating)
 - D4+D1R decisive: 0.6364 (3-video subset) (decoder transfer verified)
 
