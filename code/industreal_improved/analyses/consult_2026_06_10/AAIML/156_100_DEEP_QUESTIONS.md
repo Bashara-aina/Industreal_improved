@@ -1,65 +1,73 @@
-# 156 — 100 Deep Questions: Multi-Task Theory Defense, Diagnosis, and Resolution
+## §9. The Single-Task vs Multi-Task Comparison (Q81-90)
 
-## §1. The Multi-Task Theory Defense (Q1-10)
+### Q81. What single-task baselines do we have?
+- Single-task detection (in flight, epoch 43+)
+- Single-task activity MLP (script ready, not launched)
+- Single-task PSR (script ready, not launched)
+- Single-task pose (not started)
+- Status: 1 of 4 in flight
 
-### Q1. Is multi-task learning a valid theoretical framework?
-- Multi-task is well-established in ML literature (Caruana 1997, Ruder 2017)
-- Standard practice in NLP (BERT, T5), vision (Mask R-CNN), and audio
-- The theory is NOT the problem in our case
-- Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/analyses/consult_2026_06_10/AAIML/153_MULTI_TASK_DEBATE.md
+### Q82. What's the single-task vs multi-task comparison for pose?
+- Multi-task: 9.14° fwd / 7.78° up
+- Single-task expected: 5-7° fwd
+- If single-task < multi-task: multi-task HELPS pose
+- If single-task ≈ multi-task: multi-task doesn't help/hurt
+- Most likely: single-task is better
 
-### Q2. Can multi-task help when tasks share representations?
-- Detection, head pose, activity, PSR all need image-based features
-- They DO share low-level vision features
-- Multi-task transfer is REAL when task correlations are positive
-- The question is which architecture supports all 4
+### Q83. What's the single-task vs multi-task for PSR?
+- Multi-task V3 (in flight, post_gelu +4608)
+- Expected V3 F1: > 0.78
+- Single-task PSR (not yet run)
+- If single-task > 0.78: multi-task loses
+- If single-task < 0.78: multi-task wins
+- V3 will tell us
 
-### Q3. What does Kendall uncertainty weighting guarantee?
-- Theoretically: auto-balancing between tasks
-- In practice: can collapse on imbalanced tasks
-- BUT: bounded-Kendall (HP_PREC_CAP, KENDALL_FIXED_WEIGHTS) prevents collapse
-- Source: src/config.py (HP_PREC_CAP, KENDALL_FIXED_WEIGHTS)
+### Q84. What's the single-task vs multi-task for activity?
+- Multi-task: 0.0236 (broken, ImageNet backbone)
+- Single-task MViTv2-S frozen: 0.3810
+- Single-task MViTv2-S fine-tuned (target): 0.45-0.55
+- Multi-task MViTv2-S + all fixes (target): 0.40-0.50
+- Multi-task loses 5-10% to single-task on activity
 
-### Q4. Does the user's belief that "multi-task is fine" have literature support?
-- Multi-task works when implemented correctly
-- Standard results: +1-5% from multi-task
-- The negative transfer is usually from bug, not theory
-- User is right in principle
+### Q85. What's the single-task vs multi-task for detection?
+- Multi-task: 0.00009 (broken)
+- D1R single-task: 0.995 (YOLOv8m, independent)
+- Single-task ConvNeXt (in flight): expected 0.5-0.7
+- If single-task > 0.5: multi-task is the killer
+- If single-task < 0.1: implementation is the killer
 
-### Q5. Is the V3 PSR repair evidence supporting multi-task theory?
-- PSR head activations +4608 (was -1.0 to -1.4 dead)
-- The head CAN produce non-constant output
-- The repair + DETACH_PSR_FPN=False fixes the implementation
-- Multi-task theory is sound
-- Source: /tmp/train_psr_repair_v3.log
+### Q86. Can we prove multi-task helps with the 2x2 ablation?
+- Need: 4 single-task + 4 multi-task runs
+- Compare: single-task best vs multi-task with all 9 fixes
+- If multi-task >= 0.9 × single-task: multi-task helps slightly
+- If multi-task >= 1.1 × single-task: multi-task strongly helps
+- Otherwise: multi-task hurts or doesn't help
 
-### Q6. Can the same ConvNeXt serve 4 different heads?
-- Yes, if the right heads are designed
-- ConvNeXt features support spatial tasks (pose)
-- Temporal tasks need additional aggregation (TCN/attention)
-- The architecture is the bottleneck, not the backbone sharing
+### Q87. What's the cost of running 4 single-task baselines?
+- 4 trainings × 2-3 days each = 8-12 days
+- Detection: in flight
+- Activity: 2-3 days
+- PSR: 2-3 days
+- Pose: 1-2 days
+- Total: 8-12 days for complete comparison
 
-### Q7. Does the cascade table prove multi-task theory is wrong?
-- NO. The cascade shows implementation failures
-- Each broken head has a specific implementation cause
-- GELU dead = arch bug, not theory bug
-- 5 classes never predicted = training bug, not theory bug
-- Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/multi_task_cascade/cascade_table.md
+### Q88. Can we run 4 single-task baselines in parallel?
+- 2 GPUs, but each training uses ~3-4GB
+- 1 training per GPU at a time (don't risk OOM)
+- Sequential: 8-12 days
+- Parallel: not possible (GPU memory)
+- Same as MViTv2-S fine-tuning (also blocked)
 
-### Q8. Can multi-task work with the right architecture?
-- Yes, with the right backbone (Kinetics for activity)
-- With the right heads (TCN for temporal)
-- With the right loss balancing (bounded Kendall)
-- With the right loss formulations (per-class for imbalanced)
+### Q89. What's the right way to compare multi-task vs single-task?
+- Same backbone, same data, same augmentations
+- Same optimizer, same LR schedule
+- Same number of epochs
+- Just different task combination
+- The 2x2 ablation is the definitive test
 
-### Q9. What's the strongest evidence FOR multi-task being correct?
-- Pose works in multi-task (9.14 deg fwd)
-- Linear probe (frozen) shows backbone has signal
-- D1R single-task BEATS SOTA (multi-task CAN work)
-- The user is right that implementation is the dominant cause
-
-### Q10. Should the paper claim multi-task helps?
-- If V3 PSR F1 > 0.78: yes, multi-task helps with fixes
-- If single-task detection > 0.5: yes, with fixes
-- If MViTv2-S fine-tuning activity > 0.45: yes, with right backbone
-- Otherwise: multi-task is broken, single-task is the answer
+### Q90. What if single-task wins on all 4 heads?
+- Multi-task theory is wrong for diverse tasks
+- Single-task is the future
+- Paper story: "single-task is optimal for 4-task IndustReal"
+- But: hybrid architecture (per-task backbone) can give multi-task-like benefits
+- The 4 single-task baselines are the definitive test
