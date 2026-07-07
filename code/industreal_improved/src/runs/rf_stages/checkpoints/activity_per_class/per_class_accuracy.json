@@ -1,0 +1,422 @@
+{
+  "overall_accuracy": 0.02361765218908076,
+  "total_labeled_frames": 28665,
+  "num_classes": 69,
+  "num_classes_with_zero_accuracy": 41,
+  "per_class": {
+    "0": {
+      "class_name": "other",
+      "correct": 0,
+      "total": 0,
+      "accuracy": null
+    },
+    "1": {
+      "class_name": "take_short_brace",
+      "correct": 14,
+      "total": 160,
+      "accuracy": 0.0875
+    },
+    "2": {
+      "class_name": "align_objects",
+      "correct": 0,
+      "total": 1839,
+      "accuracy": 0.0
+    },
+    "3": {
+      "class_name": "take_pin_short",
+      "correct": 0,
+      "total": 495,
+      "accuracy": 0.0
+    },
+    "4": {
+      "class_name": "plug_short_pin",
+      "correct": 0,
+      "total": 1052,
+      "accuracy": 0.0
+    },
+    "5": {
+      "class_name": "take_tooth_washer",
+      "correct": 3,
+      "total": 747,
+      "accuracy": 0.004016
+    },
+    "6": {
+      "class_name": "take_nut",
+      "correct": 0,
+      "total": 852,
+      "accuracy": 0.0
+    },
+    "7": {
+      "class_name": "tighten_nut",
+      "correct": 0,
+      "total": 2415,
+      "accuracy": 0.0
+    },
+    "8": {
+      "class_name": "check_instruction",
+      "correct": 0,
+      "total": 6217,
+      "accuracy": 0.0
+    },
+    "9": {
+      "class_name": "take_partial_model",
+      "correct": 25,
+      "total": 530,
+      "accuracy": 0.04717
+    },
+    "10": {
+      "class_name": "take_long_brace",
+      "correct": 29,
+      "total": 287,
+      "accuracy": 0.101045
+    },
+    "11": {
+      "class_name": "take_screw_pin",
+      "correct": 0,
+      "total": 157,
+      "accuracy": 0.0
+    },
+    "12": {
+      "class_name": "put",
+      "correct": 9,
+      "total": 14,
+      "accuracy": 0.642857
+    },
+    "13": {
+      "class_name": "take_pin_long",
+      "correct": 57,
+      "total": 113,
+      "accuracy": 0.504425
+    },
+    "14": {
+      "class_name": "put_pin_long",
+      "correct": 0,
+      "total": 43,
+      "accuracy": 0.0
+    },
+    "15": {
+      "class_name": "take_wing_beam",
+      "correct": 10,
+      "total": 105,
+      "accuracy": 0.095238
+    },
+    "16": {
+      "class_name": "plug_screw_pin",
+      "correct": 0,
+      "total": 186,
+      "accuracy": 0.0
+    },
+    "17": {
+      "class_name": "take_round_washer",
+      "correct": 0,
+      "total": 527,
+      "accuracy": 0.0
+    },
+    "18": {
+      "class_name": "take_acorn_nut",
+      "correct": 0,
+      "total": 97,
+      "accuracy": 0.0
+    },
+    "19": {
+      "class_name": "tighten_acorn_nut",
+      "correct": 0,
+      "total": 332,
+      "accuracy": 0.0
+    },
+    "20": {
+      "class_name": "take_pin_middle",
+      "correct": 0,
+      "total": 140,
+      "accuracy": 0.0
+    },
+    "21": {
+      "class_name": "take_wheel",
+      "correct": 0,
+      "total": 514,
+      "accuracy": 0.0
+    },
+    "22": {
+      "class_name": "plug_pin_long",
+      "correct": 9,
+      "total": 171,
+      "accuracy": 0.052632
+    },
+    "23": {
+      "class_name": "take_wing",
+      "correct": 5,
+      "total": 106,
+      "accuracy": 0.04717
+    },
+    "24": {
+      "class_name": "put_wing",
+      "correct": 0,
+      "total": 30,
+      "accuracy": 0.0
+    },
+    "25": {
+      "class_name": "plug_pin_middle",
+      "correct": 11,
+      "total": 271,
+      "accuracy": 0.04059
+    },
+    "26": {
+      "class_name": "take_pulley",
+      "correct": 0,
+      "total": 233,
+      "accuracy": 0.0
+    },
+    "27": {
+      "class_name": "plug_wheel",
+      "correct": 0,
+      "total": 0,
+      "accuracy": null
+    },
+    "28": {
+      "class_name": "browse_instruction",
+      "correct": 270,
+      "total": 649,
+      "accuracy": 0.416025
+    },
+    "29": {
+      "class_name": "fit_short_brace",
+      "correct": 4,
+      "total": 268,
+      "accuracy": 0.014925
+    },
+    "30": {
+      "class_name": "fit_tooth_washer",
+      "correct": 0,
+      "total": 1079,
+      "accuracy": 0.0
+    },
+    "31": {
+      "class_name": "fit_round_washer",
+      "correct": 0,
+      "total": 581,
+      "accuracy": 0.0
+    },
+    "32": {
+      "class_name": "fit_long_brace",
+      "correct": 1,
+      "total": 65,
+      "accuracy": 0.015385
+    },
+    "33": {
+      "class_name": "fit_nut",
+      "correct": 0,
+      "total": 1350,
+      "accuracy": 0.0
+    },
+    "34": {
+      "class_name": "put_screw_pin",
+      "correct": 0,
+      "total": 34,
+      "accuracy": 0.0
+    },
+    "35": {
+      "class_name": "put_wheel",
+      "correct": 69,
+      "total": 208,
+      "accuracy": 0.331731
+    },
+    "36": {
+      "class_name": "pull_wheel",
+      "correct": 0,
+      "total": 21,
+      "accuracy": 0.0
+    },
+    "37": {
+      "class_name": "loosen_nut",
+      "correct": 0,
+      "total": 828,
+      "accuracy": 0.0
+    },
+    "38": {
+      "class_name": "put_nut",
+      "correct": 0,
+      "total": 138,
+      "accuracy": 0.0
+    },
+    "39": {
+      "class_name": "pull_objects",
+      "correct": 0,
+      "total": 304,
+      "accuracy": 0.0
+    },
+    "40": {
+      "class_name": "put_pin_middle",
+      "correct": 0,
+      "total": 43,
+      "accuracy": 0.0
+    },
+    "41": {
+      "class_name": "take_objects",
+      "correct": 0,
+      "total": 1063,
+      "accuracy": 0.0
+    },
+    "42": {
+      "class_name": "put_partial_model",
+      "correct": 85,
+      "total": 709,
+      "accuracy": 0.119887
+    },
+    "43": {
+      "class_name": "put_objects",
+      "correct": 0,
+      "total": 459,
+      "accuracy": 0.0
+    },
+    "44": {
+      "class_name": "pull_pin_short",
+      "correct": 0,
+      "total": 162,
+      "accuracy": 0.0
+    },
+    "45": {
+      "class_name": "put_pin_short",
+      "correct": 10,
+      "total": 127,
+      "accuracy": 0.07874
+    },
+    "46": {
+      "class_name": "put_long_brace",
+      "correct": 0,
+      "total": 66,
+      "accuracy": 0.0
+    },
+    "47": {
+      "class_name": "pull_partial_model",
+      "correct": 0,
+      "total": 0,
+      "accuracy": null
+    },
+    "48": {
+      "class_name": "fit_wheel",
+      "correct": 0,
+      "total": 545,
+      "accuracy": 0.0
+    },
+    "49": {
+      "class_name": "check_partial_model",
+      "correct": 16,
+      "total": 238,
+      "accuracy": 0.067227
+    },
+    "50": {
+      "class_name": "put_short_brace",
+      "correct": 0,
+      "total": 0,
+      "accuracy": null
+    },
+    "51": {
+      "class_name": "fit_objects",
+      "correct": 0,
+      "total": 6,
+      "accuracy": 0.0
+    },
+    "52": {
+      "class_name": "put_round_washer",
+      "correct": 0,
+      "total": 99,
+      "accuracy": 0.0
+    },
+    "53": {
+      "class_name": "fit_pulley",
+      "correct": 0,
+      "total": 386,
+      "accuracy": 0.0
+    },
+    "54": {
+      "class_name": "fit_wing_beam",
+      "correct": 16,
+      "total": 136,
+      "accuracy": 0.117647
+    },
+    "55": {
+      "class_name": "put_tooth_washer",
+      "correct": 0,
+      "total": 106,
+      "accuracy": 0.0
+    },
+    "56": {
+      "class_name": "pull_pin_middle",
+      "correct": 18,
+      "total": 29,
+      "accuracy": 0.62069
+    },
+    "57": {
+      "class_name": "put_wing_beam",
+      "correct": 0,
+      "total": 0,
+      "accuracy": null
+    },
+    "58": {
+      "class_name": "put_pulley",
+      "correct": 8,
+      "total": 81,
+      "accuracy": 0.098765
+    },
+    "59": {
+      "class_name": "pull_screw_pin",
+      "correct": 0,
+      "total": 33,
+      "accuracy": 0.0
+    },
+    "60": {
+      "class_name": "put_acorn_nut",
+      "correct": 0,
+      "total": 14,
+      "accuracy": 0.0
+    },
+    "61": {
+      "class_name": "loosen_acorn_nut",
+      "correct": 0,
+      "total": 78,
+      "accuracy": 0.0
+    },
+    "62": {
+      "class_name": "take_small_screw_pin",
+      "correct": 0,
+      "total": 40,
+      "accuracy": 0.0
+    },
+    "63": {
+      "class_name": "plug_small_screw_pin",
+      "correct": 0,
+      "total": 62,
+      "accuracy": 0.0
+    },
+    "64": {
+      "class_name": "put_small_screw_pin",
+      "correct": 4,
+      "total": 34,
+      "accuracy": 0.117647
+    },
+    "65": {
+      "class_name": "fit_acorn_nut",
+      "correct": 0,
+      "total": 79,
+      "accuracy": 0.0
+    },
+    "66": {
+      "class_name": "fit_wing",
+      "correct": 4,
+      "total": 131,
+      "accuracy": 0.030534
+    },
+    "67": {
+      "class_name": "pull_pin_long",
+      "correct": 0,
+      "total": 0,
+      "accuracy": null
+    },
+    "68": {
+      "class_name": "plug_objects",
+      "correct": 0,
+      "total": 781,
+      "accuracy": 0.0
+    }
+  }
+}
