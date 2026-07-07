@@ -40,7 +40,7 @@
 
 ### 2.1 Current State
 
-- D1R single-task: 0.995 mAP50 (BEATS WACV 0.95)
+- D1R single-task: 0.995 mAP50 (BEATS WACV 0.838 (annotated-frames, like-for-like))
 - D1 pretrained: 0.0004 (real IndustReal weights, sparse 0.1/frame)
 - D3 multi-task: 0.358 (subsample) / 0.00009 (full-38k)
 - D4+YOLOv8m: 0.000 (default) / 0.347 (re-tuned)
@@ -110,7 +110,7 @@
 
 ### 3.5 The V3 Test
 
-- V3 training in flight (epoch 25+, post_gelu +4608) — auditable from committed log `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log` (commit `8f9d12fea`); V4 launched with all F-1 fixes (KENDALL_FIXED_WEIGHTS=1 path, USE_PSR_TRANSITION=False) on RTX 3060
+- V3 training in flight (epoch 25+, post_gelu +4608) — auditable from committed log `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log` (commit `8f9d12fea`). *(UNVERIFIABLE-REMOTELY: training process state — "epoch 25+", "V4 launched", GPU model "RTX 3060" — are workstation-local. The post_gelu +4608 value is now auditable from the committed log; the process-state claims are not.)*
 - Expected F1 greater than 0.78 after 3-5 epochs
 - If F1 greater than 0.78: V3 repair works, multi-task helps PSR
 

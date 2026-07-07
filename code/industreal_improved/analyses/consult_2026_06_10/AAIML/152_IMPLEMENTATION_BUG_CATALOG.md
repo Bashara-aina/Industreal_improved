@@ -34,13 +34,13 @@ nn.Sequential(
 export DETACH_PSR_FPN=False
 export KENDALL_FIXED_WEIGHTS=1
 export AMP_DTYPE=bf16
-# Result: post_gelu activations +4608 (was -1.0 to -1.4 dead) *(UNVERIFIABLE-REMOTELY: post_gelu value from workstation `/tmp/train_psr_repair_v3.log`)*
+# Result: post_gelu activations +4608 (was -1.0 to -1.4 dead) — auditable from committed log `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log` (commit `8f9d12fea`)
 ```
 
 ### §1.5 File Paths
 - Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1597-1640
 - Detection of bug: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/psr_repair_training/
-- V3 training: /tmp/train_psr_repair_v3.log *(UNVERIFIABLE-REMOTELY: `/tmp/*.log` is workstation-local)*
+- V3 training: `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log` (committed, commit `8f9d12fea`)
 - V3 script: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/scripts/train_psr_repair_v3.sh
 
 ## §2. Detection (5 Classes Never Predicted)
@@ -141,7 +141,7 @@ export AMP_DTYPE=bf16
 
 | # | Fix | Commit | File | Effect |
 |---|---|---|---|---|
-| 1 | PSR head GELU->LeakyReLU | e618d929a | src/models/model.py:1597-1640 | Activations -130 -> +4608 *(UNVERIFIABLE-REMOTELY: post_gelu value from `/tmp/*.log`)* |
+| 1 | PSR head GELU->LeakyReLU | e618d929a | src/models/model.py:1597-1640 | Activations -130 -> +4608 — auditable from committed log `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log` (commit `8f9d12fea`) |
 | 2 | PSR head init index fix | 6defe1f5f | src/models/model.py | Sequential [3]=Linear, [2]=Dropout |
 | 3 | Pose diag index fix | bff38b790 | src/evaluation/head_pose_diag.py | 26.20 -> 7.78 |
 | 4 | Detection GT-balanced sampler | 8cef56fc2 | src/data/industreal_dataset.py | 100% batches have GT |

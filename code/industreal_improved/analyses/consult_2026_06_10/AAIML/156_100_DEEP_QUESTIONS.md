@@ -308,7 +308,7 @@
 - DETACH_PSR_FPN=True (config bug)
 - All 11 sub-heads gradient RMS=0.00e+00 (DEAD)
 - V3 fix: LeakyReLU + small-normal init + zero bias + DETACH=False
-- Post_gelu: -1.0 to -1.4 (dead) → +4608 (alive) *(UNVERIFIABLE-REMOTELY: post_gelu value from workstation /tmp/*.log)*
+- Post_gelu: -1.0 to -1.4 (dead) → +4608 (alive) — auditable from committed log  (commit )
 - Source: /tmp/train_psr_repair_v3.log *(UNVERIFIABLE-REMOTELY: /tmp/*.log is workstation-local)*
 
 ### Q42. What does V3 PSR F1 = 0.78+ mean if achieved?
@@ -528,6 +528,6 @@
 ### Q20. What's the single most important fix?
 - DETACH_PSR_FPN=False (File-157 F-1)
 - Restored gradient flow to PSR head
-- Activations went from dead (-1.0) to alive (+4608) with LeakyReLU *(UNVERIFIABLE-REMOTELY: post_gelu value from workstation /tmp/*.log)*
+- Activations went from dead (-1.0) to alive (+4608) with LeakyReLU — auditable from committed log  (commit )
 - This is the fix that gives multi-task a chance
 - V3 relaunched with the actual fix, training is running
