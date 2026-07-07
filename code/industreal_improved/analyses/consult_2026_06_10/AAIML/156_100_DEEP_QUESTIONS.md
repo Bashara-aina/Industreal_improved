@@ -144,6 +144,81 @@
 
 ---
 
+## §7. The Pose Head + Cross-Task Debate (Q61-70)
+
+### Q61. Why does pose work in multi-task when other heads fail?
+- Pose is a spatial task (forward/up direction)
+- ConvNeXt ImageNet features have spatial information
+- Per-frame regression is appropriate
+- 9.14° fwd / 7.78° up (first baseline)
+- Pose doesn't need video backbone or temporal
+
+### Q62. Is 9.14° fwd a real "first baseline" claim?
+- SOTA is ~15° (uncited source, per Opus HP-1)
+- We have 9.14° with bootstrap CI [7.74, 10.87]
+- Verdict: first ego-pose baseline, BEATS uncited SOTA
+- Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/pose_kalman_eval/pose_kalman_results.json
+
+### Q63. What does the 3.5-month index bug (26.20° vs 7.78°) tell us?
+- Eval scripts used position [3:6] as up-vector
+- Fixed in 4 scripts
+- Training loss was always correct
+- 3.5 months of stale measurement
+- Per-rec median (5.82°) is more honest headline
+
+### Q64. Is multi-task helping or hurting pose?
+- Multi-task: 9.14° (works fine)
+- Single-task: not yet measured
+- If single-task gives 5-7°: multi-task HURTS pose
+- If single-task gives 9-10°: multi-task HELPS pose
+- Most likely: multi-task doesn't help much (pose converges anyway)
+
+### Q65. What's the 14_assy_0_1 outlier?
+- 17.05° fwd (vs 6-8° others)
+- 12.32° up (vs 5-7° others)
+- Model failure, NOT GT artifact
+- GT is clean (no tracking issues)
+- Likely visual domain shift
+- Recommendation: report both with-outlier (7.39° fwd) and without (9.14° fwd)
+
+### Q66. Can we beat 9.14° with single-task pose?
+- Single-task would have 100% gradient (vs 25% in multi-task)
+- Single-task expected: 5-7° fwd
+- If single-task achieves 6°: 50% better than multi-task
+- The fix path: single-task pose baseline
+
+### Q67. Is the Kalman smoothing worth the 1.5-2.7% improvement?
+- Kalman: 9.00° fwd / 7.58° up
+- Single-frame: 9.14° fwd / 7.78° up
+- Modest improvement, but not a fundamental gain
+- ConvNeXt already produces smooth outputs
+- Real headroom: video backbone or architecture change
+
+### Q68. What's the right pose architecture for SOTA-comparable?
+- Current: 9-DoF regression from ConvNeXt features
+- Single-task: same architecture, 100% gradient
+- Could add: temporal smoothing (Kalman + Rauch-Tung-Striebel)
+- Could add: SO(3) manifold awareness
+- Single-task expected: 5-7° fwd
+
+### Q69. Should we cut pose from the paper?
+- NO: pose is the one head where multi-task doesn't hurt
+- First ego-pose baseline is reportable
+- BEATS uncited SOTA
+- 9.14° / 7.78° is honest
+- Per-rec median 8.94° / 5.82° is more robust
+
+### Q70. What's the cross-task learning transfer opportunity?
+- Detection needs GT signal (sparse)
+- Activity needs temporal semantics (video)
+- PSR needs sequence learning
+- Pose needs spatial regression
+- These don't share representations
+- Multi-task with shared backbone CANNOT serve all 4 needs
+- Different backbones per task: hybrid architecture
+
+---
+
 ## §8. The Architecture Options Analysis (Q71-80)
 
 ### Q71. What architecture options are on the table?
