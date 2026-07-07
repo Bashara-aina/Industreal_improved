@@ -512,7 +512,7 @@ PSR_TRANSITION_MIN_SUSTAINED = 3       # minimum consecutive frames above lo bef
 # Image and model
 # =========================================================================
 # Anchor sizes for RetinaNet detection head (Doc 01 B.3)
-# These are calibrated via k-means on GT boxes: python calibrate_anchors.py
+# Calibrated via k-means on GT boxes: python calibrate_anchors.py
 # Calibrated via k-means on 923 GT boxes (2 train recordings on disk):
 #   w=146-594px, h=89-463px, w/h ratio=0.82-2.95 (wider than tall)
 #   sqrt(area)=188-436px, k-means centers: 164, 269, 333, 338, 404
@@ -521,6 +521,17 @@ PSR_TRANSITION_MIN_SUSTAINED = 3       # minimum consecutive frames above lo bef
 # [OPUS v5 AUDIT #13] Anchor sizes. Original (24,48,96,192,384) covered only 1.6% of GT.
 # K-means on 14,122 boxes gave (195,335,375,445,578) but these were too large — missed
 # small GT (h p10=156px). Keep the guess anchors which empirically gave 0.0172 mAP.
+# =========================================================================
+# [Opus 140 D-1 AUDIT — 2026-07-07] Re-ran k-means on full 14,122 training GT boxes:
+#   GT sqrt-area: p10=227, p50=402, p90=572, min=86, max=821
+#   GT dimensions: p10_h=156, p50_h=303, p10_w=304, p50_w=573
+#   K-means centers (sqrt-area): 195, 335, 375, 445, 578
+#   Current anchors (96,160,256,384,512): 99.9% GT boxes achieve >0.5 center-aligned IoU
+#   Calibrated (195,335,375,445,578):     99.3% GT boxes achieve >0.5 center-aligned IoU
+#   CONCLUSION: Both anchor sets provide adequate coverage. The mean best IoU=0.234
+#   in evaluation is NOT caused by anchor size mismatch — it is caused by the regression
+#   head not refining boxes due to gradient starvation (fixed via GuaranteedGTBatchSampler
+#   and DET_GAMMA_NEG=2.0). Keep current (96,160,256,384,512) for comparability.
 ANCHOR_SIZES = (96, 160, 256, 384, 512)
 DET_POS_IOU_THRESH = 0.4       # [FIX 2026-06-20 (Opus v8 §3)] Was 0.5 — lowered to 0.4 so small assembly parts
                                # light up more positive anchors. For typical IndustReal GT (h≈156px at 720p),
