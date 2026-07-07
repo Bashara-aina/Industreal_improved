@@ -7,7 +7,7 @@
 - Forward MAE 9.14 degrees (CI 7.74-10.87 degrees)
 - Up-vector MAE 7.78 degrees (CI 6.89-8.81 degrees)
 - Kalman smoothed: 9.00 degrees / 7.58 degrees
-- Per-recording median: 8.94 degrees / 5.82 degrees
+- Per-recording median of means (16 rec): 8.94 deg fwd / 7.58 deg up; 5.82 deg is the 9-recording median-of-per-frame-medians variant (up_vector_v3, not directly comparable)
 - Outlier: 14_assy_0_1 = 17.05 degrees fwd, 12.32 degrees up (model failure, not GT)
 
 ### 1.2 Why It Works
