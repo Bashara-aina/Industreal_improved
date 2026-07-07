@@ -29,7 +29,7 @@
 | **POS** | score | **0.9988** | n/a | structural artifact; all-zeros null=0.9995, copy-prev null=0.9984 | `null_model_pos/null_model_pos.json` |
 | **FiLM** | mechanism | static 2x scaling | n/a | NOT input-dependent modulation; gamma dev-from-1 L2=27.7, near-zero sample variance (std=0.002) | `film_gamma_beta.json:46` |
 | **Decoder (full-38k)** | event F1 | **0.0053** | n/a | baseline; PSR head (0.6859) >> decoder; earlier 0.7893 was a 2-recording artifact | `decoder_full_38k/eval.json` |
-| **PSR copy-prev null (full-38k)** | macro F1 | **0.9997** | n/a | persistence baseline; model (0.7018) is 29.7% relatively worse; PSR dominated by temporal auto-correlation | `null_copy_prev/psr_copy_prev.json` |
+| **PSR copy-prev null (full-38k)** | macro F1 | UNVERIFIED (was 0.9997) | n/a | persistence baseline claim; now honest: copy-prev edit distance 0.394 (our model 0.394, delta -0.0001 — models are essentially identical on edit). F1=0.9997 was unsupported by any artifact. See `null_copy_prev/psr_copy_prev.json` for the honest artifact (edit distance per component, not F1). | `null_copy_prev/psr_copy_prev.json` |
 
 ## PSR per-component breakdown (epoch_18, 38k-frame optimal thresholds)
 
@@ -214,7 +214,7 @@ All four heads evaluated. Detection reaches cross-architecture ceiling (D1R mAP5
 
 9. **Cascade pathology** — Implementation bugs are the dominant cause of multi-task failure, not inherent multi-task interference. PSR head (F1=0.6859) outperforms decoder (F1=0.0053) by two orders of magnitude on identical backbone. Per-head issues (gradient starvation, class imbalance, GELU saturation) dominate over cross-task competition.
 
-10. **PSR copy-prev persistence null** — copy-previous-frame achieves PSR macro F1 = 0.9997 on full-38k; model (0.7018) is 29.7% relatively worse than persistence baseline. PSR improvements should be reported relative to this baseline.
+10. **PSR copy-prev persistence null** (corrected 2026-07-08) — The previously cited 0.9997 F1 was unverified (no file produced this value). Honest artifact at `null_copy_prev/psr_copy_prev.json` shows copy-prev edit distance 0.394 (our model 0.394, delta -0.0001) — the two models are essentially identical on edit. The macro-F1 of 0.7018 is NOT directly comparable to copy-prev on the same metric; copy-prev "looks like" the model in edit but has different F1 properties. PSR improvements should be reported relative to this honest baseline, not an unverified F1=0.9997.
 
 11. **Video backbone was the binding constraint for activity** — Frozen MViTv2-S linear probe achieves 0.3810 (+0.114 over majority baseline 0.267), while frozen ConvNeXt (frame-level, 0.2169) was indistinguishable from baseline. The 0.3810 >> 0.30 threshold confirms the video backbone, not the task, was the bottleneck. Fine-tuning MViTv2-S is justified and expected to approach the 0.622 published SOTA.
 

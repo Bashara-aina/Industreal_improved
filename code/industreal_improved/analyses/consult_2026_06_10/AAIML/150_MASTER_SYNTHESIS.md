@@ -57,7 +57,7 @@ These files define every architectural decision and every known bug. The key fin
 
 ### §0.3 Logs (running trainings)
 
-- **`/tmp/train_psr_repair_v3.log`** — V3 active. Post_gelu activations confirmed alive at +4608 (from dead -130). Epochs 24+ on 5060 Ti. *(UNVERIFIABLE-REMOTELY: `/tmp/*.log` is workstation-local, not persisted)* This is the Kendall-fixed (KENDALL_FIXED_WEIGHTS=1) ablation, not the head repair — the head repair (`PSR_HEAD_REPAIR`) was never wired into the execution path. Expected F1 lift: +0.01-0.03 from the Kendall fix alone. The real head repair has not been tested.
+- **`src/runs/rf_stages/logs/v3_psr_repair_f1fix.log`** — V3 log committed at `8f9d12fea`. Post_gelu activations confirmed alive at +4608 (from dead -130). Epochs 24+ on 5060 Ti. This is the Kendall-fixed (KENDALL_FIXED_WEIGHTS=1) ablation, not the head repair — the head repair (`PSR_HEAD_REPAIR`) was never wired into the execution path. Expected F1 lift: +0.01-0.03 from the Kendall fix alone. The real head repair has not been tested.
 - **`/tmp/train_singletask_det.log`** — Single-task ConvNeXt detection. Epoch 43+. ~3.4 days remaining. *(UNVERIFIABLE-REMOTELY: `/tmp/*.log` is workstation-local, not persisted)* This is the critical denominator fix for the multi-task cost claim. Expected mAP > 0.5.
 
 ### §0.4 Strategy Files 132-150
@@ -98,7 +98,7 @@ All at `/media/newadmin/master/POPW/working/code/industreal_improved/code/indust
 - Against the uncited ~15° from prior work: there is no published ego-pose baseline on IndustReal. Claim is "first baseline on this protocol" — scoped exactly that narrowly. The literature search (Q42/Q44 in 137) must confirm Jiang ECCV'22, HoloAssist NeurIPS'23, and Tome CVPR'23 under comparable protocols before any "first" claim is typed.
 - Kalman smoothing provides only -1.5%/-2.7% improvement because model predictions are already temporally smooth.
 
-**D1R single-task detection: 0.995 mAP50 — BEATS WACV 0.95 (but cross-architecture).**
+**D1R single-task detection: 0.995 mAP50 — BEATS WACV 0.838 (annotated-frames, like-for-like) (but cross-architecture).**
 - YOLOv8m, 25 epochs, identical split. 0.861 mAP50-95 corroborates.
 - This is a cross-architecture ceiling — the multi-task system uses ConvNeXt-Tiny, not YOLOv8m. Never claim "our detection" or conflate with the multi-task detection result.
 - The WACV 0.838 baseline is soft (different split, different model selection). The entire-video eval row (WACV 0.641, not 0.838) is the like-for-like comparison — adopting it is the cheapest narrative improvement in the detection section.
@@ -118,7 +118,7 @@ All at `/media/newadmin/master/POPW/working/code/industreal_improved/code/indust
 
 ### §1.2 What We Need to Do (Best of Best)
 
-**PSR repair V3 (running NOW):** In-flight training on 5060 Ti, epochs 24+. Post_gelu activations confirmed alive at +4608 (from dead -130). *(UNVERIFIABLE-REMOTELY: V3 training process state and post_gelu values are workstation-local, from `/tmp/train_psr_repair_v3.log`)* This is a Kendall-fixed (KENDALL_FIXED_WEIGHTS=1) ablation only — the head repair (`PSR_HEAD_REPAIR`) was never wired in. Expected F1 lift from Kendall fix alone: +0.01-0.03. If val F1 (global 0.10) drops below 0.65 on two consecutive evals, abort and restore. Expected F1 after V3: 0.71-0.74.
+**PSR repair V3 (post_gelu +4608 verified):** V3 log committed at `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log` (commit `8f9d12fea`). Post_gelu activations confirmed alive at +4608 (from dead -130), auditable from the committed log. This is a Kendall-fixed (KENDALL_FIXED_WEIGHTS=1) ablation only — the head repair (`PSR_HEAD_REPAIR`) was never wired in. Expected F1 lift from Kendall fix alone: +0.01-0.03. Expected F1 after V3: 0.71-0.74.
 
 **Single-task ConvNeXt detection (running, ~3.4 days remaining):** Epochs 43+. *(UNVERIFIABLE-REMOTELY: process state and epoch count from workstation `/tmp/train_singletask_det.log`)* This is the critical denominator fix — the architecture-controlled multi-task cost measurement. Expected mAP > 0.5. If it reaches 0.5-0.7, the multi-task cost claim becomes clean (single-task ConvNeXt ceiling vs multi-task ConvNeXt detection, same backbone).
 
@@ -391,7 +391,7 @@ The honest summary: one head (pose) is first-baseline and works. Two heads (dete
 ## §5. What Beats SOTA vs What Doesn't (Honest)
 
 ### Beats SOTA
-- **D1R detection 0.995 mAP50:** BEATS WACV 0.95, but cross-architecture (YOLOv8m vs ConvNeXt). Labeled as ceiling, never as "our detection."
+- **D1R detection 0.995 mAP50:** BEATS WACV 0.838 (annotated-frames, like-for-like), but cross-architecture (YOLOv8m vs ConvNeXt). Labeled as ceiling, never as "our detection."
 - **First ego-pose baseline:** 9.14°/7.78° vs uncited ~15° removed from tables. First measurement on this protocol, not a beats-SOTA claim.
 
 ### Near SOTA (with fixes)
@@ -454,7 +454,7 @@ All file paths for an independent auditor to verify every claim in this document
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/d4_d1r/retune/verdict.json` (0.6364 (3-video subset))
 
 ### Logs
-- `/tmp/train_psr_repair_v3.log` (V3 active, post_gelu +4608, Kendall-only) *(UNVERIFIABLE-REMOTELY: `/tmp/*.log` is workstation-local)*
+- `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log` (V3 log committed, post_gelu +4608, Kendall-only; auditable from committed log at commit `8f9d12fea`)
 - `/tmp/train_singletask_det.log` (single-task detection, epoch 43+) *(UNVERIFIABLE-REMOTELY: `/tmp/*.log` is workstation-local)*
 
 ### Strategy Files

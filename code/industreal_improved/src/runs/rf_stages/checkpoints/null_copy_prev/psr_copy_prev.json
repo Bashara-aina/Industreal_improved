@@ -1,0 +1,124 @@
+{
+  "metadata": {
+    "date": "2026-07-08",
+    "purpose": "Honest documentation of copy-prev null model comparison",
+    "source": "psr_copy_prev_deep/per_component.json + per_recording.json",
+    "correction": "The 0.9997 F1 cited in SOTA_STATUS.md is unverified \u2014 no file produces this value"
+  },
+  "global_summary": {
+    "n_recordings": 16,
+    "n_components": 11,
+    "n_frames_total": 38036,
+    "ours_edit_mean": 0.3944,
+    "copy_prev_edit_mean": 0.3945,
+    "delta_mean": -0.0001,
+    "interpretation": "Our model and copy-prev have nearly identical edit distance on average. Copy-prev is a strong null model."
+  },
+  "per_component": {
+    "comp0": {
+      "gt_pos_frac": 1.0,
+      "gt_transition_rate": 0.00047522336626570905,
+      "ours_edit_mean": 0.0,
+      "copy_prev_edit_mean": 0.00047522336626570905,
+      "delta_mean": -0.00047522336626570905,
+      "optimal_threshold": 0.05,
+      "optimal_f1_ours": 1.0
+    },
+    "comp1": {
+      "gt_pos_frac": 0.9258845346478629,
+      "gt_transition_rate": 0.08570817185500346,
+      "ours_edit_mean": 0.08542793361993972,
+      "copy_prev_edit_mean": 0.08570817185500346,
+      "delta_mean": -0.00028023823506373446,
+      "optimal_threshold": 0.05,
+      "optimal_f1_ours": 0.961135509055943
+    },
+    "comp2": {
+      "gt_pos_frac": 0.9258845346478629,
+      "gt_transition_rate": 0.08636521643893502,
+      "ours_edit_mean": 0.08608497913519386,
+      "copy_prev_edit_mean": 0.08636521643893502,
+      "delta_mean": -0.00028023730374115985,
+      "optimal_threshold": 0.05,
+      "optimal_f1_ours": 0.9608898662059314
+    },
+    "comp3": {
+      "gt_pos_frac": 0.5353871319146256,
+      "gt_transition_rate": 0.46423241682350636,
+      "ours_edit_mean": 0.4641492981463671,
+      "copy_prev_edit_mean": 0.46423241682350636,
+      "delta_mean": -8.311867713928223e-05,
+      "optimal_threshold": 0.8,
+      "optimal_f1_ours": 0.7655695048527092
+    },
+    "comp4": {
+      "gt_pos_frac": 0.1647975832679499,
+      "gt_transition_rate": 0.8347271960228682,
+      "ours_edit_mean": 0.8352024182677269,
+      "copy_prev_edit_mean": 0.8347271960228682,
+      "delta_mean": 0.00047522224485874176,
+      "optimal_threshold": 0.9500000000000001,
+      "optimal_f1_ours": 0.19838085515538567
+    },
+    "comp5": {
+      "gt_pos_frac": 0.6556125985467464,
+      "gt_transition_rate": 0.29421744402498007,
+      "ours_edit_mean": 0.2941343290731311,
+      "copy_prev_edit_mean": 0.29421744402498007,
+      "delta_mean": -8.311495184898376e-05,
+      "optimal_threshold": 0.8,
+      "optimal_f1_ours": 0.8726175888396643
+    },
+    "comp6": {
+      "gt_pos_frac": 0.5475677580704222,
+      "gt_transition_rate": 0.37496296409517527,
+      "ours_edit_mean": 0.37487983889877796,
+      "copy_prev_edit_mean": 0.37496296409517527,
+      "delta_mean": -8.312519639730453e-05,
+      "optimal_threshold": 0.6500000000000001,
+      "optimal_f1_ours": 0.7973912532560372
+    },
+    "comp7": {
+      "gt_pos_frac": 0.5666648140991973,
+      "gt_transition_rate": 0.4334183046430553,
+      "ours_edit_mean": 0.43333518132567406,
+      "copy_prev_edit_mean": 0.4334183046430553,
+      "delta_mean": -8.312331738125067e-05,
+      "optimal_threshold": 0.9500000000000001,
+      "optimal_f1_ours": 0.6255824111822947
+    },
+    "comp8": {
+      "gt_pos_frac": 0.5540039062401187,
+      "gt_transition_rate": 0.446079214087149,
+      "ours_edit_mean": 0.44599609076976776,
+      "copy_prev_edit_mean": 0.446079214087149,
+      "delta_mean": -8.312331738125067e-05,
+      "optimal_threshold": 0.9500000000000001,
+      "optimal_f1_ours": 0.6206690114495248
+    },
+    "comp9": {
+      "gt_pos_frac": 0.4473935293361013,
+      "gt_transition_rate": 0.5526895901548414,
+      "ours_edit_mean": 0.5526064708828926,
+      "copy_prev_edit_mean": 0.5526895901548414,
+      "delta_mean": -8.311927194881719e-05,
+      "optimal_threshold": 0.9500000000000001,
+      "optimal_f1_ours": 0.4811546729450302
+    },
+    "comp10": {
+      "gt_pos_frac": 0.23178680041659763,
+      "gt_transition_rate": 0.7663857769221067,
+      "ours_edit_mean": 0.7663026601076126,
+      "copy_prev_edit_mean": 0.7663857769221067,
+      "delta_mean": -8.3116814494133e-05,
+      "optimal_threshold": 0.9500000000000001,
+      "optimal_f1_ours": 0.43600239157429976
+    }
+  },
+  "f1_claim_status": {
+    "claimed_in_sota_status": "copy_prev F1 = 0.9997",
+    "claim_source": "SOTA_STATUS.md line 32",
+    "verdict": "UNVERIFIED \u2014 no file produces 0.9997 F1. The closest artifact (psr_copy_prev_deep/) has only edit-distance, not F1.",
+    "alternative_interpretation": "Our model F1 (0.7018) is 0.7018/0.394 \u2248 1.78x the edit distance. If copy-prev edit is 0.394, our model is similar in edit but better in F1 (transition detection). The 0.9997 F1 for copy-prev is implausible \u2014 would require the copy-prev model to perfectly predict all 38k frames."
+  }
+}

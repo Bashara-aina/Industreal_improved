@@ -49,7 +49,7 @@
 
 | # | Finding | Status | Commit / Evidence |
 |---|---|---|---|
-| F-1 | DETACH_PSR_FPN env-read + head freeze bypass + Kendall staging guard | **DONE** | 59f84c3d4 (config.py env-read) + ea6ac30c (wrapper patch) + 21ab3c3fd (Fix 1 train.py:779-812) + 08c55ae71 (Fix 2 losses.py:1756-1775) |
+| F-1 | DETACH_PSR_FPN env-read + head freeze bypass + Kendall staging guard | **DONE (post-fix multi-task validation in progress)** | 59f84c3d4 (config.py env-read) + ea6ac30c (wrapper patch) + 21ab3c3fd (Fix 1 train.py:779-812) + 08c55ae71 (Fix 2 losses.py:1756-1775). V5 killed by watchdog at epoch 32 (one eval: det 0.00009→0.0129, +143x). V5b auto-launched on GPU 0, resumed from epoch 33, in progress (ETA epoch 50: ~22h from Jul 8 03:23 launch). |
 | F-2 | File 156 §2 was lost | **DONE** | 5e501d70a (reconstructed from file 152) |
 | F-3 | Never-predicted class list wrong | **DONE** | Live text uses `{1, 13, 16, 19, 23}` in 150/151/152/155 (verified by grep) |
 | F-4 | 8 fix-commit hashes don't exist in repo | **DONE** | Verified 2026-07-07 — all 8 hashes resolve: e618d929a (LeakyReLU), 6defe1f5f (Sequential init), bff38b790 (up-vector [6:9]), 8cef56fc2 (GT-balanced sampler), cd901f655 (DET_GAMMA_NEG=2.0), 28bf668c2 (V3 launch), 59f84c3d4 (DETACH env-read), ea6ac30c (wrapper patch). All present in `git log` of public repo `Bashara-aina/Industreal_improved`. Opus-157 F-4 was stale (repo pushed since audit). |
@@ -57,9 +57,9 @@
 | F-6 | 4 evidence directories were missing | **DONE** | 7 evidence dirs in `git ls-files` (full_eval_ep18_v2, d4_retuned, up_vector_v3, d1_yolov8m_v3, psr_optimal_thr_38k, d3_full_38k, activity_mvit_probe) |
 | F-7 | +384 vs +4608 PSR post-gelu discrepancy | **DONE** | All live `+384` replaced with `+4608`; V3 log committed at `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log` (commit 8f9d12fea, 254 lines); 4 docs updated to point to committed log (commit 08c55ae71) |
 | F-8 | LOO std is 0.0163 not 0.0158 | **DONE** | All 6 live docs use 0.0163 (commit 21ab3c3fd; verified by grep in 147/150/150_SOTA_STATUS_V5/151/155/156) |
-| F-9 | /tmp/*.log and best.pth unverifiable remotely | **DONE** | 37 `UNVERIFIABLE-REMOTELY` markers across 8 files; CHECKPOINT_MANIFEST.md (commit 08c55ae71) gives SHA256 of best.pth (59cb88ec85311bfcfff91f000bd08005675e3a882bec9f24ccd5ee0cbe89f9a8) |
+| F-9 | /tmp/*.log and best.pth unverifiable remotely | **DONE (32 markers actual)** | 32 `UNVERIFIABLE-REMOTELY` markers across 8 files (down from 37 — 5 markers were correctly removed during the +4608 update because the V3 log was committed at `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log`); CHECKPOINT_MANIFEST.md (commit 08c55ae71) gives SHA256 of best.pth (59cb88ec85311bfcfff91f000bd08005675e3a882bec9f24ccd5ee0cbe89f9a8); 7 stale +4608 UNVERIFIABLE markers cleaned up in 150/152/156 (commit pending) |
 | F-10 | V3 process loading uncertain | **DONE** | V3 (PID 1901736) started 18s after commit ea6ac30c; wrapper log shows DETACH_PSR_FPN=False and LeakyReLU-active negative post-gelu |
-| F-11 | Two different null baselines conflated | **DONE** | Live 150 text names both: "persistence null (copy-prev) F1=0.9997" vs "prevalence null (always-positive) F1_null=2p/(1+p)" |
+| F-11 | Two different null baselines conflated | **DONE (F1=0.9997 corrected to UNVERIFIED)** | Honest artifact now at `null_copy_prev/psr_copy_prev.json` (4.9 KB) shows copy-prev edit distance 0.394 (our model 0.394, delta -0.0001 — models are essentially identical on edit). The 0.9997 F1 was unsupported by any file. Live 150/155/156 text now correctly distinguishes: copy-prev (edit 0.394, F1 UNVERIFIED) vs prevalence null (always-positive, F1_null=2p/(1+p), per-comp values in psr_null_delta_table.md). |
 | F-12 | Single-task ablation presets exist | **DONE** | Presets verified at config.py:1663 (det), 1694 (act), 1727 (psr), 1760 (pose); docs use `ablation_act_only` not `ablation_activity_only` (file 157 fixed at commit 08c55ae71); ablation suite at `scripts/run_ablation_suite.sh` covers all 4 arms |
 
 ## §2. The Critical Path Forward
@@ -68,8 +68,9 @@
 
 | Stage | Status | When |
 |---|---|---|
-| Stage 1: PSR V3 with DETACH fix | **RUNNING** (PID 1901736) | 1-2 days |
-| Stage 2: Single-task detection completes | **RUNNING** (PID 1574104) | 3-4 days |
+| Stage 1: PSR V3 with DETACH fix | **DONE** (V3 log at `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log`, commit 8f9d12fea, 254 lines, post_gelu +4608 verified) | — |
+| Stage 1.5: V5b (post-fix multi-task continuation) | **IN PROGRESS** (PID 3971657, GPU 0, resumed from epoch 33, ETA epoch 50: ~22h) | 22h |
+| Stage 2: Single-task detection completes | **RUNNING** (PID 4126380, GPU 1, epoch 63+, ETA epoch 100: ~36h) | 36h |
 | Stage 3: 4 single-task baselines | **PENDING** (blocked on GPU) | 8-12 days |
 | Stage 4: MViTv2-S fine-tune | **PENDING** (script ready) | 2 weeks |
 
@@ -120,7 +121,7 @@ Activity needs video backbone. Pose is fine in multi-task.
 | Single-task detection completes | Jul 11 | PENDING (running) |
 | 4 single-task baselines complete | Jul 28 | PENDING |
 | MViTv2-S fine-tune complete | Aug 17 | PENDING |
-| Multi-task V4 (all 9 fixes) completes | Aug 31 | PENDING |
+| Multi-task V5 (all 9 fixes) completes | Aug 4-7 (early; V5b from Jul 8) | IN PROGRESS |
 | 4x4 ablation complete | Sep 14 | PENDING |
 | Paper draft complete | Sep 21 | PENDING |
 | Final review + revision | Oct 5 | PENDING |
@@ -168,7 +169,7 @@ The data supports this:
 W1-2: V3 + single-task det complete
 W3-4: 4 single-task baselines
 W5-6: MViTv2-S fine-tune
-W7-8: Multi-task V4 (all fixes)
+W7-8: Multi-task V5 (all fixes) — superseded by V5b in W3-4
 W9-10: 2x2 ablation
 W11-12: Paper write + submit
 ```
