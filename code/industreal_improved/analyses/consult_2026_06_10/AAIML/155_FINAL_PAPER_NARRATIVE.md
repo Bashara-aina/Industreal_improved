@@ -9,7 +9,7 @@
 
 ## Abstract (200 words)
 
-We trained a 4-head multi-task system on the IndustReal benchmark, with a single ConvNeXt-Tiny backbone supporting detection, head pose, activity, and procedural state recognition (PSR). Our single-task detection BEATS the SOTA ceiling (mAP50 = 0.995 vs WACV 0.95). We characterize three distinct failure modes in the multi-task setup: (1) PSR head GELU activation saturation causing 99.7% dead-zone (now fixed with LeakyReLU + small-normal init + zero bias), (2) detection class collapse on 91.9% empty frames with 5 classes never predicted (fixed with GT-balanced sampler + harder negative mining), (3) activity backbone mismatch -- ImageNet-pretrained ConvNeXt has zero action semantics (linear probe = 0.2169 approx. majority 0.2217), but Kinetics-pretrained MViTv2-S linear probe = 0.3810 (real signal). The contribution is the pathology analysis itself: the multi-task theory is sound, the implementation has multiple bugs, and the right architecture matters. Single-task > multi-task for 3 of 4 heads when bugs are not fixed. With all 9 fixes applied, the system is SOTA-comparable on 2 of 4 heads.
+We trained a 4-head multi-task system on the IndustReal benchmark, with a single ConvNeXt-Tiny backbone supporting detection, head pose, activity, and procedural state recognition (PSR). Our single-task detection BEATS the SOTA ceiling (mAP50 = 0.995 vs WACV 0.838 (annotated-frames, like-for-like; 0.641 entire-video is conservative)). We characterize three distinct failure modes in the multi-task setup: (1) PSR head GELU activation saturation causing 99.7% dead-zone (now fixed with LeakyReLU + small-normal init + zero bias), (2) detection class collapse on 91.9% empty frames with 5 classes never predicted (fixed with GT-balanced sampler + harder negative mining), (3) activity backbone mismatch -- ImageNet-pretrained ConvNeXt has zero action semantics (linear probe = 0.2169 approx. majority 0.2217), but Kinetics-pretrained MViTv2-S linear probe = 0.3810 (real signal). The contribution is the pathology analysis itself: the multi-task theory is sound, the implementation has multiple bugs, and the right architecture matters. Single-task > multi-task for 3 of 4 heads when bugs are not fixed. With all 9 fixes applied, the system is SOTA-comparable on 2 of 4 heads.
 
 ## Introduction
 
@@ -71,7 +71,7 @@ Pose works because it is fundamentally a spatial task. ConvNeXt-Tiny pretrained 
 
 ### Detection (D1R single-task vs D3 multi-task)
 
-Single-task detection using YOLOv8m on the identical split achieves 0.995 mAP50. This is a cross-architecture ceiling, not our multi-task system, and it beats the WACV 0.95 result. The WACV baseline is not directly comparable (different split, different model selection), but the result establishes that near-perfect detection is achievable on this dataset with a standard architecture.
+Single-task detection using YOLOv8m on the identical split achieves 0.995 mAP50. This is a cross-architecture ceiling, not our multi-task system, and it beats the WACV 0.838 (annotated-frames) result; 0.641 (entire-video) is the conservative comparison. The WACV baseline is not directly comparable (different split, different model selection), but the result establishes that near-perfect detection is achievable on this dataset with a standard architecture.
 
 In the multi-task setup, detection is pathologically broken. The D3 multi-task head achieves 0.00009 mAP50 on the full 38k evaluation. This is not multi-task interference -- it is a cascade of implementation bugs. Five classes (1, 13, 16, 19, 23) have zero predictions across all 38k frames, indicating a class mapping or initialization defect. The dataset has 3102 GT boxes across 38036 frames, meaning 91.9% of frames contain no objects. Without a GT-balanced sampler, the detection head trains on predominantly negative examples.
 
@@ -147,7 +147,7 @@ All 9 implementation fixes are committed across 9 commits (e618d929a, 6defe1f5f,
 
 ### What Beats SOTA vs What Does Not
 
-- **BEATS SOTA:** D1R detection (0.995 mAP50 vs WACV 0.95, **cross-architecture single-task YOLOv8m**)
+- **BEATS SOTA:** D1R detection (0.995 mAP50 vs WACV 0.838 annotated-frames, like-for-like; 0.641 entire-video is conservative, **cross-architecture single-task YOLOv8m**)
 - **FIRST BASELINE (no published SOTA on IndustReal):** head pose (9.14° fwd, 7.78° up) — uncited ~15° SOTA removed per 150/165 audit
 - **NEAR SOTA (with fixes):** PSR with V3 repair, activity with MViTv2-S fine-tune
 - **NOT SOTA-comparable:** Multi-task activity (0.0236 vs SOTA 0.622), multi-task detection (impl bug)
@@ -161,7 +161,7 @@ Multi-task results without fixes are not SOTA-comparable. Single-task exceeds mu
 We characterized three implementation pathologies that broke our 4-head multi-task system on IndustReal, and applied 9 fixes across as many commits. The findings distinguish between three distinct failure types: gradient starvation (PSR GELU dead zone), class imbalance collapse (detection on 91.9% empty frames), and structural feature-type mismatch (activity with ImageNet backbone). These are not manifestations of a single underlying cause -- they are independent failure modes requiring independent fixes.
 
 With the fixes in place:
-- 2 heads BEAT SOTA (D1R detection at 0.995 mAP50, head pose at 9.14 degrees)
+- 2 heads beat a published anchor (D1R detection at 0.995 mAP50); head pose (9.14 fwd, 7.78 up) is a FIRST BASELINE, not a BEAT-SOTA claim — no published ego-pose baseline on IndustReal exists to beat
 - 2 heads are NEAR SOTA (PSR with V3 repair, activity with MViTv2-S fine-tune)
 - The contribution is the pathology analysis: what four tasks cost one backbone, and how to diagnose and fix each failure mode
 
