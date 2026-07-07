@@ -39,7 +39,7 @@
 | Hash | Description |
 |------|-------------|
 | `d0c186827` | PSR LOO-CV confirms per-comp threshold gain is real — +0.0358 ± 0.0216 held-out improvement |
-| `944add8c0` | PSR per-comp optimal F1 on full 38k val set — macro F1 = 0.7499 (Opus 140 Q2) |
+| `944add8c0` | PSR per-comp optimal F1 on full 38k val set — macro F1 = 0.7018 (Opus 140 Q2; downward revision from 0.7499 on 10k subset) |
 | `6bc786efc` | PSR null-delta table — learned signal quantified for low-prevalence components (Opus PSR-6) |
 | `fc80c97d3` | Null-model POS proves fill-forward artifact — all-zeros POS=0.9995, copy-prev 0.9984, vs ours 0.9988 (Opus Q3, PSR-1) |
 | `1fb744f03` | Retract misleading SOTA labels in SOTA_STATUS.md per 140 §-1 |
