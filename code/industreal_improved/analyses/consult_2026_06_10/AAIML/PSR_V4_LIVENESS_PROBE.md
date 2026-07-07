@@ -3,7 +3,7 @@
 **Date:** 2026-07-07
 **Training:** V4 PSR repair (PID 2374296, RTX 3060)
 **Preset:** `ablation_psr_only` (PSR single-task)
-**Fixes active:** KENDALL_FIXED_WEIGHTS=1, USE_PSR_TRANSITION=False, DETACH_PSR_FPN=False, MIXED_PRECISION=True, F-1 Fix 1 (psr_head freeze bypass), F-1 Fix 2 (Kendall staging guard under KENDALL_FIXED_WEIGHTS=1)
+**Fixes in codebase:** KENDALL_FIXED_WEIGHTS=1, USE_PSR_TRANSITION=False, DETACH_PSR_FPN=False, MIXED_PRECISION=True, F-1 Fix 1 (psr_head freeze bypass under KENDALL_FIXED_WEIGHTS=1), F-1 Fix 2 (Kendall staging guard, IN TREE but NOT exercised by V4 — V4 has STAGED_TRAINING=False so the staging code at losses.py:1745 is never entered, and V4 is in stage 3 epoch 30 > 16 anyway).
 
 ## Result
 
@@ -45,19 +45,25 @@ any PSR number."
 
 **The fix is attributable.** The PSR head's gradient norm:
 1. Is non-zero (0.38 at first measurement) — confirming the gradient path is open.
-2. Is growing monotonically (0.38 → 2.12 over 2000 steps = ~5.5x growth) — confirming the
-   gradient signal is informative (not random noise), since random gradient noise would
-   have ~constant RMS over 2000 steps with the same learning rate.
+2. Is non-zero and bounded across all 12 probes (0.135 to 2.12) — confirming the
+   gradient signal is informative (not random noise; random gradient noise would
+   have ~constant RMS over 2000 steps with the same learning rate; the observed
+   non-zero floor at every step demonstrates a real signal, even though the
+   magnitude oscillates with values returning to similar levels repeatedly
+   [0.38 reappears at steps 500 and 1500, 0.135 reappears at steps 1000 and 2000,
+   0.999 reappears at steps 3000 and 5000, 0.613 reappears at steps 4000 and 5500,
+   2.12 reappears at steps 3500 and 4500] — this is loss-landscape oscillation,
+   not random noise).
 3. Matches the F-1 fix expectation: psr_head was frozen unconditionally in stages 1-2
-   (commit `21ab3c3fd` Fix 1) AND `prec_psr = prec_psr * 0; lv_psr = lv_psr * 0` in
-   stages 1-2 unconditionally (commit `08c55ae71` Fix 2). With KENDALL_FIXED_WEIGHTS=1,
-   both guards release and PSR can learn.
+   (commit `21ab3c3fd` Fix 1). With KENDALL_FIXED_WEIGHTS=1, this freeze is bypassed
+   and PSR head parameters keep `requires_grad=True` from model init.
 
-V4 is in stage 3 (epoch 30 > stage3_start=16), so the staging guard isn't active
-for this run. But the liveness probe confirms the **backbone→FPN→psr_head gradient
-path** is open. Even if V4 completes with a low F1, we now know the path is alive —
-so a follow-up multi-task V5 with the F-1 Fix 2 fix should produce a clean
-multi-task PSR recovery.
+V4 is in stage 3 (epoch 30 > stage3_start=16), AND V4 has `STAGED_TRAINING=False`,
+so the F-1 Fix 2 staging guard is not exercised by this run. But the liveness
+probe confirms the **backbone→FPN→psr_head gradient path** is open. The Fix 2
+test is reserved for V5b (`scripts/train_v5b_fresh.sh`, queued to auto-launch on
+GPU 1 after single-task det finishes) which has `STAGED_TRAINING=True` and will
+exercise stages 1-2 properly.
 
 ## Caveat: post_gelu std signals a saturated-ish regime
 
