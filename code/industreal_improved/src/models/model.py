@@ -1614,12 +1614,14 @@ class PSRHead(nn.Module):
         # New init: small-normal weights + zero bias. Warm-start safe since
         # GELU was passing ~zero gradient through all training — checkpoint
         # state for these heads is effectively random.
+        # Sequential indices: [0]=Linear, [1]=Activation, [2]=Dropout, [3]=Linear
         for head in self.output_heads:
             if isinstance(head[0], nn.Linear):
                 nn.init.normal_(head[0].weight, std=0.01)
                 nn.init.zeros_(head[0].bias)
-                nn.init.normal_(head[2].weight, std=0.01)
-                nn.init.zeros_(head[2].bias)
+            if isinstance(head[3], nn.Linear):
+                nn.init.normal_(head[3].weight, std=0.01)
+                nn.init.zeros_(head[3].bias)
 
         self._debug_step = 0  # step counter for gradient-audit logging
         self._cache: Dict[Tuple[str, str], List[torch.Tensor]] = {}
