@@ -75,7 +75,7 @@ THIS: Final confirmation round — did we do it right?
 - **We did**: All tables now use distinct naming.
 
 ### F-12: Single-task ablation presets exist → CONFIRMED
-- **File 157 said**: `ablation_det_only`, `ablation_activity_only`, `ablation_psr_only`, `ablation_pose_only` are in config.py.
+- **File 157 said**: `ablation_det_only`, `ablation_act_only`, `ablation_psr_only`, `ablation_pose_only` are in config.py.
 - **We did**: Created launch scripts using these presets. Blocked on GPU.
 
 ---

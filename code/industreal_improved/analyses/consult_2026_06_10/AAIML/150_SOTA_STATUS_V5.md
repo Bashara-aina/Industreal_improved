@@ -30,7 +30,7 @@
 - Per-sample variance std=0.002 (essentially constant)
 - NOT modulation, just a static scaling
 
-## LOO-CV — +0.0148 ± 0.0158
+## LOO-CV — +0.0148 ± 0.0163
 - CI includes zero (per-component threshold improvement is not statistically supported)
 - Honest primary is global-0.10 F1 = 0.6788 (full 38k)
 
