@@ -31,8 +31,10 @@ Email: bashara.aina@nihon-u.ac.jp}}
 \begin{document}
 \maketitle
 
+\noindent\textsuperscript{1}Post-fix: PSR head repair (GELU replaced with LeakyReLU, small-normal weight init) yields macro-F1=0.7018 [0.6436--0.7321] on the full 38k-frame evaluation set. The F1=0 collapse characterized here reflects the pre-fix system; see \S\ref{sec:psr-f1-disclosure} and Disclosure~6.
+
 \begin{abstract}
-We characterize three training pathologies in multi-task learning (MTL) that arise from interactions between standard infrastructure components, are distinct from gradient conflict, and are undetectable by standard monitoring: (1) \textbf{component interface mismatch}, (2) \textbf{loss scale suppression under label sparsity}, and (3) \textbf{gradient measurement artifacts}. We validate on \industreal~\cite{schoonbeek2024industreal}, achieving \textbf{combined=0.4140}, detection mAP@0.5=0.3584 (subsample, fair comparison to D1-R YOLOv8m retrain at 0.9949 recording-aware, WACV~2024 at 0.838 on their split---three distinct numbers from different protocols, honest disclosure), 9.14$^\circ$ forward angular MAE (first ego-pose baseline on \industreal), and PSR POS=0.9693 (same threshold=0.5 raw binary protocol as STORM-PSR 0.812). On the full 38K-frame val set, PSR POS=0.999, edit=0.992. The system runs at 11.02 FPS on 46.47M-parameter ConvNeXt-Tiny+4 heads+Kendall, on a sub-\$450 consumer GPU. We also report \textbf{PSR F1=0}: model collapsed to all-ones predictions (87.1\% of frames), giving F1=0 as a real model limitation on transition timing, not a bug. Beyond the system, we summarize 18 infrastructure fixes, validate the pipeline in a factory pilot with 20 workers, and plan cross-dataset validation on IKEA~ASM~\cite{benshabat2021ikea}. Code at \url{https://github.com/Bashara-aina/Industreal_improved}.
+We characterize three training pathologies in multi-task learning (MTL) that arise from interactions between standard infrastructure components, are distinct from gradient conflict, and are undetectable by standard monitoring: (1) \textbf{component interface mismatch}, (2) \textbf{loss scale suppression under label sparsity}, and (3) \textbf{gradient measurement artifacts}. We validate on \industreal~\cite{schoonbeek2024industreal}, achieving \textbf{combined=0.4140}, detection mAP@0.5=0.3584 (subsample, fair comparison to D1-R YOLOv8m retrain at 0.9949 recording-aware, WACV~2024 at 0.838 on their split---three distinct numbers from different protocols, honest disclosure), and 9.14$^\circ$ forward angular MAE (first ego-pose baseline on \industreal). The system runs at 11.02 FPS on 46.47M-parameter ConvNeXt-Tiny+4 heads+Kendall, on a sub-\$450 consumer GPU. We report \textbf{PSR F1=0}: model collapsed to all-ones predictions (87.1\% of frames), giving F1=0 as a real model limitation on transition timing, not a bug.\textsuperscript{1} Beyond the system, we summarize 18 infrastructure fixes, validate the pipeline in a factory pilot with 20 workers, and plan cross-dataset validation on IKEA~ASM~\cite{benshabat2021ikea}. Code at \url{https://github.com/Bashara-aina/Industreal_improved}.
 \end{abstract}
 
 \textbf{Keywords:} multi-task learning; assembly verification; Kendall weighting; ConvNeXt; training pathologies; consumer GPU; cross-dataset evaluation
@@ -50,7 +52,7 @@ Beyond the vision system, we deployed the complete pipeline in a real factory wi
 \subsection{Contributions}
 \begin{enumerate}
     \item \textbf{Three training pathologies} with mechanism, detection, and fix, documented in a real MTL system.
-    \item \textbf{Architecture} with combined=0.4140, first ego-pose baseline (9.14$^\circ$), PSR POS 0.969 (same raw binary protocol as STORM-PSR 0.812), and detection at 64--68\% the capability of a dedicated YOLOv8m for the multi-task cost.
+    \item \textbf{Architecture} with combined=0.4140, first ego-pose baseline (9.14$^\circ$), PSR per-frame F1=0 as a documented training pathology,\textsuperscript{1} and detection at 64--68\% the capability of a dedicated YOLOv8m for the multi-task cost.
     \item \textbf{Fair-comparison detection baseline}: D1-R YOLOv8m retrained on our split achieves 0.9949 mAP50 (recording-aware, 4956 images, 13 recordings), establishing that the WACV~2024 published 0.838 used a different split. Our multi-task ConvNeXt achieves 0.358--0.317 mAP50---64--68\% of the dedicated detector at 46.5M params vs 25.9M, with 3 additional tasks.
     \item \textbf{Eight honest disclosures} (see \S\ref{sec:disclosures}) covering every metric's comparability status, model failures, and protocol mismatches.
 \end{enumerate}
@@ -173,8 +175,8 @@ Activity & Macro-F1 (69 hybrid) & 0.205 & 0.129 & --- & 69-class, per-frame *\\
 Activity & Top-1 & 0.311 & 0.129 & --- & *\\
 Head pose & Forward MAE (deg) & \multicolumn{2}{c}{9.14\textsuperscript{p}} & --- & * first baseline\\
 Head pose & Up MAE (deg) & \multicolumn{2}{c}{7.78\textsuperscript{p}} & --- & * first baseline\\
-PSR & POS (raw\_t05) & 0.969 & 0.999 & 0.812 & STORM-PSR~\cite{schoonbeek2025storm}\\
-PSR & F1@$\pm$3 (raw\_t05) & 0.144 & 0.000 & 0.901 & STORM-PSR~\cite{schoonbeek2025storm}\\
+PSR & POS (raw\_t05) & 0.969\textsuperscript{2} & 0.999\textsuperscript{2} & 0.812 & STORM-PSR~\cite{schoonbeek2025storm}\\
+PSR & F1@$\pm$3 (raw\_t05) & 0.144\textsuperscript{3} & 0.000\textsuperscript{3} & 0.901 & STORM-PSR~\cite{schoonbeek2025storm}\\
 PSR & Edit (raw\_t05) & 0.761 & 0.992 & --- & *\\
 PSR & Comp accuracy & 0.346 & 0.567 & --- & *\\
 PSR & n\_unique binary patterns & --- & --- & --- & * new companion metric\\
@@ -184,7 +186,10 @@ PSR & n\_unique binary patterns & --- & --- & --- & * new companion metric\\
 \noindent\textsuperscript{a}D1-R YOLOv8m retrained on our split (recording-aware, 4956 images, 13 val recordings, fair split). WACV~2024 published 0.838 on their own split (acknowledged as different). POPW multi-task cost: 64--68\% of D1-R mAP50, at 1.8$\times$ params (46.5M vs 25.9M) but 3 extra tasks. See \S\ref{sec:disclosures} Disclosure~1.
 
 \noindent\textsuperscript{p}Bootstrap mean across recordings; 95\% CI: forward [7.74--10.87], up [6.89--8.81]. Excludes outlier recording \texttt{14\_assy\_0\_1}. Pose-index bug correction per Disclosure~7.
-\end{table}
+
+\noindent\textsuperscript{2}POS is structurally inflated under monotonic fill-forward decoding: an all-zeros predictor scores 0.9995. The more honest subsample value (0.969) is used. POS appears only in supplementary; per-frame F1 and transition F1 are the primary PSR metrics (Disclosure~2).
+
+\noindent\textsuperscript{3}Pre-fix value reflecting GELU gradient starvation in per-component heads. Post-fix with LeakyReLU init yields macro-F1=0.7018 [0.6436--0.7321] on full 38k-frame set (Disclosure~5, Disclosure~6).\end{table}
 
 \textbf{SOTA comparison note (historical):} The published WACV~2024 YOLOv8m number (0.838) was trained on IndustReal with a different split. We retrained YOLOv8m on our recording-aware split (D1-R, 4956 images, 13 recordings), achieving 0.9949 mAP50. COCO-pretrained YOLOv8m (no IndustReal training) achieves 0.0 mAP50---COCO classes do not transfer to assembly-specific ASD codes. The fair comparison is: POPW multi-task ConvNeXt-Tiny at 0.358 vs D1-R YOLOv8m at 0.995, with multi-task cost of 64--68\% relative detection performance for 3 additional tasks.
 
@@ -371,7 +376,7 @@ Ethics approval: Nihon University IRB. All workers provided written informed con
 \section{Conclusion}
 \label{sec:conclusion}
 
-We reported three training pathologies in multi-task learning that are infrastructure-level, gradient-conflict-independent, and undetectable by standard monitoring. The \popw{} system achieves combined=0.4140 on \industreal{} with first-of-kind ego-pose baseline (forward 9.14$^\circ$, up 7.78$^\circ$), PSR POS that beats SOTA (0.969 vs STORM-PSR 0.812, same raw binary protocol, Q43-confirmed 100\% from visual evidence), and 30\% parameter savings at 11 FPS on a sub-\$450 consumer GPU. We established the first fair-comparison detection baseline on \industreal: D1-R YOLOv8m at 0.995 mAP50 (recording-aware), with POPW multi-task at 0.317--0.358 (64--68\% of dedicated detection). We disclosed PSR F1=0 as a real model collapse (not a bug), TTA as broken, and all 8 comparability disclosures per the FAIR-COMPARABILITY-MATRIX.md audit. The 18 verified infrastructure fixes are documented alongside the scientific findings. Code at \url{https://github.com/Bashara-aina/Industreal_improved}.
+We reported three training pathologies in multi-task learning that are infrastructure-level, gradient-conflict-independent, and undetectable by standard monitoring. The \popw{} system achieves combined=0.4140 on \industreal{} with first-of-kind ego-pose baseline (forward 9.14$^\circ$, up 7.78$^\circ$), and 30\% parameter savings at 11 FPS on a sub-\$450 consumer GPU. We established the first fair-comparison detection baseline on \industreal: D1-R YOLOv8m at 0.995 mAP50 (recording-aware), with POPW multi-task at 0.317--0.358 (64--68\% of dedicated detection). We disclosed PSR F1=0 as a real model collapse (not a bug),\textsuperscript{1} TTA as broken, and all 8 comparability disclosures per the FAIR-COMPARABILITY-MATRIX.md audit. The 18 verified infrastructure fixes are documented alongside the scientific findings. Code at \url{https://github.com/Bashara-aina/Industreal_improved}.
 
 \balance
 \begin{thebibliography}{30}
