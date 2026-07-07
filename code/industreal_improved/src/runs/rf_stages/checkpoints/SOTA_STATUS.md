@@ -1,4 +1,4 @@
-# SOTA Status — 2026-07-06
+# SOTA Status — 2026-07-07
 
 **Goal:** Beat SOTA on all four heads (Detection, Activity, PSR, Head Pose).
 
@@ -174,7 +174,7 @@ All four heads evaluated. ConvNeXt-Tiny + per-frame MLP hits ceiling on activity
 
 **Freeze date: Jul 20.** All results are locked to epoch_18 `best.pth` (sha256: `59cb88ec…`). The full disclosure text with current numbers, file paths, and pending-TODO items is at [`disclosures_v1.md`](disclosures_v1.md). Summary:
 
-1. **Backbone-swap transfer (D4)** — YOLOv8m→decoder transition F1 = 0.000 (default Q48), 0.347 (re-tuned hi=0.3, lo=0.1, min=2); <1% frame detection rate binds decoder. [Pending D4+D1R for final wording.]
+1. **Backbone-swap transfer (D4)** — YOLOv8m→decoder transition F1 = 0.000 (default Q48), 0.347 (re-tuned hi=0.3, lo=0.1, min=2); <1% frame detection rate binds decoder. D1R fine-tuned YOLOv8m (mAP=0.995) + retuned thresholds yields F1=0.636 (+83% relative) — decoder transfers with adequate detection density; detection density was the dominant binding constraint.
 
 2. **POS is structurally inflated** — all-zeros predictor scores POS=0.9995, copy-prev 0.9984, vs our 0.9988. POS in appendix only; per-frame F1 and transition F1 are the primary PSR metrics.
 
@@ -186,7 +186,7 @@ All four heads evaluated. ConvNeXt-Tiny + per-frame MLP hits ceiling on activity
 
 6. **PSR thresholds are validation-selected** — per-comp macro-F1 0.7499 (10k) vs global 0.10 thresh 0.7217; LOO-CV bounds selection benefit at +0.0358 ± 0.0216 across 16 recordings. [Full-38k per-comp figure pending.]
 
-7. **3.5-month evaluation-index bug** — up-vector read from [3:6] reporting 26.20°; corrected [6:9] yields 7.78°. Training loss indices always correct. One legacy script (`head_pose_diag.py`) remains unfixed, marked deprecated.
+7. **3.5-month evaluation-index bug** — up-vector read from [3:6] reporting 26.20°; corrected [6:9] yields 7.78°. Training loss indices always correct. The legacy script (`head_pose_diag.py`) was also corrected in this session (same [3:6]→[6:9] fix).
 
 8. **Position is unreported** — 9-DoF predicted but position units unverified against HoloLens export; we evaluate only orientation (6/9 DoF).
 
