@@ -3669,6 +3669,20 @@ def main(args):
         _teacher_cache_dir = getattr(C, 'TEACHER_CACHE_DIR', 'runs/teacher_preds')
         distill_loss_fn.set_teacher_cache(_teacher_cache_dir)
 
+    # [FREEZE_BACKBONE 2026-07-07] Lock entire backbone as fixed feature extractor
+    # when FREEZE_BACKBONE=True (linear probe mode). When False, backbone is fine-tuned
+    # at head_lr * BACKBONE_LR_MULT. This sets requires_grad BEFORE the param-group loop
+    # so the `if not param.requires_grad: continue` filter naturally excludes backbone
+    # params from all optimizer groups, saving memory (no optimizer states for 28M frozen).
+    _freeze_bb = bool(getattr(C, 'FREEZE_BACKBONE', True))
+    if _freeze_bb:
+        _n_frozen = 0
+        for name, param in model.named_parameters():
+            if name.startswith('backbone.'):
+                param.requires_grad = False
+                _n_frozen += 1
+        if _n_frozen > 0:
+            logger.info(f'  [FREEZE_BACKBONE] Frozen {_n_frozen} backbone params (linear probe mode)')
     backbone_params, det_head_params, head_params, activity_params, psr_params, det_head_bias_params, bias_params = [], [], [], [], [], [], []
     videomae_params = []
     loss_params = list(criterion.parameters())
@@ -3728,7 +3742,8 @@ def main(args):
     _stage_lr_mult = float(os.environ.get('_STAGE_LR_MULT', 1.0))
     if _stage_lr_mult != 1.0:
         logger.info(f'[RETRY STRATEGY] _STAGE_LR_MULT={_stage_lr_mult}× — scaling all LRs')
-    backbone_lr = C.BASE_LR * 0.1 * _stage_lr_mult
+    _backbone_lr_mult = float(getattr(C, 'BACKBONE_LR_MULT', 0.01))
+    backbone_lr = C.BASE_LR * _backbone_lr_mult * _stage_lr_mult
     head_lr = C.BASE_LR * _stage_lr_mult
     det_head_lr = head_lr * float(getattr(C, 'DET_LR_MULTIPLIER', 5.0))
     det_head_bias_lr = head_lr * DET_BIAS_LR_FACTOR
@@ -3800,7 +3815,7 @@ def main(args):
     if bool(getattr(C, 'ONE_CYCLE_LR', False)):
         # Doc 2 E.2: OneCycleLR with super-convergence
         # High peak LR (5e-4) + aggressive cosine decay
-        backbone_lr_local = C.BASE_LR * 0.1 * _stage_lr_mult
+        backbone_lr_local = C.BASE_LR * _backbone_lr_mult * _stage_lr_mult
         head_lr_local = C.BASE_LR * _stage_lr_mult
         det_head_bias_lr_local = head_lr_local * DET_BIAS_LR_FACTOR
         bias_lr_local = head_lr_local * BIAS_LR_FACTOR
@@ -4244,7 +4259,8 @@ def main(args):
         f'{C.GRAD_ACCUM_STEPS} = {C.EFFECTIVE_BATCH}'
     )
     logger.info(
-        f'  Learning rate   : backbone={C.BASE_LR * 0.1:.1e}, '
+        f'  Learning rate   : backbone={C.BASE_LR * float(getattr(C, "BACKBONE_LR_MULT", 0.01)):.1e} '
+        f'({"FROZEN" if getattr(C, "FREEZE_BACKBONE", True) else "fine-tune"}), '
         f'heads={C.BASE_LR:.1e}'
     )
     logger.info(f'  Grad clip norm  : {C.GRAD_CLIP_NORM}')

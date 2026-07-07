@@ -175,6 +175,12 @@ EMA_SMOOTHING = False      # Not in diagram — removed
 # Required when USE_PSR_SEQUENCE_MODE=True to prevent OOM on RTX 3060 12GB.
 USE_BACKBONE_CHECKPOINT = True
 
+# Backbone fine-tuning control — freeze for linear probe, fine-tune for multi-task
+# FREEZE_BACKBONE=True: backbone weights frozen (requires_grad=False) — linear probe mode.
+# FREEZE_BACKBONE=False: backbone trained at head_lr * BACKBONE_LR_MULT — multi-task FT.
+FREEZE_BACKBONE = True
+BACKBONE_LR_MULT = 0.01  # backbone LR = head LR * this multiplier when fine-tuning
+
 # =========================================================================
 # Paths
 # =========================================================================

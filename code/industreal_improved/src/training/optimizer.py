@@ -19,10 +19,16 @@ def build_optimizer(model: torch.nn.Module) -> torch.optim.Optimizer:
     """Build AdamW optimizer with differential LR for backbone/heads/bias.
 
     Per paper §Implementation:
-      - Backbone LR = 5e-5 (0.1× head LR)
+      - Backbone LR = 5e-5 (0.01× head LR with fine-tuning, frozen for linear probe)
       - Head LR = 5e-4
       - Weight decay = 5e-2 (bias/norm excluded)
     """
+    # [FREEZE_BACKBONE] Freeze entire backbone when True (linear probe mode)
+    if bool(getattr(C, 'FREEZE_BACKBONE', True)):
+        for name, param in model.named_parameters():
+            if name.startswith('backbone.'):
+                param.requires_grad = False
+
     backbone_params, head_params, no_decay_params = [], [], []
     for name, param in model.named_parameters():
         if not param.requires_grad:
@@ -34,7 +40,8 @@ def build_optimizer(model: torch.nn.Module) -> torch.optim.Optimizer:
         else:
             head_params.append(param)
 
-    backbone_lr = C.BASE_LR * 0.1
+    _bb_mult = float(getattr(C, 'BACKBONE_LR_MULT', 0.01))
+    backbone_lr = C.BASE_LR * _bb_mult
     head_lr = C.BASE_LR
     no_decay_lr = head_lr * 0.3
 
