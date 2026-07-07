@@ -1,3 +1,8 @@
+# DEPRECATED 2026-07-07: use eval_pose_kalman.py for reporting numbers.
+# This script is for diagnostic/debugging only — do not use for paper figures
+# or result tables. The up-vector index bug (using [3:6] instead of [6:9]) was
+# fixed at commit bff38b790; eval_pose_kalman.py uses the correct indices.
+
 """Quick head pose diagnostic — shows forward vs up vs position breakdown."""
 import json
 import sys
