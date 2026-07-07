@@ -1,3 +1,71 @@
+## §3. The Backbone Architecture Analysis (Q21-30)
+
+### Q21. Is ConvNeXt-Tiny the right backbone for 4-task multi-task?
+- For pose (spatial): YES, ConvNeXt works
+- For detection: Maybe, YOLOv8m gets 0.995
+- For PSR: Partially, linear probe is 0.2169 (no signal for activity)
+- For activity: NO, 0.0236 (ImageNet has no action semantics)
+
+### Q22. What does MViTv2-S give us that ConvNeXt doesn't?
+- Kinetics-400 pretraining (400 action classes, 400k clips)
+- Action semantics in features
+- Linear probe 0.3810 (vs ConvNeXt 0.2169)
+- Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/activity_mvit_probe/results.json
+
+### Q23. Should we replace ConvNeXt with MViTv2-S?
+- Cost: 2-week fine-tuning
+- Benefit: activity could reach 0.45-0.55
+- Risk: 4-head multi-task may not converge
+- Decision: yes, for activity at least
+- Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/video_backbones.py
+
+### Q24. Can we use a hybrid backbone (ConvNeXt + MViTv2-S)?
+- Architecture: share early layers, split later
+- Cost: complex
+- Benefit: best of both
+- Implementation: src/models/video_backbone_multitask.py (53.8M params, 19.3M trainable)
+- Already designed
+
+### Q25. Does the backbone need to be Kinetics-pretrained for activity?
+- Yes: ImageNet features have no action semantics (proven)
+- Linear probe (frozen ImageNet) = 0.2169 ≈ baseline
+- Linear probe (frozen Kinetics) = 0.3810 (+0.1641 improvement)
+- The backbone pretraining is THE cause of activity failure
+
+### Q26. Is per-frame architecture the problem for activity?
+- Per-frame MLP can't model temporal dynamics
+- TCN/TCN+ViT architectures built (a3bad7356)
+- TCN probe on ConvNeXt: 0.0723 (fails)
+- TCN probe on MViTv2-S: pending
+
+### Q27. What's the right architecture for 4-task multi-task?
+- Backbone: MViTv2-S (video, Kinetics) or hybrid
+- Heads: per-task (detection FPN, pose regression, activity TCN, PSR sequence)
+- Loss balancing: bounded Kendall
+- Architecture already in: video_backbone_multitask.py
+
+### Q28. Can we use ImageNet ConvNeXt for 3 of 4 heads + MViTv2-S for activity?
+- Hybrid: 2 backbones, 4 heads
+- Cost: complex but possible
+- Benefit: optimal for each task
+- Implementation: train each head on appropriate backbone
+
+### Q29. How long does MViTv2-S fine-tuning take?
+- 2-week investment per training run
+- 4 single-task baselines = 8 weeks total
+- 4 multi-task conditions = 8 weeks
+- Total: 16 weeks for complete ablation
+- Achievable in 1 quarter
+
+### Q30. What's the best backbone choice for IndustReal?
+- MViTv2-S for activity (Kinetics pretraining)
+- ConvNeXt for pose (spatial)
+- Either for detection (both can work)
+- Best of both worlds: hybrid or ensemble
+- 75-100 hour training budget per architecture choice
+
+---
+
 ## §6. The Activity Head Debate (Q51-60)
 
 ### Q51. Is activity broken by implementation or backbone?
