@@ -36,8 +36,16 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    force=True,
 )
 logger = logging.getLogger("full_eval_inprocess")
+# Force unbuffered output: flush every log message
+_console_handler = logging.StreamHandler(sys.stdout)
+_console_handler.setLevel(logging.INFO)
+_console_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logger.handlers.clear()
+logger.addHandler(_console_handler)
+logger.propagate = False
 
 # ── Path setup (mirrors subprocess_eval.py / train.py) ──────────────────────
 _SRC = Path(__file__).resolve().parent.parent  # src/
@@ -160,6 +168,16 @@ def streaming_eval(
     Accumulates detection predictions per frame for full compute_detection_map
     at the end. Activity, head pose, and PSR use running counters.
     """
+    # Open a raw status fd for guaranteed disk output (bypasses Python buffering)
+    _status_path = Path("/tmp/d3_full_v2_status.txt")
+    _status_fd = os.open(str(_status_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+
+    def log_progress(msg: str) -> None:
+        """Write to both logger and the raw status fd for guaranteed output."""
+        logger.info(msg)
+        if _status_fd is not None:
+            os.write(_status_fd, (msg + "\n").encode())
+            os.fsync(_status_fd)
     model.eval()
 
     # ── Streaming accumulators ──────────────────────────────────────────────
@@ -198,10 +216,14 @@ def streaming_eval(
 
     n_batches = 0
     _cached_anchors_np = None
+    _first_batch = True
 
     for bi, (images, targets) in enumerate(loader):
         if max_batches is not None and bi >= max_batches:
             break
+        if _first_batch:
+            log_progress("  First batch loaded, starting inference loop...")
+            _first_batch = False
 
         images = prepare_images(images, device)
         B = images.shape[0]
@@ -367,7 +389,7 @@ def streaming_eval(
 
         n_batches += 1
         if n_batches % 200 == 0:
-            logger.info("  processed %d batches (%d frames)...", n_batches, n_batches * B)
+            log_progress("  processed %d batches (%d frames)..." % (n_batches, n_batches * B))
 
     # ═══════════════════════════════════════════════════════════════════════
     # Compute aggregate metrics
@@ -448,20 +470,23 @@ def streaming_eval(
     if bad:
         logger.warning("NaN/Inf metrics detected (n=%d): %s", len(bad), bad)
 
-    # ── Print summary ──────────────────────────────────────────────────────
-    print("\n" + "=" * 60)
-    print("FULL IN-PROCESS EVAL — Key Metrics")
-    print("=" * 60)
+    # ── Print summary (to log, stdout, AND status fd) ──────────────────────
+    log_progress("=" * 60)
+    log_progress("FULL IN-PROCESS EVAL — Key Metrics")
+    log_progress("=" * 60)
     for name in ["det_mAP50", "det_mAP_50_95", "det_mAP50_all_frames",
                   "det_n_present_classes", "act_top1", "act_top1_valid_na_excluded",
                   "forward_angular_MAE_deg", "up_angular_MAE_deg",
                   "psr_macro_f1"]:
         val = results.get(name)
         if isinstance(val, float):
-            print(f"  {name:40s} = {val:.6f}")
+            log_progress(f"  {name:40s} = {val:.6f}")
         else:
-            print(f"  {name:40s} = {val}")
-    print("=" * 60)
+            log_progress(f"  {name:40s} = {val}")
+    log_progress("=" * 60)
+    if _status_fd is not None:
+        os.close(_status_fd)
+        _status_path.unlink(missing_ok=True)
 
     return results
 
@@ -556,6 +581,7 @@ def run_multi_seed_subsample(
         else:
             print(f"  {key:40s} = NaN")
     print("=" * 60)
+    sys.stdout.flush()
 
     return summary
 
@@ -700,6 +726,7 @@ def main():
         if mk in final_metrics:
             print(f"  det_mAP50 = {final_metrics[mk]:.4f} +/- {final_metrics[sk]:.4f}")
     print("=" * 60)
+    sys.stdout.flush()
 
     del model, val_ds, val_loader
     gc.collect()
