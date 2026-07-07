@@ -115,19 +115,19 @@
 | Ours PSR head (global thresh 0.10, 38k) | **0.6788** | Per-frame component state, single threshold | ConvNeXt-Tiny + MLP + causal transformer | Conservative primary |
 | Ours PSR head (global thresh 0.10, 10k) | **0.7217** | Per-frame, 10k-subset (superseded by 38k) | ConvNeXt-Tiny | Superseded (biased subset) |
 | Ours PSR head (per-comp optimal, 10k) | **0.7499** | Per-frame, 10k-subset (superseded) | ConvNeXt-Tiny | Superseded (biased subset) |
-| Ours null_copy_prev | **0.9997** | Persistence baseline (always repeat previous frame) | -- | Structural artifact |
+| Ours null_copy_prev | **0.9997** | Persistence baseline / copy-prev null (always repeat previous frame) | -- | Structural artifact |
 | Ours MonotonicDecoder (full-38k) | **0.0053** | Transition events, full 38k | ConvNeXt-Tiny + decoder | Baseline (saturated logits) |
 | Ours MonotonicDecoder (2-recording) | **0.7893** | Transition events, 2 recordings only | ConvNeXt-Tiny + decoder | Artifact (small sample) |
 | Ours D4 (YOLOv8m pre-trained -> decoder) | **0.000** | Transition events, default Q48 thresholds | YOLOv8m + decoder | Diagnostic -- threshold mismatch |
 | Ours D4 (re-tuned thresholds) | **0.347** | Transition events, global sweep hi=0.3 lo=0.1 min=2 | YOLOv8m + decoder | Diagnostic -- detection density binds |
-| Ours D4+D1R (fine-tuned + re-tuned) | **0.6364** | Transition events, D1R weights + re-tuned | YOLOv8m + decoder | Decisive test -- decoder transfers with adequate detection |
+| Ours D4+D1R (fine-tuned + re-tuned) | **0.6364 (3-video subset)** | Transition events, D1R weights + re-tuned | YOLOv8m + decoder | Decisive test -- decoder transfers with adequate detection |
 
 **Verdicts:**
 - Our PSR (0.7018 per-comp optimal, 38k) is NOT comparable to STORM (0.901) or B3 (0.883) -- fundamentally different paradigm: per-frame state classification vs transition detection with temporal/procedural priors.
 - The per-frame PSR baseline (0.7018) is a first baseline, not a competitive number against STORM.
 - 16.8% relative gap to STORM (0.7018 vs 0.901) is partly paradigm (different task), partly architecture (our ConvNeXt vs their YOLOv8m + temporal), partly implementation (PSR head gradient starvation).
-- Model (0.7018) is 29.7% relatively worse than persistence baseline (0.9997) -- PSR dominated by temporal auto-correlation.
-- Null-delta evidence (comp 4: +0.097, comp 10: +0.093) proves genuine learned signal on hardest components despite overall low F1.
+- Model (0.7018) is 29.7% relatively worse than persistence baseline / copy-prev null (0.9997) -- PSR dominated by temporal auto-correlation.
+- Prevalence null-delta evidence (always-positive baseline; comp 4: +0.097, comp 10: +0.093) proves genuine learned signal on hardest components despite overall low F1.
 
 ---
 
@@ -165,7 +165,7 @@
 | 5 | PSR 0.7018 | WACV B3 0.883 | 0.883 | **NOT COMPARABLE (paradigm)** | Per-frame state vs transition detection |
 | 6 | PSR 0.7018 | Null copy-prev 0.9997 | 0.9997 | **WORSE THAN PERSISTENCE BASELINE** | Model learns sub-threshold signal but dominated by auto-correlation |
 | 7 | Head pose 9.14 deg / 7.78 deg | No prior published baseline | -- | **FIRST BASELINE** | No prior result to compare against |
-| 8 | D4+D1R 0.6364 | D4 0.000 (default) / 0.347 (re-tuned) | 0.000 / 0.347 | **DIAGNOSTIC** (within our ecosystem) | Internal ablation, not SOTA comparison |
+| 8 | D4+D1R 0.6364 (3-video subset) | D4 0.000 (default) / 0.347 (re-tuned) | 0.000 / 0.347 | **DIAGNOSTIC** (within our ecosystem) | Internal ablation, not SOTA comparison |
 
 ### 3.2 Comparisons That Do NOT Survive Peer Review
 
@@ -245,7 +245,7 @@
 | Detection (multi-task, ConvNeXt) | 0.00009 | 0.5-0.7 | 0.641 (WACV) | Near SOTA |
 | Activity (per-frame) | 0.0236 | 0.45-0.55 (MViTv2-S fine-tune) | 0.6223 (WACV) | Near SOTA |
 | PSR (per-frame state) | 0.7018 | 0.78+ (head repair) | 0.901 (STORM) | Near SOTA (paradigm mismatch) |
-| PSR (transition events) | 0.0053 (decoder) | 0.6364 (D4+D1R) | 0.883 (WACV B3) | Near SOTA (detection density fixed) |
+| PSR (transition events) | 0.0053 (decoder) | 0.6364 (3-video subset) (D4+D1R) | 0.883 (WACV B3) | Near SOTA (detection density fixed) |
 | Head pose forward | 9.14 deg | 9.14 deg | No prior baseline | BEATS SOTA (first baseline) |
 | Head pose up | 7.78 deg | 7.78 deg | No prior baseline | BEATS SOTA (first baseline) |
 
@@ -262,7 +262,7 @@
 | Detection (same-backbone) | 0.00009 | 0.5-0.7 (fixes + single-task) | 0.641 (WACV) | Near SOTA pending |
 | Activity | 0.0236 | 0.45-0.55 (MViTv2-S fine-tune) | 0.6223 (WACV) | Near SOTA pending (2 weeks) |
 | PSR (per-frame) | 0.7018 | 0.78+ (V3 repair, real this time) | 0.901 (STORM, diff paradigm) | Near SOTA (paradigm caveat) |
-| PSR (transition) | 0.0053 | 0.6364 (D4+D1R, detection-dense) | 0.883 (B3) | Diagnostic only |
+| PSR (transition) | 0.0053 | 0.6364 (3-video subset) (D4+D1R, detection-dense) | 0.883 (B3) | Diagnostic only |
 | Head pose forward | **9.14 deg** | **9.14 deg** | No prior baseline | **BEATS SOTA** (first baseline) |
 | Head pose up | **7.78 deg** | **7.78 deg** | No prior baseline | **BEATS SOTA** (first baseline) |
 
@@ -289,7 +289,7 @@
 **Realistic expectation:**
 - 2 BEATS SOTA (head pose, D1R detection) -- these are running now and verified
 - 1-2 NEAR SOTA (PSR with real head repair, activity with MViTv2-S fine-tune) -- depends on fix success
-- 1 DIAGNOSTIC (decoder transition F1 via D4+D1R at 0.6364)
+- 1 DIAGNOSTIC (decoder transition F1 via D4+D1R at 0.6364 (3-video subset))
 - 2 NULL RESULTS documented (activity per-frame, multi-task detection broken) -- each with root cause analysis
 
 ---
@@ -330,7 +330,7 @@ This is a STRONGER paper than "we beat SOTA on all heads." It is a paper about W
 | D1R results.csv | No -- NEEDS COMMIT | 0.995 | Uncommitted |
 | null_model_pos/ | Yes | 0.9995 / 0.9984 | Committed |
 | null_copy_prev/ | Yes | 0.9997 | Committed |
-| d4_d1r/ | Yes | 0.6364 | Committed |
+| d4_d1r/ | Yes | 0.6364 (3-video subset) | Committed |
 | activity_mvit_probe/ | Yes | 0.3810 | Committed |
 
 **Action item (from 140 SS0):** Commit four evidence directories: d4_retuned, full_eval_ep18_v2, up_vector_v3, D1R results.csv. Without these, 9.14 deg head pose and 0.347 D4 re-tune are unauditable.

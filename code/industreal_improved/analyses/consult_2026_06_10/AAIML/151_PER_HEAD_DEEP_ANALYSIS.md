@@ -44,7 +44,7 @@
 - D1 pretrained: 0.0004 (real IndustReal weights, sparse 0.1/frame)
 - D3 multi-task: 0.358 (subsample) / 0.00009 (full-38k)
 - D4+YOLOv8m: 0.000 (default) / 0.347 (re-tuned)
-- D4+D1R decisive: 0.000 / 0.6364 (83 percent improvement)
+- D4+D1R decisive: 0.000 / 0.6364 (3-video subset) (83 percent improvement)
 
 ### 2.2 Why Multi-Task Fails
 
@@ -72,7 +72,7 @@
 
 ### 2.5 The Decisive Test
 
-- Single-task training in flight (epoch 43+, roughly 3.4 days remaining)
+- Single-task training in flight (epoch 43+, roughly 3.4 days remaining) *(UNVERIFIABLE-REMOTELY: epoch count from workstation `/tmp/train_singletask_det.log`)*
 - If mAP greater than 0.5: implementation bug confirmed
 - If mAP less than 0.1: multi-task is the killer
 
@@ -83,7 +83,7 @@
 - Per-comp optimal F1: 0.7018 (full 38k, honest)
 - Decoder F1 (full 38k): 0.0053 (saturated logits)
 - Decoder F1 (2 recordings): 0.7893 (small sample)
-- null_copy_prev F1: 0.9997 (model is 29.7 percent worse than persistence)
+- null_copy_prev F1: 0.9997 (persistence / copy-prev null; model is 29.7 percent worse than persistence)
 - LOO-CV: plus 0.0148 plus or minus 0.0158 (CI includes zero)
 
 ### 3.2 Why It Fails
@@ -97,7 +97,7 @@
 
 - LeakyReLU(0.01) plus small-normal init (std=0.01) plus zero bias (model.py:1600-1604)
 - V3 launch script with DETACH_PSR_FPN=False (28bf668c)
-- Post_gelu activations: -130 to +4608 (massive improvement)
+- Post_gelu activations: -130 to +4608 (massive improvement) *(UNVERIFIABLE-REMOTELY: post_gelu value from workstation `/tmp/train_psr_repair_v3.log`)*
 
 ### 3.4 File Paths
 
@@ -105,12 +105,12 @@
 - Loss: `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/training/losses.py` (PSR loss)
 - Decoder: `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/psr_transition.py` (MonotonicDecoder)
 - V3 training: `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/scripts/train_psr_repair_v3.sh`
-- Log: /tmp/train_psr_repair_v3.log (running NOW)
+- Log: /tmp/train_psr_repair_v3.log (running NOW) *(UNVERIFIABLE-REMOTELY: `/tmp/*.log` is workstation-local)*
 - True signal: `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/psr_true_signal`
 
 ### 3.5 The V3 Test
 
-- V3 training in flight (epoch 25+, post_gelu +4608)
+- V3 training in flight (epoch 25+, post_gelu +4608) *(UNVERIFIABLE-REMOTELY: epoch count and post_gelu from workstation `/tmp/train_psr_repair_v3.log`)*
 - Expected F1 greater than 0.78 after 3-5 epochs
 - If F1 greater than 0.78: V3 repair works, multi-task helps PSR
 

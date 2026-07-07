@@ -10,13 +10,13 @@
 ## Detection — BEATS SOTA (single-task) / BROKEN (multi-task)
 - D1R single-task: 0.995 mAP50 (BEATS WACV 0.95)
 - D3 multi-task: 0.00009 (impl bug, 4 fixes applied)
-- D4+D1R decisive: 0.6364 (decoder transfer verified)
+- D4+D1R decisive: 0.6364 (3-video subset) (decoder transfer verified)
 
 ## PSR — NEAR SOTA + repair in flight
 - Per-comp optimal F1: 0.7018 (full 38k, honest)
 - MonotonicDecoder F1: 0.0053 (saturated logits, will improve with repair)
 - PSR copy_prev F1: 0.9997 (model is 29.7% worse than persistence)
-- PSR head repair applied: LeakyReLU, post_gelu mean +4608 on sequence frames (V3 training log step 10; values vary 4448-4864 across steps — single-run snapshot, not converged measurement)
+- PSR head repair applied: LeakyReLU, post_gelu mean +4608 on sequence frames *(UNVERIFIABLE-REMOTELY: post_gelu value from workstation `/tmp/train_psr_repair_v3.log`)* (V3 training log step 10; values vary 4448-4864 across steps — single-run snapshot, not converged measurement)
 
 ## Activity — BREAKTHROUGH (MViTv2-S video backbone)
 - Multi-task ConvNeXt: 0.0236 (class collapse)
@@ -51,7 +51,7 @@
 9. Temporal probe: bare except fix
 
 ## What's in flight
-- PSR head repair training (epoch 24+, activations alive)
-- Single-task ConvNeXt detection (epoch 24+)
+- PSR head repair training (epoch 24+, activations alive) *(UNVERIFIABLE-REMOTELY: epoch count from workstation `/tmp/train_psr_repair_v3.log`)*
+- Single-task ConvNeXt detection (epoch 24+) *(UNVERIFIABLE-REMOTELY: epoch count from workstation `/tmp/train_singletask_det.log`)*
 - MViTv2-S fine-tuning (script ready, blocked on GPU)
 - TCN+ViT training (architectures ready, blocked on GPU)

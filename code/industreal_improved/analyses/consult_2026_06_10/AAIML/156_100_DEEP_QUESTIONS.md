@@ -318,8 +318,8 @@
 - V3 result will validate the fix path
 
 ### Q43. Why is our PSR F1 ≈ null_copy_prev F1?
-- Ours F1 = 0.7018, null_copy_prev = 0.9997
-- Delta = -0.2983 (model 29.7% WORSE than persistence)
+- Ours F1 = 0.7018, null_copy_prev = 0.9997 (persistence / copy-prev null)
+- Delta = -0.2983 (model 29.7% WORSE than persistence baseline)
 - The model is making more errors than just copying
 - This suggests the head is broken
 - Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/psr_true_signal/
@@ -371,7 +371,7 @@
 - Multi-task with all fixes: F1 expected > 0.78
 - Single-task: not yet measured
 - MonotonicDecoder: 0.0053 full-38k, 0.7893 small sample
-- null_copy_prev: 0.9997 (model 29.7% worse)
+- null_copy_prev: 0.9997 (persistence / copy-prev null; model 29.7% worse)
 - Honest story: implementation was the killer, fix is V3
 - Comparison to STORM B3 (0.883) is unfair (different paradigm)
 
