@@ -84,7 +84,7 @@
 - Decoder F1 (full 38k): 0.0053 (saturated logits)
 - Decoder F1 (2 recordings): 0.7893 (small sample)
 - null_copy_prev F1: 0.9997 (persistence / copy-prev null; model is 29.7 percent worse than persistence)
-- LOO-CV: plus 0.0148 plus or minus 0.0158 (CI includes zero)
+- LOO-CV: plus 0.0148 plus or minus 0.0163 (CI includes zero)
 
 ### 3.2 Why It Fails
 

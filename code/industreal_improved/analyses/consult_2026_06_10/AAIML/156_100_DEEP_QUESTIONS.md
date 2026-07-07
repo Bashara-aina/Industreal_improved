@@ -360,7 +360,7 @@
 - If V3 F1 > single-task: multi-task helps PSR
 - If V3 F1 ~ single-task: multi-task is fine for PSR
 
-### Q49. What does the LOO-CV +0.0148 ± 0.0158 mean?
+### Q49. What does the LOO-CV +0.0148 ± 0.0163 mean?
 - LOO improvement is NOT statistically significant
 - CI includes zero
 - Per-component threshold tuning doesn't reliably help

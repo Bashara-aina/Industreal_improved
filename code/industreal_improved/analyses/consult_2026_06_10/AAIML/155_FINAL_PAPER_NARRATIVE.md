@@ -86,7 +86,7 @@ The multi-task detection results across conditions tell a consistent story:
 
 ### PSR (GELU Dead -> LeakyReLU Fix)
 
-The PSR head in the multi-task setup achieves 0.7018 F1 on the full 38k evaluation at per-component optimal thresholds (bootstrap 95% CI: 0.6436-0.7321). The global 0.10 threshold yields 0.6788 on the full 38k. LOO-CV improvement over the global baseline is +0.0148 +/- 0.0158 (CI includes zero -- per-component threshold improvement is not statistically supported).
+The PSR head in the multi-task setup achieves 0.7018 F1 on the full 38k evaluation at per-component optimal thresholds (bootstrap 95% CI: 0.6436-0.7321). The global 0.10 threshold yields 0.6788 on the full 38k. LOO-CV improvement over the global baseline is +0.0148 +/- 0.0163 (CI includes zero -- per-component threshold improvement is not statistically supported).
 
 These numbers are misleadingly high because the PSR evaluation metric is structurally inflated by the copy-prev persistence baseline (predicting the previous frame's state). The persistence null (copy-prev) achieves 0.9997 F1 on the POS metric -- because most frames have no state change, re-predicting the prior state is nearly always correct. Our trained model at 0.7018 is 29.7% worse than this persistence baseline. This means the PSR head learned to predict no transitions, which happens to be correct for most frames, but failed entirely at detecting actual transitions. (Note: this persistence null is distinct from the prevalence null F1_null = 2p/(1+p) used in the per-component null-delta table, which measures improvement over an always-positive predictor.)
 

@@ -114,7 +114,7 @@ All at `/media/newadmin/master/POPW/working/code/industreal_improved/code/indust
 **PSR per-component optimal F1: 0.7018 — honest, full-38k, val-selected.**
 - Corrected from the 10k-subset 0.7499 (which was frame-selection luck). The 38k figure is the honest primary. Bootstrap 95% CI: [0.6436-0.7321].
 - Global 0.10 threshold on 38k: 0.6788. The 10k-vs-38k gap (0.7217 vs 0.6773 at global 0.10) was real — due to frame-selection bias in the 10k subset.
-- LOO-CV improvement: +0.0148 ± 0.0158 (all val-only). CI includes zero — per-component threshold improvement is not statistically supported. Honest primary is global-0.10 F1 = 0.6788.
+- LOO-CV improvement: +0.0148 ± 0.0163 (all val-only). CI includes zero — per-component threshold improvement is not statistically supported. Honest primary is global-0.10 F1 = 0.6788.
 
 ### §1.2 What We Need to Do (Best of Best)
 

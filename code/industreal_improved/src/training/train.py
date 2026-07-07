@@ -773,12 +773,16 @@ def _set_stage_requires_grad(model: nn.Module, stage: int, backbone_type: str) -
                 set_backbone_stage_requires_grad(
                     model, backbone_type, stage=stage_idx, requires_grad=False
                 )
-        # Freeze task heads (skip activity_head when --reinit-heads active: a freshly
-        # reinitialised head needs to learn from epoch 0, not wait until stage 3)
+        # Freeze task heads (skip activity_head + psr_head when --reinit-heads active:
+        # freshly reinitialised heads need to learn from epoch 0, not wait until stage 3.
+        # [F-1 2026-07-07 Opus-165 audit] Added psr_head bypass — was unconditionally
+        # frozen in stages 1-2, which killed PSR gradient regardless of DETACH.
         for name, p in model.named_parameters():
             if 'activity_head' in name or 'psr_head' in name:
                 if _REINIT_HEADS_ACTIVE and 'activity_head' in name:
                     continue  # [FIX B5 Part 2] Keep activity head trainable after reinit
+                if _REINIT_HEADS_ACTIVE and 'psr_head' in name:
+                    continue  # [F-1 2026-07-07] Keep PSR head trainable, per Opus-165 audit
                 p.requires_grad = False
 
     elif stage == 2:
@@ -795,11 +799,14 @@ def _set_stage_requires_grad(model: nn.Module, stage: int, backbone_type: str) -
                     model, backbone_type, stage=stage_idx, requires_grad=False
                 )
         # Freeze activity/PSR heads (pose and head_pose remain trainable)
-        # Skip activity_head when --reinit-heads active (same rationale as stage 1).
+        # Skip activity_head + psr_head when --reinit-heads active (same as stage 1).
+        # [F-1 2026-07-07 Opus-165 audit] PSR head bypass added.
         for name, p in model.named_parameters():
             if 'activity_head' in name or 'psr_head' in name:
                 if _REINIT_HEADS_ACTIVE and 'activity_head' in name:
                     continue  # [FIX B5 Part 2] Keep activity head trainable after reinit
+                if _REINIT_HEADS_ACTIVE and 'psr_head' in name:
+                    continue  # [F-1 2026-07-07] Keep PSR head trainable, per Opus-165 audit
                 p.requires_grad = False
 
     # stage == 3: all trainable (already set above)
