@@ -67,7 +67,7 @@ The pose head is the only head that works correctly in the multi-task setting. F
 
 Pose works because it is fundamentally a spatial task. ConvNeXt-Tiny pretrained on ImageNet encodes spatial features (object shape, texture, scene layout) which are exactly what pose regression needs. The multi-task gradient allocation of roughly 25% per Kendall weights is sufficient for a direct linear readout head.
 
-**Verdict: First ego-pose baseline on the IndustReal protocol. BEATS uncited SOTA of approximately 15 degrees.**
+**Verdict: First ego-pose baseline on the IndustReal protocol. The uncited ~15° SOTA is removed (no published baseline to compare against per 150/165).**
 
 ### Detection (D1R single-task vs D3 multi-task)
 
@@ -147,7 +147,8 @@ All 9 implementation fixes are committed across 9 commits (e618d929a, 6defe1f5f,
 
 ### What Beats SOTA vs What Does Not
 
-- **BEATS SOTA:** D1R detection (0.995 mAP50 vs WACV 0.95), head pose (9.14 degrees vs uncited approx. 15 degrees)
+- **BEATS SOTA:** D1R detection (0.995 mAP50 vs WACV 0.95, **cross-architecture single-task YOLOv8m**)
+- **FIRST BASELINE (no published SOTA on IndustReal):** head pose (9.14° fwd, 7.78° up) — uncited ~15° SOTA removed per 150/165 audit
 - **NEAR SOTA (with fixes):** PSR with V3 repair, activity with MViTv2-S fine-tune
 - **NOT SOTA-comparable:** Multi-task activity (0.0236 vs SOTA 0.622), multi-task detection (impl bug)
 
