@@ -1,0 +1,631 @@
+{
+  "total_labeled_frames": {
+    "train": 69189,
+    "val": 37280,
+    "train_val_total": 106469
+  },
+  "num_classes": 69,
+  "distribution": {
+    "0": {
+      "class_name": "other",
+      "train": 0,
+      "val": 0,
+      "train_val_total": 0,
+      "train_pct": 0.0,
+      "val_pct": 0.0,
+      "train_val_pct": 0.0
+    },
+    "1": {
+      "class_name": "take_short_brace",
+      "train": 821,
+      "val": 190,
+      "train_val_total": 1011,
+      "train_pct": 1.1866,
+      "val_pct": 0.5097,
+      "train_val_pct": 0.9496
+    },
+    "2": {
+      "class_name": "align_objects",
+      "train": 5654,
+      "val": 2703,
+      "train_val_total": 8357,
+      "train_pct": 8.1718,
+      "val_pct": 7.2505,
+      "train_val_pct": 7.8492
+    },
+    "3": {
+      "class_name": "take_pin_short",
+      "train": 1705,
+      "val": 629,
+      "train_val_total": 2334,
+      "train_pct": 2.4643,
+      "val_pct": 1.6872,
+      "train_val_pct": 2.1922
+    },
+    "4": {
+      "class_name": "plug_short_pin",
+      "train": 2975,
+      "val": 1274,
+      "train_val_total": 4249,
+      "train_pct": 4.2998,
+      "val_pct": 3.4174,
+      "train_val_pct": 3.9908
+    },
+    "5": {
+      "class_name": "take_tooth_washer",
+      "train": 2182,
+      "val": 1007,
+      "train_val_total": 3189,
+      "train_pct": 3.1537,
+      "val_pct": 2.7012,
+      "train_val_pct": 2.9952
+    },
+    "6": {
+      "class_name": "take_nut",
+      "train": 2351,
+      "val": 1079,
+      "train_val_total": 3430,
+      "train_pct": 3.3979,
+      "val_pct": 2.8943,
+      "train_val_pct": 3.2216
+    },
+    "7": {
+      "class_name": "tighten_nut",
+      "train": 5911,
+      "val": 2863,
+      "train_val_total": 8774,
+      "train_pct": 8.5433,
+      "val_pct": 7.6797,
+      "train_val_pct": 8.2409
+    },
+    "8": {
+      "class_name": "check_instruction",
+      "train": 8485,
+      "val": 8386,
+      "train_val_total": 16871,
+      "train_pct": 12.2635,
+      "val_pct": 22.4946,
+      "train_val_pct": 15.8459
+    },
+    "9": {
+      "class_name": "take_partial_model",
+      "train": 1830,
+      "val": 718,
+      "train_val_total": 2548,
+      "train_pct": 2.6449,
+      "val_pct": 1.926,
+      "train_val_pct": 2.3932
+    },
+    "10": {
+      "class_name": "take_long_brace",
+      "train": 825,
+      "val": 339,
+      "train_val_total": 1164,
+      "train_pct": 1.1924,
+      "val_pct": 0.9093,
+      "train_val_pct": 1.0933
+    },
+    "11": {
+      "class_name": "take_screw_pin",
+      "train": 501,
+      "val": 198,
+      "train_val_total": 699,
+      "train_pct": 0.7241,
+      "val_pct": 0.5311,
+      "train_val_pct": 0.6565
+    },
+    "12": {
+      "class_name": "put",
+      "train": 33,
+      "val": 14,
+      "train_val_total": 47,
+      "train_pct": 0.0477,
+      "val_pct": 0.0376,
+      "train_val_pct": 0.0441
+    },
+    "13": {
+      "class_name": "take_pin_long",
+      "train": 379,
+      "val": 179,
+      "train_val_total": 558,
+      "train_pct": 0.5478,
+      "val_pct": 0.4802,
+      "train_val_pct": 0.5241
+    },
+    "14": {
+      "class_name": "put_pin_long",
+      "train": 42,
+      "val": 80,
+      "train_val_total": 122,
+      "train_pct": 0.0607,
+      "val_pct": 0.2146,
+      "train_val_pct": 0.1146
+    },
+    "15": {
+      "class_name": "take_wing_beam",
+      "train": 383,
+      "val": 156,
+      "train_val_total": 539,
+      "train_pct": 0.5536,
+      "val_pct": 0.4185,
+      "train_val_pct": 0.5063
+    },
+    "16": {
+      "class_name": "plug_screw_pin",
+      "train": 763,
+      "val": 267,
+      "train_val_total": 1030,
+      "train_pct": 1.1028,
+      "val_pct": 0.7162,
+      "train_val_pct": 0.9674
+    },
+    "17": {
+      "class_name": "take_round_washer",
+      "train": 2073,
+      "val": 740,
+      "train_val_total": 2813,
+      "train_pct": 2.9961,
+      "val_pct": 1.985,
+      "train_val_pct": 2.6421
+    },
+    "18": {
+      "class_name": "take_acorn_nut",
+      "train": 303,
+      "val": 169,
+      "train_val_total": 472,
+      "train_pct": 0.4379,
+      "val_pct": 0.4533,
+      "train_val_pct": 0.4433
+    },
+    "19": {
+      "class_name": "tighten_acorn_nut",
+      "train": 1014,
+      "val": 400,
+      "train_val_total": 1414,
+      "train_pct": 1.4656,
+      "val_pct": 1.073,
+      "train_val_pct": 1.3281
+    },
+    "20": {
+      "class_name": "take_pin_middle",
+      "train": 577,
+      "val": 179,
+      "train_val_total": 756,
+      "train_pct": 0.8339,
+      "val_pct": 0.4802,
+      "train_val_pct": 0.7101
+    },
+    "21": {
+      "class_name": "take_wheel",
+      "train": 1802,
+      "val": 679,
+      "train_val_total": 2481,
+      "train_pct": 2.6045,
+      "val_pct": 1.8214,
+      "train_val_pct": 2.3303
+    },
+    "22": {
+      "class_name": "plug_pin_long",
+      "train": 399,
+      "val": 270,
+      "train_val_total": 669,
+      "train_pct": 0.5767,
+      "val_pct": 0.7242,
+      "train_val_pct": 0.6284
+    },
+    "23": {
+      "class_name": "take_wing",
+      "train": 453,
+      "val": 182,
+      "train_val_total": 635,
+      "train_pct": 0.6547,
+      "val_pct": 0.4882,
+      "train_val_pct": 0.5964
+    },
+    "24": {
+      "class_name": "put_wing",
+      "train": 96,
+      "val": 45,
+      "train_val_total": 141,
+      "train_pct": 0.1388,
+      "val_pct": 0.1207,
+      "train_val_pct": 0.1324
+    },
+    "25": {
+      "class_name": "plug_pin_middle",
+      "train": 560,
+      "val": 421,
+      "train_val_total": 981,
+      "train_pct": 0.8094,
+      "val_pct": 1.1293,
+      "train_val_pct": 0.9214
+    },
+    "26": {
+      "class_name": "take_pulley",
+      "train": 699,
+      "val": 299,
+      "train_val_total": 998,
+      "train_pct": 1.0103,
+      "val_pct": 0.802,
+      "train_val_pct": 0.9374
+    },
+    "27": {
+      "class_name": "plug_wheel",
+      "train": 44,
+      "val": 0,
+      "train_val_total": 44,
+      "train_pct": 0.0636,
+      "val_pct": 0.0,
+      "train_val_pct": 0.0413
+    },
+    "28": {
+      "class_name": "browse_instruction",
+      "train": 1615,
+      "val": 748,
+      "train_val_total": 2363,
+      "train_pct": 2.3342,
+      "val_pct": 2.0064,
+      "train_val_pct": 2.2194
+    },
+    "29": {
+      "class_name": "fit_short_brace",
+      "train": 790,
+      "val": 314,
+      "train_val_total": 1104,
+      "train_pct": 1.1418,
+      "val_pct": 0.8423,
+      "train_val_pct": 1.0369
+    },
+    "30": {
+      "class_name": "fit_tooth_washer",
+      "train": 2731,
+      "val": 1254,
+      "train_val_total": 3985,
+      "train_pct": 3.9472,
+      "val_pct": 3.3637,
+      "train_val_pct": 3.7429
+    },
+    "31": {
+      "class_name": "fit_round_washer",
+      "train": 1898,
+      "val": 724,
+      "train_val_total": 2622,
+      "train_pct": 2.7432,
+      "val_pct": 1.9421,
+      "train_val_pct": 2.4627
+    },
+    "32": {
+      "class_name": "fit_long_brace",
+      "train": 133,
+      "val": 88,
+      "train_val_total": 221,
+      "train_pct": 0.1922,
+      "val_pct": 0.2361,
+      "train_val_pct": 0.2076
+    },
+    "33": {
+      "class_name": "fit_nut",
+      "train": 2727,
+      "val": 1490,
+      "train_val_total": 4217,
+      "train_pct": 3.9414,
+      "val_pct": 3.9968,
+      "train_val_pct": 3.9608
+    },
+    "34": {
+      "class_name": "put_screw_pin",
+      "train": 43,
+      "val": 49,
+      "train_val_total": 92,
+      "train_pct": 0.0621,
+      "val_pct": 0.1314,
+      "train_val_pct": 0.0864
+    },
+    "35": {
+      "class_name": "put_wheel",
+      "train": 325,
+      "val": 266,
+      "train_val_total": 591,
+      "train_pct": 0.4697,
+      "val_pct": 0.7135,
+      "train_val_pct": 0.5551
+    },
+    "36": {
+      "class_name": "pull_wheel",
+      "train": 79,
+      "val": 23,
+      "train_val_total": 102,
+      "train_pct": 0.1142,
+      "val_pct": 0.0617,
+      "train_val_pct": 0.0958
+    },
+    "37": {
+      "class_name": "loosen_nut",
+      "train": 1821,
+      "val": 898,
+      "train_val_total": 2719,
+      "train_pct": 2.6319,
+      "val_pct": 2.4088,
+      "train_val_pct": 2.5538
+    },
+    "38": {
+      "class_name": "put_nut",
+      "train": 391,
+      "val": 196,
+      "train_val_total": 587,
+      "train_pct": 0.5651,
+      "val_pct": 0.5258,
+      "train_val_pct": 0.5513
+    },
+    "39": {
+      "class_name": "pull_objects",
+      "train": 262,
+      "val": 439,
+      "train_val_total": 701,
+      "train_pct": 0.3787,
+      "val_pct": 1.1776,
+      "train_val_pct": 0.6584
+    },
+    "40": {
+      "class_name": "put_pin_middle",
+      "train": 154,
+      "val": 68,
+      "train_val_total": 222,
+      "train_pct": 0.2226,
+      "val_pct": 0.1824,
+      "train_val_pct": 0.2085
+    },
+    "41": {
+      "class_name": "take_objects",
+      "train": 2696,
+      "val": 1457,
+      "train_val_total": 4153,
+      "train_pct": 3.8966,
+      "val_pct": 3.9083,
+      "train_val_pct": 3.9007
+    },
+    "42": {
+      "class_name": "put_partial_model",
+      "train": 1693,
+      "val": 791,
+      "train_val_total": 2484,
+      "train_pct": 2.4469,
+      "val_pct": 2.1218,
+      "train_val_pct": 2.3331
+    },
+    "43": {
+      "class_name": "put_objects",
+      "train": 1199,
+      "val": 660,
+      "train_val_total": 1859,
+      "train_pct": 1.7329,
+      "val_pct": 1.7704,
+      "train_val_pct": 1.746
+    },
+    "44": {
+      "class_name": "pull_pin_short",
+      "train": 529,
+      "val": 202,
+      "train_val_total": 731,
+      "train_pct": 0.7646,
+      "val_pct": 0.5418,
+      "train_val_pct": 0.6866
+    },
+    "45": {
+      "class_name": "put_pin_short",
+      "train": 370,
+      "val": 161,
+      "train_val_total": 531,
+      "train_pct": 0.5348,
+      "val_pct": 0.4319,
+      "train_val_pct": 0.4987
+    },
+    "46": {
+      "class_name": "put_long_brace",
+      "train": 141,
+      "val": 75,
+      "train_val_total": 216,
+      "train_pct": 0.2038,
+      "val_pct": 0.2012,
+      "train_val_pct": 0.2029
+    },
+    "47": {
+      "class_name": "pull_partial_model",
+      "train": 77,
+      "val": 0,
+      "train_val_total": 77,
+      "train_pct": 0.1113,
+      "val_pct": 0.0,
+      "train_val_pct": 0.0723
+    },
+    "48": {
+      "class_name": "fit_wheel",
+      "train": 1305,
+      "val": 653,
+      "train_val_total": 1958,
+      "train_pct": 1.8861,
+      "val_pct": 1.7516,
+      "train_val_pct": 1.839
+    },
+    "49": {
+      "class_name": "check_partial_model",
+      "train": 105,
+      "val": 239,
+      "train_val_total": 344,
+      "train_pct": 0.1518,
+      "val_pct": 0.6411,
+      "train_val_pct": 0.3231
+    },
+    "50": {
+      "class_name": "put_short_brace",
+      "train": 131,
+      "val": 0,
+      "train_val_total": 131,
+      "train_pct": 0.1893,
+      "val_pct": 0.0,
+      "train_val_pct": 0.123
+    },
+    "51": {
+      "class_name": "fit_objects",
+      "train": 171,
+      "val": 9,
+      "train_val_total": 180,
+      "train_pct": 0.2471,
+      "val_pct": 0.0241,
+      "train_val_pct": 0.1691
+    },
+    "52": {
+      "class_name": "put_round_washer",
+      "train": 296,
+      "val": 167,
+      "train_val_total": 463,
+      "train_pct": 0.4278,
+      "val_pct": 0.448,
+      "train_val_pct": 0.4349
+    },
+    "53": {
+      "class_name": "fit_pulley",
+      "train": 749,
+      "val": 497,
+      "train_val_total": 1246,
+      "train_pct": 1.0825,
+      "val_pct": 1.3332,
+      "train_val_pct": 1.1703
+    },
+    "54": {
+      "class_name": "fit_wing_beam",
+      "train": 368,
+      "val": 247,
+      "train_val_total": 615,
+      "train_pct": 0.5319,
+      "val_pct": 0.6626,
+      "train_val_pct": 0.5776
+    },
+    "55": {
+      "class_name": "put_tooth_washer",
+      "train": 264,
+      "val": 136,
+      "train_val_total": 400,
+      "train_pct": 0.3816,
+      "val_pct": 0.3648,
+      "train_val_pct": 0.3757
+    },
+    "56": {
+      "class_name": "pull_pin_middle",
+      "train": 232,
+      "val": 71,
+      "train_val_total": 303,
+      "train_pct": 0.3353,
+      "val_pct": 0.1905,
+      "train_val_pct": 0.2846
+    },
+    "57": {
+      "class_name": "put_wing_beam",
+      "train": 64,
+      "val": 0,
+      "train_val_total": 64,
+      "train_pct": 0.0925,
+      "val_pct": 0.0,
+      "train_val_pct": 0.0601
+    },
+    "58": {
+      "class_name": "put_pulley",
+      "train": 125,
+      "val": 116,
+      "train_val_total": 241,
+      "train_pct": 0.1807,
+      "val_pct": 0.3112,
+      "train_val_pct": 0.2264
+    },
+    "59": {
+      "class_name": "pull_screw_pin",
+      "train": 83,
+      "val": 36,
+      "train_val_total": 119,
+      "train_pct": 0.12,
+      "val_pct": 0.0966,
+      "train_val_pct": 0.1118
+    },
+    "60": {
+      "class_name": "put_acorn_nut",
+      "train": 17,
+      "val": 48,
+      "train_val_total": 65,
+      "train_pct": 0.0246,
+      "val_pct": 0.1288,
+      "train_val_pct": 0.0611
+    },
+    "61": {
+      "class_name": "loosen_acorn_nut",
+      "train": 35,
+      "val": 83,
+      "train_val_total": 118,
+      "train_pct": 0.0506,
+      "val_pct": 0.2226,
+      "train_val_pct": 0.1108
+    },
+    "62": {
+      "class_name": "take_small_screw_pin",
+      "train": 21,
+      "val": 42,
+      "train_val_total": 63,
+      "train_pct": 0.0304,
+      "val_pct": 0.1127,
+      "train_val_pct": 0.0592
+    },
+    "63": {
+      "class_name": "plug_small_screw_pin",
+      "train": 0,
+      "val": 68,
+      "train_val_total": 68,
+      "train_pct": 0.0,
+      "val_pct": 0.1824,
+      "train_val_pct": 0.0639
+    },
+    "64": {
+      "class_name": "put_small_screw_pin",
+      "train": 19,
+      "val": 34,
+      "train_val_total": 53,
+      "train_pct": 0.0275,
+      "val_pct": 0.0912,
+      "train_val_pct": 0.0498
+    },
+    "65": {
+      "class_name": "fit_acorn_nut",
+      "train": 152,
+      "val": 107,
+      "train_val_total": 259,
+      "train_pct": 0.2197,
+      "val_pct": 0.287,
+      "train_val_pct": 0.2433
+    },
+    "66": {
+      "class_name": "fit_wing",
+      "train": 134,
+      "val": 150,
+      "train_val_total": 284,
+      "train_pct": 0.1937,
+      "val_pct": 0.4024,
+      "train_val_pct": 0.2667
+    },
+    "67": {
+      "class_name": "pull_pin_long",
+      "train": 22,
+      "val": 0,
+      "train_val_total": 22,
+      "train_pct": 0.0318,
+      "val_pct": 0.0,
+      "train_val_pct": 0.0207
+    },
+    "68": {
+      "class_name": "plug_objects",
+      "train": 2362,
+      "val": 1208,
+      "train_val_total": 3570,
+      "train_pct": 3.4138,
+      "val_pct": 3.2403,
+      "train_val_pct": 3.3531
+    }
+  }
+}
