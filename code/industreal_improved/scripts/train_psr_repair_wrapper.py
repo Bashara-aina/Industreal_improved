@@ -51,6 +51,14 @@ def _patched_apply(name):
         print(f'[wrapper] Post-preset override: USE_PSR_TRANSITION=False '
               f'(per env var, dense per-frame PSR loss on every batch)',
               file=sys.stderr, flush=True)
+    # [FIX 2026-07-08] Override STAGED_TRAINING after preset apply
+    # (stage_rf4 preset may set STAGED_TRAINING=False; the env var was
+    # not being honored, which broke V5b's F-1 Fix 2 test).
+    if os.environ.get('STAGED_TRAINING', 'False') == 'True':
+        C.STAGED_TRAINING = True
+        print(f'[wrapper] Post-preset override: STAGED_TRAINING=True '
+              f'(per env var, F-1 Fix 2 staging guard will be exercised)',
+              file=sys.stderr, flush=True)
     print(f'[wrapper] Post-preset override: MIXED_PRECISION=True (applied after {name})',
           file=sys.stderr, flush=True)
 
