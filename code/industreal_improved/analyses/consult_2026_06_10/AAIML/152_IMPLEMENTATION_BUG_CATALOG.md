@@ -7,7 +7,7 @@
 - Pre-activations mean = -130
 - +0.1 first-layer bias = 1300x too small
 - Result: GELU was passing ~zero gradient through all training
-- PSR F1 ≈ 0.9997 (null_copy_prev) — model not learning
+- PSR F1 ≈ 0.9997 (null_copy_prev, persistence / copy-prev null) — model not learning
 
 ### §1.2 The Fix (e618d929a, 6defe1f5f)
 ```python
@@ -34,13 +34,13 @@ nn.Sequential(
 export DETACH_PSR_FPN=False
 export KENDALL_FIXED_WEIGHTS=1
 export AMP_DTYPE=bf16
-# Result: post_gelu activations +4608 (was -1.0 to -1.4 dead)
+# Result: post_gelu activations +4608 (was -1.0 to -1.4 dead) *(UNVERIFIABLE-REMOTELY: post_gelu value from workstation `/tmp/train_psr_repair_v3.log`)*
 ```
 
 ### §1.5 File Paths
 - Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/model.py:1597-1640
 - Detection of bug: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/psr_repair_training/
-- V3 training: /tmp/train_psr_repair_v3.log
+- V3 training: /tmp/train_psr_repair_v3.log *(UNVERIFIABLE-REMOTELY: `/tmp/*.log` is workstation-local)*
 - V3 script: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/scripts/train_psr_repair_v3.sh
 
 ## §2. Detection (5 Classes Never Predicted)
@@ -141,7 +141,7 @@ export AMP_DTYPE=bf16
 
 | # | Fix | Commit | File | Effect |
 |---|---|---|---|---|
-| 1 | PSR head GELU->LeakyReLU | e618d929a | src/models/model.py:1597-1640 | Activations -130 -> +4608 |
+| 1 | PSR head GELU->LeakyReLU | e618d929a | src/models/model.py:1597-1640 | Activations -130 -> +4608 *(UNVERIFIABLE-REMOTELY: post_gelu value from `/tmp/*.log`)* |
 | 2 | PSR head init index fix | 6defe1f5f | src/models/model.py | Sequential [3]=Linear, [2]=Dropout |
 | 3 | Pose diag index fix | bff38b790 | src/evaluation/head_pose_diag.py | 26.20 -> 7.78 |
 | 4 | Detection GT-balanced sampler | 8cef56fc2 | src/data/industreal_dataset.py | 100% batches have GT |

@@ -32,12 +32,12 @@ These files define every architectural decision and every known bug. The key fin
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/evaluation/activity_temporal_probe_cpu.py`
   - Temporal probe for activity. Had a bare-except bug that suppressed crashes; fixed and committed at 7001107de.
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/evaluation/psr_true_signal_analysis.py`
-  - PSR null-delta and signal analysis. Produced the per-component null-delta table: +0.097 (comp4), +0.093 (comp10), -0.000 (comp9).
+  - PSR prevalence null-delta (always-positive baseline) and signal analysis. Produced the per-component prevalence null-delta table: +0.097 (comp4), +0.093 (comp10), -0.000 (comp9).
 
 ### §0.2 Checkpoints and Data
 
 - **`/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/best.pth`**
-  - 738MB. SHA256: `59cb88ec85311bfcfff91f000bd08005675e3a882bec9f24ccd5ee0cbe89f9a8`. The recovery checkpoint. Must be cold-copied before any run overwrites it.
+  - 738MB. SHA256: `59cb88ec85311bfcfff91f000bd08005675e3a882bec9f24ccd5ee0cbe89f9a8`. The recovery checkpoint. Must be cold-copied before any run overwrites it. *(UNVERIFIABLE-REMOTELY: best.pth is 738MB, not in git, SHA256 only verifiable on workstation)*
 - **`/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth`**
   - 738MB. Secondary recovery checkpoint.
 - **`/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/SOTA_STATUS.md`**
@@ -53,12 +53,12 @@ These files define every architectural decision and every known bug. The key fin
 - **`/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/psr_optimal_thr_38k/optimal_thresholds.json`**
   - 0.7018 per-component optimal F1. The honest PSR headline after the 10k-to-38k correction.
 - **`/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/d4_d1r/retune/verdict.json`**
-  - 0.6364 D4+D1R decoder transfer result. The decisive test that proved decoder transfer works given adequate detection density.
+  - 0.6364 (3-video subset) D4+D1R decoder transfer result. The decisive test that proved decoder transfer works given adequate detection density.
 
 ### §0.3 Logs (running trainings)
 
-- **`/tmp/train_psr_repair_v3.log`** — V3 active. Post_gelu activations confirmed alive at +4608 (from dead -130). Epochs 24+ on 5060 Ti. This is the Kendall-fixed (KENDALL_FIXED_WEIGHTS=1) ablation, not the head repair — the head repair (`PSR_HEAD_REPAIR`) was never wired into the execution path. Expected F1 lift: +0.01-0.03 from the Kendall fix alone. The real head repair has not been tested.
-- **`/tmp/train_singletask_det.log`** — Single-task ConvNeXt detection. Epoch 43+. ~3.4 days remaining. This is the critical denominator fix for the multi-task cost claim. Expected mAP > 0.5.
+- **`/tmp/train_psr_repair_v3.log`** — V3 active. Post_gelu activations confirmed alive at +4608 (from dead -130). Epochs 24+ on 5060 Ti. *(UNVERIFIABLE-REMOTELY: `/tmp/*.log` is workstation-local, not persisted)* This is the Kendall-fixed (KENDALL_FIXED_WEIGHTS=1) ablation, not the head repair — the head repair (`PSR_HEAD_REPAIR`) was never wired into the execution path. Expected F1 lift: +0.01-0.03 from the Kendall fix alone. The real head repair has not been tested.
+- **`/tmp/train_singletask_det.log`** — Single-task ConvNeXt detection. Epoch 43+. ~3.4 days remaining. *(UNVERIFIABLE-REMOTELY: `/tmp/*.log` is workstation-local, not persisted)* This is the critical denominator fix for the multi-task cost claim. Expected mAP > 0.5.
 
 ### §0.4 Strategy Files 132-150
 
@@ -107,8 +107,8 @@ All at `/media/newadmin/master/POPW/working/code/industreal_improved/code/indust
 - Frozen MViTv2-S (Kinetics-400) carries frame-level activity signal. ConvNeXt (ImageNet-1k) does not — its 0.2169 is statistically indistinguishable from the 0.2217 majority-class baseline (95% CI ±0.0046).
 - MViTv2-S SOTA on this protocol: 0.622 (WACV T3 verification). Fine-tuning justified by probe >> 0.30 threshold. Expected after fine-tuning: 0.45-0.55.
 
-**D4+D1R decoder transfer: 0.6364 — decoder transfer verified given adequate detection density.**
-- With YOLOv8m detections (0.995 mAP50) feeding the MonotonicDecoder, transition F1 reaches 0.6364. This proves the decoder bottleneck is detection density, not the decoder architecture.
+**D4+D1R decoder transfer: 0.6364 (3-video subset) — decoder transfer verified given adequate detection density.**
+- With YOLOv8m detections (0.995 mAP50) feeding the MonotonicDecoder, transition F1 reaches 0.6364 (3-video subset). This proves the decoder bottleneck is detection density, not the decoder architecture.
 - Contrast: with ConvNeXt detections (0.00009 mAP50), the decoder achieved 0.000 at default thresholds and 0.347 after a 145-combination re-tune.
 
 **PSR per-component optimal F1: 0.7018 — honest, full-38k, val-selected.**
@@ -118,9 +118,9 @@ All at `/media/newadmin/master/POPW/working/code/industreal_improved/code/indust
 
 ### §1.2 What We Need to Do (Best of Best)
 
-**PSR repair V3 (running NOW):** In-flight training on 5060 Ti, epochs 24+. Post_gelu activations confirmed alive at +4608 (from dead -130). This is a Kendall-fixed (KENDALL_FIXED_WEIGHTS=1) ablation only — the head repair (`PSR_HEAD_REPAIR`) was never wired in. Expected F1 lift from Kendall fix alone: +0.01-0.03. If val F1 (global 0.10) drops below 0.65 on two consecutive evals, abort and restore. Expected F1 after V3: 0.71-0.74.
+**PSR repair V3 (running NOW):** In-flight training on 5060 Ti, epochs 24+. Post_gelu activations confirmed alive at +4608 (from dead -130). *(UNVERIFIABLE-REMOTELY: V3 training process state and post_gelu values are workstation-local, from `/tmp/train_psr_repair_v3.log`)* This is a Kendall-fixed (KENDALL_FIXED_WEIGHTS=1) ablation only — the head repair (`PSR_HEAD_REPAIR`) was never wired in. Expected F1 lift from Kendall fix alone: +0.01-0.03. If val F1 (global 0.10) drops below 0.65 on two consecutive evals, abort and restore. Expected F1 after V3: 0.71-0.74.
 
-**Single-task ConvNeXt detection (running, ~3.4 days remaining):** Epochs 43+. This is the critical denominator fix — the architecture-controlled multi-task cost measurement. Expected mAP > 0.5. If it reaches 0.5-0.7, the multi-task cost claim becomes clean (single-task ConvNeXt ceiling vs multi-task ConvNeXt detection, same backbone).
+**Single-task ConvNeXt detection (running, ~3.4 days remaining):** Epochs 43+. *(UNVERIFIABLE-REMOTELY: process state and epoch count from workstation `/tmp/train_singletask_det.log`)* This is the critical denominator fix — the architecture-controlled multi-task cost measurement. Expected mAP > 0.5. If it reaches 0.5-0.7, the multi-task cost claim becomes clean (single-task ConvNeXt ceiling vs multi-task ConvNeXt detection, same backbone).
 
 **MViTv2-S fine-tuning (script ready, blocked on GPU):** Expected activity 0.45-0.55 (from frozen 0.3810). This would bring activity from "null result" to "near SOTA" (WACV 0.622). Requires 2 GPU-weeks.
 
@@ -133,10 +133,10 @@ All at `/media/newadmin/master/POPW/working/code/industreal_improved/code/indust
 ### Detection (10 questions)
 
 **Q1: Is D3 mAP=0.00009 caused by multi-task or implementation?**
-The evidence strongly favors implementation. Five detection classes (1, 2, 3, 14, 23) never fire at any confidence threshold — a class mapping bug between the detection head's logit ordering and COCO-based class indexing. The 91.9% empty-frame rate (3102 GT boxes across 38036 frames) with ~105 predictions per frame means almost all predictions are false positives on empty frames. No GT-balanced sampler was ever implemented. Gradient blending (ACTIVITY_GRAD_BLEND_RATIO=0.05) means detection trains on insufficient positive examples. The cascade hypothesis (multi-task interference driving the failure) has been superseded by implementation-dominant explanation.
+The evidence strongly favors implementation. Five detection classes (1, 13, 16, 19, 23) never fire at any confidence threshold — a class mapping bug between the detection head's logit ordering and COCO-based class indexing. The 91.9% empty-frame rate (3102 GT boxes across 38036 frames) with ~105 predictions per frame means almost all predictions are false positives on empty frames. No GT-balanced sampler was ever implemented. Gradient blending (ACTIVITY_GRAD_BLEND_RATIO=0.05) means detection trains on insufficient positive examples. The cascade hypothesis (multi-task interference driving the failure) has been superseded by implementation-dominant explanation.
 
 **Q2: Should we run single-task detection to get clean cost denominator?**
-Already running (epoch 43+, ConvNeXt-Tiny, ~3.4 days remaining). This is the single most important training run of the entire cycle — it answers whether the multi-task detection degradation is real (single-task > multi-task on same backbone) or whether ConvNeXt-Tiny cannot do detection at all.
+Already running (epoch 43+, ConvNeXt-Tiny, ~3.4 days remaining). *(UNVERIFIABLE-REMOTELY: epoch count from workstation `/tmp/train_singletask_det.log`)* This is the single most important training run of the entire cycle — it answers whether the multi-task detection degradation is real (single-task > multi-task on same backbone) or whether ConvNeXt-Tiny cannot do detection at all.
 
 **Q3: Is the 4 detection fixes enough to make multi-task work?**
 The 4 fixes (GT-balanced sampler, DET_GAMMA_NEG 1.5→2.0, anchor audit, class index verification) address the known implementation bugs. They should lift detection from 0.00009 to at least 0.1-0.3. Whether they close the gap to single-task depends on whether residual interference remains.
@@ -160,7 +160,7 @@ Both, with WACV-matched convention as primary. The standard in COCO detection is
 Yes, for the class-imbalance half. But the empty-frame problem has a second component: the detection head produces ~105 predictions per frame, almost all false positives. The GT-balanced sampler addresses the ratio of positive to negative examples in training. For the false-positive density at inference, the DET_GAMMA_NEG tuning (1.5→2.0) and anchor audit are the complementary fixes.
 
 **Q10: Can we beat WACV 0.641 mAP with single-task ConvNeXt-Tiny detection?**
-Expected. ConvNeXt-Tiny single-task detection should achieve 0.5-0.7 mAP50 based on ConvNeXt's general detection capability. This would be below D1R 0.995 (YOLOv8m is better at detection) but could match or exceed WACV 0.641. The run is in flight and will answer this in ~3.4 days.
+Expected. ConvNeXt-Tiny single-task detection should achieve 0.5-0.7 mAP50 based on ConvNeXt's general detection capability. This would be below D1R 0.995 (YOLOv8m is better at detection) but could match or exceed WACV 0.641. The run is in flight and will answer this in ~3.4 days. *(UNVERIFIABLE-REMOTELY: duration from `/tmp/train_singletask_det.log`)*
 
 ---
 
@@ -173,13 +173,13 @@ The LeakyReLU repair was applied to the wrong module. `PSRTransitionPredictor` (
 V3 applies only the Kendall fix (KENDALL_FIXED_WEIGHTS=1) to the live `PSRHead`. Expected lift is +0.01-0.03, not +0.05-0.10. The 0.78+ projection was based on the mistaken assumption that the LeakyReLU repair was active. V3's expected F1: 0.71-0.74 from a base of 0.7018.
 
 **Q13: Is Ours F1 (0.7018) > null_copy_prev F1 (0.9997) really "no learning"?**
-The comparison is misleading because POS is structurally inflated for any constant-output model (algebra: POS(constant) = 1 − N/(T-1) where N is transitions and T is frames). The per-component null-delta table is the honest measure of learning: +0.097 (comp4, p=0.14), +0.093 (comp10, p=0.18), -0.000 (comp9). The model learns genuine signal on low-prevalence components but is worse than a persistence baseline on the POS metric because POS rewards any constant output.
+The comparison is misleading because POS is structurally inflated for any constant-output model (algebra: POS(constant) = 1 − N/(T-1) where N is transitions and T is frames). The per-component prevalence null-delta table (always-positive baseline, F1_null = 2p/(1+p)) is the honest measure of learning: +0.097 (comp4, p=0.14), +0.093 (comp10, p=0.18), -0.000 (comp9). The model learns genuine signal on low-prevalence components but is worse than a persistence baseline on the POS metric because POS rewards any constant output.
 
 **Q14: Should we report F1 relative to copy_prev baseline, not absolute?**
-Report both. The absolute F1 is the standard metric for comparability with future work. The null-delta (improvement over copy_prev/null) is the honest measure of learned signal within the PSR section. The null-delta columns should lead the per-component PSR table.
+Report both. The absolute F1 is the standard metric for comparability with future work. The prevalence null-delta (improvement over always-positive baseline F1_null = 2p/(1+p), NOT over copy-prev) is the honest measure of learned signal within the PSR section. The prevalence null-delta columns should lead the per-component PSR table.
 
 **Q15: Is the MonotonicDecoder F1 (0.0053 full-38k) the right comparison?**
-The decoder F1 of 0.0053 reflects saturated logits feeding into the decoder, not decoder capability. With D4+D1R weights (dense YOLOv8m detections), the decoder achieves 0.6364 — proving the decoder itself is not the bottleneck. The 0.0053 number belongs in the PSR section only with the explanation that logit saturation makes decoder comparison invalid for this checkpoint.
+The decoder F1 of 0.0053 reflects saturated logits feeding into the decoder, not decoder capability. With D4+D1R weights (dense YOLOv8m detections), the decoder achieves 0.6364 (3-video subset) — proving the decoder itself is not the bottleneck. The 0.0053 number belongs in the PSR section only with the explanation that logit saturation makes decoder comparison invalid for this checkpoint.
 
 **Q16: Should we use the decoder (0.7893) or the head (0.7018) for the paper?**
 The head F1 (0.7018 per-comp optimal, 0.6788 global 0.10) is the honest primary — it reflects the actual model prediction from raw video frames. The decoder is a post-processing layer on top of head logits. Both should be reported in a single row with clear labels.
@@ -290,16 +290,16 @@ The evidence supports a pathology-dominant paper with SOTA-comparison as seconda
 Emphasize both as an integrated story. The single-task detection win (0.995 mAP50) proves the task is solvable on this data. The multi-task detection failure (0.00009) proves task composition adds difficulty. The paper's contribution is measuring that gap and diagnosing its causes — not celebrating either alone.
 
 **Q48: Is the AAIML submission worth it given our current numbers?**
-Yes, if the paper is framed as a pathology/measurement paper. The assets: first ego-pose baseline (9.14°/7.78°), first per-frame PSR baseline with null-delta analysis (0.7018 full-38k, per-component signal verified), D4+D1R decoder transfer result (0.6364), MViTv2-S probe breakthrough (0.3810), and the single-task detection ceiling (0.995 mAP50 cross-architecture). The pathology story (three verified bugs, three exhibits of the monitoring blind spot thesis) is novel and publishable. The submission is worth it.
+Yes, if the paper is framed as a pathology/measurement paper. The assets: first ego-pose baseline (9.14°/7.78°), first per-frame PSR baseline with null-delta analysis (0.7018 full-38k, per-component signal verified), D4+D1R decoder transfer result (0.6364 (3-video subset)), MViTv2-S probe breakthrough (0.3810), and the single-task detection ceiling (0.995 mAP50 cross-architecture). The pathology story (three verified bugs, three exhibits of the monitoring blind spot thesis) is novel and publishable. The submission is worth it.
 
 **Q49: How do we handle the in-flight training results (PSR V3, single-task det)?**
-Both are gating factors for the final numbers table. The freeze date (Jul 20) must accommodate their completion. PSR V3 completes in ~2 days (from epoch 24+). Single-task detection completes in ~3.4 days (from epoch 43+). Both should produce results by Jul 14-15, leaving 5 days for final eval and writing. The results_frozen.json discipline (138 Attack 10) commits the evaluation stack at freeze.
+Both are gating factors for the final numbers table. The freeze date (Jul 20) must accommodate their completion. PSR V3 completes in ~2 days (from epoch 24+). Single-task detection completes in ~3.4 days (from epoch 43+). *(UNVERIFIABLE-REMOTELY: V3 and single-task detection epoch counts from workstation `/tmp/*.log`)* Both should produce results by Jul 14-15, leaving 5 days for final eval and writing. The results_frozen.json discipline (138 Attack 10) commits the evaluation stack at freeze.
 
 **Q50: What is the absolute best case for the paper if all 9 fixes work + V3 trains + MViTv2-S fine-tunes?**
 
 The absolute best case:
 - **Detection (multi-task):** mAP50 0.3-0.5 (from 9 fixes, same-backbone). Multi-task cost = 30-60% relative to single-task ConvNeXt (expected 0.5-0.7).
-- **PSR:** F1 0.78-0.84 (from real head repair — not yet tested). Per-component null-delta +0.10-0.15. LOO-CV improvement +0.03-0.05.
+- **PSR:** F1 0.78-0.84 (from real head repair — not yet tested). Per-component prevalence null-delta (always-positive baseline) +0.10-0.15. LOO-CV improvement +0.03-0.05.
 - **Activity:** 0.45-0.55 (from MViTv2-S fine-tune — 2 GPU-weeks). "Near SOTA" (SOTA 0.622 from WACV).
 - **Pose:** 9.14°/7.78° first baseline (unchanged — already works).
 - **Detection (single-task):** 0.5-0.7 mAP50 (ConvNeXt-Tiny). Cross-architecture ceiling: 0.995 (YOLOv8m).
@@ -314,15 +314,15 @@ The realistic best case for Jul 20 submission: multi-task detection 0.1-0.3 (par
 
 ### §3.1 Day 1-3 (NOW): PSR V3 + Single-task detection
 
-**PSR V3 (running NOW, 5060 Ti, epochs 24+):**
+**PSR V3 (running NOW, 5060 Ti, epochs 24+):** *(UNVERIFIABLE-REMOTELY: V3 process state from workstation `/tmp/train_psr_repair_v3.log`)*
 - What it tests: KENDALL_FIXED_WEIGHTS=1 only (the head repair was never wired in — see §-1 in 140)
 - Expected F1: 0.71-0.74 (from 0.7018 baseline, +0.01-0.03 lift)
 - Abort criterion: val F1 (global 0.10) < 0.65 on two consecutive evals
-- Verification: epoch 18 best.pth SHA256 59cb88ec... cold-copied
+- Verification: epoch 18 best.pth SHA256 59cb88ec... cold-copied *(UNVERIFIABLE-REMOTELY: best.pth SHA256 not verifiable from GitHub — checkpoint not in git)*
 
-**Single-task ConvNeXt detection (running, 5060 Ti, epochs 43+):**
+**Single-task ConvNeXt detection (running, 5060 Ti, epochs 43+):** *(UNVERIFIABLE-REMOTELY: detection process state from workstation `/tmp/train_singletask_det.log`)*
 - Expected mAP50: 0.5-0.7
-- ~3.4 days remaining from epoch 43
+- ~3.4 days remaining from epoch 43 *(UNVERIFIABLE-REMOTELY: remaining time from `/tmp/train_singletask_det.log`)*
 - This is the critical denominator fix — answers whether ConvNeXt-Tiny can do detection at all
 
 ### §3.2 Day 1 (also NOW): Blocking diagnostics and hygiene (RTX 3060 + CPU)
@@ -362,7 +362,7 @@ When GPU is free (after V3 and single-task detection complete):
 2. **Single-task pose ablation** (1 day, optional filler): only if GPU idle.
 3. **MViTv2-S fine-tuning launch** (2-week investment, blocked on GPU): expected activity 0.45-0.55.
 4. **D3 full-set detection eval with detection enabled** (1 day): produces the honest multi-task detection number.
-5. **D4+D1R eval** (0.5-1 day, 3060): already done — 0.6364.
+5. **D4+D1R eval** (0.5-1 day, 3060): already done — 0.6364 (3-video subset).
 6. **P2.6 transition F1** (1 day, cached): paradigm-comparison table.
 
 ### §3.5 Week 3-4: Final ablation and writing
@@ -402,7 +402,7 @@ The honest summary: one head (pose) is first-baseline and works. Two heads (dete
 ### Honest Failures
 - **Multi-task activity 0.0236:** Class collapse on wrong backbone (ConvNeXt ImageNet). The diagnosis is the contribution.
 - **Multi-task detection 0.00009:** Implementation bugs (5 never-predicted classes, 91.9% empty frames, no GT-balanced sampler).
-- **PSR head F1 0.7018 < null persistence 0.9997:** POS is structurally inflated; the per-component null-delta table is the honest metric. Model learns signal on low-prevalence components.
+- **PSR head F1 0.7018 < persistence null (copy-prev) 0.9997:** POS is structurally inflated; the per-component prevalence null-delta table (always-positive baseline) is the honest metric. Model learns signal on low-prevalence components.
 
 ---
 
@@ -436,14 +436,14 @@ All file paths for an independent auditor to verify every claim in this document
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/evaluation/null_model_pos.py` (null model for POS)
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/evaluation/convnext_psr_decoder.py` (MonotonicDecoder eval)
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/evaluation/activity_temporal_probe_cpu.py` (temporal probe)
-- `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/evaluation/psr_true_signal_analysis.py` (null-delta analysis)
+- `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/evaluation/psr_true_signal_analysis.py` (prevalence null-delta analysis; always-positive baseline)
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/psr_transition.py` (DEAD CODE — PSRTransitionPredictor never instantiated)
 
 ### Loss functions
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/losses.py` (lines 951-952: pose indices correct; line 1436-1454: Gaussian transition targets live; line 1666: KENDALL_FIXED_WEIGHTS consumed)
 
 ### Checkpoints and Data
-- `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/best.pth` (738MB, SHA256: 59cb88ec85311bfcfff91f000bd08005675e3a882bec9f24ccd5ee0cbe89f9a8)
+- `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/best.pth` (738MB, SHA256: 59cb88ec85311bfcfff91f000bd08005675e3a882bec9f24ccd5ee0cbe89f9a8) *(UNVERIFIABLE-REMOTELY: best.pth not in git)*
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/crash_recovery.pth` (738MB)
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/SOTA_STATUS.md` (master table — needs Day-1 edit)
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/disclosures_v1.md` (12 disclosures)
@@ -451,11 +451,11 @@ All file paths for an independent auditor to verify every claim in this document
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/full_eval_ep18_v2/metrics.json` (9.14/7.78 — MUST BE COMMITTED)
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/d3_full_38k/detection_mAP.json` (0.00009)
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/psr_optimal_thr_38k/optimal_thresholds.json` (0.7018)
-- `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/d4_d1r/retune/verdict.json` (0.6364)
+- `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/d4_d1r/retune/verdict.json` (0.6364 (3-video subset))
 
 ### Logs
-- `/tmp/train_psr_repair_v3.log` (V3 active, post_gelu +4608, Kendall-only)
-- `/tmp/train_singletask_det.log` (single-task detection, epoch 43+)
+- `/tmp/train_psr_repair_v3.log` (V3 active, post_gelu +4608, Kendall-only) *(UNVERIFIABLE-REMOTELY: `/tmp/*.log` is workstation-local)*
+- `/tmp/train_singletask_det.log` (single-task detection, epoch 43+) *(UNVERIFIABLE-REMOTELY: `/tmp/*.log` is workstation-local)*
 
 ### Strategy Files
 - `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/analyses/consult_2026_06_10/AAIML/132_OPUS_TOP_10_DEPTH_V2.md` (top-10 depth analysis)
@@ -481,7 +481,7 @@ When V3 completes and the single-task detection run finishes, run this exact eva
 **1. PSR evaluation (30 min, cached logits):**
 - Take V3 checkpoint (epochs 30+, wherever it plateaus)
 - Eval PSR F1 on full 38k with per-component optimal thresholds
-- Compare to: head F1=0.7018 (pre-V3), decoder F1=0.0053 (pre-V3, saturated), null_copy_prev=0.9997
+- Compare to: head F1=0.7018 (pre-V3), decoder F1=0.0053 (pre-V3, saturated), null_copy_prev=0.9997 (persistence / copy-prev null)
 - Expected: V3 F1 in [0.71, 0.74] (Kendall fix only)
 - If V3 F1 > 0.78: the Kendall fix alone was more effective than projected — the weight-fixing hypothesis is confirmed
 - If V3 F1 ~ 0.70: the Kendall fix is ineffective — the binding constraint is the head gradient starvation, not task weights
