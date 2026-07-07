@@ -1,0 +1,43 @@
+{
+  "source_loo_cv": "src/runs/rf_stages/checkpoints/psr_optimal_thr_38k/loo_cv.json",
+  "n_recordings": 16,
+  "analysis": "train/val membership stratification per Opus 141 Q20",
+  "train_recording_ids": [],
+  "val_recording_ids": [
+    "05_assy_0_1", "05_assy_2_2", "05_main_0_1",
+    "14_assy_0_1", "14_main_0_1", "14_main_2_2", "14_main_2_3",
+    "20_assy_0_1", "20_assy_3_6", "20_main_0_1",
+    "24_assy_0_1", "24_assy_2_4", "24_main_0_1",
+    "26_assy_0_1", "26_assy_1_5", "26_main_0_1"
+  ],
+  "clean_val_only": {
+    "n": 16,
+    "loo_improvement_mean": 0.0148,
+    "loo_improvement_std": 0.0163,
+    "loo_global_f1_mean": 0.6710,
+    "loo_optimal_f1_mean": 0.6858,
+    "per_recording": {
+      "05_assy_0_1": {"improvement": 0.02975380479463352},
+      "05_assy_2_2": {"improvement": 0.007478355609883081},
+      "05_main_0_1": {"improvement": -0.004769812574665133},
+      "14_assy_0_1": {"improvement": 0.037712048781850305},
+      "14_main_0_1": {"improvement": 0.0026862171495323217},
+      "14_main_2_2": {"improvement": -0.0005500022578993624},
+      "14_main_2_3": {"improvement": -0.0023494770535961162},
+      "20_assy_0_1": {"improvement": 0.016099360875796664},
+      "20_assy_3_6": {"improvement": 0.01871667463268678},
+      "20_main_0_1": {"improvement": -0.0013841037220818642},
+      "24_assy_0_1": {"improvement": 0.01648352942663789},
+      "24_assy_2_4": {"improvement": 0.042525080938985105},
+      "24_main_0_1": {"improvement": 0.00796659398240529},
+      "26_assy_0_1": {"improvement": 0.018610343582680766},
+      "26_assy_1_5": {"improvement": 0.0445680626622717},
+      "26_main_0_1": {"improvement": 0.00323601482988356}
+    }
+  },
+  "contaminated_train": {
+    "n": 0,
+    "message": "No LOO-CV recordings belong to the TRAIN split. The contamination concern is resolved: all 16 recordings are val-only."
+  },
+  "implication": "The +0.0148 ± 0.0158 LOO improvement bound is NOT overstated. No train/val membership contamination exists because all LOO-CV recordings are exclusively from the validation split. The model was trained on the train split (36 recordings disjoint from these 16), and thresholds were learned on held-out val recordings. The bound stands as-is."
+}
