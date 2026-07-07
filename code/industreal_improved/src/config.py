@@ -793,11 +793,14 @@ DET_OHEM_MIN_NEG = 32    # [FIX 2026-06-19 v2] was 128 — 128 negatives dominat
 #   negatives: p^2 * CE (gamma=2, standard) — only OHEM-kept hard negatives contribute
 DET_ASYMMETRIC_GAMMA = True     # enable per-class gamma (pos vs neg)
 DET_GAMMA_POS = 0.0             # no gamma suppression for positives
-DET_GAMMA_NEG = 1.5             # [FIX 2026-06-19 v2] was 1.0 — v1 fix at 1.0 was too aggressive.
-                                 # At p=0.074, gamma=1.0 gives 0.074 effective weight per negative (13.5× increase),
-                                 # which was excessive with RATIO=5/MIN_NEG=128 (67.5× total gradient) → suppressed
-                                 # all predictions. gamma=1.5 gives p^0.5=0.27 → 3.5× moderate increase, enough
-                                 # to break equilibrium without overwhelming positives. Paired with RATIO=2/MIN_NEG=32.
+DET_GAMMA_NEG = 2.0             # [FIX 2026-07-07 (Opus 140 D-1)] Was 1.5 — analysis (agent-55) found
+                                 # 3.8M false positives on empty eval frames + only 46% correct-class predictions.
+                                 # Raising to 2.0 (standard RetinaNet value) forces harder negative mining,
+                                 # suppressing the 63% class-7/class-10 false positive flood. At gamma=2.0,
+                                 # a well-classified negative (p=0.1) gets (0.9)^2=0.81 weight vs (0.9)^1.5=0.85 at
+                                 # gamma=1.5 — modest 5% increase for easy negs, but a confident neg (p=0.01) gets
+                                 # (0.99)^2=0.98 vs (0.99)^1.5=0.985 — the effect concentrates on the hard
+                                 # OHEM-selected negatives where it matters for class separation.
 
 WING_OMEGA   = 0.05
 WING_EPSILON = 0.005
