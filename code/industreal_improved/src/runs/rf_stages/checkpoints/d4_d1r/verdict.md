@@ -28,7 +28,7 @@
 
 **F1 = 0.6364 >= 0.6 -- decoder transfers given adequate detection density.**
 
-With D1R fine-tuned YOLOv8m (mAP=0.995) and retuned Q48 thresholds (hi=0.3, lo=0.1, min=2), the MonotonicDecoder achieves F1=0.6364 -- an 83% relative improvement over original D4 retuned F1=0.347. Detection density was the dominant binding constraint at the original D4 operating point. The gap to ConvNeXt-based PSR (0.7499 optimal / ~0.72 on 38k) is ~0.11 (15% relative), representing the residual paradigm gap between detection-based and direct PSR inference.
+With D1R fine-tuned YOLOv8m (mAP=0.995) and retuned Q48 thresholds (hi=0.3, lo=0.1, min=2), the MonotonicDecoder achieves F1=0.6364 -- an 83% relative improvement over original D4 retuned F1=0.347. Detection density was the dominant binding constraint at the original D4 operating point. The gap to ConvNeXt-based PSR (0.7018 optimal on 38k, downward revision from 0.7499 on 10k) is ~0.07 (10% relative), representing the residual paradigm gap between detection-based and direct PSR inference.
 
 **Disclosure update (SS5.4):** "With a dense fine-tuned detector, F1 = 0.6364 -- decoder transfers given adequate detection density."
 

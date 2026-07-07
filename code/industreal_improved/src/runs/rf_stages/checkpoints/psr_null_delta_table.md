@@ -21,4 +21,4 @@
 
 **Interpretation:** Low-prevalence components (comp 4 at p=0.142, comp 10 at p=0.183) show delta +0.097 and +0.093 respectively — approximately +0.10 of genuine learned signal beyond the prevalence prior. Comp 8 (p=0.667, delta +0.053) also shows moderate learned signal. High-prevalence components (comp 0-2, p>0.9) show small deltas as expected from ceiling effects. Comp 9 is effectively at-null (delta -0.000), indicating the model learned nothing beyond prevalence for that posture.
 
-**Discloses (Opus PSR-6):** The 0.7499 macro-F1 is partially backbone+prevalence-fitting, but with +0.09-0.10 delta on the hardest, lowest-prevalence components — the head learned something real on the components that matter most.
+**Discloses (Opus PSR-6):** The macro-F1 (0.7018 on full 38k, downward revision from 0.7499 on 10k subset) is partially backbone+prevalence-fitting, but with +0.09-0.10 delta on the hardest, lowest-prevalence components — the head learned something real on the components that matter most.
