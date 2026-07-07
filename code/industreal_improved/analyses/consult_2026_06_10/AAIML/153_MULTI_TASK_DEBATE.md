@@ -70,7 +70,7 @@ The data shows multi-task is the problem:
 
 ### §3.2 The 4 Single-Task Baselines
 Need to run (blocked on GPU):
-1. Single-task detection (in flight, ~3.4 days remaining)
+1. Single-task detection (in flight, ~3.4 days remaining) *(UNVERIFIABLE-REMOTELY: remaining time from workstation `/tmp/train_singletask_det.log`)*
 2. Single-task pose (not started)
 3. Single-task activity (not started, will be 0.05 even single-task)
 4. Single-task PSR (script ready)
@@ -140,6 +140,6 @@ We have:
 
 The "do the best" plan is:
 1. Get V3 PSR F1 results (1-2 days)
-2. Get single-task detection results (3-4 days)
+2. Get single-task detection results (3-4 days) *(UNVERIFIABLE-REMOTELY: timing from workstation `/tmp/train_singletask_det.log`)*
 3. Launch MViTv2-S fine-tuning (2 weeks)
 4. Final comparison

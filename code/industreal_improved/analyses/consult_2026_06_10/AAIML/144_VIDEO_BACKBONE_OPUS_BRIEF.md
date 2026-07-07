@@ -10,7 +10,7 @@
 - Linear probe (frozen ConvNeXt): 0.2169 ≈ 0.2217 (zero signal). The frozen backbone cannot discriminate assembly activities above chance.
 - TCN+ViT architectures built (commits `a3bad7356`, `693b119b`) but not trained. These remain candidates for a post-backbone temporal head if the video backbone succeeds.
 - 41/69 classes have zero accuracy (class collapse confirmed). The per-class breakdown shows systematic collapse in low-frequency activities, suggesting the frozen features lack temporal structure entirely.
-- PSR head repair (LeakyReLU) applied; full D4+D1R F1=0.6364 decisive test. The repair stabilised PSR but does not address the backbone bottleneck.
+- PSR head repair (LeakyReLU) applied; full D4+D1R F1=0.6364 (3-video subset) decisive test. The repair stabilised PSR but does not address the backbone bottleneck.
 
 ## 1. Three Improvements Requested
 
@@ -37,7 +37,7 @@ Currently the ConvNeXt is frozen for the linear probe. The proposal is to replac
 
 - **Detection** (existing, proven at ~0.995 mAP@50 on D1R). Strong gradient signal; risk of dominating the backbone features.
 - **Head pose** (existing, 7.78 degrees MAE). Moderate gradient magnitude.
-- **PSR** (existing, head repaired with LeakyReLU, F1=0.6364). Handles procedure state recognition.
+- **PSR** (existing, head repaired with LeakyReLU, F1=0.6364 (3-video subset)). Handles procedure state recognition.
 - **Activity** (currently 0.0236). Severely undertrained; likely needs the largest gradient contribution per step.
 
 The multi-task dynamics are unknown because only linear-probe and single-task runs exist.
