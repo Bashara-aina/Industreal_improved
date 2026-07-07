@@ -32,7 +32,7 @@ THIS: Final confirmation round — did we do it right?
 ### F-1: DETACH_PSR_FPN silent no-op → FIXED
 - **File 157 said**: V3 launch scripts exported `DETACH_PSR_FPN=False` as env var, but config.py hardcoded `True` with no env-read.
 - **We did**: Added env-read to config.py (`commit 59f84c3d4`), patched wrapper to force `DETACH_PSR_FPN=False` after preset apply (`commit ea6ac30c`).
-- **Status**: Deeper investigation (agent-114) found PSR gradient is STILL dead due to parameter freezing + Kendall staging — NOT the DETACH flag. DETACH fix was correct but insufficient.
+- **Status (updated Jul-07 per Opus-165)**: Deeper investigation (agent-114) found PSR gradient is STILL dead due to parameter freezing + Kendall staging — NOT the DETACH flag. **Opus-165 confirmed this finding. Fix applied in commit `21ab3c3fd`**: added `psr_head` to the staged-training freeze bypass (train.py:782-784 and 804-806) so `--reinit-heads` keeps PSR head trainable in stages 1-2 (same pattern as activity_head). The Kendall staging fix (losses.py F-2) still pending — V3/V4 runs with `KENDALL_FIXED_WEIGHTS=1` avoid the Kendall zero-risk.
 
 ### F-2: File 156 §2 was lost → RECONSTRUCTED
 - **File 157 said**: Section §2 (Q11-20, Implementation Critique) was lost during concurrent agent overwrites.
@@ -60,7 +60,7 @@ THIS: Final confirmation round — did we do it right?
 
 ### F-8: LOO-CV std 0.0158 → 0.0163 → NOTED
 - **File 157 said**: Use 0.0163 from `loo_improvement_std` in `loo_stratified.json`.
-- **We did**: No occurrences of wrong value found.
+- **We did (updated Jul-07 per Opus-165)**: Opus-165 audit found the wrong LOO std ±0.0158 was STILL live in 6 files. Fixed in commit `21ab3c3fd`: replaced all occurrences with 0.0163 (ground truth from `psr_loo_cv_stratified/loo_stratified.json`).
 
 ### F-9: Workstation-only claims unverifiable remotely → MARKED
 - **File 157 said**: Claims about `/tmp/*.log`, `best.pth`, V3 process state are unverifiable from GitHub.
