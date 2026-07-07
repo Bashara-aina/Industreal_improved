@@ -41,7 +41,7 @@ Build a paper for AAIML 2027 that **beats SOTA across all four IndustReal task h
 | **Head Pose forward** | angular MAE | **8.39°** | ~15° (claimed) | **near SOTA** |
 | **Head Pose up** | angular MAE | 26.20° (full) / 13.5° (300-subset) | n/a | **mixed / ambiguous** |
 | **PSR (global thresh 0.10)** | macro F1 | 0.7217 | 0.901 (STORM) | competitive |
-| **PSR (per-comp optimal)** | macro F1 | **0.7499** | 0.901 (STORM) | **near SOTA** (-0.13) |
+| **PSR (per-comp optimal)** | macro F1 | **0.7018** | 0.901 (STORM) | **near SOTA** (-0.13) |
 | **PSR (YOLOv8m → PSR, D4)** | event F1 / POS / Edit | **0.000 / 0.999 / 0.994** | 0.883 | **POS paradox confirmed** |
 | **PSR POS** | ordered-pair fraction | 0.968 | 0.812 | metric artifact |
 
@@ -52,7 +52,7 @@ Build a paper for AAIML 2027 that **beats SOTA across all four IndustReal task h
 **Done:**
 - Detection BEATS SOTA via separately-trained YOLOv8m (d1r)
 - Head Pose forward MAE 8.39° (near SOTA)
-- PSR per-comp F1 0.7499 (near SOTA)
+- PSR per-comp F1 0.7018 (near SOTA)
 - MonotonicDecoder bug fixed (variable shadow → real thresholds)
 - D1 YOLOv8m full eval (mAP=0.0004 is the real metric, not a bug)
 - D4 YOLOv8m → PSR experiment (F1=0, POS=0.999 — POS paradox confirmed)
@@ -121,7 +121,7 @@ File 127 contains 66 deep questions across 10 specialist sections. Each question
 6. **D-1** — What is the true detection ground truth when full eval gives NaN?
 7. **HP-2** — Up-vector reliability: 7.06° vs 13.5° vs 26.20° — which is real?
 8. **A-1** — What does Kendall uncertainty weighting buy when one head is killed?
-9. **AC-3** — The POS paradox: F1=0.7499 vs D4 F1=0 — which is real?
+9. **AC-3** — The POS paradox: F1=0.7018 vs D4 F1=0 — which is real?
 10. **AC-6** — All numbers will change after the simple head run
 
 ---
@@ -191,7 +191,7 @@ File 129 contains 16 sections:
 24 action items sequenced P1-P5.
 
 ### P1: Critical Path (Next 2 Weeks)
-- **P1.1** Finish PSR via fixed-weight training (F1 0.7499 → ~0.83)
+- **P1.1** Finish PSR via fixed-weight training (F1 0.7018 → ~0.83)
 - **P1.2** D1 audit — DONE, mAP=0.0004 is real
 - **P1.3** Fix NaN full eval via in-process EVAL_MAX_BATCHES=0
 - **P1.4** Train Activity non-simple head (TCN+ViT, lift 0.028 toward 0.10)
@@ -226,7 +226,7 @@ File 129 contains 16 sections:
 ### Success Metrics
 | Metric | Current | Target | Date |
 |---|---|---|---|
-| PSR F1 | 0.7499 | ≥0.83 | Week 2-3 |
+| PSR F1 | 0.7018 | ≥0.83 | Week 2-3 |
 | Detection mAP (multi-task) | 0.358 | ≥0.60 | Week 4 |
 | Activity clip-level top1 | 0.028 | ≥0.10 | Week 4-5 |
 | Head pose up-vector MAE | 26.20° | ≤15° | Week 2 |
@@ -244,7 +244,7 @@ File 129 contains 16 sections:
 4. **MonotonicDecoder variable shadow** — `B, T, C = logits.shape` shadowed config module; renamed to `n_comp`, imported config as `_C`. (Fixed in earlier session, persisted.)
 
 ### 8.2 Critical findings
-1. **POS paradox confirmed**: D4 YOLOv8m → PSR gives F1=0 with POS=0.999. Same eval protocol as our reported 0.7499.
+1. **POS paradox confirmed**: D4 YOLOv8m → PSR gives F1=0 with POS=0.999. Same eval protocol as our reported 0.7018.
 2. **Activity is dead**: 22x gap from 0.622 (T3 MViTv2-S) is architectural (per-frame MLP cannot do temporal reasoning).
 3. **PSR head is starved**: 569 steps of psr=0.0000, liveness DEAD. Kendall log_var_psr=-0.04.
 4. **best.pth was broken**: epoch 11 was promoted via NaN-inflated metric. Now epoch 18 is best.
@@ -289,7 +289,7 @@ When the user asks about a specific topic, Opus should:
 
 ### Specific topic routing
 - "Should we claim SOTA on detection?" → file 130 P1.2 + file 128 Debate 1.1, 8.1
-- "Why is PSR F1 0.7499 instead of 0.901?" → file 127 PSR-3 + file 128 Debate 2.3
+- "Why is PSR F1 0.7018 instead of 0.901?" → file 127 PSR-3 + file 128 Debate 2.3
 - "How do we improve activity?" → file 130 P1.4, P5.1 + file 127 ACT-1, ACT-2
 - "What's the up-vector MAE?" → file 127 HP-2 + file 128 Debate 4.2 + file 130 P2.4
 - "Are the numbers reproducible?" → file 127 AC-6 + file 128 Debate 10.1
@@ -299,7 +299,7 @@ When the user asks about a specific topic, Opus should:
 
 ## Section 11: One-Paragraph Summary for Opus
 
-The user has spent extensive effort on a multi-task IndustReal model (ConvNeXt-Tiny backbone + 4 heads: detection, activity, PSR, head pose) for the AAIML 2027 submission. The strongest results are: separately-trained YOLOv8m beating detection SOTA (mAP50=0.995 vs 0.838), forward head pose near SOTA (8.39° vs claimed 15°), and PSR per-component F1 near SOTA (0.7499 vs 0.901). The weakest results are: activity clip-level 0.028 vs MViTv2-S 0.622 (22x gap, architectural ceiling), and PSR's D4 backbone-swap giving F1=0 with POS=0.999 (POS paradox confirmed). Two GPUs are active: RTX 5060 Ti running training (epoch 25, 44% done, ~1.7h remaining) and RTX 3060 running evaluations. The next critical actions are: (1) train PSR with KENDALL_FIXED_WEIGHTS=True to lift F1 toward 0.83, (2) train Activity non-simple TCN+ViT head to lift clip-level toward 0.10, (3) reframe detection as multi-task cost (64-68% of YOLOv8m ceiling), (4) add honest disclosure section §5.4 to paper with 8 items including D4 F1=0 and activity 0.028. All 66 deep questions, 30 adversarial debates, every metric with file location, and 24 sequenced action items are documented in files 127-130 in this directory.
+The user has spent extensive effort on a multi-task IndustReal model (ConvNeXt-Tiny backbone + 4 heads: detection, activity, PSR, head pose) for the AAIML 2027 submission. The strongest results are: separately-trained YOLOv8m beating detection SOTA (mAP50=0.995 vs 0.838), forward head pose near SOTA (8.39° vs claimed 15°), and PSR per-component F1 near SOTA (0.7018 vs 0.901). The weakest results are: activity clip-level 0.028 vs MViTv2-S 0.622 (22x gap, architectural ceiling), and PSR's D4 backbone-swap giving F1=0 with POS=0.999 (POS paradox confirmed). Two GPUs are active: RTX 5060 Ti running training (epoch 25, 44% done, ~1.7h remaining) and RTX 3060 running evaluations. The next critical actions are: (1) train PSR with KENDALL_FIXED_WEIGHTS=True to lift F1 toward 0.83, (2) train Activity non-simple TCN+ViT head to lift clip-level toward 0.10, (3) reframe detection as multi-task cost (64-68% of YOLOv8m ceiling), (4) add honest disclosure section §5.4 to paper with 8 items including D4 F1=0 and activity 0.028. All 66 deep questions, 30 adversarial debates, every metric with file location, and 24 sequenced action items are documented in files 127-130 in this directory.
 
 ---
 

@@ -66,14 +66,14 @@
 
 ### PSR-1: The POS Paradox — Why Does POS=0.968 Not Translate to Good F1?
 
-(a) Our POS=0.968 is higher than SOTA's 0.812, but F1=0.7499 < STORM's 0.901. The reviewer-3 file flags POS as a metric artifact from MonotonicDecoder's fill-forward ordering constraint matching the GT ordering.
+(a) Our POS=0.968 is higher than SOTA's 0.812, but F1=0.7018 < STORM's 0.901. The reviewer-3 file flags POS as a metric artifact from MonotonicDecoder's fill-forward ordering constraint matching the GT ordering.
 (b) Reporting high POS without context is misleading. Must explain the paradox or drop POS from headline metrics.
 (c) `src/runs/rf_stages/checkpoints/SOTA_STATUS.md` (POS=0.968), `analyses/consult_2026_06_10/AAIML/reviewer-3-psr-paradigm-reconciliation.md`.
 (d) Null model baseline: what POS would a "predict-all-zeros" decoder achieve? If ≥ 0.95, our POS is meaningless.
 
 ### PSR-2: Transition-Based F1 vs Per-Frame F1 — Which Metric Reflects Real Utility?
 
-(a) B3/STORM use transition F1 (event matching within tolerance). Our 0.7499 is per-frame F1. Are these comparable?
+(a) B3/STORM use transition F1 (event matching within tolerance). Our 0.7018 is per-frame F1. Are these comparable?
 (b) Different metrics measure different things. Mixing them in a single table is a reviewer attack.
 (c) `src/evaluation/psr_optimal_thresholds.py` uses per-frame F1; `eval_yolov8m_psr.py:308` uses event F1.
 (d) A side-by-side run with both metrics on the same predictions.
@@ -94,14 +94,14 @@
 
 ### PSR-5: Optimal Threshold Variation — Paper Claim or Data Snooping Artifact?
 
-(a) psr_optimal_thresholds.py sweeps 19 thresholds × 11 components on the validation set, reporting optimal macro-F1=0.7499. With 209 effective combinations, val overfitting is plausible.
+(a) psr_optimal_thresholds.py sweeps 19 thresholds × 11 components on the validation set, reporting optimal macro-F1=0.7018. With 209 effective combinations, val overfitting is plausible.
 (b) Reviewers will demand a held-out test split.
 (c) `src/runs/rf_stages/checkpoints/psr_optimal_thr/optimal_thresholds.json`.
 (d) Leave-one-recording-out cross-validation of the optimal thresholds.
 
 ### PSR-6: The Dead Head Pattern — Are All 11 PSR Sub-Heads Indistinguishable?
 
-(a) liveness reports psr=1.00e-06 DEAD across all components. If all sub-heads are dead, F1=0.7499 is purely backbone contribution.
+(a) liveness reports psr=1.00e-06 DEAD across all components. If all sub-heads are dead, F1=0.7018 is purely backbone contribution.
 (b) Reviewers will ask: what did your PSR head actually learn?
 (c) `/tmp/train_ep24_smaller.log` LIVENESS lines.
 (d) Per-component gradient magnitude, per-component prediction entropy.
@@ -363,7 +363,7 @@
 
 ### SOTA-2: STORM-PSR Paradigm Gap — Transition vs Per-Frame
 
-(a) STORM F1=0.901 vs our F1=0.7499 — but different metrics (transition vs per-frame). D4 with same protocol as STORM gives F1=0.
+(a) STORM F1=0.901 vs our F1=0.7018 — but different metrics (transition vs per-frame). D4 with same protocol as STORM gives F1=0.
 (b) Mixing paradigms in a comparison table is invalid.
 (c) `analyses/consult_2026_06_10/AAIML/industreal-sota-benchmarks.md`.
 (d) Run STORM's metric on our predictions for direct comparison.
@@ -483,7 +483,7 @@
 
 ### AC-3: The POS Paradox — Which PSR Number Is Real?
 
-(a) Our F1=0.7499 vs D4 F1=0 with POS=0.999 in both. Same evaluation protocol. Which is real?
+(a) Our F1=0.7018 vs D4 F1=0 with POS=0.999 in both. Same evaluation protocol. Which is real?
 (b) Reviewers will spot the inconsistency.
 (c) `SOTA_STATUS.md`, `d4_yolov8m_psr/metrics.json`.
 (d) Run our PSR F1 on the D4 protocol for direct comparison.

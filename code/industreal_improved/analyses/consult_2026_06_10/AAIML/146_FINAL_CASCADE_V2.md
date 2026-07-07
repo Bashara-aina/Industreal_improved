@@ -56,7 +56,7 @@ Our 4-head multi-task setup fails in three diagnosable ways. The dominant cause 
 
 **Is the 0.00009 mAP fixable by implementation changes alone?** The single-task ConvNeXt detection training (epoch 43+) will answer this. If single-task ConvNeXt achieves high mAP, then the 0.00009 is entirely due to multi-task setup issues (implementation bugs + gradient competition). If single-task ConvNeXt also fails, then there is a ConvNeXt-specific detection pathology independent of multi-task.
 
-**Will the PSR head repair recover F1 from 0.7018 to 0.7893?** The ConvNeXt-to-decoder 2x2 table (checkpoints/convnext_psr_decoder) shows that ConvNeXt-based PSR with best decoder tuning achieves F1=0.8788. If the head repair unblocks learning, the PSR head should reach at least the decoder's F1 level, because the head has direct access to backbone features while the decoder works from detection-based proxies.
+**Will the PSR head repair recover F1 from 0.7018?** The earlier projection to 0.7893 was based on a decoder artifact: the decoder F1 of 0.7893 came from only 2 recordings (2000 frames). On the full 38k evaluation set, the decoder achieves F1=0.0053 (saturated PSR head logits), and the PSR head (F1=0.7018) is actually better than the decoder. The ConvNeXt-to-decoder 2x2 table (checkpoints/convnext_psr_decoder) shows that ConvNeXt-based PSR with best decoder tuning achieves F1=0.8788. If the head repair unblocks learning, the PSR head should reach a higher F1 than its current 0.7018, because the head has direct access to backbone features while the decoder works from detection-based proxies.
 
 **Will the TCN+ViT probe break the 0.2169 backbone ceiling?** The frozen ConvNeXt linear probe (0.2169) is statistically indistinguishable from majority class (0.2217). Adding temporal aggregation (TCN or mean pooling) may or may not extract signal. If it does, the activity head can be rescued without a full backbone swap. If it does not, MViTv2-S is required.
 
@@ -69,7 +69,7 @@ Lead the paper with single-task D1R detection (0.995 BEATS SOTA). Report the mul
 - Activity ImageNet ceiling (frozen linear probe 0.2169 = majority class 0.2217, statistically indistinguishable)
 
 Provide a concrete fix path (3-4 weeks of focused work):
-1. Complete PSR head repair training (expect F1 above 0.7893)
+1. Complete PSR head repair training (expect F1 improvement above current 0.7018; earlier 0.7893 decoder target was a 2-recording artifact, actual decoder full-38k F1=0.0053)
 2. Complete single-task ConvNeXt detection (measures true multi-task cost)
 3. Run TCN+ViT temporal probe (decides if activity can be rescued on ConvNeXt)
 4. Implement GT-balanced sampler for detection (addresses empty-frame collapse)

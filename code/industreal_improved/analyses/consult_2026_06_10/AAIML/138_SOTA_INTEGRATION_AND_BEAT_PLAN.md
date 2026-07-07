@@ -15,7 +15,7 @@ This table merges SOTA_STATUS.md (epoch_18, best.pth) with the corrections and r
 | **Detection D1R** | mAP50 (YOLOv8m, 25ep) | **0.995** | 0.838 (WACV) | +0.157 | **CEILING MEASUREMENT** — single-task, not our model. Do not claim as "our detection." Report as the cost denominator. |
 | **Detection D1** | mAP50 (official IndustReal weights) | **0.0004** | 0.838 (WACV) | -0.838 | **SILENT COCO FALLBACK SUSPECTED (C-2)** — eval may have hit COCO weights. Resolution: fail-hard fix applied; rerun with verified weights. Current number uninterpretable. |
 | **Detection D3 (multi-task ConvNeXt)** | mAP50 | **0.358** | 0.838 | -0.480 | **NaN FULL EVAL** — subsample only. May be 0.573 under COCO convention (excl. zero-GT classes: 15/24 present). Must resolve convention before paper. |
-| **PSR (per-frame)** | macro F1 (per-comp optimal) | **0.7499** | 0.901 (STORM) | -0.151 | **NEAR SOTA** — head repair (in flight) expected to lift to 0.83-0.87. Transition F1 (P2.6) not yet computed. |
+| **PSR (per-frame)** | macro F1 (per-comp optimal) | **0.7018** | 0.901 (STORM) | -0.151 | **NEAR SOTA** — head repair (in flight) expected to lift to 0.83-0.87. Transition F1 (P2.6) not yet computed. |
 | **PSR (global thresh 0.10)** | macro F1 | **0.7217** | 0.901 | -0.179 | **HONEST PRIMARY** — per-comp thresholds are val-selected; LOO-CV mandatory before calibrated number is headline. |
 | **PSR null-delta** | low-prev comps | **+0.097/+0.093** | n/a | n/a | **GENUINE LEARNED SIGNAL** — proves head learned something despite dead gradients. |
 | **PSR (D4: YOLOv8m→decoder)** | transition F1 | **0.000 (default) / 0.347 (retuned)** | 0.883 (B3) | -0.883 | **INPUT STARVATION** — YOLOv8m fires on <1% of frames; decoder works when it has signal. Threshold retune lifts to 0.347. |
@@ -126,7 +126,7 @@ Without variance bounds, every cross-model comparison is provisional. A one-sigm
 
 ## §2. Where We Are NEAR SOTA — Closing the Gap (10 Questions)
 
-PSR macro F1 0.7499 vs STORM 0.901. Gap 16%. This is the head with the most actionable path to improvement, but the diagnosis has changed between file 130 and files 132-133: not Kendall suppression, but architectural death of the per-component heads.
+PSR macro F1 0.7018 vs STORM 0.901. Gap 16%. This is the head with the most actionable path to improvement, but the diagnosis has changed between file 130 and files 132-133: not Kendall suppression, but architectural death of the per-component heads.
 
 ### Q2.01 — What is the expected F1 after PSR head repair, and is the head-repair approach validated by any evidence?
 
@@ -138,12 +138,12 @@ PSR macro F1 0.7499 vs STORM 0.901. Gap 16%. This is the head with the most acti
 
 ### Q2.02 — Should transition F1 be computed before or after the head repair?
 
-**Status:** P2.6 (transition F1 on same predictions as 0.7499) is promoted to Week 1 in 132 §4. It costs 1 day on cached logits.
+**Status:** P2.6 (transition F1 on same predictions as 0.7018) is promoted to Week 1 in 132 §4. It costs 1 day on cached logits.
 
 **Deep question:** The decision tree:
 - If pre-repair transition F1 is already ~0.7: the per-frame head is doing well on transitions despite being dead. Head repair may push it to STORM parity. Narrative: "even with a dead head, our model captures transitions."
 - If pre-repair transition F1 is ~0.3-0.5: the dead head kills transition detection specifically. Head repair is the critical intervention. Narrative: "per-component gradient starvation primarily affects transition events."
-- If pre-repair transition F1 is <0.2: the head is barely doing transitions at all. The 0.7499 is prevalence-calibration noise. Narrative becomes salvage (is the paradigm defensible?).
+- If pre-repair transition F1 is <0.2: the head is barely doing transitions at all. The 0.7018 is prevalence-calibration noise. Narrative becomes salvage (is the paradigm defensible?).
 
 The question: which narrative are we hoping for, and does running P2.6 before head repair commit us to a weaker story? Counterpoint: running it after head repair contaminates the "same predictions" comparison. The honest chain is: compute on epoch_18 (pre-repair) → publish or not based on the number → compute on head-repair checkpoint → compare. The first number (0.75 per-frame F1, X transition F1) is what we have; the pre-repair transition F1 should be reported as the baseline regardless of magnitude.
 
@@ -166,7 +166,7 @@ The question is strategic: do we want a headline claim ("competitive with STORM"
 
 **Status:** SOTA_STATUS.md and 128-sota Debate 2 establish that STORM (0.901) adds procedural knowledge (expected transition masks). B3 (0.883) uses semantic features without procedural knowledge.
 
-**Deep question:** If our contribution is "no procedural knowledge, no hand-crafted features, just a ConvNeXt backbone + per-frame MLP," then B3 0.883 is the fair comparison (same inputs: semantic features only). STORM adds procedural knowledge, which is the next axis of comparison. The gap to B3: 0.7499 vs 0.883 = 0.133 (15% relative). After head repair (0.83) the gap would be 0.053 (6%). That's within a standard deviation — potentially "comparable" (not "competitive," but within noise). This changes the narrative from "behind STORM" to "matching B3 after a controlled fix."
+**Deep question:** If our contribution is "no procedural knowledge, no hand-crafted features, just a ConvNeXt backbone + per-frame MLP," then B3 0.883 is the fair comparison (same inputs: semantic features only). STORM adds procedural knowledge, which is the next axis of comparison. The gap to B3: 0.7018 vs 0.883 = 0.133 (15% relative). After head repair (0.83) the gap would be 0.053 (6%). That's within a standard deviation — potentially "comparable" (not "competitive," but within noise). This changes the narrative from "behind STORM" to "matching B3 after a controlled fix."
 
 **Required action:** Update all paper comparisons to B3 as the primary baseline, STORM as the "with procedural knowledge" upper bound.
 
@@ -180,11 +180,11 @@ The question is strategic: do we want a headline claim ("competitive with STORM"
 
 ### Q2.06 — What is the correct per-component threshold selection protocol: global, per-comp optimal, or LOO-CV?
 
-**Status:** PSR-5 in 133 §2 establishes a clear hierarchy: 0.7217 (global threshold 0.10) is the honest primary. 0.7499 (per-comp optimal on val) requires LOO-CV for verification. LOO-CV is P2.5, 2 days.
+**Status:** PSR-5 in 133 §2 establishes a clear hierarchy on the 10k subset: 0.7217 (global threshold 0.10, 10k) is the honest primary. 0.7499 (per-comp optimal, 10k) required LOO-CV for verification. Corrected full-38k: global 0.10 = 0.6788, per-comp optimal = 0.7018. LOO-CV is P2.5, 2 days.
 
 **Deep question:** The threshold selection problem is not just statistical — it's narrative. The paper can present:
 - Best case: 0.7810 (5k subset, per-comp optimal) → looks great but overfits
-- Val case: 0.7499 (full eval, per-comp optimal) → honest but val-selected
+- Val case: 0.7018 (full eval, per-comp optimal) → honest but val-selected
 - Conservative: 0.7217 (global threshold) → robust but lower
 - With LOO-CV: 0.74 ± 0.03 → the most defensible
 
@@ -210,7 +210,7 @@ Which one is the headline? The Opus resolution (132 §2 Q9) says 0.7217 until LO
 
 ### Q2.09 — Should we report N-1 LOO-CV for per-component thresholds even if it shrinks the F1 gap to B3/STORM?
 
-**Status:** PSR-5 clarifies that LOO-CV is mandatory before per-comp-optimal thresholds (0.7499) can be primary. If LOO-CV shrinks to 0.73 ± 0.01, the calibrated threshold advantage (0.7499 - 0.7217 = 0.028) largely disappears.
+**Status:** PSR-5 clarifies that LOO-CV is mandatory before per-comp-optimal thresholds (0.7018) can be primary. If LOO-CV shrinks to 0.73 ± 0.01, the calibrated threshold advantage over the global 0.10 threshold (originally +0.028 on 10k: 0.7499-0.7217; corrected to +0.023 on 38k: 0.7018-0.6788) largely disappears.
 
 **Deep question:** The commitment to report LOO-CV regardless of outcome is the paper's strongest integrity signal. If the number degrades, the paper reports it as a finding ("per-component threshold calibration does not generalize across recordings on this dataset"). That's a publishable negative result — it tells practitioners "don't bother with per-comp thresholds on small-N recordings." If the number holds, it validates the approach. Either outcome is informative, which is the mark of a well-designed experiment. The risk is narrative: if LOO-CV shrinks the gap, the PSR story weakens. But the alternative (reporting only val-optimal) is reviewer-bait. The correct answer: run LOO-CV, report the outcome, and let the narrative adjust.
 
@@ -523,9 +523,9 @@ This section collects the strongest possible reviewer attacks and the fix for ea
 
 **Fix:** Preempt in §1: "Our single-task detection baseline uses a standard YOLOv8m trained on the identical split. We measure cost as degradation from this ceiling because (a) it is the strongest achievable detection performance on this data, and (b) it isolates multi-task interference from architecture choice. The cost measurement is the contribution; the ceiling model is a yardstick, not a claim."
 
-### Attack 2: "Your PSR 0.7499 is prevalence calibration, not learning. Components with >50% prevalence score 0.75-1.0 regardless of model quality."
+### Attack 2: "Your PSR 0.7018 is prevalence calibration, not learning. Components with >50% prevalence score 0.75-1.0 regardless of model quality."
 
-**Fix:** Include the null-delta table (Q2.08). Show that low-prevalence components (comp 4 at 14%, comp 10 at 18%) achieve delta >+0.09 over the prevalence-prior null. The aggregate 0.7499 includes prevalence calibration AND genuine signal. The decomposition makes this transparent.
+**Fix:** Include the null-delta table (Q2.08). Show that low-prevalence components (comp 4 at 14%, comp 10 at 18%) achieve delta >+0.09 over the prevalence-prior null. The aggregate 0.7018 includes prevalence calibration AND genuine signal. The decomposition makes this transparent.
 
 ### Attack 3: "You claim 'first baseline' for head pose, but I can find 5 ego-pose papers on HoloLens. Your literature search was insufficient."
 

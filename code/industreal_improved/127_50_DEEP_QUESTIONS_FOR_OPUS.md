@@ -45,14 +45,14 @@
 
 ## Q4: Per-component threshold selection on the validation set — how much F1 improvement is real vs overfitting to val noise?
 
-**The claim:** psr_optimal_thresholds.py sweeps 19 thresholds (0.05 to 0.95 step 0.05) per component on the validation set and reports the resulting macro F1 as the "optimal" score. The improvement from global 0.10 (0.7217) to per-comp optimal (0.7499) is attributed to better per-component calibration. A similar sweep in sweep_psr_threshold.py uses an even finer grid.
+**The claim:** psr_optimal_thresholds.py sweeps 19 thresholds (0.05 to 0.95 step 0.05) per component on the validation set and reports the resulting macro F1 as the "optimal" score. The improvement from global 0.10 to per-comp optimal was attributed to better per-component calibration. Originally reported as 0.7217→0.7499 on a 10k subset; corrected to 0.6788→0.7018 on the full 38k evaluation set. A similar sweep in sweep_psr_threshold.py uses an even finer grid.
 
 **Why this matters:** Choosing per-component thresholds that maximize F1 on the same data used for metric reporting is a form of validation set overfitting. With 11 components and 19 candidate thresholds each, the search space is large enough to find thresholds that happen to perform well on val noise. The true generalization gap can only be measured on a held-out test set.
 
 **Evidence:**
 - psr_optimal_thresholds.py:85-104 — per-component sweep on all val frames.
 - psr_optimal_thresholds.py:108 — reports the aggregated macro F1 using optimally chosen thresholds.
-- psr_optimal_thresholds.py:113-126 — also reports global thresh=0.10 for comparison (0.7217 vs 0.7499).
+- psr_optimal_thresholds.py:113-126 — also reports global thresh=0.10 for comparison (originally 0.7217 vs 0.7499 on 10k; corrected to 0.6788 vs 0.7018 on 38k).
 - SOTA_STATUS.md:17 shows per-comp F1 values ranging from 0.3455 (comp 4) to 1.0000 (comp 0) — components with extreme class imbalance (comp 4: 0.142 gt_pos_frac, comp 0: 1.000 gt_pos_frac) get extreme thresholds that maximize F1 on val but may not generalize.
 - sweep_psr_threshold.py:213-220 — global sweep, best thresh selected on same val data.
 
