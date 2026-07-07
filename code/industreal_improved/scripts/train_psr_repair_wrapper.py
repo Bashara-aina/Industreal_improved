@@ -28,11 +28,19 @@ from src import config as C
 
 # Intercept apply_preset() so MIXED_PRECISION stays True even after
 # stage_rf4 preset sets mixed_precision=False.
+# [FIX 2026-07-07 File-157 F-1] Also force DETACH_PSR_FPN=False if env var set.
+# The hardcoded `DETACH_PSR_FPN=True` in presets was blocking the PSR
+# gradient flow even when the V3 launch script set the env var to False.
 _orig_apply = C.apply_preset
 
 def _patched_apply(name):
     _orig_apply(name)
     C.MIXED_PRECISION = True
+    if os.environ.get('DETACH_PSR_FPN', 'True') == 'False':
+        C.DETACH_PSR_FPN = False
+        print(f'[wrapper] Post-preset override: DETACH_PSR_FPN=False '
+              f'(per env var, PSR gradient flow to backbone ENABLED)',
+              file=sys.stderr, flush=True)
     print(f'[wrapper] Post-preset override: MIXED_PRECISION=True (applied after {name})',
           file=sys.stderr, flush=True)
 
