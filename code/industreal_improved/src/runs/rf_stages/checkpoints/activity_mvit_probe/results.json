@@ -1,0 +1,37 @@
+{
+  "model": "MViTv2-S (Kinetics-400 pretrained) linear probe",
+  "clip_len": 16,
+  "stride": 8,
+  "extraction_batch_size": 4,
+  "probe_batch_size": 256,
+  "epochs": 10,
+  "lr": 0.001,
+  "optimizer": "AdamW",
+  "weight_decay": 0.0001,
+  "scheduler": "CosineAnnealingLR",
+  "feature_dim": 768,
+  "num_classes_raw": 75,
+  "num_classes_grouped": 69,
+  "grouping_mode": "hybrid",
+  "majority_class_75": 7,
+  "majority_baseline_75": 0.266633,
+  "majority_baseline_69": 0.266633,
+  "best_val_top1_75": 0.381048,
+  "best_val_top1_69": 0.381048,
+  "best_epoch": 6,
+  "improvement_over_majority_69": 0.114415,
+  "train_clips_valid": 3559,
+  "val_clips_valid": 1984,
+  "convnext_comparison": {
+    "convnext_val_top1_69": 0.2169,
+    "convnext_majority_69": 0.2217,
+    "mvit_improvement_over_convnext": 0.164148
+  },
+  "verdict": "SIGNAL DETECTED (>0.30) \u2014 fine-tuning worth 2-week investment",
+  "notes": [
+    "MViTv2-S features: 768-dim clip-level embeddings from torchvision Kinetics-400 weights",
+    "Clip: 16 frames, stride 8",
+    "ConvNeXt reference: per-frame 0.2169 on 69 classes (acting as majority-class oracle)",
+    "If improvement > +0.08 over convnext (0.2169), fine-tuning is justified"
+  ]
+}
