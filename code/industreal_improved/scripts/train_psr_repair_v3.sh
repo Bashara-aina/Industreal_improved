@@ -26,12 +26,10 @@ PYTHONUNBUFFERED=1 CUDA_VISIBLE_DEVICES=1 OMP_NUM_THREADS=4 \
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 DETACH_PSR_FPN=False \
 KENDALL_FIXED_WEIGHTS=1 \
-python3 -u -m src.training.train_psr_repair_wrapper \
+python3 -u "$TRAIN_DIR/scripts/train_psr_repair_wrapper.py" \
     --preset stage_rf4 \
     --batch-size 2 \
-    --resume "$CKPT" \
-    --epochs 5 \
-    --log "$LOG"
+    --resume "$CKPT"
 
 EXIT_CODE=$?
 echo "Training exited with code ${EXIT_CODE} at $(date)"
