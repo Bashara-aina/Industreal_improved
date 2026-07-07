@@ -263,8 +263,8 @@
 | Activity | 0.0236 | 0.45-0.55 (MViTv2-S fine-tune) | 0.6223 (WACV) | Near SOTA pending (2 weeks) |
 | PSR (per-frame) | 0.7018 | 0.78+ (V3 repair, real this time) | 0.901 (STORM, diff paradigm) | Near SOTA (paradigm caveat) |
 | PSR (transition) | 0.0053 | 0.6364 (3-video subset) (D4+D1R, detection-dense) | 0.883 (B3) | Diagnostic only |
-| Head pose forward | **9.14 deg** | **9.14 deg** | No prior baseline | **BEATS SOTA** (first baseline) |
-| Head pose up | **7.78 deg** | **7.78 deg** | No prior baseline | **BEATS SOTA** (first baseline) |
+| Head pose forward | **9.14 deg** | **9.14 deg** | No prior baseline | **FIRST BASELINE** (no published SOTA to beat) |
+| Head pose up | **7.78 deg** | **7.78 deg** | No prior baseline | **FIRST BASELINE** (no published SOTA to beat) |
 
 ---
 
