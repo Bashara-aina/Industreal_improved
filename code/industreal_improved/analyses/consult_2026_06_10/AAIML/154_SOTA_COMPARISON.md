@@ -218,7 +218,7 @@
 
 ## Section 5: The Path to Beating / Reaching SOTA
 
-### 5.1 Achieved Now (With Current Checkpoint, epoch_18 best.pth)
+### 5.1 Achieved Now (With Current Checkpoint, epoch_18 best.pth) *(UNVERIFIABLE-REMOTELY: best.pth checkpoint not in git)*
 
 | Head | Metric | Current | SOTA | Verdict |
 |---|---|---|---|---|

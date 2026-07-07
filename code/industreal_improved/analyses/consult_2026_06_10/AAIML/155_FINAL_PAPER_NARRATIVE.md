@@ -39,7 +39,7 @@ All models are trained with AdamW optimizer and CosineAnnealingLR scheduler usin
 
 ### The 9 Implementation Fixes (Detailed)
 
-1. **PSR head: LeakyReLU + small-normal init + zero bias (e618d929a).** Replaced GELU activation with LeakyReLU(0.01) in all 11 PSR sub-heads. Reinitialized weights with small-normal (std=0.01) and set biases to zero. Restored activations from mean -130 to +4608 on sequence frames.
+1. **PSR head: LeakyReLU + small-normal init + zero bias (e618d929a).** Replaced GELU activation with LeakyReLU(0.01) in all 11 PSR sub-heads. Reinitialized weights with small-normal (std=0.01) and set biases to zero. Restored activations from mean -130 to +4608 on sequence frames. *(UNVERIFIABLE-REMOTELY: post_gelu value from /tmp/*.log)*
 
 2. **PSR head: Sequential init index fix (6defe1f5f).** Corrected the index used for initializing the second Linear layer in the Sequential block (index 3 instead of 2 after LeakyReLU insertion).
 
@@ -92,9 +92,9 @@ These numbers are misleadingly high because the PSR evaluation metric is structu
 
 The root cause is GELU activation starvation. Pre-activations in the per-component output heads averaged -130 across all training. The existing +0.1 first-layer bias was 1300 times too small to push activations into the GELU active regime. GELU is effectively dead for inputs below approximately -3.0 standard deviations, meaning 99.7% of activations were in the saturation zone. The per-component heads showed zero RMS gradient over extended training spans.
 
-The repair replaces GELU with LeakyReLU (negative_slope=0.01), reinitializes weights with small-normal (mean=0, std=0.01), and sets biases to zero. A critical additional bug was DETACH_PSR_FPN=True in the default config, which detached FPN features and broke gradient flow to the PSR head entirely. With DETACH_PSR_FPN=False and the activation repair, post-GELU activations went from -1.0 to -1.4 (dead) to +4608 (alive) on sequence frames.
+The repair replaces GELU with LeakyReLU (negative_slope=0.01), reinitializes weights with small-normal (mean=0, std=0.01), and sets biases to zero. A critical additional bug was DETACH_PSR_FPN=True in the default config, which detached FPN features and broke gradient flow to the PSR head entirely. With DETACH_PSR_FPN=False and the activation repair, post-GELU activations went from -1.0 to -1.4 (dead) to +4608 (alive) on sequence frames. *(UNVERIFIABLE-REMOTELY: post-GELU values from workstation /tmp/*.log)*
 
-The V3 PSR repair training is in flight. Expected F1 after repair is above 0.78, which would be a meaningful improvement over the dead-activation baseline.
+The V3 PSR repair training is in flight. *(UNVERIFIABLE-REMOTELY: V3 training state only verifiable on workstation via /tmp/train_psr_repair_v3.log)* Expected F1 after repair is above 0.78, which would be a meaningful improvement over the dead-activation baseline.
 
 **Verdict: Implementation bug found and fixed (GELU starvation + detached FPN gradient). V3 training running to validate.**
 
@@ -141,7 +141,7 @@ Three of four heads are bounded by wiring, initialization, or activation-patholo
 
 ### The Fix Path
 
-All 9 implementation fixes are committed across 9 commits (e618d929a, 6defe1f5f, bff38b790, 8cef56fc2, cd901f655, 10d5ab596, a0ffb9aa8, 216566da0, bc6bebdb7). V3 PSR repair training is in flight (expected F1 > 0.78). Single-task ConvNeXt detection training is in flight (expected mAP > 0.5). MViTv2-S fine-tuning script is ready (2-week investment, expected 0.45-0.55). After the fixes, PSR F1 is expected above 0.78, detection mAP is expected above 0.5, and activity accuracy with fine-tuned MViTv2-S is expected at 0.45-0.55 approaching SOTA.
+All 9 implementation fixes are committed across 9 commits (e618d929a, 6defe1f5f, bff38b790, 8cef56fc2, cd901f655, 10d5ab596, a0ffb9aa8, 216566da0, bc6bebdb7). V3 PSR repair training is in flight (expected F1 > 0.78) *(UNVERIFIABLE-REMOTELY: V3 process state from /tmp/train_psr_repair_v3.log)*. Single-task ConvNeXt detection training is in flight (expected mAP > 0.5) *(UNVERIFIABLE-REMOTELY: detection process state from /tmp/train_singletask_det.log)*. MViTv2-S fine-tuning script is ready (2-week investment, expected 0.45-0.55). After the fixes, PSR F1 is expected above 0.78, detection mAP is expected above 0.5, and activity accuracy with fine-tuned MViTv2-S is expected at 0.45-0.55 approaching SOTA.
 
 ### What Beats SOTA vs What Does Not
 
@@ -173,7 +173,7 @@ The path forward is clear. A Kinetics-pretrained video backbone for activity pro
 
 All code, data, and checkpoints are available:
 - Repository: https://github.com/Bashara-aina/Industreal_improved
-- Best checkpoint: src/runs/rf_stages/checkpoints/best.pth (SHA256: 59cb88ec85311bfcfff91f000bd08005675e3a882bec9f24ccd5ee0cbe89f9a8)
+- Best checkpoint: src/runs/rf_stages/checkpoints/best.pth (SHA256: 59cb88ec85311bfcfff91f000bd08005675e3a882bec9f24ccd5ee0cbe89f9a8) *(UNVERIFIABLE-REMOTELY: best.pth not in git, SHA256 only verifiable on workstation)*
 - All 9 fix commits are listed in this document
 - All training scripts are in scripts/
 - Per-head evaluation scripts are in src/evaluation/
