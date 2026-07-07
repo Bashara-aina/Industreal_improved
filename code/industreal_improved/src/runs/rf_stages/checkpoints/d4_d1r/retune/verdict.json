@@ -1,0 +1,12 @@
+{
+  "f1_at_t_original": 0.0,
+  "f1_at_t_best_global": 0.6363636363636364,
+  "f1_at_t_retuned": 0.1955922865013774,
+  "verdict": "threshold-partial: decoder shows marginal benefit \u2014 thresholds partially helpful",
+  "n_videos": 3,
+  "best_global_config": {
+    "sustain_hi": 0.3,
+    "sustain_lo": 0.1,
+    "sustain_min": 2
+  }
+}
