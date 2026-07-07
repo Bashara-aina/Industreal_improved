@@ -2,7 +2,7 @@
 
 ## §1. PSR Head Repair (e618d929a, 6defe1f5f)
 - GELU 99.7% saturated → LeakyReLU(0.01) + small-normal init (std=0.01) + zero bias
-- Activations: -130 (dead) → +384 to +640 (alive) on sequence frames
+- Post_gelu mean: -130 (dead GELU) → +4608 (V3 training log step 10) on sequence frames
 - Gradient flow restored
 
 ## §2. Head Pose Index Fix (bff38b790)
