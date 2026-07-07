@@ -24,7 +24,7 @@
 
 ### §1.3 PSR
 - Multi-task (current): 0.7018
-- Multi-task V3 (with all fixes): ? (running)
+- Multi-task V5 (with all fixes): ? (V5b in progress, GPU 0, resumed from epoch 33; ETA epoch 50: ~22h)
 - Single-task ConvNeXt: ?
 - Decoder (no learning): 0.0053 full-38k
 - null_copy_prev: 0.9997
