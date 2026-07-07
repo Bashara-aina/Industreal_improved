@@ -6,39 +6,44 @@
 
 **Opus-165 audit closed (commit 08c55ae71):** F-1 Fix 2 (losses.py Kendall staging guard) applied; F-7 +4608 figure now points to committed log in 4 live docs; F-12 preset name corrected in 157; CHECKPOINT_MANIFEST.md gives best.pth SHA256 for reproducibility; detection "beats SOTA" framing clarified as cross-architecture single-task. F-4 verified (all 8 hashes resolve in public repo).
 
+**Plan reordered (commit pending)**: Multi-task V5 (the only run that produces a real post-fix headline number) pulled forward from W7-8 to **W3-4**. Original plan buried the load-bearing result behind 4 weeks of single-task baselines that can't be interpreted without it. New order: V5 first → single-task denominators → MViTv2-S fine-tune + V6 → 2x2 ablation → paper. See §0 below.
+
 ## §0. The 12-Week Schedule (95 days, Jul 7 → Oct 10)
 
 ### Week 1-2 (Jul 7-20) — IMMEDIATE: Get In-Flight Results
-- **Day 1-2**: V3 PSR with actual DETACH fix completes → F1 result (running NOW, PID 1901736)
-- **Day 1-7**: Single-task detection completes (PID 1574104, epoch 43+, ~3.4 days remaining)
-- **Day 7-14**: Reconstruct file 156 §2 (DONE) + address File-157 F-1 through F-12 corrections
-- **Day 14**: Freeze milestone — first numbers ready
+- **Day 1-2**: V4 PSR (ablation_psr_only) with all F-1 fixes completes → F1 result (running NOW, PID 2374296, RTX 3060, epoch 30 batch 4250/13161, ETA 1:54/epoch)
+- **Day 1-9**: Single-task detection completes (PID 1574104, RTX 5060 Ti, epoch 49+, ~1.6 days remaining)
+- **Day 7-14**: Reconstruct file 156 §2 (DONE) + address File-157 F-1 through F-12 corrections (DONE per commit 08c55ae71)
+- **Day 14**: Freeze milestone — V4 PSR liveness probe confirms gradient path (psr=NonZeroGradNorm, 0.38→2.12 over 2000 steps)
 
-### Week 3-4 (Jul 21-Aug 3) — Single-Task Baselines
-- **Day 15-17**: Launch single-task activity (ConvNeXt + 75→69 class remap) — blocked on GPU
-- **Day 18-20**: Launch single-task PSR (ConvNeXt + LeakyReLU + small-normal init) — blocked on GPU
-- **Day 21-24**: Launch single-task pose (ConvNeXt + simple regression) — blocked on GPU
-- **Day 28**: 4 single-task baselines complete, first 2x2 matrix ready
+### Week 3-4 (Jul 21-Aug 3) — PRIORITY: Multi-Task V5 (all 9 fixes)
+- **Day 15-17**: Launch multi-task V5 — full 4-head training with all 9 fixes (KENDALL_FIXED_WEIGHTS=1 + DETACH=False + USE_PSR_TRANSITION=False + LeakyReLU + small-normal + zero bias + GT-balanced sampler + DET_GAMMA_NEG=2.0 + Sequential init fix + up-vector [6:9] + F-1 Fix 1+2)
+- **Day 18-32**: V5 running, expected ~14 days at 2 epochs/day
+- **Day 33**: V5 epoch-end eval, post-fix multi-task headline numbers (D3 mAP50, head pose, PSR F1, activity top-1) — the only run that produces these
+- **Why priority**: single-task baselines can't be interpreted without the multi-task number to compare against. V5 is the load-bearing result.
 
-### Week 5-6 (Aug 4-17) — MViTv2-S Fine-Tuning
-- **Day 29-30**: Launch MViTv2-S fine-tune (Kinetics pretrained, 2-week budget) — blocked on GPU
-- **Day 30-42**: Fine-tune running, 2 epochs/day
-- **Day 42**: MViTv2-S fine-tune complete, expected activity 0.45-0.55
+### Week 5-6 (Aug 4-17) — Single-Task Baselines + MViTv2-S Probe
+- **Day 34-37**: Launch 3 single-task baselines (pose, PSR-with-V5-fixes, det) — become denominators for V5
+- **Day 38-40**: Re-run frozen MViTv2-S probe with V5-aligned features (already have 0.3810; verify reproducibility)
+- **Day 41-47**: All single-task baselines + activity ablation (ablation_act_only) complete
+- **Day 48**: First 2x2 ablation matrix ready (multi-task V5 vs single-task baselines)
 
-### Week 7-8 (Aug 18-31) — Multi-Task with All Fixes
-- **Day 43-45**: Launch multi-task V4 (all 9 fixes + DETACH fix + DETACH fix script)
-- **Day 46-56**: Multi-task training (2 epochs/day)
-- **Day 56**: Multi-task V4 complete, 4x2 ablation matrix ready
+### Week 7-8 (Aug 18-31) — MViTv2-S Fine-Tune + Multi-Task V6
+- **Day 49-50**: Launch MViTv2-S fine-tune (Kinetics pretrained, 2-week budget)
+- **Day 51-56**: Fine-tune running, 2 epochs/day
+- **Day 57-60**: Launch multi-task V6 = V5 + MViTv2-S backbone (replaces ConvNeXt activity features)
+- **Day 61-64**: V6 running with MViTv2-S activity head
+- **Day 64**: V6 + MViTv2-S fine-tune complete, expected activity 0.45-0.55 (per Opus-165 §3.4)
 
 ### Week 9-10 (Sep 1-14) — Final Ablation
-- **Day 57-70**: Run remaining single-task baselines (pose, activity, PSR with V4 fixes)
-- **Day 70**: Complete 4x4 matrix (4 single-task, 4 multi-task conditions)
+- **Day 65-78**: Run remaining single-task baselines (pose, activity, PSR with V5+V6 fixes)
+- **Day 78**: Complete 4x4 matrix (4 single-task, 2 multi-task conditions: V5 ConvNeXt, V6 MViTv2-S)
 
 ### Week 11-12 (Sep 15-Oct 10) — Paper Writing + Submission
-- **Day 71-77**: Write final paper (file 155 + new findings)
-- **Day 78-84**: .tex integration, references, format
-- **Day 85-91**: Internal review, revision
-- **Day 92-95**: AAIML submission prep (format, abstract, supplementary)
+- **Day 79-85**: Write final paper (file 155 + V5/V6 findings + cascade narrative)
+- **Day 86-90**: .tex integration, references, format
+- **Day 91-93**: Internal review, revision
+- **Day 94-95**: AAIML submission prep (format, abstract, supplementary)
 
 ## §1. The 8 Critical File-157 Findings to Address
 
