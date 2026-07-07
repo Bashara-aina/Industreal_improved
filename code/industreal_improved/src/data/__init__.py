@@ -9,6 +9,7 @@ re-export the public API of industreal_dataset.py.
 """
 from .industreal_dataset import (  # noqa: F401
     IndustRealMultiTaskDataset,
+    GuaranteedGTBatchSampler,
     collate_fn,
     collate_fn_sequences,
     clear_frame_cache,
