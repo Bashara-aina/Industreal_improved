@@ -1,78 +1,75 @@
-# 156 — 100 Deep Questions for Opus
+## §6. The Activity Head Debate (Q51-60)
 
-**Date:** 2026-07-07
-**Purpose:** Comprehensive deep-dive Q&A spanning detection, PSR, activity, head pose, implementation, and strategic direction.
+### Q51. Is activity broken by implementation or backbone?
+- Implementation: ACTIVITY_GRAD_BLEND_RATIO 0.05→1.0 (starved initially)
+- Backbone: ImageNet (no action semantics)
+- Linear probe (frozen ImageNet): 0.2169 ≈ baseline (zero signal)
+- Linear probe (frozen Kinetics): 0.3810 (real signal)
+- BACKBONE is the dominant cause
 
----
+### Q52. What does MViTv2-S 0.3810 tell us?
+- Kinetics-pretrained features DO have action semantics
+- ConvNeXt (ImageNet) features DO NOT
+- The backbone pretraining is the key
+- Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/activity_mvit_probe/results.json
 
-## §4. The Detection Head Debate (Q31-40)
+### Q53. Why does MViTv2-S probe 0.3810 work but multi-task 0.0236 fail?
+- Multi-task detection 0.00009 (broken)
+- Multi-task activity 0.0236 (broken)
+- Frozen linear probe: ConvNeXt 0.2169, MViTv2-S 0.3810
+- Multi-task + Kinetics features = best of both worlds
+- Multi-task + ImageNet features = failure
+- Backbone type is the cause
 
-### Q31. Why does D3 multi-task detection get 0.00009 mAP?
-- 91.9% of frames have zero GT
-- 5 classes NEVER predicted across 38k frames
-- Class 12 is "default catch-all" for 7 different states
-- Box regression: mean IoU 0.234 (below 0.5)
-- Source: Agent-55 root cause analysis
+### Q54. Per-class: which classes benefit most from video features?
+- check_instruction: 0.0000 → 0.8771 (+0.8771)
+- tighten_nut: 0.0000 → 0.7149 (+0.7149)
+- plug_objects: 0.0000 → 0.3558 (+0.3558)
+- 11 of 41 zero-accuracy classes fixed by video features
+- Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/mvit_per_class/comparison.md
 
-### Q32. Is detection broken by multi-task or implementation?
-- 4 fixes applied: GT-balanced sampler, gamma_neg 2.0, anchor audit, class verify
-- D1R single-task (YOLOv8m) = 0.995 (BEATS SOTA)
-- Pending: single-task ConvNeXt detection (in flight, ~3.4 days)
-- Likely: implementation is dominant cause
+### Q55. Why do some classes go to zero with video features?
+- 19 classes that ConvNeXt could detect went to zero
+- pull_pin_middle: 62.1% → 0
+- take_pin_long: 50.4% → 0
+- put_wheel: 33.2% → 0
+- Reason: rare classes with few samples
+- Linear probe has insufficient examples to learn
+- Will improve with full fine-tuning
 
-### Q33. Will the 4 detection fixes make D3 work?
-- GT-balanced sampler: 100% batches have GT (was 8%)
-- gamma_neg 2.0: harder negative mining
-- Anchor audit: not the issue
-- Class index: not the issue
-- Likely: D3 mAP improves from 0.00009 to 0.1-0.5
+### Q56. Is per-frame MLP architecture the problem for activity?
+- Per-frame: can classify spatial patterns
+- Per-frame: cannot model temporal dynamics
+- TCN mean-pool on ConvNeXt: 0.0723 (fails)
+- TCN mean-pool on MViTv2-S: pending
+- Per-frame is wrong for temporal actions
 
-### Q34. Can multi-task detection beat single-task?
-- With 4 fixes: maybe 80-90% of single-task
-- Without fixes: 0.1% of single-task
-- The 91.9% empty frames is structural (not multi-task)
-- Multi-task doesn't cause 91.9% empty frames
-- Multi-task just doesn't help with sparse GT
+### Q57. Should we use TCN+ViT for activity?
+- Architectures built: src/models/activity_tcn.py, activity_tcn_vit.py
+- TCN mean-pool on ConvNeXt: 0.0723 (FAILS)
+- TCN+ViT on MViTv2-S: pending
+- Per Opus ACT-1: gate is probe > 0.30
+- MViTv2-S linear probe 0.3810 PASSES gate
+- TCN+ViT is justified ON MViTv2-S features
 
-### Q35. Is D1R the right comparison for multi-task?
-- D1R is YOLOv8m (different architecture)
-- Multi-task uses ConvNeXt (different backbone)
-- Fair comparison: single-task ConvNeXt vs multi-task ConvNeXt
-- Both with same fixes
-- Currently: single-task ConvNeXt training in flight
+### Q58. Is 2-week MViTv2-S fine-tuning worth it?
+- Linear probe 0.3810 (above 0.30 gate)
+- Expected fine-tune: 0.45-0.55
+- Closes gap to WACV 0.622 from 0.3810
+- 2-week investment, 75-100 hours
+- YES, it's worth it for activity
+- Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/scripts/train_mvit_finetune.sh
 
-### Q36. What does D4+D1R = 0.6364 tell us?
-- Decoder F1 = 0.6364 with D1R weights (dense detection)
-- vs 0.347 with pretrained YOLOv8m (sparse detection)
-- 83% relative improvement from dense detection
-- Confirms: detection density is the binding constraint
-- Multi-task decoder transfer works
+### Q59. Should multi-task activity use MViTv2-S?
+- Multi-task with MViTv2-S backbone: 53.8M params, 19.3M trainable
+- Implementation: src/models/video_backbone_multitask.py
+- Expected: similar to single-task MViTv2-S + small drop from multi-task
+- Single-task expected: 0.45-0.55
+- Multi-task expected: 0.40-0.50 (5-10% drop)
 
-### Q37. Why does D4 default = 0.000?
-- Q48 hysteresis thresholds: hi=0.5, lo=0.3, sustain=3
-- Sparse YOLOv8m detections don't meet hi=0.5
-- Re-tuned: hi=0.3, lo=0.1, sustain=2 → 0.347
-- Multi-task with D1R + re-tuned → 0.6364
-- Default thresholds starve sparse detection
-
-### Q38. Should we report detection per-class?
-- 24 classes total
-- 6 zero-GT classes (channels 1, 2, 3, 14, 15, 23)
-- 18 present classes
-- Per-class AP varies widely
-- Per-class detection rate: most 0%, some 3-4%
-- Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/detection_root_cause/analysis.md
-
-### Q39. What's the true multi-task detection ceiling?
-- After 4 fixes + V3 PSR repair: unknown
-- Estimated: 0.05-0.15 mAP (vs single-task 0.5-0.7)
-- Multi-task still loses to single-task for detection
-- Reason: 91.9% empty frames is structural
-- Multi-task is wrong for detection in this setup
-
-### Q40. Should we cut detection from the paper?
-- Multi-task 0.00009 is not reportable
-- Single-task D1R 0.995 IS reportable (independent model)
-- Recommendation: cut multi-task detection, report single-task D1R
-- Show multi-task as "limitation, see pathology analysis"
-- The fix path is single-task with same backbone
+### Q60. What's the right framing for activity in the paper?
+- Multi-task 0.0236 (broken) is NOT the reportable number
+- Single-task MViTv2-S frozen probe 0.3810 IS reportable (first video-backbone baseline)
+- Single-task MViTv2-S fine-tuned (target 0.45-0.55) is the SOTA-comparable result
+- Multi-task with MViTv2-S + all fixes is the best case
+- Story: backbone wrong type → Kinetics fixes it
