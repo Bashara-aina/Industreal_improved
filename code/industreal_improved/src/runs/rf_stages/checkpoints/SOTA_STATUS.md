@@ -178,7 +178,7 @@ All four heads evaluated. ConvNeXt-Tiny + per-frame MLP hits ceiling on activity
 
 3. **Per-frame action classification is a floor baseline** — top-1 0.0236, clip 0.028, linear probe 0.2169 (±0.0046 CI) vs majority prior 0.2217; 37/66 classes zero accuracy. No statistically detectable frame-level action signal. [Temporal probe result pending.]
 
-4. **Multi-task detection** — mAP50 0.358 on 250-batch balanced subsample (36% of single-task YOLOv8m ceiling 0.995); cross-architecture caveat applies. [Same-backbone ConvNeXt single-task ceiling Y pending; full-set eval X; present-class figure pending convention verification.]
+4. **Multi-task detection** — mAP50 0.358 (24-class diluted) / 0.573 (present-class COCO-standard) on 250-batch balanced subsample. Under COCO convention (zero-GT excluded), 0.573 is the correct comparison: 58% of single-task YOLOv8m ceiling 0.995. Zero-GT count verified: **6 classes** (channels 1,2,3,14,15,23) from full-set 38k-frame eval — not 9 as earlier subsample data suggested. Full-set detection eval is blocked by NaN crash. [Same-backbone ConvNeXt single-task ceiling Y pending; full-set eval X; 17 present classes vs 6 zero-GT.]
 
 5. **PSR per-component gradient starvation** — Linear(256,64)→GELU→Linear(64,1) heads showed zero RMS gradient; earlier attribution to ReLU/bias=−1.0 head described dead code (`PSRTransitionPredictor`, not `PSRHead`). Null-deltas: +0.097 (c4), +0.093 (c10), −0.000 (c9). See the gradient-starvation §5.4 section above.
 
