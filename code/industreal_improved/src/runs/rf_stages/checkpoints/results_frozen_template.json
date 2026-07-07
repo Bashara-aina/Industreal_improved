@@ -1,0 +1,61 @@
+{
+  "$schema": "results_frozen_template.json",
+  "description": "Template for results_frozen.json — the single source of truth for paper tables after Jul 20 freeze.",
+  "freeze_metadata": {
+    "freeze_date": "2026-07-20",
+    "timestamp": "<TIMESTAMP_ISO8601>",
+    "protocol": "Opus 140 §5 Day 4-7 freeze protocol",
+    "source_document": "140_OPUS_ANSWERS_V2.md §4, §5"
+  },
+  "checkpoint": {
+    "source_path": "src/runs/rf_stages/checkpoints/best.pth",
+    "source_sha256": "<SOURCE_CHECKPOINT_SHA256>",
+    "frozen_path": "src/runs/rf_stages/checkpoints/reporting_checkpoint_frozen.pth",
+    "frozen_sha256": "<FROZEN_CHECKPOINT_SHA256>",
+    "matches_source": false
+  },
+  "git": {
+    "commit_sha": "<GIT_COMMIT_SHA>"
+  },
+  "eval_files": [
+    {
+      "path": "pose_kalman_eval/pose_kalman_results.json",
+      "sha256": "<SHA256>"
+    }
+  ],
+  "headline_numbers": {
+    "head_pose_forward_mae": "<PLACEHOLDER_DEG>",
+    "head_pose_up_vector_mae": "<PLACEHOLDER_DEG>",
+    "head_pose_forward_kalman_mae": "<PLACEHOLDER_DEG>",
+    "head_pose_up_vector_kalman_mae": "<PLACEHOLDER_DEG>",
+    "detection_d1_yolov8m_mAP50": "<PLACEHOLDER>",
+    "detection_d3_multi_task_mAP50": "<PLACEHOLDER>",
+    "detection_d3_present_class_mAP50": "<PLACEHOLDER>",
+    "activity_per_frame_top1": "<PLACEHOLDER>",
+    "activity_clip_top1": "<PLACEHOLDER>",
+    "activity_linear_probe_top1": "<PLACEHOLDER>",
+    "activity_majority_baseline": "<PLACEHOLDER>",
+    "activity_temporal_probe": "<PLACEHOLDER>",
+    "psr_global_thresh_0_10_f1": "<PLACEHOLDER>",
+    "psr_per_comp_optimal_f1": "<PLACEHOLDER>",
+    "psr_loo_cv_mean_delta": "<PLACEHOLDER>",
+    "psr_loo_cv_std": "<PLACEHOLDER>",
+    "psr_null_delta_comp_4": "<PLACEHOLDER>",
+    "psr_null_delta_comp_10": "<PLACEHOLDER>",
+    "psr_null_delta_comp_9": "<PLACEHOLDER>",
+    "psr_d4_default_f1": "<PLACEHOLDER>",
+    "psr_d4_retuned_f1": "<PLACEHOLDER>",
+    "t3_verification": "<PLACEHOLDER>",
+    "pos_ours": "<PLACEHOLDER>",
+    "pos_null_all_zeros": "<PLACEHOLDER>",
+    "pos_null_copy_prev": "<PLACEHOLDER>"
+  },
+  "integrity_notes": {
+    "pathology_2_status": "theoretical until Kendall-only ablation completes",
+    "nan_checkpoint_selection": "epoch 11 promoted due to NaN-inflated combined metric; epoch 18 manually identified as true best",
+    "eval_index_bug": "3.5-month up-vector index bug [3:6]->[6:9]; training loss indices always correct",
+    "cuda_crash_disclosure": "see training logs for crash frequency per GPU configuration",
+    "psr_head_repair_noop": "PSRTransitionPredictor (with ReLU/bias=-1.0 heads) is dead code; trained head is PSRHead (GELU, +0.1 bias)",
+    "freeze_protocol": "no results added, modified, or removed after freeze timestamp without documented addendum"
+  }
+}
