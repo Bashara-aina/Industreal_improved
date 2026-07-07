@@ -241,6 +241,22 @@ DET_CLASS_NAMES = {
     24: 'error_state',
 }
 
+# [OPUS 140 D-1 CLASS INDEX VERIFICATION] Validate DET_CLASS_NAMES mapping.
+# DET_CLASS_NAMES keys are COCO category_ids (1..24). Model outputs 0..23.
+# The conversion in _extract_boxes_from_coco() subtracts 1: idx = cat_id - 1.
+# DET_CLASS_ALPHAS keys use model indices (0..23). Verify consistency here
+# so any future mapping drift is caught at import time.
+assert len(DET_CLASS_NAMES) == NUM_DET_CLASSES, (
+    f'DET_CLASS_NAMES has {len(DET_CLASS_NAMES)} entries but NUM_DET_CLASSES={NUM_DET_CLASSES}. '
+    f'They must be equal — each class needs a name.'
+)
+_det_keys = sorted(DET_CLASS_NAMES.keys())
+assert _det_keys == list(range(1, NUM_DET_CLASSES + 1)), (
+    f'DET_CLASS_NAMES keys are {_det_keys} but must be 1..{NUM_DET_CLASSES}. '
+    f'Keys are COCO category_ids (1-indexed). Model indices are keys-1 (0..{NUM_DET_CLASSES-1}). '
+    f'DET_CLASS_ALPHAS keys must use model indices (0..{NUM_DET_CLASSES-1}).'
+)
+
 # --- Action Recognition (AR) ---
 # [ROOT-CAUSE FIX — activity class count] -----------------------------------
 # industreal_dataset.py:_parse_ar_labels writes the *raw* action_id straight
@@ -782,6 +798,15 @@ DET_CLASS_ALPHAS = {
         # NOTE: idx 23 = error_state has zero train GT; FOCAL_ALPHA=0.25 is fine (nothing to learn from)
         # Zero val GT (can't measure): idx 1/3/15 --- default
     }
+
+# [OPUS 140 D-1] Validate DET_CLASS_ALPHAS keys are model indices 0..NUM_DET_CLASSES-1.
+for _cid in DET_CLASS_ALPHAS:
+    assert 0 <= _cid < NUM_DET_CLASSES, (
+        f'DET_CLASS_ALPHAS key {_cid} is out of range 0..{NUM_DET_CLASSES - 1}. '
+        f'Keys must be model output indices, not COCO category_ids. '
+        f'Conversion in _extract_boxes_from_coco: idx = cat_id - 1'
+    )
+
 GIOU_WEIGHT   = 2.0  # Doc 01 B.2: GIoU regression weight vs cls weight=1.0
 
 # Hard negative mining for detection FocalLoss (RF stage collapse fix)
