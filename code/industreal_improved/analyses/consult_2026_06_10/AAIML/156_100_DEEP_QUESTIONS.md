@@ -299,3 +299,78 @@
 - The right answer: hybrid (ConvNeXt + MViTv2-S)
 - Implementation: src/models/video_backbone_multitask.py (already designed)
 - 2-week investment, expected to reach SOTA-comparable on all 4 heads
+
+## §5. The PSR Head Debate (Q41-50)
+
+### Q41. Is the PSR head broken by implementation or architecture?
+- GELU 99.7% dead (CONFIRMED)
+- +0.1 bias 1300x too small
+- DETACH_PSR_FPN=True (config bug)
+- All 11 sub-heads gradient RMS=0.00e+00 (DEAD)
+- V3 fix: LeakyReLU + small-normal init + zero bias + DETACH=False
+- Post_gelu: -1.0 to -1.4 (dead) → +4608 (alive)
+- Source: /tmp/train_psr_repair_v3.log
+
+### Q42. What does V3 PSR F1 = 0.78+ mean if achieved?
+- Multi-task CAN learn PSR with right implementation
+- F1 > 0.78 = better than current 0.7018
+- F1 > 0.78 = closer to decoder 0.7893
+- V3 result will validate the fix path
+
+### Q43. Why is our PSR F1 ≈ null_copy_prev F1?
+- Ours F1 = 0.7018, null_copy_prev = 0.9997
+- Delta = -0.2983 (model 29.7% WORSE than persistence)
+- The model is making more errors than just copying
+- This suggests the head is broken
+- Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/psr_true_signal/
+
+### Q44. What's the gap between MonotonicDecoder F1 and our head F1?
+- MonotonicDecoder (full 38k): 0.0053 (saturated logits)
+- MonotonicDecoder (2 recordings): 0.7893 (small sample)
+- Our head: 0.7018 (with optimal thresholds)
+- Honest comparison: 0.0053 (same data)
+- The decoder fails because PSR head logits are saturated
+
+### Q45. Why is the procedure-order constraint the bottleneck?
+- Decoder oracle (sustained, procedure order on): 0.5947
+- Decoder oracle (relaxed, procedure order off): 0.8807
+- 32% gap from procedure order constraint
+- comp4 is never placed in 10/16 recordings
+- MonotonicDecoder with hardcoded sequential chain fails on assembly
+- Source: Agent-25 decoder oracle analysis
+
+### Q46. Should we replace PSR head with MonotonicDecoder?
+- MonotonicDecoder F1: 0.0053 (saturated logits)
+- Our head F1: 0.7018 (with optimal thresholds)
+- The head is better than the decoder on full 38k
+- V3 with fix may give 0.78+ (better than decoder's 0.7893)
+- Keep the head, fix the implementation
+
+### Q47. What's the right PSR architecture for assembly?
+- LeakyReLU + small-normal init (universal)
+- DETACH_PSR_FPN=False (gradient flow)
+- Causal TCN or attention for temporal
+- Multi-scale dilations [1, 2, 4, 8]
+- Skip procedure-order constraint (data-driven)
+
+### Q48. Is multi-task PSR worth the implementation cost?
+- Current: 0.7018 (impl bug, V3 will fix)
+- V3 expected: 0.78+ (impl fixed)
+- Single-task PSR: unknown (need to run)
+- If V3 F1 > single-task: multi-task helps PSR
+- If V3 F1 ~ single-task: multi-task is fine for PSR
+
+### Q49. What does the LOO-CV +0.0148 ± 0.0158 mean?
+- LOO improvement is NOT statistically significant
+- CI includes zero
+- Per-component threshold tuning doesn't reliably help
+- Honest primary: global-0.10 F1 = 0.6788
+- Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/psr_loo_cv_stratified/
+
+### Q50. What should we report for PSR in the paper?
+- Multi-task with all fixes: F1 expected > 0.78
+- Single-task: not yet measured
+- MonotonicDecoder: 0.0053 full-38k, 0.7893 small sample
+- null_copy_prev: 0.9997 (model 29.7% worse)
+- Honest story: implementation was the killer, fix is V3
+- Comparison to STORM B3 (0.883) is unfair (different paradigm)
