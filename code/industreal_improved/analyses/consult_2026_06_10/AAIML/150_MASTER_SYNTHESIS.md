@@ -93,7 +93,7 @@ All at `/media/newadmin/master/POPW/working/code/industreal_improved/code/indust
 ### §1.1 Where We BEAT or NEAR SOTA
 
 **Head pose: 9.14° forward / 7.78° up — first ego-pose baseline.**
-- Weighted mean across 38,036 frames. Per-recording median of means: forward 8.94°, up 5.82° (all-16; 7.58° is the Kalman-smoothed per-frame median, not the raw per-recording median). Excluding outlier recording 14_assy_0_1: forward 8.46°, up 7.39°. Bootstrap 95% CI: forward [7.74-10.87], up [6.89-8.81].
+- Weighted mean across 38,036 frames. Per-recording median of means: forward 8.94°, up 7.58° (median of per-recording means, all 16 recordings, from bootstrap_ci.json; 5.82° is the 9-recording median-of-per-frame-medians variant from up_vector_v3, not directly comparable). Excluding outlier recording 14_assy_0_1: forward 8.46°, up 7.39°. Bootstrap 95% CI: forward [7.74-10.87], up [6.89-8.81].
 - Training-loss indices verified correct at losses.py:951-952. The 26.20° era was an eval-only index bug reading position channels [3:6] as up-vector.
 - Against the uncited ~15° from prior work: there is no published ego-pose baseline on IndustReal. Claim is "first baseline on this protocol" — scoped exactly that narrowly. The literature search (Q42/Q44 in 137) must confirm Jiang ECCV'22, HoloAssist NeurIPS'23, and Tome CVPR'23 under comparable protocols before any "first" claim is typed.
 - Kalman smoothing provides only -1.5%/-2.7% improvement because model predictions are already temporally smooth.

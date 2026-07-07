@@ -17,7 +17,7 @@
 | **Activity (MViTv2-S linear probe, frozen)** | clip-level top1 | **0.3810** | 0.622 (MViTv2-S) | encodes real action signal (+0.114 over majority 0.267); video backbone was the binding constraint for activity | `activity_mvit_probe/results.json:20` |
 | **Activity T3 baseline** | top1_69 | 0.6223 | 0.622 | matches Meccano published baseline | `t3_mecanno_eval.json` |
 | **Head Pose forward** | angular MAE (single-frame) | **9.14°** (95% CI 7.74-10.87°) | uncited | first ego-pose baseline; 16 recordings, 38k frames; confirmed by corrected-index full_eval_stream v2 | `full_eval_ep18_v2/metrics.json`; `bootstrap_ci.json:7-10` |
-| **Head Pose up** | angular MAE (single-frame) | **7.78°** (95% CI 6.89-8.81°); all-16 weighted mean 7.78°, per-rec median 5.82° (all-16 raw; 7.58° is Kalman-smoothed; F- per 157 Q63) | uncited | first ego-pose baseline; index [6:9] fix confirmed by full_eval_stream v2 | `full_eval_ep18_v2/metrics.json`; `bootstrap_ci.json:27-30`; `up_vector_v3/up_vector_per_recording.json:79-81` |
+| **Head Pose up** | angular MAE (single-frame) | **7.78°** (95% CI 6.89-8.81°); all-16 weighted mean 7.78°, per-rec median of means: 7.58° (all 16, from bootstrap_ci.json; 5.82° is the 9-recording median-of-per-frame-medians variant from up_vector_v3, not directly comparable) | uncited | first ego-pose baseline; index [6:9] fix confirmed by full_eval_stream v2 | `full_eval_ep18_v2/metrics.json`; `bootstrap_ci.json:27-30`; `up_vector_v3/up_vector_per_recording.json:79-81` |
 | **Head Pose forward (Kalman)** | angular MAE | **9.00°** | uncited | +0.14° (1.5%) from RTS smoother; per-frame predictions already temporally smooth | `SOTA_STATUS.md:153-154` |
 | **Head Pose up (Kalman)** | angular MAE | **7.58°** | uncited | +0.21° (2.7%) from RTS smoother | `SOTA_STATUS.md:153-155` |
 | **PSR (global thresh 0.10)** | macro F1 | **0.6788** | 0.901 STORM | 38k-frame evaluation | `psr_optimal_thr_38k/optimal_thresholds.json:31` |
@@ -159,7 +159,7 @@ fwd_p, pos_p, up_p = pred[:, 0:3], pred[:, 3:6], pred[:, 6:9]
 fwd_t, pos_t, up_t = target[:, 0:3], target[:, 3:6], target[:, 6:9]
 ```
 
-The training loss correctly slices `up = pred[:, 6:9]` and matches GT at `target[:, 6:9]`. The model was trained to predict the up-vector at the correct indices. The corrected 7.78° up-vector MAE (and 5.82° per-recording median of per-frame medians, all-16) reflects genuine model performance, not index-mismatch artifacts.
+The training loss correctly slices `up = pred[:, 6:9]` and matches GT at `target[:, 6:9]`. The model was trained to predict the up-vector at the correct indices. The corrected 7.78° up-vector MAE (and 7.58° per-recording median of means, all 16; 5.82° is the 9-recording median-of-per-frame-medians variant) reflects genuine model performance, not index-mismatch artifacts.
 
 The 3.5-month index bug was in the EVAL scripts (full_eval.py, full_eval_stream.py, full_eval_inprocess.py, head_pose_diag.py), NOT in the training loss. The model is well-formed; the measurement was wrong.
 
