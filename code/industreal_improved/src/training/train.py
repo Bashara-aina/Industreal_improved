@@ -773,16 +773,21 @@ def _set_stage_requires_grad(model: nn.Module, stage: int, backbone_type: str) -
                 set_backbone_stage_requires_grad(
                     model, backbone_type, stage=stage_idx, requires_grad=False
                 )
-        # Freeze task heads (skip activity_head + psr_head when --reinit-heads active:
-        # freshly reinitialised heads need to learn from epoch 0, not wait until stage 3.
-        # [F-1 2026-07-07 Opus-165 audit] Added psr_head bypass — was unconditionally
-        # frozen in stages 1-2, which killed PSR gradient regardless of DETACH.
+        # [F-1 2026-07-07 Opus-165 audit v2] PSR head freeze bypass.
+        # The original code unconditionally froze psr_head in stages 1-2,
+        # killing PSR gradient regardless of DETACH_PSR_FPN or KENDALL config.
+        # Previously gated on _REINIT_HEADS_ACTIVE (which is False when resuming),
+        # so psr_head stayed frozen for all V3 runs.
+        # Now: PSR head is trainable when KENDALL_FIXED_WEIGHTS=1 (the V3 config),
+        # regardless of reinit status. The DETACH_PSR_FPN flag controls backbone
+        # gradient flow; this gate controls whether the head learns at all.
+        _psr_trainable = bool(getattr(C, 'KENDALL_FIXED_WEIGHTS', False))
         for name, p in model.named_parameters():
             if 'activity_head' in name or 'psr_head' in name:
                 if _REINIT_HEADS_ACTIVE and 'activity_head' in name:
-                    continue  # [FIX B5 Part 2] Keep activity head trainable after reinit
-                if _REINIT_HEADS_ACTIVE and 'psr_head' in name:
-                    continue  # [F-1 2026-07-07] Keep PSR head trainable, per Opus-165 audit
+                    continue  # [FIX B5 Part 2]
+                if 'psr_head' in name and _psr_trainable:
+                    continue  # [F-1 v2] PSR head trainable under V3 config
                 p.requires_grad = False
 
     elif stage == 2:
@@ -799,14 +804,13 @@ def _set_stage_requires_grad(model: nn.Module, stage: int, backbone_type: str) -
                     model, backbone_type, stage=stage_idx, requires_grad=False
                 )
         # Freeze activity/PSR heads (pose and head_pose remain trainable)
-        # Skip activity_head + psr_head when --reinit-heads active (same as stage 1).
-        # [F-1 2026-07-07 Opus-165 audit] PSR head bypass added.
+        # [F-1 2026-07-07 Opus-165 audit v2] Same PSR freeze bypass as stage 1.
         for name, p in model.named_parameters():
             if 'activity_head' in name or 'psr_head' in name:
                 if _REINIT_HEADS_ACTIVE and 'activity_head' in name:
-                    continue  # [FIX B5 Part 2] Keep activity head trainable after reinit
-                if _REINIT_HEADS_ACTIVE and 'psr_head' in name:
-                    continue  # [F-1 2026-07-07] Keep PSR head trainable, per Opus-165 audit
+                    continue  # [FIX B5 Part 2]
+                if 'psr_head' in name and _psr_trainable:
+                    continue  # [F-1 v2] PSR head trainable under V3 config
                 p.requires_grad = False
 
     # stage == 3: all trainable (already set above)
