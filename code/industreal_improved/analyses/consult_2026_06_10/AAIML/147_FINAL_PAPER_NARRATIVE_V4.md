@@ -18,7 +18,7 @@ Our 4-head multi-task setup has implementation bugs. Single-task detection BEATS
 
 **PSR head F1 = 0.7018** (full 38k, per-component optimal, val-selected). Bootstrap 95% CI: [0.6436-0.7321]. Global 0.10 threshold yields 0.6788 on 38k. LOO-CV improvement: +0.0148 +/- 0.0158 (all val-only, no train/val contamination). Compared to STORM (0.901 event F1): paradigm difference makes direct comparison misleading -- STORM uses procedurally-generated transition features; we predict from raw video frames.
 
-**ConvNeXt to decoder F1 = 0.0053** (saturated logits, fix in flight). The MonotonicDecoder receiving ConvNeXt-based PSR logits at D4 thresholds produces near-zero F1 because the PSR head logits are already saturated from GELU starvation. The repair (LeakyReLU + small-normal init + zero bias) restored activations from mean -130 to +384 on sequence frames; retraining is in progress.
+**ConvNeXt to decoder F1 = 0.0053** (saturated logits, fix in flight). The MonotonicDecoder receiving ConvNeXt-based PSR logits at D4 thresholds produces near-zero F1 because the PSR head logits are already saturated from GELU starvation. The repair (LeakyReLU + small-normal init + zero bias) restored activations from dead (-1.0 to -1.4) to post_gelu mean +4608 on sequence frames (V3 training log step 10); retraining is in progress.
 
 ## 3. The Cascade (Implementation > Multi-Task)
 
