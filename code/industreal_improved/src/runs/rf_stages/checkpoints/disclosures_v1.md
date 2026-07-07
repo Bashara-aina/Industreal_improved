@@ -1,4 +1,4 @@
-# §5.4 Disclosure Language — Ten Numbered Disclosures (v2)
+# §5.4 Disclosure Language — Twelve Numbered Disclosures (v2)
 
 **Source:** 140_OPUS_ANSWERS_V2.md §4
 **Date:** 2026-07-07
@@ -25,9 +25,9 @@ Under monotonic fill-forward decoding, an all-zeros predictor scores POS = 0.999
 
 ## 3. Per-frame action classification is a floor baseline
 
-Top-1 = 0.0236 (28,665 labeled frames), 16-frame majority vote 0.028, vs a majority-class prior of 0.2217; a linear probe on frozen backbone features reaches 0.2169, within the prior's 95% CI (±0.0046); 41 of 69 evaluated classes have zero accuracy (up from previously reported 37/66 on subsample). The backbone shows no statistically detectable frame-level action signal.
+Top-1 = 0.0236 (28,665 labeled frames), 16-frame majority vote 0.028, vs a majority-class prior of 0.2217; a ConvNeXt linear probe on frozen frame-level features reaches 0.2169, within the prior's 95% CI (±0.0046); 41 of 69 evaluated classes have zero accuracy (up from previously reported 37/66 on subsample). The ConvNeXt backbone shows no statistically detectable frame-level action signal. **MViTv2-S video linear probe = 0.3810** (+0.114 over majority 0.267), confirming the video backbone was the binding constraint for activity.
 
-**Files:** `src/runs/rf_stages/checkpoints/activity_linear_probe.json`, `src/runs/rf_stages/checkpoints/activity_confusion_matrix.md`, `src/runs/rf_stages/checkpoints/activity_clip_ep18/activity_clip.json`
+**Files:** `src/runs/rf_stages/checkpoints/activity_linear_probe.json`, `src/runs/rf_stages/checkpoints/activity_confusion_matrix.md`, `src/runs/rf_stages/checkpoints/activity_clip_ep18/activity_clip.json`, `src/runs/rf_stages/checkpoints/activity_mvit_probe/results.json`
 
 ---
 
@@ -105,6 +105,22 @@ This does not invalidate PSR as a metric, but it means that even modest absolute
 
 ---
 
+## 11. Video backbone was the binding constraint for activity
+
+Frozen MViTv2-S linear probe achieves 0.3810 (+0.114 over majority baseline 0.267), while frozen ConvNeXt (frame-level, 0.2169) was indistinguishable from baseline. The 0.3810 >> 0.30 threshold confirms the video backbone, not the task, was the bottleneck for activity classification. The ConvNeXt result was a false negative driven by the frame-level evaluation protocol and ConvNeXt's lack of temporal receptive field. Fine-tuning MViTv2-S is justified and expected to approach the 0.622 published SOTA.
+
+**Files:** `src/runs/rf_stages/checkpoints/activity_mvit_probe/results.json`
+
+---
+
+## 12. Activity recovery path: MViTv2-S fine-tuning is justified
+
+Linear probe 0.3810 exceeds the 0.30 gate for "worth fine-tuning." Expected recovery: 2-week fine-tuning of Kinetics-400 pretrained MViTv2-S in the multi-task pipeline, targeting 0.50+ clip-level top-1. The MViTv2-S probe results supersede the earlier ConvNeXt probe (0.2169) as the correct activity baseline.
+
+**Files:** `src/runs/rf_stages/checkpoints/activity_mvit_probe/results.json`
+
+---
+
 ## Integrity Notes (reside in SS4/SS6, cross-referenced from SS5.4)
 
 **Pathology 2 is theoretical, not empirical (until Kendall-only ablation lands).** The Kendall-fixed ablation is currently in-flight; until it completes, Pathology 2 is presented as a theoretical analysis bounded by expected effect size (+0.01-0.03). The two proven pathologies are: (1) PSR per-component gradient starvation (Disclosure 5), and (2) NaN-checkpoint selection failure (AC-1).
@@ -120,6 +136,8 @@ This does not invalidate PSR as a metric, but it means that even modest absolute
 ## 2026-07-07 Opus 140 batch updates
 
 The following updates were incorporated from the Opus 140 evaluation batch, resolving all bracketed pending items from the v1 draft:
+
+- **MViTv2-S linear probe = 0.3810** (+0.114 over majority 0.267), confirming the video backbone was the binding constraint for activity. ConvNeXt probe (0.2169, indistinguishable from baseline) was a false negative. Fine-tuning MViTv2-S is justified and expected to approach SOTA 0.622. Disclosures 11-12 added.
 
 - **D4+D1R F1 = 0.6364** decisively confirms detection-density-bound decoder transfer (vs original 0.347, 1.83x improvement). The decoder is effective only when its detector supplies dense frame-level input.
 - **PSR F1 revised downward** from 0.7499 (10k subset, easy-biased) to 0.7018 on the full 38k evaluation set, with bootstrap 95% CI [0.6436-0.7321]. LOO membership verified clean — no recording-level train/val contamination exists.

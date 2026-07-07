@@ -1,0 +1,443 @@
+{
+  "align_objects": {
+    "mvit_accuracy": 0.154696,
+    "mvit_count": 181,
+    "convnext_accuracy": 0.0,
+    "delta": 0.154696,
+    "zero_to_nonzero": true
+  },
+  "take_pin_short": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 15,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "plug_short_pin": {
+    "mvit_accuracy": 0.022727,
+    "mvit_count": 88,
+    "convnext_accuracy": 0.0,
+    "delta": 0.022727,
+    "zero_to_nonzero": true
+  },
+  "take_tooth_washer": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 22,
+    "convnext_accuracy": 0.004,
+    "delta": -0.004,
+    "zero_to_nonzero": false
+  },
+  "take_nut": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 13,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "tighten_nut": {
+    "mvit_accuracy": 0.714894,
+    "mvit_count": 235,
+    "convnext_accuracy": 0.0,
+    "delta": 0.714894,
+    "zero_to_nonzero": true
+  },
+  "check_instruction": {
+    "mvit_accuracy": 0.877127,
+    "mvit_count": 529,
+    "convnext_accuracy": 0.0,
+    "delta": 0.877127,
+    "zero_to_nonzero": true
+  },
+  "take_partial_model": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 15,
+    "convnext_accuracy": 0.0472,
+    "delta": -0.0472,
+    "zero_to_nonzero": false
+  },
+  "take_long_brace": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 8,
+    "convnext_accuracy": 0.101,
+    "delta": -0.101,
+    "zero_to_nonzero": false
+  },
+  "take_screw_pin": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 7,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "take_pin_long": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 3,
+    "convnext_accuracy": 0.5044,
+    "delta": -0.5044,
+    "zero_to_nonzero": false
+  },
+  "put_pin_long": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 2,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "take_wing_beam": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 3,
+    "convnext_accuracy": 0.0952,
+    "delta": -0.0952,
+    "zero_to_nonzero": false
+  },
+  "plug_screw_pin": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 13,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "take_round_washer": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 11,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "take_acorn_nut": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 2,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "tighten_acorn_nut": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 29,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "take_pin_middle": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 3,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "take_wheel": {
+    "mvit_accuracy": 0.125,
+    "mvit_count": 16,
+    "convnext_accuracy": 0.0,
+    "delta": 0.125,
+    "zero_to_nonzero": true
+  },
+  "plug_pin_long": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 19,
+    "convnext_accuracy": 0.0526,
+    "delta": -0.0526,
+    "zero_to_nonzero": false
+  },
+  "take_wing": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 6,
+    "convnext_accuracy": 0.0472,
+    "delta": -0.0472,
+    "zero_to_nonzero": false
+  },
+  "plug_pin_middle": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 27,
+    "convnext_accuracy": 0.0406,
+    "delta": -0.0406,
+    "zero_to_nonzero": false
+  },
+  "take_pulley": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 6,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "browse_instruction": {
+    "mvit_accuracy": 0.164179,
+    "mvit_count": 67,
+    "convnext_accuracy": 0.416,
+    "delta": -0.251821,
+    "zero_to_nonzero": false
+  },
+  "fit_short_brace": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 9,
+    "convnext_accuracy": 0.0149,
+    "delta": -0.0149,
+    "zero_to_nonzero": false
+  },
+  "fit_tooth_washer": {
+    "mvit_accuracy": 0.072727,
+    "mvit_count": 55,
+    "convnext_accuracy": 0.0,
+    "delta": 0.072727,
+    "zero_to_nonzero": true
+  },
+  "fit_round_washer": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 14,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "fit_long_brace": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 4,
+    "convnext_accuracy": 0.0154,
+    "delta": -0.0154,
+    "zero_to_nonzero": false
+  },
+  "fit_nut": {
+    "mvit_accuracy": 0.040541,
+    "mvit_count": 74,
+    "convnext_accuracy": 0.0,
+    "delta": 0.040541,
+    "zero_to_nonzero": true
+  },
+  "put_wheel": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 3,
+    "convnext_accuracy": 0.3317,
+    "delta": -0.3317,
+    "zero_to_nonzero": false
+  },
+  "pull_wheel": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 1,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "loosen_nut": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 72,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "put_nut": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 1,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "pull_objects": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 36,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "take_objects": {
+    "mvit_accuracy": 0.298851,
+    "mvit_count": 87,
+    "convnext_accuracy": 0.0,
+    "delta": 0.298851,
+    "zero_to_nonzero": true
+  },
+  "put_partial_model": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 21,
+    "convnext_accuracy": 0.1199,
+    "delta": -0.1199,
+    "zero_to_nonzero": false
+  },
+  "put_objects": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 23,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "pull_pin_short": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 6,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "put_pin_short": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 1,
+    "convnext_accuracy": 0.0787,
+    "delta": -0.0787,
+    "zero_to_nonzero": false
+  },
+  "put_long_brace": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 2,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "fit_wheel": {
+    "mvit_accuracy": 0.139535,
+    "mvit_count": 43,
+    "convnext_accuracy": 0.0,
+    "delta": 0.139535,
+    "zero_to_nonzero": true
+  },
+  "check_partial_model": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 23,
+    "convnext_accuracy": 0.0672,
+    "delta": -0.0672,
+    "zero_to_nonzero": false
+  },
+  "put_round_washer": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 4,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "fit_pulley": {
+    "mvit_accuracy": 0.029412,
+    "mvit_count": 34,
+    "convnext_accuracy": 0.0,
+    "delta": 0.029412,
+    "zero_to_nonzero": true
+  },
+  "fit_wing_beam": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 17,
+    "convnext_accuracy": 0.1176,
+    "delta": -0.1176,
+    "zero_to_nonzero": false
+  },
+  "put_tooth_washer": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 4,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "pull_pin_middle": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 3,
+    "convnext_accuracy": 0.6207,
+    "delta": -0.6207,
+    "zero_to_nonzero": false
+  },
+  "put_pulley": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 2,
+    "convnext_accuracy": 0.0988,
+    "delta": -0.0988,
+    "zero_to_nonzero": false
+  },
+  "pull_screw_pin": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 2,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "loosen_acorn_nut": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 7,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "take_small_screw_pin": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 1,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "plug_small_screw_pin": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 3,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "fit_acorn_nut": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 1,
+    "convnext_accuracy": 0.0,
+    "delta": 0.0,
+    "zero_to_nonzero": false
+  },
+  "fit_wing": {
+    "mvit_accuracy": 0.0,
+    "mvit_count": 7,
+    "convnext_accuracy": 0.0305,
+    "delta": -0.0305,
+    "zero_to_nonzero": false
+  },
+  "plug_objects": {
+    "mvit_accuracy": 0.355769,
+    "mvit_count": 104,
+    "convnext_accuracy": 0.0,
+    "delta": 0.355769,
+    "zero_to_nonzero": true
+  },
+  "take_short_brace": {
+    "mvit_accuracy": null,
+    "mvit_count": null,
+    "convnext_accuracy": 0.0875,
+    "delta": null,
+    "zero_to_nonzero": false
+  },
+  "put": {
+    "mvit_accuracy": null,
+    "mvit_count": null,
+    "convnext_accuracy": 0.6429,
+    "delta": null,
+    "zero_to_nonzero": false
+  },
+  "put_wing": {
+    "mvit_accuracy": null,
+    "mvit_count": null,
+    "convnext_accuracy": 0.0,
+    "delta": null,
+    "zero_to_nonzero": false
+  },
+  "put_screw_pin": {
+    "mvit_accuracy": null,
+    "mvit_count": null,
+    "convnext_accuracy": 0.0,
+    "delta": null,
+    "zero_to_nonzero": false
+  },
+  "put_pin_middle": {
+    "mvit_accuracy": null,
+    "mvit_count": null,
+    "convnext_accuracy": 0.0,
+    "delta": null,
+    "zero_to_nonzero": false
+  },
+  "fit_objects": {
+    "mvit_accuracy": null,
+    "mvit_count": null,
+    "convnext_accuracy": 0.0,
+    "delta": null,
+    "zero_to_nonzero": false
+  },
+  "put_small_screw_pin": {
+    "mvit_accuracy": null,
+    "mvit_count": null,
+    "convnext_accuracy": 0.1176,
+    "delta": null,
+    "zero_to_nonzero": false
+  },
+  "put_acorn_nut": {
+    "mvit_accuracy": null,
+    "mvit_count": null,
+    "convnext_accuracy": 0.0,
+    "delta": null,
+    "zero_to_nonzero": false
+  }
+}
