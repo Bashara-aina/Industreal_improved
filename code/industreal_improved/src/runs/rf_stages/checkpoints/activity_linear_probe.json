@@ -1,0 +1,20 @@
+{
+  "model": "ConvNeXt-Tiny linear probe",
+  "checkpoint": "/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/best.pth",
+  "backbone_dim": 768,
+  "num_classes": 69,
+  "num_epochs": 5,
+  "batch_size": 256,
+  "optimizer": "AdamW",
+  "lr": 0.001,
+  "weight_decay": 0.0001,
+  "scheduler": "CosineAnnealingLR",
+  "gradient_clipping": "max_norm=1.0",
+  "majority_class_baseline": 0.221674,
+  "majority_class": 8,
+  "best_val_per_frame_top1": 0.216869,
+  "train_samples_valid": 26322,
+  "val_samples_valid": 31217,
+  "verdict": "NO DETECTABLE FRAME-LEVEL SIGNAL (0.2169 vs 0.2217 majority baseline, 95% CI +-0.0046)",
+  "note": "Linear probe on frozen ConvNeXt-Tiny C5 (768-dim) GAP-pooled features. If top-1 < 0.05, backbone is the bottleneck and P1.4/P5.1 dead on arrival. Features pre-extracted in one pass; -1 labels filtered pre-training."
+}

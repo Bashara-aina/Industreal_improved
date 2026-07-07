@@ -17,7 +17,7 @@ This is the multi-task checkpoint that produced:
 - D1R detection: mAP50 = 0.995 (single-task YOLOv8m on the same split; derived via `d1_yolov8m_v3/metrics.json`)
 - Head pose: fwd MAE 9.14°, up MAE 7.78° (from `full_eval_ep18_v2/metrics.json`)
 - PSR: F1 = 0.7018 per-component optimal, F1 = 0.6788 global 0.10 (from `psr_optimal_thr_38k/optimal_thresholds.json`)
-- Activity: top-1 = 0.0236 (class collapse; 0.3810 with frozen MViTv2-S probe)
+- Activity: top-1 = 0.0233 valid-frame / 0.0191 all-frame (class collapse; 0.3810 with frozen MViTv2-S probe)
 
 | File | Size (bytes) | SHA256 |
 |---|---|---|

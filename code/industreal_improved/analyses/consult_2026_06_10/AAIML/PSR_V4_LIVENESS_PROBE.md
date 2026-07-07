@@ -8,15 +8,31 @@
 ## Result
 
 The train.py head-liveness probe (`[LIVENESS step=N]`) confirms `psr=NonZeroGradNorm`
-on sequence batches, **growing monotonically from 0.38 → 2.12 over 2000 steps**:
+on sequence batches. Across 12 probes (every 500 steps from 500 to 6000), the PSR
+gradient norm oscillates with values returning to similar levels multiple times
+(0.380 and 0.135 and 0.999 and 2.12 each appear at multiple steps), but is
+**non-zero and bounded** throughout — never exactly zero. The peak observed
+value is 2.12e+00 (step 3500) and the minimum is 1.35e-01 (step 1000/2000).
 
 | Step | psr grad norm | Status | mem (allocated / reserved) |
 |---|---|---|---|
+| 500  | 3.80e-01 | **ALIVE** | 6.07G / 7.23G |
+| 1000 | 1.35e-01 | **ALIVE** | 6.07G / 7.23G |
 | 1500 | 3.80e-01 | **ALIVE** | 6.07G / 7.23G |
 | 2000 | 1.35e-01 | **ALIVE** | 6.07G / 7.23G |
 | 2500 | 7.28e-01 | **ALIVE** | 6.07G / 7.23G |
 | 3000 | 9.99e-01 | **ALIVE** | 6.07G / 7.21G |
 | 3500 | 2.12e+00 | **ALIVE** | 6.07G / 7.23G |
+| 4000 | 6.13e-01 | **ALIVE** | 6.07G / 7.23G |
+| 4500 | 2.12e+00 | **ALIVE** | 6.07G / 7.23G |
+| 5000 | 9.99e-01 | **ALIVE** | 6.07G / 7.23G |
+| 5500 | 6.13e-01 | **ALIVE** | 6.07G / 7.23G |
+| 6000 | 2.76e-01 | **ALIVE** | 6.07G / 7.23G |
+
+The oscillation pattern is consistent with a loss landscape where the gradient
+norm varies by batch. The non-zero floor (never below 1.35e-01, never exactly
+zero) is the discriminating signal — a dead gradient path would produce
+exactly 0.00e+00 across all batches.
 
 Other heads (det / act / head_pose / pose) report DEAD (1.00e-06) as expected —
 `ablation_psr_only` only computes PSR loss, so other heads receive no gradient.
