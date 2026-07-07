@@ -97,7 +97,7 @@ Sentences like "model is 29.7% worse than persistence" (copy-prev) and "null-del
 
 ### F-12. ✅ Single-task ablation presets already exist in config.py — the "not started" baselines are config-ready.
 
-`ablation_det_only` (config.py:~1660, "Ablation A1: detection-only, arch+hparams == stage_rf4"), `ablation_activity_only` (A2, ~1691), `ablation_psr_only` (A3, ~1724), `ablation_pose_only` (A4, ~1757), plus `ablation_single_task` (~1572). Also relevant: `pose_multitask_vs_singletask/comparison.md` exists and concludes "Pose is not a confirmed multi-task win… Reserve multi-task claims for tasks where single-task ablation exists," and notes the pose-only preset is **unrun**. Several answers below (150 Q33/Q39, 153 §3.2, 156 Q81/Q82) are sharpened by this: launching a single-task baseline is a one-line preset selection, not new engineering.
+`ablation_det_only` (config.py:~1663, "Ablation A1: detection-only, arch+hparams == stage_rf4"), `ablation_act_only` (A2, ~1694), `ablation_psr_only` (A3, ~1727), `ablation_pose_only` (A4, ~1760), plus `ablation_single_task` (~1621). Also relevant: `pose_multitask_vs_singletask/comparison.md` exists and concludes "Pose is not a confirmed multi-task win… Reserve multi-task claims for tasks where single-task ablation exists," and notes the pose-only preset is **unrun**. Several answers below (150 Q33/Q39, 153 §3.2, 156 Q81/Q82) are sharpened by this: launching a single-task baseline is a one-line preset selection, not new engineering.
 
 ---
 
@@ -606,7 +606,7 @@ The narrative structure (pathology paper, three failure types, three lessons) is
 
 ### §8.9 Single-Task vs Multi-Task (Q81–90) — recovered
 
-**Q81. What single-task baselines do we have?** Recovered text verified and improved: detection in flight (🔒); activity/PSR/pose **preset-ready in tree** (`ablation_activity_only`/`ablation_psr_only`/`ablation_pose_only`, F-12) — "script ready/not started" understates; each is a one-line launch when GPU frees. Status: 1 of 4 running, 3 of 4 config-complete, 0 of 4 completed.
+**Q81. What single-task baselines do we have?** Recovered text verified and improved: detection in flight (🔒); activity/PSR/pose **preset-ready in tree** (`ablation_act_only`/`ablation_psr_only`/`ablation_pose_only`, F-12) — "script ready/not started" understates; each is a one-line launch when GPU frees. Status: 1 of 4 running, 3 of 4 config-complete, 0 of 4 completed.
 **Q82. Single vs multi for pose?** Branch logic endorsed; expected single-task 7–8° (not 5–7, §8.7 Q66); memo already strips benefit language either way.
 **Q83. Single vs multi for PSR?** Reset per F-1/F-10: V3 expectation 0.71–0.74 (not >0.78); single-task PSR unrun; the comparison is meaningful only after the attributed repair exists on the multi-task side, else it compares a repaired single-task against an unrepaired multi-task.
 **Q84. Single vs multi for activity?** Verified numbers; note the comparison spans backbones (ConvNeXt multi-task 0.0236 vs MViT single-task 0.3810), so it measures backbone + task-count jointly — only the future MViT-multi-task run isolates the multi-task term. The recovered "loses 5–10%" is the unlabeled prior again.

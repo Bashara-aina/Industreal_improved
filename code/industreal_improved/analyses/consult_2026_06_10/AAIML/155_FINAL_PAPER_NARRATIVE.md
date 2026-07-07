@@ -25,7 +25,9 @@ Multi-task learning is widely believed to help when tasks share representations.
 2. GT-balanced sampler + DET_GAMMA_NEG 1.5 -> 2.0 (detection, commits 8cef56fc2 + cd901f655)
 3. MViTv2-S video backbone (activity, script ready, blocked on GPU)
 
-**Headline result:** Single-task detection BEATS SOTA (0.995 mAP50). First ego-pose baseline (9.14 deg / 7.78 deg). With all 9 fixes, multi-task is SOTA-comparable on 2 of 4 heads.
+**Headline result:** Single-task detection (YOLOv8m, single-task fine-tune) **BEATS SOTA** (0.995 mAP50) cross-architecture on IndustReal's WACV detection split. First ego-pose baseline (9.14 deg / 7.78 deg). With all 9 fixes, multi-task (ConvNeXt-T, 4 heads) is SOTA-comparable on 2 of 4 heads.
+
+**Important framing (Opus-165 §4.4):** The 0.995 mAP50 is a **single-task, YOLOv8m** result, NOT a multi-task result. A hostile reviewer will read "beats SOTA" as a multi-task claim; we are NOT claiming the multi-task pipeline beats detection SOTA. The multi-task detection head (D3) is 0.00009 (broken; 9 fixes applied, V4 validating). For the multi-task system result, see §Multi-Task Results below.
 
 ## Method
 
@@ -39,7 +41,7 @@ All models are trained with AdamW optimizer and CosineAnnealingLR scheduler usin
 
 ### The 9 Implementation Fixes (Detailed)
 
-1. **PSR head: LeakyReLU + small-normal init + zero bias (e618d929a).** Replaced GELU activation with LeakyReLU(0.01) in all 11 PSR sub-heads. Reinitialized weights with small-normal (std=0.01) and set biases to zero. Restored activations from mean -130 to +4608 on sequence frames. *(UNVERIFIABLE-REMOTELY: post_gelu value from /tmp/*.log)*
+1. **PSR head: LeakyReLU + small-normal init + zero bias (e618d929a).** Replaced GELU activation with LeakyReLU(0.01) in all 11 PSR sub-heads. Reinitialized weights with small-normal (std=0.01) and set biases to zero. Restored activations from mean -130 to +4608 on sequence frames — auditable from committed log `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log` (commit `8f9d12fea`); values vary 4448-4864 across steps (single-run snapshot, not converged measurement).
 
 2. **PSR head: Sequential init index fix (6defe1f5f).** Corrected the index used for initializing the second Linear layer in the Sequential block (index 3 instead of 2 after LeakyReLU insertion).
 
@@ -92,7 +94,7 @@ These numbers are misleadingly high because the PSR evaluation metric is structu
 
 The root cause is GELU activation starvation. Pre-activations in the per-component output heads averaged -130 across all training. The existing +0.1 first-layer bias was 1300 times too small to push activations into the GELU active regime. GELU is effectively dead for inputs below approximately -3.0 standard deviations, meaning 99.7% of activations were in the saturation zone. The per-component heads showed zero RMS gradient over extended training spans.
 
-The repair replaces GELU with LeakyReLU (negative_slope=0.01), reinitializes weights with small-normal (mean=0, std=0.01), and sets biases to zero. A critical additional bug was DETACH_PSR_FPN=True in the default config, which detached FPN features and broke gradient flow to the PSR head entirely. With DETACH_PSR_FPN=False and the activation repair, post-GELU activations went from -1.0 to -1.4 (dead) to +4608 (alive) on sequence frames. *(UNVERIFIABLE-REMOTELY: post-GELU values from workstation /tmp/*.log)*
+The repair replaces GELU with LeakyReLU (negative_slope=0.01), reinitializes weights with small-normal (mean=0, std=0.01), and sets biases to zero. A critical additional bug was DETACH_PSR_FPN=True in the default config, which detached FPN features and broke gradient flow to the PSR head entirely. With DETACH_PSR_FPN=False and the activation repair, post-GELU activations went from -1.0 to -1.4 (dead) to +4608 (alive) on sequence frames — auditable from committed log `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log` (commit `8f9d12fea`). V4 (with USE_PSR_TRANSITION=False, KENDALL_FIXED_WEIGHTS=1, ablation_psr_only) is running on RTX 3060 to validate the multi-task PSR recovery.
 
 The V3 PSR repair training is in flight. *(UNVERIFIABLE-REMOTELY: V3 training state only verifiable on workstation via /tmp/train_psr_repair_v3.log)* Expected F1 after repair is above 0.78, which would be a meaningful improvement over the dead-activation baseline.
 
