@@ -185,7 +185,7 @@
 
 ## Section 4: What Beats SOTA vs What Doesn't
 
-### 4.1 BEATS SOTA
+### 4.1 Headline Results (D1R detection BEATS SOTA, head pose is FIRST BASELINE)
 
 | Head | Our Value | SOTA Value | Protocol | Caveat |
 |---|---|---|---|---|
@@ -246,11 +246,11 @@
 | Activity (per-frame) | 0.0236 | 0.45-0.55 (MViTv2-S fine-tune) | 0.6223 (WACV) | Near SOTA |
 | PSR (per-frame state) | 0.7018 | 0.78+ (head repair) | 0.901 (STORM) | Near SOTA (paradigm mismatch) |
 | PSR (transition events) | 0.0053 (decoder) | 0.6364 (3-video subset) (D4+D1R) | 0.883 (WACV B3) | Near SOTA (detection density fixed) |
-| Head pose forward | 9.14 deg | 9.14 deg | No prior baseline | BEATS SOTA (first baseline) |
-| Head pose up | 7.78 deg | 7.78 deg | No prior baseline | BEATS SOTA (first baseline) |
+| Head pose forward | 9.14 deg | 9.14 deg | No prior baseline | FIRST BASELINE (no published SOTA to beat) |
+| Head pose up | 7.78 deg | 7.78 deg | No prior baseline | FIRST BASELINE (no published SOTA to beat) |
 
-**Total best case:** 2 BEATS SOTA (D1R detection, head pose), 3-4 NEAR SOTA (multi-task detection, activity, PSR, decoder)
-**Total honest worst case:** 2 BEATS SOTA (D1R, head pose), 2 NOT SOTA (PSR head still broken, activity still broken)
+**Total best case:** 1 BEATS SOTA (D1R detection) + 1 FIRST BASELINE (head pose, no published SOTA to beat), 3-4 NEAR SOTA (multi-task detection, activity, PSR, decoder)
+**Total honest worst case:** 1 BEATS SOTA (D1R) + 1 FIRST BASELINE (head pose), 2 NOT SOTA (PSR head still broken, activity still broken)
 
 ---
 
@@ -273,21 +273,21 @@
 **Can we beat SOTA on 2 heads + near SOTA on 2 heads?**
 
 **Best case** (all fixes work):
-- Head pose: BEATS SOTA (9.14 deg / 7.78 deg -- first baselines)
+- Head pose: FIRST BASELINE (9.14 deg / 7.78 deg -- no published SOTA to beat)
 - D1R detection: BEATS SOTA (0.995 vs WACV 0.641, cross-architecture)
 - PSR: Near SOTA (0.78+ with real head repair, paradigm caveat)
 - Activity: Near SOTA (0.45+ with MViTv2-S fine-tune)
 - Multi-task detection: Near SOTA (0.5-0.7 with all 4 fixes)
 
 **Worst case** (fixes insufficient):
-- Head pose: BEATS SOTA (independent of other heads -- works now)
+- Head pose: FIRST BASELINE (independent of other heads -- works now)
 - D1R: BEATS SOTA (independent -- works now)
 - PSR: Still at 0.7018 (model not learning beyond persistence baseline)
 - Activity: Still at 0.0236 (broken, needs backbone swap)
 - Multi-task detection: Still at 0.00009 (broken, needs gradient flow repair)
 
 **Realistic expectation:**
-- 2 BEATS SOTA (head pose, D1R detection) -- these are running now and verified
+- 1 BEATS SOTA (D1R detection) + 1 FIRST BASELINE (head pose) -- these are running now and verified
 - 1-2 NEAR SOTA (PSR with real head repair, activity with MViTv2-S fine-tune) -- depends on fix success
 - 1 DIAGNOSTIC (decoder transition F1 via D4+D1R at 0.6364 (3-video subset))
 - 2 NULL RESULTS documented (activity per-frame, multi-task detection broken) -- each with root cause analysis
@@ -300,7 +300,7 @@ The honest story is a measurement-and-pathology paper:
 
 | Claim Type | Count | Details |
 |---|---|---|
-| **BEATS SOTA** | 2 | D1R detection (0.995, cross-architecture), head pose (9.14 deg / 7.78 deg, first baseline) |
+| **BEATS SOTA** | 1 | D1R detection (0.995, cross-architecture) |
 | **NEAR SOTA** | 2 | PSR (0.78+ projected with real repair), activity (0.45-0.55 projected with MViTv2-S fine-tune) |
 | **First baselines** | 2 | Head pose forward, head pose up (previously unreported in IndustReal) |
 | **Null results with root cause** | 2 | Activity (ConvNeXt frame-level has no linear signal), multi-task detection (GELU saturation, gradient starvation) |
