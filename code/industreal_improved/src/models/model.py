@@ -1594,21 +1594,32 @@ class PSRHead(nn.Module):
         # C.2: Per-component output heads (11 separate tiny MLPs)
         # comp0 (base plate) placed first 95%; comp10 (wheels) come last.
         # Each component has different transition statistics.
+        # [REPAIR 2026-07-07 Opus 140 §-1d + diagnostic 96b144e51]
+        # Activation: LeakyReLU(0.01) instead of GELU — GELU was 99.7%+ saturated
+        # because pre-activations had mean ~ -130 (1300x too negative for the
+        # +0.1 bias to push them out of the dead zone). LeakyReLU does not
+        # saturate for negative inputs (constant 0.01 gradient). Weight init:
+        # normal(0, 0.01) instead of default — keeps pre-activations small at
+        # init. Final bias: 0.0 instead of default — no default prediction.
         self.output_heads = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(gru_hidden, 64),
-                nn.GELU(),
+                nn.LeakyReLU(negative_slope=0.01),
                 nn.Dropout(dropout * 0.3),
                 nn.Linear(64, 1),
             ) for _ in range(num_components)
         ])
 
-        # [AUDIT] Bias +0.1 on first Linear(256,64) of each output head pushes
-        # GELU into the linear regime, preventing zero-feature collapse into
-        # the final Linear(64,1) when transformer output has near-zero variance.
+        # [AUDIT] Replaced previous +0.1 bias init (insufficient by 1300x).
+        # New init: small-normal weights + zero bias. Warm-start safe since
+        # GELU was passing ~zero gradient through all training — checkpoint
+        # state for these heads is effectively random.
         for head in self.output_heads:
             if isinstance(head[0], nn.Linear):
-                nn.init.constant_(head[0].bias, 0.1)
+                nn.init.normal_(head[0].weight, std=0.01)
+                nn.init.zeros_(head[0].bias)
+                nn.init.normal_(head[2].weight, std=0.01)
+                nn.init.zeros_(head[2].bias)
 
         self._debug_step = 0  # step counter for gradient-audit logging
         self._cache: Dict[Tuple[str, str], List[torch.Tensor]] = {}
