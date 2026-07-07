@@ -27,15 +27,15 @@ Three separate issues converge on this number. First (Q20), some LOO recordings 
 
 **Counter-argument:** The document raises all three concerns in the questions themselves (Q12, Q18, Q20). The LOO-CV script can produce per-recording results; they simply haven't been extracted into the Evidence Inventory table yet. The mean is reported transparently with its std. The question format invites Opus to examine these distributions before using the number. The document doesn't claim the +0.0358 is the final answer — it asks whether it holds up under scrutiny.
 
-**Challenge 4: The 0.7499 headline F1 is an upper bound on a 10k-frame subset, not a representative number, and the gap to STORM widens when using the honest 38k eval.**
+**Challenge 4: The headline F1 (originally 0.7499 on 10k subset) is an upper bound, not a representative number, and the gap to STORM widens when using the honest 38k eval (corrected to 0.7018).**
 
-The document admits at Q49 that "the 0.7499 is an upper bound, not a representative number." The full 38k eval at global 0.10 gives macro F1 = 0.677 (from `full_eval_ep18_stream/metrics.json`). Per-comp optimal thresholds have never been applied to all 38k frames. If the 10k optimal thresholds overfit to the subset — yielding only 0.70-0.72 on the full 38k — the honest gap to STORM's 0.901 widens from 0.151 to 0.181-0.201. The "competitive" label in SOTA_STATUS.md depends on which number is published. This decision (D3) is listed as zero-cost compute and should have been run before writing the 50 questions, not scheduled as a parallel task during training.
+The document admits at Q49 that "the 0.7499 is an upper bound, not a representative number, corrected to 0.7018 on full 38k." The full 38k eval at global 0.10 gives macro F1 = 0.677 (from `full_eval_ep18_stream/metrics.json`). Per-comp optimal thresholds have never been applied to all 38k frames. If the 10k optimal thresholds overfit to the subset — yielding only 0.70-0.72 on the full 38k — the honest gap to STORM's 0.901 widens from 0.151 to 0.181-0.201. The "competitive" label in SOTA_STATUS.md depends on which number is published. This decision (D3) is listed as zero-cost compute and should have been run before writing the 50 questions, not scheduled as a parallel task during training.
 
 **Counter-argument:** The D3 item explicitly schedules this computation "immediately on the RTX 3060 while the RTX 5060 Ti trains." The 50 questions were prepared for Opus to make these decisions, not as a final publication draft. The document correctly flags the issue rather than hiding it. The 10k vs 38k gap exists, but its magnitude is unknown, which is precisely why D3 exists.
 
 **Challenge 5: The bundled intervention (head repair + Kendall fixed weights) means no attribution is possible after the in-flight training converges.**
 
-The in-flight training applies both PSR_HEAD_REPAIR=1 and KENDALL_FIXED_WEIGHTS=1 simultaneously. If PSR F1 improves from 0.7499 to 0.8000, the narrative will claim "head repair success" but the Kendall fix could account for 20-60% of the gain. The factorial ablation (D10) is listed as 60-90 hours of compute and tagged as "high-effort" with the recommendation to skip it. The document reasons that the head repair is "the primary cause" based on 133 PSR-3, but PSR-3's evidence was gathered before Kendall was known to be broken. After Q48's own admission, the Kendall fix is expected to contribute +0.01-0.03. If the total improvement is +0.05 and Kendall accounts for +0.03 (60%), the bundled intervention's attribution framework is misleading.
+The in-flight training applies both PSR_HEAD_REPAIR=1 and KENDALL_FIXED_WEIGHTS=1 simultaneously. If PSR F1 improves from 0.7018 to 0.8000, the narrative will claim "head repair success" but the Kendall fix could account for 20-60% of the gain. The factorial ablation (D10) is listed as 60-90 hours of compute and tagged as "high-effort" with the recommendation to skip it. The document reasons that the head repair is "the primary cause" based on 133 PSR-3, but PSR-3's evidence was gathered before Kendall was known to be broken. After Q48's own admission, the Kendall fix is expected to contribute +0.01-0.03. If the total improvement is +0.05 and Kendall accounts for +0.03 (60%), the bundled intervention's attribution framework is misleading.
 
 **Counter-argument:** Science advances on bundled interventions. The combined improvement is what matters for the final model. The attribution question is a secondary concern for the ablation section of the paper, not a prerequisite for the primary result. If the combined F1 reaches 0.80+, the narrative "fixing two bugs gave +0.05" is honest and doesn't require fine-grained attribution. The D10 ablation is postponed, not rejected — it can be run after the deadline if time permits.
 
@@ -53,7 +53,7 @@ STORM's per-component F1 breakdown (Table 2) is the only direct comparison point
 
 **Gap 3: No empirical verification that the 10k optimal thresholds generalize to 38k (Q49/D3).**
 
-D3 estimates 30 minutes to run this. The document was written before D3 was executed. The 0.7499 number appears in SOTA_STATUS.md and the Evidence Inventory without a caveat that it's possibly overfit to a subset. The gap between the reported number and the honest number could be 0.03-0.08 F1. Running D3 before circulating these questions would have anchored the discussion on the stronger or weaker number.
+D3 estimates 30 minutes to run this. The document was written before D3 was executed. The 0.7018 number appears in SOTA_STATUS.md and the Evidence Inventory without a caveat that it's possibly overfit to a subset. The gap between the reported number and the honest number could be 0.03-0.08 F1. Running D3 before circulating these questions would have anchored the discussion on the stronger or weaker number.
 
 **Gap 4: No train/val prevalence comparison (Q27).**
 
@@ -69,7 +69,7 @@ The document asks "which recordings are in train vs val?" but doesn't report fin
 
 **Interpretation 1: The head repair may reduce F1 because the loss landscape has shifted away from the dead-head convergence point.**
 
-The dead heads reached F1=0.7499 by fitting prevalence priors with near-constant sigmoid outputs. The transformer features adapted to produce features that, when run through the dead heads, give the optimal constant prediction. After head repair with Xavier initialization (fresh weights), the repaired heads must learn from scratch while the transformer features are already tuned for a different output distribution. There is a risk of negative interaction: the repaired heads produce non-constant outputs, the transformer sees new gradient signals, and the combined system must re-converge to a point that may be no better (or worse) than the dead-head equilibrium. The in-flight training's first 5 epochs will show whether the repaired heads quickly find signal (crossing baseline at epoch 27-28) or struggle (crossing at epoch 35+ or never).
+The dead heads reached F1=0.7018 by fitting prevalence priors with near-constant sigmoid outputs. The transformer features adapted to produce features that, when run through the dead heads, give the optimal constant prediction. After head repair with Xavier initialization (fresh weights), the repaired heads must learn from scratch while the transformer features are already tuned for a different output distribution. There is a risk of negative interaction: the repaired heads produce non-constant outputs, the transformer sees new gradient signals, and the combined system must re-converge to a point that may be no better (or worse) than the dead-head equilibrium. The in-flight training's first 5 epochs will show whether the repaired heads quickly find signal (crossing baseline at epoch 27-28) or struggle (crossing at epoch 35+ or never).
 
 **Interpretation 2: The Kendall fixed weights may account for most of the improvement, not the head repair.**
 
@@ -81,7 +81,7 @@ With sigma=3, the optimal head output is a soft Gaussian ramp spanning 19 frames
 
 **Interpretation 4: Comp9's at-null delta (Q17) is not a bug but a feature bound: PSR is structurally unsolvable for some components.**
 
-Comp9 (mid-placement hand posture) has null-delta = -0.000. The model cannot distinguish comp9's active state from its inactive state using visual features. This may be because comp9's posture is visually identical to an intermediate stage of another component — the hand position is the same, only the assembly context differs. If this is a feature bound (the visual information is not in the 2D ConvNeXt features, regardless of head quality), then the 0.7499 ceiling is an average of 10 solvable components (mean F1 approx. 0.80) and 1 unsolvable component (F1 stuck at 0.69). Under this interpretation, the "gap to STORM" narrows to (STORM's comp9 mean - our comp9 mean), which may be smaller than the overall gap. The appropriate comparison is per-component, not macro-mean.
+Comp9 (mid-placement hand posture) has null-delta = -0.000. The model cannot distinguish comp9's active state from its inactive state using visual features. This may be because comp9's posture is visually identical to an intermediate stage of another component — the hand position is the same, only the assembly context differs. If this is a feature bound (the visual information is not in the 2D ConvNeXt features, regardless of head quality), then the 0.7018 ceiling is an average of 10 solvable components (mean F1 approx. 0.80) and 1 unsolvable component (F1 stuck at 0.69). Under this interpretation, the "gap to STORM" narrows to (STORM's comp9 mean - our comp9 mean), which may be smaller than the overall gap. The appropriate comparison is per-component, not macro-mean.
 
 **Interpretation 5: The per-comp optimal thresholding success is entirely driven by two components (comp4 and comp10), not a general threshold improvement.**
 
@@ -91,7 +91,7 @@ Q15 estimates that the +0.028 improvement from global 0.10 to per-comp optimal i
 
 ## Section D. Five New Questions for the PSR Analysis
 
-**Question 1: What is the rollback plan if the in-flight training produces PSR F1 lower than the epoch 18 baseline (0.7499 or 0.677 at global 0.10)?**
+**Question 1: What is the rollback plan if the in-flight training produces PSR F1 lower than the epoch 18 baseline (0.7018 or 0.677 at global 0.10)?**
 
 The document's D1 says: "If no improvement by epoch 30, stop and diagnose transformer health (Q4)." This plan assumes the repair will either help or be neutral. If F1 drops below baseline (e.g., to 0.65 or lower), the repair is actively harmful. In that case, stopping the training and restoring the dead-head checkpoint is the safe option. But the restored checkpoint still has dead heads and the same ceiling. The question is: is there a third path? Options include (a) re-initialize heads with bias=-0.5 instead of bias=0.0 to provide a moderate prevalence prior, (b) keep the old head weights frozen and add a small residual MLP on top, or (c) train only the heads (freeze transformer) for the first 5 epochs to let them adapt without disrupting the backbone. This contingency plan should be established before epoch 30 arrives.
 
@@ -109,7 +109,7 @@ The central debate (Debate 1) hinges on whether the comp4 delta (+0.097) comes f
 
 **Question 5: At what epoch does the in-flight training cross the epoch 18 baseline, and what does the crossing time reveal about whether the head repair or the Kendall fix is responsible?**
 
-If crossing happens at epoch 27 (1 epoch after resume), the repair was immediately effective — the new heads found signal on the first gradient step. This strongly suggests the heads were the primary bottleneck (the transformer features were healthy, just waiting for heads to use them). If crossing happens at epoch 35+ (9+ epochs), the repair needed significant re-convergence, implying the transformer features also had to adapt to the new output distribution. This would be consistent with either (a) the Kendall fix being the primary driver (the multi-task re-weighting takes time to propagate through the transformer), or (b) the head repair disrupting previously adapted features (heads fixed, but transformer needs to re-learn its feature distribution to match). The crossing epoch is a free diagnostic — just track the eval PSR F1 at each epoch and note when it surpasses 0.7499 (or 0.677 at global 0.10).
+If crossing happens at epoch 27 (1 epoch after resume), the repair was immediately effective — the new heads found signal on the first gradient step. This strongly suggests the heads were the primary bottleneck (the transformer features were healthy, just waiting for heads to use them). If crossing happens at epoch 35+ (9+ epochs), the repair needed significant re-convergence, implying the transformer features also had to adapt to the new output distribution. This would be consistent with either (a) the Kendall fix being the primary driver (the multi-task re-weighting takes time to propagate through the transformer), or (b) the head repair disrupting previously adapted features (heads fixed, but transformer needs to re-learn its feature distribution to match). The crossing epoch is a free diagnostic — just track the eval PSR F1 at each epoch and note when it surpasses 0.7018 (or 0.677 at global 0.10).
 
 ---
 
@@ -117,7 +117,7 @@ If crossing happens at epoch 27 (1 epoch after resume), the repair was immediate
 
 **Most actionable challenge:** The input_dim mismatch (Q8) must be resolved immediately. One `print(x.shape)` call in the forward pass determines whether the entire PSR analysis stack is built on valid features or silent corruption. D3 should be elevated to blocking priority.
 
-**Least defensible number:** The 0.7499 per-comp optimal F1 on 10k frames is an upper bound, not a representative result. Publish the full 38k per-comp optimal alongside it, or caveat aggressively.
+**Least defensible number:** The 0.7499 per-comp optimal F1 on 10k frames was an upper bound, not a representative result (corrected to 0.7018 on 38k). Publish the full 38k per-comp optimal alongside it, or caveat aggressively.
 
 **Most interesting alternative interpretation:** The Gaussian-smeared loss (sigma=3) and the MonotonicDecoder hysteresis may be actively working against each other — the loss rewards smooth ramps, the decoder rewards sharp steps. If confirmed, this is a design-level flaw that no amount of head repair can fix.
 

@@ -96,7 +96,7 @@
 
 | Metric | Value | Verification |
 |---|---|---|
-| Per-comp optimal macro F1 (full eval) | **0.7499** | `full_eval_ep18_stream/metrics.json` (10k frames) |
+| Per-comp optimal macro F1 (38k full eval) | **0.7018** | `full_eval_ep18_stream/metrics.json` (38k frames, corrected from 10k 0.7499) |
 | Per-comp optimal macro F1 (5k subset) | **0.7810** | (sub-run) |
 | Per-comp optimal macro F1 (38k full) | **NEVER COMPUTED** | Per 135 debate critical evidence gap |
 | Global threshold 0.10 macro F1 | 0.7217 | (full eval) |
@@ -152,7 +152,7 @@
 
 1. **D3 full-set detection mAP** — never measured. Paper claims 0.358 from 2.6% subsample. Either run D3 in-process full eval (Opus 130 P1.3) or report the subsample mean ± σ.
 
-2. **PSR F1 on full 38k frames at per-comp optimal thresholds** — currently only on 10k subset. The 0.7499 may drop to 0.70-0.72.
+2. **PSR F1 on full 38k frames at per-comp optimal thresholds** — currently only on 10k subset. The 0.7018 may drop to 0.70-0.72.
 
 3. **PSR transition head input_dim** — 512 vs 768 mismatch unverified. One `print(x.shape)` resolves. May invalidate everything downstream.
 
@@ -174,7 +174,7 @@
 The 64% cost compares ConvNeXt multi-task to YOLOv8m single-task. The right denominator is ConvNeXt single-task. Without it, every cost sentence has an unknown denominator.
 
 ### Debate 2 (135): PSR F1 may be invalid
-input_dim=512 vs 768 mismatch, 0.7499 is on 10k subset not 38k. Head repair + Kendall can't be attributed separately. No single ablation.
+input_dim=512 vs 768 mismatch; 0.7499 was on 10k subset, corrected to 0.7018 on full 38k. Head repair + Kendall can't be attributed separately. No single ablation.
 
 ### Debate 3 (136): Linear probe signal is statistically zero
 0.2169 vs 0.2217 baseline is within 95% CI. "BACKBONE HAS SIGNAL" claim is misleading. TCN+ViT gating rests on this false positive.
@@ -189,7 +189,7 @@ input_dim=512 vs 768 mismatch, 0.7499 is on 10k subset not 38k. Head repair + Ke
 | Head pose up-vector MAE | YES (3 independent verifications) | "First ego-pose up-vector baseline: 5.82° per-recording median, 7.78° full eval" |
 | D1R mAP50 | YES (results.csv epoch 25) | "YOLOv8m 25-epoch fine-tuning: mAP50=0.995 (single-task ceiling)" |
 | D3 mAP50 | PARTIAL (only 250-batch subsample) | "Multi-task ConvNeXt-Tiny: mAP50=0.358 on 250-batch class-balanced subsample" — NOT headline |
-| PSR per-comp F1 | YES (full_eval_ep18_stream metrics.json) | "Per-component optimal macro-F1 = 0.7499 (per-frame, val)" |
+| PSR per-comp F1 | YES (full_eval_ep18_stream metrics.json) | "Per-component optimal macro-F1 = 0.7018 (per-frame, val)" |
 | PSR null-delta | YES (psr_null_delta_table.md) | "Genuine learned signal on low-prevalence components: comp 4 +0.097, comp 10 +0.093" |
 | D4 re-tuned F1 | YES (d4_retuned/sweep_results.json) | "YOLOv8m→decoder transition F1 = 0.347 with re-tuned Q48 thresholds" |
 | Linear probe | YES (activity_linear_probe.py output) | "Frozen ConvNeXt features yield 0.2169 top-1, statistically indistinguishable from majority-class baseline 0.2217" |
@@ -244,7 +244,7 @@ input_dim=512 vs 768 mismatch, 0.7499 is on 10k subset not 38k. Head repair + Ke
 
 ## §9. One-paragraph bottom line
 
-We have 20+ commits, 8 GitHub-tracked SOTA improvements, 4 detection eval scripts fixed for the 3.5-month index bug, 3 independent verifications of up-vector MAE = 7.78° (vs buggy 26.20°), null-POS proof (0.9988 vs null=0.9995), D4 threshold re-tune (0.000 → 0.347), PSR head repair integrated and training in flight, plus 10 deep-dive files (134-138) with adversarial debate. The current paper narrative can defensibly claim: **first ego-pose baseline (forward 9.14°, up-vector 5.82°)** and **PSR competitive with SOTA (0.7499 vs 0.901, 16% gap with null-delta evidence of genuine signal)**. Detection D1R is single-task ceiling, not our model; multi-task cost is 36% of ceiling. Activity is the weakest head (0.028 per-frame MLP, probe statistically equivalent to baseline). The 3 in-flight blocking diagnostics (training loss shape, input_dim, D3 full) must run before any numbers are written. **Read files 134-138 in order, then answer the 11 prioritized questions above, then write the §5.4 disclosures.**
+We have 20+ commits, 8 GitHub-tracked SOTA improvements, 4 detection eval scripts fixed for the 3.5-month index bug, 3 independent verifications of up-vector MAE = 7.78° (vs buggy 26.20°), null-POS proof (0.9988 vs null=0.9995), D4 threshold re-tune (0.000 → 0.347), PSR head repair integrated and training in flight, plus 10 deep-dive files (134-138) with adversarial debate. The current paper narrative can defensibly claim: **first ego-pose baseline (forward 9.14°, up-vector 5.82°)** and **PSR competitive with SOTA (0.7018 vs 0.901, 16% gap with null-delta evidence of genuine signal)**. Detection D1R is single-task ceiling, not our model; multi-task cost is 36% of ceiling. Activity is the weakest head (0.028 per-frame MLP, probe statistically equivalent to baseline). The 3 in-flight blocking diagnostics (training loss shape, input_dim, D3 full) must run before any numbers are written. **Read files 134-138 in order, then answer the 11 prioritized questions above, then write the §5.4 disclosures.**
 
 ---
 

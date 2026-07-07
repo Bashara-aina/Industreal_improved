@@ -21,7 +21,7 @@
 | **Head Pose up** | angular MAE (300-subset) | 13.52° | n/a | `src/runs/rf_stages/checkpoints/SOTA_STATUS.md` | reasonable |
 | **Head Pose up** | angular MAE (full eval) | 26.20° | n/a | `src/runs/rf_stages/checkpoints/SOTA_STATUS.md` | mixed — unit ambiguity |
 | **PSR (global thresh 0.10)** | macro F1 | **0.7217** | 0.901 (STORM) | `src/runs/rf_stages/checkpoints/SOTA_STATUS.md` | competitive |
-| **PSR (per-comp optimal)** | macro F1 (full 38k) | **0.7499** | 0.901 (STORM) | `src/runs/rf_stages/checkpoints/psr_optimal_thr/optimal_thresholds.json` | **near SOTA** |
+| **PSR (per-comp optimal)** | macro F1 (full 38k) | **0.7018** | 0.901 (STORM) | `src/runs/rf_stages/checkpoints/psr_optimal_thr/optimal_thresholds.json` | **near SOTA** |
 | **PSR (per-comp optimal)** | macro F1 (5k subset) | **0.7810** | 0.901 | `src/runs/rf_stages/checkpoints/psr_optimal_thr_v2/optimal_thresholds.json` | higher on subset |
 | **PSR (D4 YOLOv8m)** | event F1 / POS / Edit | **0.000 / 0.999 / 0.994** | 0.883 (B3) / 0.901 (STORM) | `src/runs/rf_stages/checkpoints/d4_yolov8m_psr/metrics.json` | **POS paradox confirmed** |
 | **PSR POS** | ordered-pair fraction | **0.968** | 0.812 (STORM) | `src/runs/rf_stages/checkpoints/SOTA_STATUS.md` | metric artifact |
@@ -45,7 +45,7 @@
 | 8 | 0.667 | 0.90 | 0.8536 |
 | 9 | 0.527 | 0.05 | 0.6900 |
 | 10 | 0.183 | 0.70 | 0.4020 |
-| **Macro F1** | | | **0.7499** |
+| **Macro F1** | | | **0.7018** |
 
 Source: `src/runs/rf_stages/checkpoints/psr_optimal_thr/optimal_thresholds.json`
 
@@ -155,7 +155,7 @@ Each name encodes an 11-bit PSR component state as a binary string. Source: `src
 | Eval | Output File | Result Summary |
 |---|---|---|
 | Full eval stream (epoch 18) | `src/runs/rf_stages/checkpoints/full_eval_ep18_stream/metrics.json` | All heads, streaming |
-| PSR optimal thresholds (full) | `src/runs/rf_stages/checkpoints/psr_optimal_thr/optimal_thresholds.json` | macro-F1=0.7499 |
+| PSR optimal thresholds (full) | `src/runs/rf_stages/checkpoints/psr_optimal_thr/optimal_thresholds.json` | macro-F1=0.7018 |
 | PSR optimal thresholds (5k) | `src/runs/rf_stages/checkpoints/psr_optimal_thr_v2/optimal_thresholds.json` | macro-F1=0.7810 |
 | Activity clip-level (epoch 18) | `src/runs/rf_stages/checkpoints/activity_clip_ep18/activity_clip.json` | top1=0.028 |
 | Activity clip checkpoints | `src/runs/rf_stages/checkpoints/activity_clip_ep18/checkpoint_*.pkl` | intermediate saves |
@@ -216,7 +216,7 @@ Each name encodes an 11-bit PSR component state as a binary string. Source: `src
 | act_top1 (per-frame) | 0.023 | `SOTA_STATUS.md` |
 | act_top1 (clip-level) | 0.028 | `activity_clip_ep18/activity_clip.json` |
 | pose forward MAE | 8.39° | `SOTA_STATUS.md` |
-| PSR F1 (per-comp) | 0.7499 | `psr_optimal_thr/optimal_thresholds.json` |
+| PSR F1 (per-comp) | 0.7018 | `psr_optimal_thr/optimal_thresholds.json` |
 | MonotonicDecoder bug | FIXED (variable shadow) | `psr_transition.py` |
 
 ### 9.3 Delta Summary
@@ -224,7 +224,7 @@ Each name encodes an 11-bit PSR component state as a binary string. Source: `src
 | Item | Delta | Significance |
 |---|---|---|
 | best.pth | epoch 11 → 18 | Found real best, not NaN-best |
-| PSR F1 | 0.0 → 0.7499 | MonotonicDecoder fix + threshold tuning |
+| PSR F1 | 0.0 → 0.7018 | MonotonicDecoder fix + threshold tuning |
 | det YOLOv8m | 0.358 → 0.995 (separate training) | Methodology contribution (separate training run) |
 | pose forward | 9.1° → 8.39° | Marginal; depends on normalization |
 | Activity | 18.3% → 2.8% (clip) | Architectural ceiling reached |
@@ -334,7 +334,7 @@ Each name encodes an 11-bit PSR component state as a binary string. Source: `src
 | Head pose 13.52° | `src/runs/rf_stages/checkpoints/SOTA_STATUS.md` (300-subset) |
 | Head pose 26.20° | `src/runs/rf_stages/checkpoints/SOTA_STATUS.md` (full eval) |
 | PSR F1 0.7217 (global 0.10) | `src/runs/rf_stages/checkpoints/SOTA_STATUS.md` |
-| PSR F1 0.7499 (per-comp, full) | `src/runs/rf_stages/checkpoints/psr_optimal_thr/optimal_thresholds.json` |
+| PSR F1 0.7018 (per-comp, full) | `src/runs/rf_stages/checkpoints/psr_optimal_thr/optimal_thresholds.json` |
 | PSR F1 0.7810 (per-comp, 5k) | `src/runs/rf_stages/checkpoints/psr_optimal_thr_v2/optimal_thresholds.json` |
 | PSR F1 0 (D4 YOLOv8m) | `src/runs/rf_stages/checkpoints/d4_yolov8m_psr/metrics.json` |
 | PSR POS 0.968 | `src/runs/rf_stages/checkpoints/SOTA_STATUS.md` |
@@ -362,7 +362,7 @@ Each name encodes an 11-bit PSR component state as a binary string. Source: `src
 To verify any claim in this document, Opus should:
 
 1. **Detection 0.995**: `cat runs/detect/src/runs/yolov8m_industreal/d1r/results.csv`
-2. **PSR F1 0.7499**: `cat src/runs/rf_stages/checkpoints/psr_optimal_thr/optimal_thresholds.json`
+2. **PSR F1 0.7018**: `cat src/runs/rf_stages/checkpoints/psr_optimal_thr/optimal_thresholds.json`
 3. **Activity 0.028**: `cat src/runs/rf_stages/checkpoints/activity_clip_ep18/activity_clip.json`
 4. **Pose 8.39°**: `cat src/runs/rf_stages/checkpoints/SOTA_STATUS.md`
 5. **D4 F1=0**: `cat src/runs/rf_stages/checkpoints/d4_yolov8m_psr/metrics.json`

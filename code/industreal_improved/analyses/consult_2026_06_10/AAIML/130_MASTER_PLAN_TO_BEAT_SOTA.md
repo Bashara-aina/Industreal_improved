@@ -15,7 +15,7 @@
 | Activity (clip-level) | top1=0.028 | ≥0.622 (MViTv2-S) | -0.594 | P3 — architectural |
 | Head Pose forward | 8.39° | ≤15° | **DONE** | P2 — claim now |
 | Head Pose up | 26.20° (or 13.52°) | ≤15° | -11° | P3 — investigate |
-| PSR (per-comp F1) | 0.7499 | ≥0.883 (B3) | -0.133 | P1 — finish gap |
+| PSR (per-comp F1) | 0.7018 | ≥0.883 (B3) | -0.133 | P1 — finish gap |
 | PSR (transition F1) | 0 (D4) | ≥0.883 | -0.883 | P2 — paradigm |
 | PSR POS | 0.968 | drop | n/a | P3 — explain |
 
@@ -25,7 +25,7 @@
 
 ## P1: Critical Path (Next 2 Weeks)
 
-### P1.1 Finish PSR (0.7499 → 0.883, gap -0.13)
+### P1.1 Finish PSR (0.7018 → 0.883, gap -0.13)
 
 **Action:** Train PSR with `KENDALL_FIXED_WEIGHTS=True` and fixed manual weights, removing the Kendall suppression. Run for 5-10 epochs from epoch_18 checkpoint.
 
@@ -35,7 +35,7 @@
 
 **Effort:** 2-3 days compute, including crash risk.
 
-**Expected impact:** F1 from 0.7499 → ~0.82 (estimate based on observed gradient starvation).
+**Expected impact:** F1 from 0.7018 → ~0.82 (estimate based on observed gradient starvation).
 
 **Files:**
 - `env var` — `KENDALL_FIXED_WEIGHTS=1` (no code edit needed)
@@ -138,7 +138,7 @@
 
 **Effort:** 2-3 days compute.
 
-**Expected impact:** PSR F1 from 0.7499 → ~0.80.
+**Expected impact:** PSR F1 from 0.7018 → ~0.80.
 
 **Files:**
 - `env var` `KENDALL_FIXED_WEIGHTS=1`
@@ -206,7 +206,7 @@
 
 ### P2.6 Transition F1 Side-by-Side (PSR Per-Frame vs Transition)
 
-**Action:** Compute both per-frame F1 (current 0.7499) and transition F1 (event matching within tolerance) on the same predictions.
+**Action:** Compute both per-frame F1 (current 0.7018) and transition F1 (event matching within tolerance) on the same predictions.
 
 **Why:** Question PSR-2: different metrics measure different things. Mixing them is invalid.
 
@@ -344,7 +344,7 @@
 
 ### P4.1 Add POS Paradox Explanation to Paper
 
-**Action:** In §5.2.1, add 1 paragraph explaining POS=0.968 vs F1=0.7499 vs D4 F1=0.
+**Action:** In §5.2.1, add 1 paragraph explaining POS=0.968 vs F1=0.7018 vs D4 F1=0.
 
 **Why:** Question PSR-1, debate 2.1: high POS is misleading without context.
 
@@ -428,7 +428,7 @@
 
 **Action:** Add expected-transition mask as training loss. Compare per-component F1.
 
-**Why:** Question PSR-7, debate 2.2: B3's 0.883 vs ours 0.7499 — procedural knowledge may be +0.10.
+**Why:** Question PSR-7, debate 2.2: B3's 0.883 vs ours 0.7018 — procedural knowledge may be +0.10.
 
 **Blocks:** Major code change.
 
@@ -471,7 +471,7 @@ Both GPUs can run in parallel. P1.1 (training) on 5060 Ti, P1.2/P1.3 (eval) on 3
 
 | Metric | Current | Target | Date |
 |---|---|---|---|
-| PSR F1 | 0.7499 | ≥0.83 | Week 2-3 |
+| PSR F1 | 0.7018 | ≥0.83 | Week 2-3 |
 | Detection mAP (multi-task) | 0.358 | ≥0.60 | Week 4 |
 | Activity clip-level top1 | 0.028 | ≥0.10 | Week 4-5 |
 | Head pose up-vector MAE | 26.20° | ≤15° | Week 2 |
