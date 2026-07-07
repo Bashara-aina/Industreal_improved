@@ -44,7 +44,7 @@ Our 4-head multi-task setup fails in three diagnosable ways. The dominant cause 
 
 ## Section 5. What is Fixed or In-Flight
 
-**PSR head repair (LeakyReLU + small-normal init + zero bias) applied.** The repair replaces GELU with LeakyReLU (negative_slope=0.01), reinitializes per-component weights with small-normal (mean=0, std=0.01), and sets bias to zero. Post-repair diagnostic confirmed activations restored from mean -130 to range -130 through +384 on sequence frames. Training is in flight (epoch 24+ on RTX 5060 Ti). The dead `PSRTransitionPredictor` class was confirmed absent from the pipeline.
+**PSR head repair (LeakyReLU + small-normal init + zero bias) applied.** The repair replaces GELU with LeakyReLU (negative_slope=0.01), reinitializes per-component weights with small-normal (mean=0, std=0.01), and sets bias to zero. Post-repair diagnostic confirmed post_gelu mean restored to +4608 on sequence frames (V3 training log step 10). Training is in flight (epoch 24+ on RTX 5060 Ti). The dead `PSRTransitionPredictor` class was confirmed absent from the pipeline.
 
 **Single-task ConvNeXt detection training in flight (epoch 43+).** This provides the architecture-controlled multi-task cost measurement: a same-backbone, same-split single-task detection run. Without it, the multi-task cost claim rests on a cross-architecture comparison (YOLOv8m ceiling of 0.995 vs ConvNeXt multi-task 0.00009), which conflates implementation bugs with multi-task interference.
 

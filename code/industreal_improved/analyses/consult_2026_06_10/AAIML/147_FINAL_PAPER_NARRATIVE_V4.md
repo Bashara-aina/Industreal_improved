@@ -47,7 +47,7 @@ The cascade hypothesis from earlier analyses held that multi-task interference c
 
 ## 5. What's Fixed or In-Flight
 
-**PSR head repair (LeakyReLU + small-normal + zero bias) applied.** Activations confirmed alive: mean pre-activation went from -130 to +384 on sequence frames after the repair. Training is in flight (epoch 24+ on RTX 5060 Ti). The repair replaces GELU with LeakyReLU (negative_slope=0.01), reinitializes weights with small-normal (mean=0, std=0.01), and sets bias to zero. The dead `PSRTransitionPredictor` class was confirmed absent from the pipeline and has been removed.
+**PSR head repair (LeakyReLU + small-normal + zero bias) applied.** Activations confirmed alive: post_gelu mean went from -130 (dead GELU) to +4608 on sequence frames after the repair (V3 training log step 10). Training is in flight (epoch 24+ on RTX 5060 Ti). The repair replaces GELU with LeakyReLU (negative_slope=0.01), reinitializes weights with small-normal (mean=0, std=0.01), and sets bias to zero. The dead `PSRTransitionPredictor` class was confirmed absent from the pipeline and has been removed.
 
 **Single-task ConvNeXt detection training in flight (epoch 43+).** This is the critical denominator fix: a same-backbone, same-split single-task detection run that will provide the architecture-controlled multi-task cost measurement. Without it, the "64% cost" claim rests on a cross-architecture comparison (YOLOv8m ceiling vs ConvNeXt multi-task), which was the central unresolved debate from 134.
 
