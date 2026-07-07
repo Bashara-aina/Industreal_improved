@@ -21,6 +21,7 @@ Usage:
 """
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -31,6 +32,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
+os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from src import config as C
@@ -71,10 +73,8 @@ class ClipDataset(Dataset):
         from collections import defaultdict
         recs = defaultdict(list)
         for i in range(len(self.base)):
-            try:
-                meta = self.base[i][1].get('metadata', {}) if isinstance(self.base[i], tuple) else {}
-            except Exception:
-                meta = {}
+            sample = self.base[i]  # returns dict from IndustRealMultiTaskDataset.__getitem__
+            meta = sample.get('metadata', {})
             rec_id = meta.get('recording_id', f'unknown_{i}')
             frame_num = meta.get('frame_num', i)
             recs[rec_id].append((i, frame_num))
@@ -93,8 +93,8 @@ class ClipDataset(Dataset):
 
     def __getitem__(self, idx):
         frames = [self.base[i] for i in self.clips[idx]]
-        images = torch.stack([f[0]['rgb'] for f in frames])  # [T, 3, H, W]
-        labels = torch.tensor([f[1]['activity'].item() if hasattr(f[1]['activity'], 'item') else int(f[1]['activity'])
+        images = torch.stack([f['images']['rgb'] for f in frames])  # [T, 3, H, W]
+        labels = torch.tensor([f['activity'].item() if hasattr(f['activity'], 'item') else int(f['activity'])
                                 for f in frames])  # [T]
         return images, labels
 
