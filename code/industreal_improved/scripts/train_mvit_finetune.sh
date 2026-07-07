@@ -4,11 +4,12 @@
 # Frozen probe = 0.3810 (above 0.30 threshold), need fine-tuning to close gap
 # to MViTv2-S SOTA on Kinetics-400 (0.622 Top-1).
 #
-# OOM SAFEGUARD:
-#   BOTH GPUs busy — BUILD ONLY, do NOT launch.
+# PARALLEL EXECUTION (revised 2026-07-07):
+#   GPU 0: V5 multi-task (stage_rf4 + 9 fixes, running)
+#   GPU 1: MViTv2-S fine-tune (THIS SCRIPT, after single-task det finishes)
 #
 # Memory budget: ~3.5 GB with gradient checkpointing + FP16 (batch=2, T=16).
-# Fits comfortably on RTX 3060 12 GB.
+# Fits comfortably on RTX 5060 Ti 16 GB.
 #
 # Usage:
 #   bash scripts/train_mvit_finetune.sh
@@ -16,7 +17,7 @@
 set -uo pipefail
 
 # ── CUDA Configuration ──────────────────────────────────────
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 export OMP_NUM_THREADS=4
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 

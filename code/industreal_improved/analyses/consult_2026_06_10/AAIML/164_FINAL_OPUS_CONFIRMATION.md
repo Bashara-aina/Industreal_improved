@@ -86,7 +86,7 @@ THIS: Final confirmation round — did we do it right?
 
 | Head | Metric | Our | SOTA | Verdict (Our Assessment) |
 |---|---|---|---|---|
-| D1R Detection (single-task YOLOv8m) | mAP50 | **0.995** | WACV 0.95 | **BEATS SOTA** |
+| D1R Detection (single-task YOLOv8m) | mAP50 | **0.995** | WACV 0.838 (annotated-frames, like-for-like; 0.641 entire-video is conservative) | **BEATS SOTA** |
 | D3 Detection (multi-task, impl bug) | mAP50 | 0.00009 | WACV 0.641 | Broken (9 fixes applied) |
 | Head Pose (multi-task) | fwd/up MAE | **9.14°/7.78°** | ~15° (uncited) | First baseline |
 | PSR (multi-task, full-38k) | per-comp F1 | **0.7018** | STORM 0.883 (diff paradigm) | Near SOTA |
