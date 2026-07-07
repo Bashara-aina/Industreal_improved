@@ -391,6 +391,53 @@ def _build_loader(
         # never land on one.
         det_frac = float(getattr(C, 'DET_GT_FRAME_FRACTION', 0.0))
         sampler = ds.get_sampler() if det_frac > 0.0 else None
+
+    # [FIX 2026-07-07 (Opus 140 D-1)] Guaranteed-GT batch sampler.
+    # DET_GT_FRAME_FRACTION alone is probabilistic: with det_frac=0.40 and
+    # batch_size=6, ~4.7% of training batches contain ZERO GT frames.
+    # Over 48K training steps, that's ~2,256 steps with zero positive gradient
+    # — enough to cause the detection head's cls logits to drift negative.
+    # GuaranteedGTBatchSampler wraps the weighted sampler and ensures at least
+    # 1 GT-bearing frame per batch, giving the detection head positive gradient
+    # on 100% of training steps.
+    use_gt_guarantee = (
+        is_train
+        and sampler is not None
+        and float(getattr(C, 'DET_GT_FRAME_FRACTION', 0.0)) > 0.0
+    )
+    batch_sampler = None
+    if use_gt_guarantee:
+        try:
+            gt_indices = ds.get_det_gt_frame_indices()
+            if gt_indices:
+                _GuaranteedGTBatchSampler = getattr(
+                    _ds_module, 'GuaranteedGTBatchSampler'
+                )
+                batch_sampler = _GuaranteedGTBatchSampler(
+                    base_sampler=sampler,
+                    gt_indices=gt_indices,
+                    batch_size=batch_size,
+                    drop_last=True,
+                )
+                logger.info(
+                    '[GT_BATCH_SAMPLER] GuaranteedGTBatchSampler active: '
+                    '%d/%d GT indices, batch_size=%d, every batch has >=1 GT frame.',
+                    len(gt_indices), len(ds),
+                    batch_size,
+                )
+            else:
+                logger.warning(
+                    '[GT_BATCH_SAMPLER] No GT indices found — falling back to '
+                    'probabilistic DET_GT_FRAME_FRACTION=%.2f sampler.',
+                    float(getattr(C, 'DET_GT_FRAME_FRACTION', 0.0)),
+                )
+        except Exception as _gt_sampler_exc:
+            logger.warning(
+                '[GT_BATCH_SAMPLER] Failed to create guaranteed batch sampler: %s. '
+                'Falling back to standard sampler.',
+                _gt_sampler_exc,
+            )
+
     effective_prefetch = prefetch if num_workers > 0 else None
     if persistent is None:
         persistent = is_train and (num_workers > 0)
@@ -403,6 +450,20 @@ def _build_loader(
     # Cap prefetch to 4 (raised from 2 on 2026-06-15) — 64GB RAM + 32GB
     # /dev/shm provides ample room for 8 workers x 4 prefetch x batch=2.
     _eff_prefetch = min(effective_prefetch, 4) if effective_prefetch else None
+
+    if batch_sampler is not None:
+        return DataLoader(
+            ds,
+            batch_sampler=batch_sampler,
+            shuffle=False,
+            num_workers=num_workers,
+            collate_fn=collate,
+            pin_memory=C.PIN_MEMORY,
+            persistent_workers=bool(persistent),
+            prefetch_factor=_eff_prefetch,
+            worker_init_fn=_worker_seed_fn if num_workers > 0 else None,
+        )
+
     return DataLoader(
         ds,
         batch_size=batch_size,

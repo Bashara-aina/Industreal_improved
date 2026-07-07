@@ -1557,6 +1557,79 @@ class IndustRealMultiTaskDataset(Dataset):
             replacement=True,
         )
 
+    def get_det_gt_frame_indices(self) -> List[int]:
+        """Return indices of samples that contain detection GT boxes.
+
+        Used by GuaranteedGTBatchSampler to ensure at least one GT frame
+        per batch. Returns empty list when no detection GT is available
+        (e.g., ablation_A_3060 subset with no OD labels).
+        """
+        return [
+            i for i, s in enumerate(self.samples)
+            if s.get('num_dets', 0) > 0
+        ]
+
+
+# =========================================================================
+# GuaranteedGTBatchSampler
+# =========================================================================
+
+class GuaranteedGTBatchSampler:
+    """Batch-level sampler that guarantees at least one GT frame per batch.
+
+    Wraps a base WeightedRandomSampler and ensures every yielded batch contains
+    at least one frame with detection ground-truth boxes. This fixes the gradient
+    starvation that occurs when 92% of evaluation frames carry no GT boxes
+    (analysis: D3 mAP=0.00009 root cause, Opus 140 Q1).
+
+    The base sampler provides diverse class-balanced indices; the GT pool ensures
+    the detection head receives positive gradient on every training step.
+    """
+
+    def __init__(
+        self,
+        base_sampler: WeightedRandomSampler,
+        gt_indices: List[int],
+        batch_size: int,
+        drop_last: bool = True,
+    ):
+        self.base_sampler = base_sampler
+        self.gt_pool = list(gt_indices)
+        self.gt_set = set(gt_indices)
+        self.batch_size = batch_size
+        self.drop_last = drop_last
+        self.num_samples = len(base_sampler)  # num_samples from WeightedRandomSampler
+
+    def __iter__(self):
+        if not self.gt_pool:
+            # No GT frames available — fall back to base sampler only
+            batch = []
+            for idx in self.base_sampler:
+                batch.append(idx)
+                if len(batch) == self.batch_size:
+                    yield batch
+                    batch = []
+            if not self.drop_last and batch:
+                yield batch
+            return
+
+        batch = []
+        for idx in self.base_sampler:
+            batch.append(idx)
+            if len(batch) == self.batch_size:
+                if not any(i in self.gt_set for i in batch):
+                    # Replace last element with a random GT index
+                    batch[-1] = random.choice(self.gt_pool)
+                yield batch
+                batch = []
+        if not self.drop_last and batch:
+            yield batch
+
+    def __len__(self) -> int:
+        if self.drop_last:
+            return self.num_samples // self.batch_size
+        return (self.num_samples + self.batch_size - 1) // self.batch_size
+
 
 # =========================================================================
 # Collate Function
