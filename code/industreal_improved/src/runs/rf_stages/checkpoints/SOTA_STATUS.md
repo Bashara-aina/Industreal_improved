@@ -1,47 +1,49 @@
 # SOTA Status — 2026-07-07
 
-**Goal:** Beat SOTA on all four heads (Detection, Activity, PSR, Head Pose).
+**Goal:** Establish baselines on all four heads (Detection, Activity, PSR, Head Pose).
 
 **Freeze checkpoint:** `best.pth` (sha256: `59cb88ec85311bfcfff91f000bd08005675e3a882bec9f24ccd5ee0cbe89f9a8`)
 **Freeze date: Jul 20.** Full §5.4 disclosure language at [`disclosures_v1.md`](disclosures_v1.md).
 
 ## Current results (epoch_18 promoted to best.pth)
 
-| Head | Metric | Our | SOTA | Status |
+| Head | Metric | Our (95% CI) | SOTA | Notes | Source |
+|---|---|---|---|---|---|---|
+| **Detection (D1R fine-tuned)** | mAP50 (YOLOv8m 25ep) | **0.995** | ~0.95 | cross-architecture ceiling | `detection_zero_gt_count.json:33-48` |
+| **Detection (multi-task D3)** | mAP50_pc (present-class) | **0.573** (58% of ceiling) | 0.995 (single-task) | 17 present classes, 6 zero-GT; COCO convention | `detection_zero_gt_count.json:34-48` |
+| **Activity (per-frame)** | top1 | 0.0236 | 0.622 (MViTv2-S) | verb-antonym errors 1.3% of errors; temporally ambiguous by construction | `activity_confusion_matrix.md` |
+| **Activity (clip-level)** | top1 (16-frame majority) | **0.028** | 0.622 (MViTv2-S) | per-frame MLP cannot do temporal reasoning | `activity_clip_ep18/activity_clip.json:5` |
+| **Activity linear probe (frozen ConvNeXt)** | per-frame top1 | **0.2169** | 0.2217 (majority class) | statistically indistinguishable from majority-class baseline (95% CI +-0.0046); frozen C5 features not linearly separable for actions | `SOTA_STATUS.md:120-124` |
+| **Activity T3 baseline** | top1_69 | 0.6223 | 0.622 | matches Meccano published baseline | `t3_mecanno_eval.json` |
+| **Head Pose forward** | angular MAE (single-frame) | **9.14°** (95% CI 7.74-10.87°) | uncited | first ego-pose baseline; 16 recordings, 38k frames | `bootstrap_ci.json:7-10` |
+| **Head Pose up** | angular MAE (single-frame) | **7.78°** (95% CI 6.89-8.81°); per-rec median 5.82° | uncited | first ego-pose baseline; index [6:9] fix confirmed | `bootstrap_ci.json:27-30`; `up_vector_v3/up_vector_per_recording.json:79-81` |
+| **Head Pose forward (Kalman)** | angular MAE | **9.00°** | uncited | +0.14° (1.5%) from RTS smoother; per-frame predictions already temporally smooth | `SOTA_STATUS.md:153-154` |
+| **Head Pose up (Kalman)** | angular MAE | **7.58°** | uncited | +0.21° (2.7%) from RTS smoother | `SOTA_STATUS.md:153-155` |
+| **PSR (global thresh 0.10)** | macro F1 | **0.6788** | 0.901 STORM | 38k-frame evaluation | `psr_optimal_thr_38k/optimal_thresholds.json:31` |
+| **PSR (per-comp optimal 38k)** | macro F1 (LOO transferred) | **0.7018** (95% CI 0.6436-0.7321) | 0.901 STORM | 16 LOO folds, per-comp thresholds from full set | `bootstrap_ci.json:38-40` |
+| **PSR LOO-CV** | held-out improvement | **+0.0148 +- 0.0158** | n/a | 16 recordings, all val-only; CI includes zero | `psr_loo_cv_stratified/loo_stratified.json:14-16` |
+| **PSR null-delta (low-prev comps)** | learned signal | **+0.097 (comp 4) / +0.093 (comp 10)** | n/a | positive delta on hardest components; comp 9 null-delta -0.000 | `SOTA_STATUS.md:167` |
+| **D4 pretrained (YOLOv8m → decoder)** | event F1 | **0.000** (default) -> **0.347** (re-tuned) | n/a | threshold-sensitive; <1% frame detection rate | `d4_retuned/verdict.json:2-4` |
+| **D4+D1R (decisive)** | event F1 | **0.000** (default) -> **0.636** (re-tuned, 83% improvement) | n/a | decoder transfers with adequate detection density; detection density was dominant constraint | `d4_d1r/retune/verdict.json:2-4` |
+| **POS** | score | **0.9988** | n/a | structural artifact; all-zeros null=0.9995, copy-prev null=0.9984 | `null_model_pos/null_model_pos.json` |
+| **FiLM** | mechanism | static 2x scaling | n/a | NOT input-dependent modulation; gamma dev-from-1 L2=27.7, near-zero sample variance (std=0.002) | `film_gamma_beta.json:46` |
+
+## PSR per-component breakdown (epoch_18, 38k-frame optimal thresholds)
+
+| comp | best_thresh | F1 | precision | recall |
 |---|---|---|---|---|
-| **Detection (ASD)** | mAP50 / mAP50-95 (YOLOv8m 25ep) | **0.995 / 0.861** | ~0.95 | single-task ceiling, cross-architecture |
-| **Detection (D1 full eval)** | mAP50 (YOLOv8m) | **0.0004** | n/a | broken — class mapping needs verification |
-| **Activity (per-frame)** | top1 valid | 0.0236 | n/a (clip-level only) | broken — verb-antonym confusions on same object (1.3% of errors) are temporally ambiguous, not a model bug |
-| **Activity (clip-level)** | top1 (16-frame majority) | **0.028** | 0.622 (MViTv2-S) | broken — per-frame MLP can't do temporal reasoning |
-| **Activity linear probe (frozen ConvNeXt)** | per-frame top1 | **0.2169** | 0.2217 (majority class) | statistically indistinguishable from majority-class baseline (0.2169 vs 0.2217, 95% CI ±0.0046) — signal is null at frame level. Frozen ConvNeXt C5 features are NOT linearly separable for actions; temporal modeling required. |
-| **Activity T3 baseline** | top1_69 | 0.6223 | 0.622 | matches |
-| **Head Pose forward** | angular MAE (single-frame) | **9.14°** | uncited | first ego-pose baseline |
-| **Head Pose up** | angular MAE (single-frame) | **7.78°** [+](pose_kalman_eval/pose_kalman_results.json) | uncited | first ego-pose baseline — index [6:9] fix confirmed |
-| **Head Pose forward** | angular MAE (Kalman smoothed) | **9.00°** [+](pose_kalman_eval/pose_kalman_results.json) | uncited | first ego-pose baseline — +0.14° (1.5%) from RTS smoother |
-| **Head Pose up** | angular MAE (Kalman smoothed) | **7.58°** [+](pose_kalman_eval/pose_kalman_results.json) | uncited | first ego-pose baseline — +0.21° (2.7%) from RTS smoother |
-| **PSR (global thresh 0.10)** | macro F1 | **0.7217** | 0.901 STORM | competitive |
-| **PSR (per-comp optimal)** | macro F1 | **0.7499** (full) / **0.7810** (5k subset) | 0.901 STORM | **near SOTA** |
-| **PSR LOO-CV** | held-out improvement | +0.0358 ± 0.0216 | n/a | **confirmed** — +0.0358 ± 0.0216 confirmed; threshold improvement persists across recordings |
-| **PSR null-delta (low-prev comps)** | learned signal | **+0.097 (comp 4) / +0.093 (comp 10)** | n/a | genuine learned signal on hardest components (see [psr_null_delta_table.md](psr_null_delta_table.md)) |
-| **PSR (YOLOv8m → MonotonicDecoder, D4)** | event F1 / POS / Edit | **0.000 / 0.999 / 0.994**[^1] | 0.883 B3 / 0.901 STORM | **POS structurally inflated**[^1] — null-model experiment proves POS is a fill-forward artifact (see §5.2.1) |
-| **D4 YOLOv8m → decoder (re-tuned thresholds)** | event F1 | **0.000→0.347** (hi=0.3, lo=0.1, min=2) | n/a | **threshold-sensitive but backbone-limited** — retuning lifts F1 from 0 to 0.347, but decoder gains saturate because YOLOv8m produces detections on <1% of frames; backbone detection density is the binding constraint |
-
-## PSR per-component breakdown (epoch_18, per-comp optimal thresholds)
-
-| comp | gt_pos_frac | best_thresh | F1 |
-|---|---|---|---|
-| 0 | 1.000 | 0.05 | 1.0000 |
-| 1 | 0.911 | 0.20 | 0.9627 |
-| 2 | 0.911 | 0.15 | 0.9578 |
-| 3 | 0.545 | 0.85 | 0.7480 |
-| 4 | 0.142 | 0.80 | 0.3455 |
-| 5 | 0.631 | 0.50 | 0.7793 |
-| 6 | 0.544 | 0.45 | 0.7057 |
-| 7 | 0.667 | 0.90 | 0.8041 |
-| 8 | 0.667 | 0.90 | 0.8536 |
-| 9 | 0.527 | 0.05 | 0.6900 |
-| 10 | 0.183 | 0.70 | 0.4020 |
-| **Macro F1** | | | **0.7499** |
+| 0 | 0.05 | 1.0000 | 1.0000 | 1.0000 |
+| 1 | 0.05 | 0.9611 | 0.9516 | 0.9708 |
+| 2 | 0.05 | 0.9609 | 0.9467 | 0.9755 |
+| 3 | 0.80 | 0.7656 | 0.6608 | 0.9098 |
+| 4 | 0.95 | 0.1984 | 0.1101 | 1.0000 |
+| 5 | 0.80 | 0.8726 | 0.8233 | 0.9282 |
+| 6 | 0.65 | 0.7974 | 0.6877 | 0.9486 |
+| 7 | 0.95 | 0.6256 | 0.4552 | 1.0000 |
+| 8 | 0.95 | 0.6207 | 0.4500 | 1.0000 |
+| 9 | 0.95 | 0.4812 | 0.3168 | 1.0000 |
+| 10 | 0.95 | 0.4360 | 0.2788 | 0.9999 |
+| **Macro F1** | | **0.7018** | | |
 
 ## Null-model POS experiment (§5.2.1 disclosure)
 
@@ -52,8 +54,6 @@ The null-model POS experiment proves that **POS is a structurally inflated metri
 | Ours (ConvNeXt) | 0.9988 | Real predictions |
 | Null all-zeros | 0.9995 | Trivially "perfect" |
 | Null copy-prev | 0.9984 | Trivially "perfect" |
-
-[^1]: POS is a structurally inflated metric under monotonic fill-forward decoding. The null-model POS experiment proves both null models achieve POS ≈ 0.998, indistinguishable from our 0.9988. POS moves to a footnote/appendix; per-frame F1 and transition F1 are the primary PSR metrics.
 
 Results file: `null_model_pos/null_model_pos.json` (3 recordings: 14_main_2_2, 14_main_2_3, 20_assy_0_1).
 
@@ -68,7 +68,7 @@ The D4 experiment evaluates whether the MonotonicDecoder, when fed YOLOv8m detec
 | Per-component optimal | 0.261 | Per-comp thresholds overfit and degrade global F1 |
 | **D1R fine-tuned + retuned (hi=0.3, lo=0.1, min=2)** | **0.636** | Decoder transfers with adequate detection density (4000 frames, 3 recordings) |
 
-**Disclosure**: YOLOv8m→decoder transition F1 = 0.000 at default Q48 thresholds; re-tuned F1 = 0.347 with pretrained YOLOv8m. With D1R fine-tuned YOLOv8m (mAP=0.995) and re-tuned thresholds, F1 = 0.636 — an 83% relative improvement. This confirms the decoder is not the primary bottleneck: detection density was the dominant binding constraint. The gap to ConvNeXt-based PSR optimal F1 (0.75) is ~0.11 (15% relative), representing the residual paradigm gap between detection-based and direct PSR inference. Final disclosure: "with a dense fine-tuned detector, the decoder transfers given adequate detection density; both detection density AND decoder capacity were binding at the original D4 operating point, with detection density as the dominant constraint."
+**Disclosure**: YOLOv8m→decoder transition F1 = 0.000 at default Q48 thresholds; re-tuned F1 = 0.347 with pretrained YOLOv8m. With D1R fine-tuned YOLOv8m (mAP=0.995) and re-tuned thresholds, F1 = 0.636 — an 83% relative improvement. This confirms the decoder is not the primary bottleneck: detection density was the dominant binding constraint. The gap to ConvNeXt-based PSR optimal F1 (0.7018) is ~0.066 (9% relative), representing the residual paradigm gap between detection-based and direct PSR inference. Final disclosure: "with a dense fine-tuned detector, the decoder transfers given adequate detection density; both detection density AND decoder capacity were binding at the original D4 operating point, with detection density as the dominant constraint."
 
 The error-state class (24) has 0 GT instances in the entire IndustReal COCO dataset (categories 1-22 only; 100,000 annotations). The 24-class ASD taxonomy defines error_state as class 24, but no frames in any split were annotated for it. Across 38,036 val frames, YOLOv8m predicts error_state 0 times at any confidence threshold, yielding a frame-level FPR of **0.0%**. WACV's published error-state FPR is 65% — that model was trained on actual error instances. The comparison is uninformative: our model was never exposed to the concept during training. The class-24 output channel exists in the detection head by architectural convention but receives no learning signal. This finding goes in SS5.4 as a null-result disclosure.
 
@@ -79,8 +79,8 @@ The error-state class (24) has 0 GT instances in the entire IndustReal COCO data
 
 ## Key wins (this session)
 
-1. **Discovered best.pth was a bad checkpoint** — epoch 11's "best" was due to NaN-inflated combined metric. Epoch 18 is the real best with PSR F1=0.83.
-2. **Promoted epoch_18 → best.pth** — current best macro-F1 = 0.7499 (per-comp optimal).
+1. **Discovered best.pth was a bad checkpoint** — epoch 11's "best" was due to NaN-inflated combined metric. Epoch 18 is the real best with PSR F1=0.7018.
+2. **Promoted epoch_18 → best.pth** — current best macro-F1 = 0.7018 (per-comp optimal, 38k).
 3. **Fixed MonotonicDecoder bug** — `B, T, C = logits.shape` shadowed config module; Q48 hysteresis thresholds were never actually read from config.
 4. **Q36 inverse-prevalence confirmed working** — `PSR_COMP_WEIGHTS` properly applied in BCE loss.
 5. **§5.4 PSR per-component null-delta analysis** — confirms genuine learned signal on low-prevalence components (comp 4: delta +0.097, comp 10: delta +0.093; see [psr_null_delta_table.md](psr_null_delta_table.md)).
@@ -168,7 +168,7 @@ The per-component output heads (Linear(256,64)->GELU->Linear(64,1)) showed zero 
 
 *Our earlier internal attribution of this failure to a ReLU/bias=-1.0 head described a module not in the execution path; we disclose the correction.* The gradient-starvation evidence (zero per-component RMS gradients; TI-3's "GELU fully saturated to zero after linear64") describes `PSRHead.output_heads` (`model.py:1609-1611`), not the dead `PSRTransitionPredictor` class. The existing +0.1 bias init (guarding against GELU zero-collapse) was an earlier attempt to patch this.
 
-All four heads evaluated. ConvNeXt-Tiny + per-frame MLP hits ceiling on activity (needs video-level architecture). Activity linear probe (frozen ConvNeXt) achieves 0.2169 val top-1 ≈ majority-class baseline (0.2217) — backbone frame-level signal is statistically null (0.2169 vs 0.2217, 95% CI ±0.0046); temporal modeling required. PSR first-baseline with per-comp threshold optimization. Detection single-task ceiling (cross-architecture). Head pose first ego-pose baseline. **D4 (YOLOv8m → MonotonicDecoder) yields F1=0 with POS=0.999** — the POS paradox is structural: a sparse-detection decoder trivially matches an "almost always empty" GT. **Threshold retuning** lifts D4 F1 from 0.000 to 0.347, confirming the decoder is not redundant but is constrained by YOLOv8m's detection density rather than threshold calibration.
+All four heads evaluated. Detection reaches cross-architecture ceiling (D1R mAP50=0.995). Multi-task detection (D3) achieves mAP50_pc=0.573, 58% of single-task ceiling. Activity per-frame (0.0236) and clip-level (0.028) are floor baselines; linear probe (0.2169) is statistically indistinguishable from majority-class baseline (0.2217, 95% CI +-0.0046). PSR per-comp optimal F1=0.7018 (95% CI 0.6436-0.7321) on 38k frames; LOO-CV improvement +0.0148 +- 0.0158 (all val-only, no contamination). Head pose establishes first ego-pose baselines (forward 9.14°, up 7.78°). **D4 (YOLOv8m → MonotonicDecoder) yields F1=0 with POS=0.999** — the POS paradox is structural: a sparse-detection decoder trivially matches an "almost always empty" GT. **Threshold retuning** lifts D4 F1 from 0.000 to 0.347; **D4+D1R decisive** lifts to 0.636 (+83%), confirming detection density was the dominant constraint. FiLM applies static 2x scaling, not input-dependent modulation.
 
 ## §5.4 Disclosure Language — Eight Numbered Disclosures
 
@@ -184,7 +184,7 @@ All four heads evaluated. ConvNeXt-Tiny + per-frame MLP hits ceiling on activity
 
 5. **PSR per-component gradient starvation** — Linear(256,64)→GELU→Linear(64,1) heads showed zero RMS gradient; earlier attribution to ReLU/bias=−1.0 head described dead code (`PSRTransitionPredictor`, not `PSRHead`). Null-deltas: +0.097 (c4), +0.093 (c10), −0.000 (c9). See the gradient-starvation §5.4 section above.
 
-6. **PSR thresholds are validation-selected** — per-comp macro-F1 0.7499 (10k) vs global 0.10 thresh 0.7217; LOO-CV bounds selection benefit at +0.0358 ± 0.0216 across 16 recordings. [Full-38k per-comp figure pending.]
+6. **PSR thresholds are validation-selected** — per-comp macro-F1 0.7018 (38k, 95% CI 0.6436-0.7321) vs global 0.10 thresh 0.6788; LOO-CV bounds selection benefit at +0.0148 +- 0.0158 across 16 recordings (all val-only; no train/val contamination).
 
 7. **3.5-month evaluation-index bug** — up-vector read from [3:6] reporting 26.20°; corrected [6:9] yields 7.78°. Training loss indices always correct. The legacy script (`head_pose_diag.py`) was also corrected in this session (same [3:6]→[6:9] fix).
 
@@ -215,6 +215,7 @@ All four heads evaluated. ConvNeXt-Tiny + per-frame MLP hits ceiling on activity
 
 - `best.pth` — current best (epoch 18)
 - `epoch_18.pth` — same
-- `psr_optimal_thr/optimal_thresholds.json` — per-comp optimal thresholds
+- `psr_optimal_thr_38k/optimal_thresholds.json` — per-comp optimal thresholds (38k-frame)
+- `psr_optimal_thr/optimal_thresholds.json` — per-comp optimal thresholds (10k-frame, superseded)
 - `full_eval_ep18_stream/metrics.json` — full val eval at threshold 0.10
 - `psr_data_cache_best.pth` — cached logits from old best.pth (not used)
