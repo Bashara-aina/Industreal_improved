@@ -1,0 +1,509 @@
+{
+  "experiment": "activity_temporal_probe_cpu",
+  "reference": "Opus 141 ACT-ARCH-2, Q3",
+  "clip_size": 16,
+  "stride": 8,
+  "backbone_dim": 768,
+  "num_classes": 69,
+  "num_train_frames": 26322,
+  "num_val_frames": 35456,
+  "num_train_clips": 3239,
+  "num_val_clips": 4396,
+  "val_clips_per_recording": {
+    "05_assy_0_1": 342,
+    "05_assy_2_2": 279,
+    "05_main_0_1": 169,
+    "14_assy_0_1": 367,
+    "14_main_0_1": 197,
+    "14_main_2_2": 163,
+    "14_main_2_3": 195,
+    "20_assy_0_1": 290,
+    "20_assy_3_6": 339,
+    "20_main_0_1": 229,
+    "24_assy_0_1": 253,
+    "24_assy_2_4": 346,
+    "24_main_0_1": 159,
+    "26_assy_0_1": 378,
+    "26_assy_1_5": 508,
+    "26_main_0_1": 182
+  },
+  "train_clips_per_recording": {
+    "01_assy_0_1": 113,
+    "01_assy_1_1": 145,
+    "01_main_0_1": 70,
+    "02_assy_0_1": 192,
+    "02_assy_1_2": 183,
+    "02_main_0_1": 102,
+    "04_assy_0_1": 152,
+    "04_assy_2_1": 138,
+    "04_main_0_1": 54,
+    "06_assy_0_1": 88,
+    "06_assy_1_4": 62,
+    "06_main_0_1": 66,
+    "07_assy_0_1": 75,
+    "07_assy_2_3": 137,
+    "07_main_0_1": 60,
+    "11_assy_0_1": 109,
+    "11_assy_3_3": 112,
+    "11_main_0_1": 47,
+    "15_assy_0_1": 73,
+    "15_main_3_1": 47,
+    "15_main_3_2": 29,
+    "16_assy_0_1": 148,
+    "16_main_0_1": 82,
+    "16_main_3_3": 62,
+    "21_assy_0_1": 115,
+    "21_main_0_1": 28,
+    "22_assy_0_1": 93,
+    "22_assy_2_3": 179,
+    "22_main_0_1": 79,
+    "25_assy_0_1": 96,
+    "25_assy_2_1": 43,
+    "25_main_0_1": 45,
+    "27_assy_0_1": 93,
+    "27_main_0_1": 65,
+    "27_main_1_3": 32,
+    "27_main_3_1": 25
+  },
+  "per_frame_majority_baseline": 0.221674,
+  "per_frame_linear_probe_reference": 0.216869,
+  "clip_level_majority_baseline": 0.228844,
+  "best_epoch": 15,
+  "best_val_clip_top1": 0.072338,
+  "macro_f1": 0.045781,
+  "weighted_f1": 0.050069,
+  "comparison_to_per_frame": {
+    "per_frame": 0.216869,
+    "clip_mean_pool": 0.072338,
+    "delta": -0.144531
+  },
+  "comparison_to_majority": {
+    "majority_baseline": 0.221674,
+    "clip_mean_pool": 0.072338,
+    "delta": -0.149336
+  },
+  "optimizer": "AdamW",
+  "lr": 0.001,
+  "weight_decay": 0.0001,
+  "epochs": 20,
+  "max_batches": "all",
+  "per_class_metrics": {
+    "0": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "1": {
+      "precision": 0.1364,
+      "recall": 0.12,
+      "f1": 0.1277,
+      "support": 25
+    },
+    "2": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 280
+    },
+    "3": {
+      "precision": 0.0329,
+      "recall": 0.0602,
+      "f1": 0.0426,
+      "support": 83
+    },
+    "4": {
+      "precision": 0.1301,
+      "recall": 0.1284,
+      "f1": 0.1293,
+      "support": 148
+    },
+    "5": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 124
+    },
+    "6": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 147
+    },
+    "7": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 347
+    },
+    "8": {
+      "precision": 0.58,
+      "recall": 0.0288,
+      "f1": 0.0549,
+      "support": 1006
+    },
+    "9": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 87
+    },
+    "10": {
+      "precision": 0.0507,
+      "recall": 0.5278,
+      "f1": 0.0925,
+      "support": 36
+    },
+    "11": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 24
+    },
+    "12": {
+      "precision": 0.0208,
+      "recall": 0.3333,
+      "f1": 0.0392,
+      "support": 3
+    },
+    "13": {
+      "precision": 0.0536,
+      "recall": 0.3333,
+      "f1": 0.0923,
+      "support": 18
+    },
+    "14": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 7
+    },
+    "15": {
+      "precision": 0.0254,
+      "recall": 0.2308,
+      "f1": 0.0458,
+      "support": 13
+    },
+    "16": {
+      "precision": 0.037,
+      "recall": 0.0667,
+      "f1": 0.0476,
+      "support": 30
+    },
+    "17": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 88
+    },
+    "18": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 23
+    },
+    "19": {
+      "precision": 0.18,
+      "recall": 0.1915,
+      "f1": 0.1856,
+      "support": 47
+    },
+    "20": {
+      "precision": 0.0545,
+      "recall": 0.1304,
+      "f1": 0.0769,
+      "support": 23
+    },
+    "21": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 85
+    },
+    "22": {
+      "precision": 0.0667,
+      "recall": 0.3571,
+      "f1": 0.1124,
+      "support": 28
+    },
+    "23": {
+      "precision": 0.0377,
+      "recall": 0.1053,
+      "f1": 0.0556,
+      "support": 19
+    },
+    "24": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 5
+    },
+    "25": {
+      "precision": 0.0667,
+      "recall": 0.25,
+      "f1": 0.1053,
+      "support": 44
+    },
+    "26": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 43
+    },
+    "27": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "28": {
+      "precision": 0.1179,
+      "recall": 0.8878,
+      "f1": 0.2081,
+      "support": 98
+    },
+    "29": {
+      "precision": 0.0537,
+      "recall": 0.2222,
+      "f1": 0.0865,
+      "support": 36
+    },
+    "30": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 156
+    },
+    "31": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 84
+    },
+    "32": {
+      "precision": 0.0164,
+      "recall": 0.1111,
+      "f1": 0.0286,
+      "support": 9
+    },
+    "33": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 174
+    },
+    "34": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 5
+    },
+    "35": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 32
+    },
+    "36": {
+      "precision": 0.0078,
+      "recall": 0.25,
+      "f1": 0.015,
+      "support": 4
+    },
+    "37": {
+      "precision": 0.1636,
+      "recall": 0.0783,
+      "f1": 0.1059,
+      "support": 115
+    },
+    "38": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 23
+    },
+    "39": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 42
+    },
+    "40": {
+      "precision": 0.0252,
+      "recall": 0.2727,
+      "f1": 0.0462,
+      "support": 11
+    },
+    "41": {
+      "precision": 0.2381,
+      "recall": 0.0588,
+      "f1": 0.0943,
+      "support": 170
+    },
+    "42": {
+      "precision": 0.1346,
+      "recall": 0.0588,
+      "f1": 0.0819,
+      "support": 119
+    },
+    "43": {
+      "precision": 0.0294,
+      "recall": 0.0303,
+      "f1": 0.0299,
+      "support": 66
+    },
+    "44": {
+      "precision": 0.2143,
+      "recall": 0.1,
+      "f1": 0.1364,
+      "support": 30
+    },
+    "45": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 17
+    },
+    "46": {
+      "precision": 0.0357,
+      "recall": 0.3333,
+      "f1": 0.0645,
+      "support": 9
+    },
+    "47": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "48": {
+      "precision": 0.0826,
+      "recall": 0.2603,
+      "f1": 0.1254,
+      "support": 73
+    },
+    "49": {
+      "precision": 0.0101,
+      "recall": 0.0286,
+      "f1": 0.0149,
+      "support": 35
+    },
+    "50": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "51": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "52": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 17
+    },
+    "53": {
+      "precision": 0.1092,
+      "recall": 0.38,
+      "f1": 0.1696,
+      "support": 50
+    },
+    "54": {
+      "precision": 0.05,
+      "recall": 0.0476,
+      "f1": 0.0488,
+      "support": 21
+    },
+    "55": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 19
+    },
+    "56": {
+      "precision": 0.0227,
+      "recall": 0.1429,
+      "f1": 0.0392,
+      "support": 7
+    },
+    "57": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "58": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 12
+    },
+    "59": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 3
+    },
+    "60": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 6
+    },
+    "61": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 9
+    },
+    "62": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 6
+    },
+    "63": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 9
+    },
+    "64": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 9
+    },
+    "65": {
+      "precision": 0.0227,
+      "recall": 0.1,
+      "f1": 0.037,
+      "support": 10
+    },
+    "66": {
+      "precision": 0.0682,
+      "recall": 0.15,
+      "f1": 0.0937,
+      "support": 20
+    },
+    "67": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 0
+    },
+    "68": {
+      "precision": 0.2881,
+      "recall": 0.1589,
+      "f1": 0.2048,
+      "support": 107
+    }
+  },
+  "gate": "FAIL",
+  "gate_note": "At or below baseline; no temporal signal detected",
+  "note": "Temporal probe on frozen ConvNeXt-Tiny C5 GAP-pooled 768-dim features. Clips of 16 frames (stride=8), features mean-pooled per clip, label = mode of valid frame labels. Linear classifier on clip features. CPU-only, OOM-safe."
+}

@@ -48,21 +48,22 @@ for _log_name in ['src.data.industreal_dataset', 'src']:
     logging.getLogger(_log_name).setLevel(logging.WARNING)
 
 
-def normalize_images(images: torch.Tensor) -> torch.Tensor:
-    """Normalize uint8 images to [0,1] then ImageNet mean/std."""
-    if images.dtype == torch.uint8:
-        images = images.float().div_(255.0)
-        mean = torch.tensor(C.IMAGENET_MEAN, dtype=images.dtype).view(1, 3, 1, 1)
-        std = torch.tensor(C.IMAGENET_STD, dtype=images.dtype).view(1, 3, 1, 1)
-        images = (images - mean) / std
-    return images
-
-
 def extract_backbone_features(
     backbone: ConvNeXtBackbone, images: torch.Tensor
 ) -> torch.Tensor:
-    """Run images through frozen backbone, return [B, 768] GAP-pooled C5."""
-    images = normalize_images(images)
+    """Run images through frozen backbone, return [B, 768] GAP-pooled C5.
+
+    Optimized for CPU: resize 720x1280 -> 224x224 first, then normalize.
+    """
+    # float -> resize with area mode (best for downsampling) -> normalize
+    if images.dtype == torch.uint8:
+        images = images.float()
+    if images.shape[-1] != 224 or images.shape[-2] != 224:
+        images = F.interpolate(images, size=(224, 224), mode='area')
+    images = images.div_(255.0)
+    mean = torch.tensor(C.IMAGENET_MEAN, dtype=images.dtype).view(1, 3, 1, 1)
+    std = torch.tensor(C.IMAGENET_STD, dtype=images.dtype).view(1, 3, 1, 1)
+    images = (images - mean) / std
     c2, c3, c4, c5 = backbone(images)
     features = F.adaptive_avg_pool2d(c5, 1).flatten(1)
     return features
@@ -274,12 +275,12 @@ def main():
         help='Output directory',
     )
     parser.add_argument(
-        '--batch-size', type=int, default=4,
+        '--batch-size', type=int, default=16,
         help='Batch size for backbone feature extraction (CPU)',
     )
     parser.add_argument(
-        '--max-batches', type=int, default=2000,
-        help='Max batches for extraction (0 = all; default 2000 for OOM safety)',
+        '--max-batches', type=int, default=0,
+        help='Max batches for extraction (0 = all; use e.g. 2000 for OOM-safe GPU)',
     )
     parser.add_argument(
         '--clip-size', type=int, default=16,
@@ -342,6 +343,8 @@ def main():
     backbone = ConvNeXtBackbone(pretrained=False)
     backbone.load_state_dict(backbone_state, strict=False)
     backbone = backbone.to(device)
+    # channels_last memory format gives ~10% CPU speedup on ConvNeXt
+    backbone = backbone.to(memory_format=torch.channels_last)
     backbone.eval()
     for param in backbone.parameters():
         param.requires_grad = False
