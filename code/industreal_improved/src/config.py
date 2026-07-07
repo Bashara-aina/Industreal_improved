@@ -1069,7 +1069,11 @@ DETACH_REG_FPN = True
 # When True, PSR receives feat.detach() so PSR gradients don't flow into
 # shared FPN features. Prevents PSR loss spikes from corrupting detection
 # features through the backbone. Set True for RF1, False for full training.
-DETACH_PSR_FPN = True
+# [FIX 2026-07-07 File-157 audit] Env-overridable so launch scripts
+# (e.g. scripts/train_psr_repair_v3.sh with DETACH_PSR_FPN=False) actually
+# take effect. Without this env read, the V3 training ran for hours
+# with DETACH_PSR_FPN=True despite the env var saying False.
+DETACH_PSR_FPN = os.environ.get('DETACH_PSR_FPN', 'True') != 'False'
 STAGE3_WARMUP_EPOCHS = 3  # LR warmup epochs at Stage 3 entry to stabilize new head activation
 # PSR_WARMUP_EPOCHS disabled: STAGE3_WARMUP_EPOCHS already ramps psr_head via the
 # dedicated param group LR at train.py:2511-2526. Combining both ramps multiplied
