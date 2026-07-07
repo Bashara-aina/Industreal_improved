@@ -1,0 +1,239 @@
+{
+  "metadata": {
+    "analysis": "between/within recording variance decomposition (Opus 141 Q25)",
+    "n_frames_total": 38036,
+    "n_recordings": 16,
+    "grand_mean_fwd_deg": 9.13549518585205,
+    "grand_mean_up_deg": 7.784238338470459,
+    "total_std_fwd_deg": 7.853174209594727,
+    "total_std_up_deg": 6.838122367858887
+  },
+  "anova_table": {
+    "forward": {
+      "source": [
+        "between_recordings",
+        "within_recordings",
+        "total"
+      ],
+      "SS": [
+        325730.6944535266,
+        2019977.0555464735,
+        2345707.75
+      ],
+      "df": [
+        15,
+        38020,
+        38035
+      ],
+      "MS": [
+        21715.379630235104,
+        53.129328131153954,
+        null
+      ],
+      "F": [
+        408.7267878981825,
+        null,
+        null
+      ]
+    },
+    "up": {
+      "source": [
+        "between_recordings",
+        "within_recordings",
+        "total"
+      ],
+      "SS": [
+        130284.18615553791,
+        1648229.3138444622,
+        1778513.5
+      ],
+      "df": [
+        15,
+        38020,
+        38035
+      ],
+      "MS": [
+        8685.612410369195,
+        43.351638975393534,
+        null
+      ],
+      "F": [
+        200.35257295114408,
+        null,
+        null
+      ]
+    }
+  },
+  "variance_components": {
+    "forward": {
+      "between_recording": 9.191396592283525,
+      "within_recording": 53.129328131153954,
+      "total": 62.32072472343748,
+      "between_fraction": 0.1474853932311034,
+      "within_fraction": 0.8525146067688966,
+      "icc": 0.1474853932311034
+    },
+    "up": {
+      "between_recording": 3.6669526524720975,
+      "within_recording": 43.351638975393534,
+      "total": 47.01859162786563,
+      "between_fraction": 0.07798941919602018,
+      "within_fraction": 0.9220105808039798,
+      "icc": 0.07798941919602018
+    }
+  },
+  "interpretation": {
+    "dominant_component": "within_recording",
+    "recommendation": "TEMPORAL_SMOOTHING",
+    "rationale": "Forward MAE: 14.7% between, 85.3% within. Up MAE: 7.8% between, 92.2% within. Within-recording (per-frame) noise accounts for the majority of error variance in both components. Headroom lies in temporal smoothing, not data diversification.",
+    "n0_effective_group_size": 2356.7963893854944,
+    "F_statistic_fwd": 408.7267878981825,
+    "F_statistic_up": 200.35257295114408
+  },
+  "per_recording": {
+    "05_assy_0_1": {
+      "n": 2918,
+      "fwd_MAE_deg": 6.262603759765625,
+      "up_MAE_deg": 7.5281081199646,
+      "fwd_within_var": 28.86343765258789,
+      "up_within_var": 41.131439208984375,
+      "fwd_within_std": 5.372470378875732,
+      "up_within_std": 6.413379669189453
+    },
+    "05_assy_2_2": {
+      "n": 2323,
+      "fwd_MAE_deg": 9.367636680603027,
+      "up_MAE_deg": 10.275617599487305,
+      "fwd_within_var": 113.8955078125,
+      "up_within_var": 96.36823272705078,
+      "fwd_within_std": 10.672183990478516,
+      "up_within_std": 9.816732406616211
+    },
+    "05_main_0_1": {
+      "n": 1380,
+      "fwd_MAE_deg": 10.167197227478027,
+      "up_MAE_deg": 7.755524158477783,
+      "fwd_within_var": 88.2394027709961,
+      "up_within_var": 45.808773040771484,
+      "fwd_within_std": 9.393583297729492,
+      "up_within_std": 6.768218040466309
+    },
+    "14_assy_0_1": {
+      "n": 3005,
+      "fwd_MAE_deg": 17.04846954345703,
+      "up_MAE_deg": 12.324789047241211,
+      "fwd_within_var": 106.97840118408203,
+      "up_within_var": 54.114044189453125,
+      "fwd_within_std": 10.343036651611328,
+      "up_within_std": 7.35622501373291
+    },
+    "14_main_0_1": {
+      "n": 1685,
+      "fwd_MAE_deg": 10.46786117553711,
+      "up_MAE_deg": 5.710357189178467,
+      "fwd_within_var": 40.155921936035156,
+      "up_within_var": 11.448714256286621,
+      "fwd_within_std": 6.336870193481445,
+      "up_within_std": 3.3835949897766113
+    },
+    "14_main_2_2": {
+      "n": 1404,
+      "fwd_MAE_deg": 10.921670913696289,
+      "up_MAE_deg": 7.623568534851074,
+      "fwd_within_var": 32.63804244995117,
+      "up_within_var": 53.2872428894043,
+      "fwd_within_std": 5.712971210479736,
+      "up_within_std": 7.299811363220215
+    },
+    "14_main_2_3": {
+      "n": 1679,
+      "fwd_MAE_deg": 10.96671199798584,
+      "up_MAE_deg": 6.559674263000488,
+      "fwd_within_var": 19.713390350341797,
+      "up_within_var": 15.111701011657715,
+      "fwd_within_std": 4.439976215362549,
+      "up_within_std": 3.8873770236968994
+    },
+    "20_assy_0_1": {
+      "n": 2854,
+      "fwd_MAE_deg": 8.516141891479492,
+      "up_MAE_deg": 7.067502021789551,
+      "fwd_within_var": 60.50252914428711,
+      "up_within_var": 26.717073440551758,
+      "fwd_within_std": 7.778337001800537,
+      "up_within_std": 5.168856143951416
+    },
+    "20_assy_3_6": {
+      "n": 2967,
+      "fwd_MAE_deg": 11.493207931518555,
+      "up_MAE_deg": 7.9872660636901855,
+      "fwd_within_var": 114.16324615478516,
+      "up_within_var": 64.9590072631836,
+      "fwd_within_std": 10.684720039367676,
+      "up_within_std": 8.059715270996094
+    },
+    "20_main_0_1": {
+      "n": 2066,
+      "fwd_MAE_deg": 8.076192855834961,
+      "up_MAE_deg": 6.334611415863037,
+      "fwd_within_var": 32.58318328857422,
+      "up_within_var": 14.333054542541504,
+      "fwd_within_std": 5.708168029785156,
+      "up_within_std": 3.7859020233154297
+    },
+    "24_assy_0_1": {
+      "n": 2158,
+      "fwd_MAE_deg": 8.571924209594727,
+      "up_MAE_deg": 8.349268913269043,
+      "fwd_within_var": 42.33451843261719,
+      "up_within_var": 24.069704055786133,
+      "fwd_within_std": 6.506498336791992,
+      "up_within_std": 4.906088352203369
+    },
+    "24_assy_2_4": {
+      "n": 2952,
+      "fwd_MAE_deg": 6.074075698852539,
+      "up_MAE_deg": 5.896729946136475,
+      "fwd_within_var": 11.302265167236328,
+      "up_within_var": 13.80703353881836,
+      "fwd_within_std": 3.361884117126465,
+      "up_within_std": 3.7157816886901855
+    },
+    "24_main_0_1": {
+      "n": 1371,
+      "fwd_MAE_deg": 6.802186012268066,
+      "up_MAE_deg": 6.0889506340026855,
+      "fwd_within_var": 16.457456588745117,
+      "up_within_var": 11.968695640563965,
+      "fwd_within_std": 4.056778907775879,
+      "up_within_std": 3.459580183029175
+    },
+    "26_assy_0_1": {
+      "n": 3093,
+      "fwd_MAE_deg": 9.052972793579102,
+      "up_MAE_deg": 9.198894500732422,
+      "fwd_within_var": 93.5586166381836,
+      "up_within_var": 145.0598602294922,
+      "fwd_within_std": 9.67257022857666,
+      "up_within_std": 12.044079780578613
+    },
+    "26_assy_1_5": {
+      "n": 4587,
+      "fwd_MAE_deg": 6.077327251434326,
+      "up_MAE_deg": 6.021549701690674,
+      "fwd_within_var": 8.919812202453613,
+      "up_within_var": 11.29422664642334,
+      "fwd_within_std": 2.986605405807495,
+      "up_within_std": 3.3606884479522705
+    },
+    "26_main_0_1": {
+      "n": 1594,
+      "fwd_MAE_deg": 8.828389167785645,
+      "up_MAE_deg": 9.011425018310547,
+      "fwd_within_var": 16.238496780395508,
+      "up_within_var": 32.318634033203125,
+      "fwd_within_std": 4.0297017097473145,
+      "up_within_std": 5.684947967529297
+    }
+  }
+}
