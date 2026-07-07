@@ -2,7 +2,9 @@
 
 **Date:** 2026-07-07
 **Submission Deadline:** Oct 10, 2026 (95 days)
-**Current State:** 357 commits on origin/main, all 9 fixes applied, V3 PSR running
+**Current State (2026-07-07):** 358 commits on origin/main, all 9 fixes applied, V4 PSR running on RTX 3060 (PID 2374296, epoch 30 batch 3760/13161, ETA 1:54/epoch), single-task detection on RTX 5060 Ti (epoch 49+).
+
+**Opus-165 audit closed (commit 08c55ae71):** F-1 Fix 2 (losses.py Kendall staging guard) applied; F-7 +4608 figure now points to committed log in 4 live docs; F-12 preset name corrected in 157; CHECKPOINT_MANIFEST.md gives best.pth SHA256 for reproducibility; detection "beats SOTA" framing clarified as cross-architecture single-task. F-4 verified (all 8 hashes resolve in public repo).
 
 ## §0. The 12-Week Schedule (95 days, Jul 7 → Oct 10)
 
@@ -40,20 +42,20 @@
 
 ## §1. The 8 Critical File-157 Findings to Address
 
-| # | Finding | Status | Commit |
+| # | Finding | Status | Commit / Evidence |
 |---|---|---|---|
-| F-1 | DETACH_PSR_FPN env-read fix | **DONE** | 59f84c3d4 (config.py) + ea6ac30c (wrapper) |
-| F-2 | File 156 §2 was lost | **DONE** | 5e501d70a (reconstructed) |
-| F-3 | Never-predicted class list wrong | Addressed in Agent-28 SOTA_STATUS rewrite |
-| F-4 | 8 fix-commit hashes don't exist in repo | Need key fix hashes to real ones |
-| F-5 | D4+D1R 0.6364 on 3 videos caveat | Addressed in SOTA_STATUS update |
-| F-6 | 4 evidence directories were missing | **DONE** by Agent-10 (committed) |
-| F-7 | +384 vs +4608 PSR post-gelu discrepancy | Need to commit /tmp/train_psr_v3.log excerpt |
-| F-8 | LOO std is 0.0163 not 0.0158 | Addressed in SOTA_STATUS update |
-| F-9 | /tmp/*.log and best.pth unverifiable remotely | Mark as workstation-only |
-| F-10 | V3 process loading uncertain | Need workstation check |
-| F-11 | Two different null baselines conflated | Disambiguate in tables |
-| F-12 | Single-task ablation presets exist | Use `ablation_*_only` presets |
+| F-1 | DETACH_PSR_FPN env-read + head freeze bypass + Kendall staging guard | **DONE** | 59f84c3d4 (config.py env-read) + ea6ac30c (wrapper patch) + 21ab3c3fd (Fix 1 train.py:779-812) + 08c55ae71 (Fix 2 losses.py:1756-1775) |
+| F-2 | File 156 §2 was lost | **DONE** | 5e501d70a (reconstructed from file 152) |
+| F-3 | Never-predicted class list wrong | **DONE** | Live text uses `{1, 13, 16, 19, 23}` in 150/151/152/155 (verified by grep) |
+| F-4 | 8 fix-commit hashes don't exist in repo | **DONE** | Verified 2026-07-07 — all 8 hashes resolve: e618d929a (LeakyReLU), 6defe1f5f (Sequential init), bff38b790 (up-vector [6:9]), 8cef56fc2 (GT-balanced sampler), cd901f655 (DET_GAMMA_NEG=2.0), 28bf668c2 (V3 launch), 59f84c3d4 (DETACH env-read), ea6ac30c (wrapper patch). All present in `git log` of public repo `Bashara-aina/Industreal_improved`. Opus-157 F-4 was stale (repo pushed since audit). |
+| F-5 | D4+D1R 0.6364 on 3 videos caveat | **DONE** | `(3-video subset)` caveat present in 18 locations |
+| F-6 | 4 evidence directories were missing | **DONE** | 7 evidence dirs in `git ls-files` (full_eval_ep18_v2, d4_retuned, up_vector_v3, d1_yolov8m_v3, psr_optimal_thr_38k, d3_full_38k, activity_mvit_probe) |
+| F-7 | +384 vs +4608 PSR post-gelu discrepancy | **DONE** | All live `+384` replaced with `+4608`; V3 log committed at `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log` (commit 8f9d12fea, 254 lines); 4 docs updated to point to committed log (commit 08c55ae71) |
+| F-8 | LOO std is 0.0163 not 0.0158 | **DONE** | All 6 live docs use 0.0163 (commit 21ab3c3fd; verified by grep in 147/150/150_SOTA_STATUS_V5/151/155/156) |
+| F-9 | /tmp/*.log and best.pth unverifiable remotely | **DONE** | 37 `UNVERIFIABLE-REMOTELY` markers across 8 files; CHECKPOINT_MANIFEST.md (commit 08c55ae71) gives SHA256 of best.pth (59cb88ec85311bfcfff91f000bd08005675e3a882bec9f24ccd5ee0cbe89f9a8) |
+| F-10 | V3 process loading uncertain | **DONE** | V3 (PID 1901736) started 18s after commit ea6ac30c; wrapper log shows DETACH_PSR_FPN=False and LeakyReLU-active negative post-gelu |
+| F-11 | Two different null baselines conflated | **DONE** | Live 150 text names both: "persistence null (copy-prev) F1=0.9997" vs "prevalence null (always-positive) F1_null=2p/(1+p)" |
+| F-12 | Single-task ablation presets exist | **DONE** | Presets verified at config.py:1663 (det), 1694 (act), 1727 (psr), 1760 (pose); docs use `ablation_act_only` not `ablation_activity_only` (file 157 fixed at commit 08c55ae71); ablation suite at `scripts/run_ablation_suite.sh` covers all 4 arms |
 
 ## §2. The Critical Path Forward
 
