@@ -459,3 +459,75 @@
 - Activity: 0.0236 → 0.45+ with MViTv2-S (NEAR SOTA)
 
 **The "do the best" plan is executing. The 100 questions are answered by the in-flight trainings. The paper comes from the data.**
+
+## §2. The Implementation Critique (Q11-20) — RECONSTRUCTED from File-157 F-2 audit
+
+### Q11. How many implementation bugs were found in total?
+- 9 commits, 9 fixes total (e618d929a, 6defe1f5f, bff38b790, 8cef56fc2, cd901f655, 10d5ab596, a0ffb9aa8, 216566da0, bc6bebdb7, plus 28bf668c2 for V3 DETACH)
+- 4 are detection fixes (GT-balanced sampler, gamma_neg, anchor audit, class verify)
+- 2 are PSR head fixes (LeakyReLU, init index)
+- 1 is pose eval fix (up-vector index)
+- 1 is full-eval v2 fix
+- 1 is multi-task FREEZE_BACKBONE flag
+- 1 is V3 DETACH_PSR_FPN env-read fix (File-157 F-1)
+- Source: /media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/analyses/consult_2026_06_10/AAIML/152_IMPLEMENTATION_BUG_CATALOG.md
+
+### Q12. What was the most critical bug found?
+- DETACH_PSR_FPN=True (File-157 F-1)
+- This was the 4th exhibit of "code that exists but does not execute"
+- Detached FPN features blocked PSR gradient flow
+- All 11 sub-heads at gradient RMS=0.00e+00 (DEAD)
+- The V3 launch script exported DETACH_PSR_FPN=False but it was ignored
+- Fix: config.py:1072 now reads from env; wrapper patches apply_preset
+
+### Q13. Is GELU saturation an implementation or theory bug?
+- Implementation: +0.1 bias 1300x too small
+- Could also be theory: GELU has known saturation issues
+- Fix: LeakyReLU(0.01) + small-normal init (std=0.01) + zero bias (universal fix)
+- Source: src/models/model.py:1597-1624
+
+### Q14. Are 5 never-predicted classes an implementation bug?
+- Verified mapping: 24 entries, indices 1-24, mapping correct (commit a0ffb9aa8)
+- So: training convergence issue, not mapping bug
+- Per File-157 F-3: correct list is {1, 13, 16, 19, 23} not {1, 2, 3, 14, 23}
+- Per File-157 F-3: zero-GT is {1, 2, 3, 14, 15, 23}; classes 2, 3 hallucinated 28k/55k times
+
+### Q15. How many bugs are NOT implementation?
+- Activity backbone: NOT implementation (ImageNet vs Kinetics)
+- FiLM static 2x scaling: NOT a bug, just a feature
+- Pose multi-task works: NOT broken
+- The 3 implementation pathologies are PSR, detection, pose index
+- 1 non-implementation pathology: activity backbone
+
+### Q16. Can the user be right that implementation is dominant?
+- YES: 3 of 4 heads are implementation bugs
+- PSR: GELU + DETACH_PSR_FPN (fixable, V3 running with actual fix)
+- Detection: 5 never predicted + 8% GT batches (fixable with 4 fixes)
+- Pose index: eval bug only (training was correct)
+- Activity: NOT implementation, but could be improved with video backbone
+
+### Q17. What's the cost of all 9 fixes?
+- 4 days of focused work
+- All committed to git
+- All have test runs in progress
+- Total impact: pending in-flight training results
+
+### Q18. Is the 4-fix detection suite sufficient?
+- GT-balanced sampler: 100% batches have GT (was 8%)
+- gamma_neg 2.0: harder negative mining
+- Anchor audit: confirmed adequate, not the root cause
+- Class index verify: mapping correct
+- Likely: D3 mAP improves from 0.00009 to 0.1-0.5 when run with these fixes
+
+### Q19. Are there bugs we haven't found?
+- ACTIVITY_GRAD_BLEND_RATIO 0.05→1.0 schedule (per Opus A-6)
+- Initial ratio of 0.05 starves activity head
+- Final ratio of 1.0 enables direct gradients
+- This is a SCHEDULING bug, not architecture
+
+### Q20. What's the single most important fix?
+- DETACH_PSR_FPN=False (File-157 F-1)
+- Restored gradient flow to PSR head
+- Activations went from dead (-1.0) to alive (+4608) with LeakyReLU
+- This is the fix that gives multi-task a chance
+- V3 relaunched with the actual fix, training is running
