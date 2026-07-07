@@ -1,0 +1,47 @@
+{
+  "pose_film": {
+    "gamma": {
+      "mean": 1.976898193359375,
+      "std": 0.20975090563297272,
+      "min": 2.205371856689453e-06,
+      "max": 2.0,
+      "deviation_from_1_L2_mean": 27.689599990844727,
+      "deviation_from_1_L2_std": 0.0019001879263669252,
+      "deviation_from_1_L2_median": 27.690216064453125
+    },
+    "beta": {
+      "mean": -0.00029057360370643437,
+      "std": 0.017992565408349037,
+      "min": -0.30916687846183777,
+      "max": 0.28181469440460205,
+      "L2_mean": 0.42282921075820923,
+      "L2_std": 0.26456359028816223,
+      "L2_median": 0.2732853293418884
+    },
+    "n_samples": 800,
+    "n_channels": 768
+  },
+  "headpose_film": {
+    "gamma": {
+      "mean": 1.927736759185791,
+      "std": 0.3655048608779907,
+      "min": 1.7881393432617188e-07,
+      "max": 2.0,
+      "deviation_from_1_L2_mean": 27.63357162475586,
+      "deviation_from_1_L2_std": 0.005822181701660156,
+      "deviation_from_1_L2_median": 27.63525390625
+    },
+    "beta": {
+      "mean": -0.0017851386219263077,
+      "std": 0.12604789435863495,
+      "min": -0.9657173752784729,
+      "max": 0.8800544738769531,
+      "L2_mean": 3.336705207824707,
+      "L2_std": 1.0354721546173096,
+      "L2_median": 3.082629442214966
+    },
+    "n_samples": 800,
+    "n_channels": 768
+  },
+  "verdict": "PASS-THROUGH FOR CONDITIONING, ACTIVE SCALING: gamma dev-from-1 L2=27.7 (~1.0/channel) with near-zero sample variance (std=0.002), meaning per-channel scaling is fixed across all inputs -- NOT input-dependent modulation. Beta is trivially small (L2=0.4-3.3). The FiLM layers apply a static per-channel reweight but do NOT condition on keypoints/head pose in an input-dependent way. This undermines the 'FiLM conditions features on pose' novelty claim.",
+}
