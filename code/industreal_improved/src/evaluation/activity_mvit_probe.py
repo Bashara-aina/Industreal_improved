@@ -163,9 +163,9 @@ class MViTClipDataset(Dataset):
                     self.clips.append((rec_id, clip_start, action_id))
 
     def _init_frame_cache(self) -> None:
-        """No pre-load — frames loaded on-demand by DataLoader workers.
-        The kernel's page cache handles disk caching. Workers each load their
-        own frames via PIL, overlapping I/O with GPU compute."""
+        """No pre-load — on-demand loading via DataLoader workers.
+        The kernel's page cache provides automatic disk caching across
+        concurrent training + probe processes."""
         pass
 
     def __len__(self) -> int:
@@ -368,7 +368,7 @@ def main():
             train_dataset,
             batch_size=args.batch_size,
             shuffle=False,
-            num_workers=4,  # parallel I/O: workers load frames while GPU computes
+            num_workers=4,  # workers overlap I/O with GPU compute
             collate_fn=mvit_collate,
             prefetch_factor=2,
         )
