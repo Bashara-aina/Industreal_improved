@@ -97,7 +97,7 @@
 
 - LeakyReLU(0.01) plus small-normal init (std=0.01) plus zero bias (model.py:1600-1604)
 - V3 launch script with DETACH_PSR_FPN=False (28bf668c)
-- Post_gelu activations: -130 to +4608 (massive improvement) *(UNVERIFIABLE-REMOTELY: post_gelu value from workstation `/tmp/train_psr_repair_v3.log`)*
+- Post_gelu activations: -130 to +4608 (massive improvement) — auditable from committed log `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log` (commit `8f9d12fea`); values vary 4448-4864 across steps (single-run snapshot, not converged measurement)
 
 ### 3.4 File Paths
 
@@ -110,7 +110,7 @@
 
 ### 3.5 The V3 Test
 
-- V3 training in flight (epoch 25+, post_gelu +4608) *(UNVERIFIABLE-REMOTELY: epoch count and post_gelu from workstation `/tmp/train_psr_repair_v3.log`)*
+- V3 training in flight (epoch 25+, post_gelu +4608) — auditable from committed log `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log` (commit `8f9d12fea`); V4 launched with all F-1 fixes (KENDALL_FIXED_WEIGHTS=1 path, USE_PSR_TRANSITION=False) on RTX 3060
 - Expected F1 greater than 0.78 after 3-5 epochs
 - If F1 greater than 0.78: V3 repair works, multi-task helps PSR
 

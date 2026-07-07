@@ -1753,7 +1753,14 @@ class MultiTaskLoss(nn.Module):
                         act_ramp = (self._current_epoch + 1) / act_ramp_epochs
                     else:
                         act_ramp = 1.0
-                    if stage == 1:
+                    # [FIX 2026-07-07 File-157 F-1 v2] KENDALL_FIXED_WEIGHTS=1 guard:
+                    # when fixed weights are in use, the staging zero-out of prec_psr
+                    # /lv_psr is suppressed so PSR keeps receiving gradient in stages
+                    # 1-2. Without this, every multi-task run with KENDALL_FIXED_WEIGHTS=1
+                    # would have a dead PSR head until stage 3 (epoch >= 16), reproducing
+                    # the original V3 pathology on fresh starts.
+                    _kendall_fixed = bool(getattr(C, 'KENDALL_FIXED_WEIGHTS', False))
+                    if stage == 1 and not _kendall_fixed:
                         # Detection-only stage: head_pose and psr frozen.
                         prec_hp = prec_hp * 0
                         lv_hp = lv_hp * 0
@@ -1762,7 +1769,7 @@ class MultiTaskLoss(nn.Module):
                         # [F18] Activity ramp handled ONCE at the loss level
                         # (activity section above) — the old prec_act *= act_ramp
                         # here made staged warmup ramp^2 as well.
-                    elif stage == 2:
+                    elif stage == 2 and not _kendall_fixed:
                         # Det + head_pose + activity (ramp at 1.0 by epoch >= ACT_RAMP_EPOCHS)
                         prec_psr = prec_psr * 0
                         lv_psr = lv_psr * 0

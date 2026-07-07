@@ -5,6 +5,8 @@ Patches src.config to set MIXED_PRECISION=True BEFORE train.py imports it.
 This allows stage_rf4 preset's mixed_precision=False to be overridden,
 because we also intercept C.apply_preset() to re-apply the override.
 
+Also patches USE_PSR_TRANSITION to match env var (F-1 v3 fix).
+
 Usage:
     CUDA_VISIBLE_DEVICES=1 python3 scripts/train_psr_repair_wrapper.py --preset stage_rf4 ...
 """
@@ -31,6 +33,9 @@ from src import config as C
 # [FIX 2026-07-07 File-157 F-1] Also force DETACH_PSR_FPN=False if env var set.
 # The hardcoded `DETACH_PSR_FPN=True` in presets was blocking the PSR
 # gradient flow even when the V3 launch script set the env var to False.
+# [FIX 2026-07-07 V4] Also force USE_PSR_TRANSITION from env var.
+# ablation_psr_only preset bakes in use_psr_transition: True which would
+# override the env var unless we patch the preset apply too.
 _orig_apply = C.apply_preset
 
 def _patched_apply(name):
@@ -40,6 +45,11 @@ def _patched_apply(name):
         C.DETACH_PSR_FPN = False
         print(f'[wrapper] Post-preset override: DETACH_PSR_FPN=False '
               f'(per env var, PSR gradient flow to backbone ENABLED)',
+              file=sys.stderr, flush=True)
+    if os.environ.get('USE_PSR_TRANSITION', 'True') == 'False':
+        C.USE_PSR_TRANSITION = False
+        print(f'[wrapper] Post-preset override: USE_PSR_TRANSITION=False '
+              f'(per env var, dense per-frame PSR loss on every batch)',
               file=sys.stderr, flush=True)
     print(f'[wrapper] Post-preset override: MIXED_PRECISION=True (applied after {name})',
           file=sys.stderr, flush=True)

@@ -18,7 +18,7 @@ Our 4-head multi-task setup has implementation bugs. Single-task detection BEATS
 
 **PSR head F1 = 0.7018** (full 38k, per-component optimal, val-selected). Bootstrap 95% CI: [0.6436-0.7321]. Global 0.10 threshold yields 0.6788 on 38k. LOO-CV improvement: +0.0148 +/- 0.0163 (all val-only, no train/val contamination). Compared to STORM (0.901 event F1): paradigm difference makes direct comparison misleading -- STORM uses procedurally-generated transition features; we predict from raw video frames.
 
-**ConvNeXt to decoder F1 = 0.0053** (saturated logits, fix in flight). The MonotonicDecoder receiving ConvNeXt-based PSR logits at D4 thresholds produces near-zero F1 because the PSR head logits are already saturated from GELU starvation. The repair (LeakyReLU + small-normal init + zero bias) restored activations from dead (-1.0 to -1.4) to post_gelu mean +4608 on sequence frames (V3 training log step 10); retraining is in progress.
+**ConvNeXt to decoder F1 = 0.0053** (saturated logits, fix in flight). The MonotonicDecoder receiving ConvNeXt-based PSR logits at D4 thresholds produces near-zero F1 because the PSR head logits are already saturated from GELU starvation. The repair (LeakyReLU + small-normal init + zero bias) restored activations from dead (-1.0 to -1.4) to post_gelu mean +4608 on sequence frames (auditable from committed log `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log`, V3 step 10; values vary 4448-4864 across steps — single-run snapshot, not converged measurement); V4 retraining in progress on RTX 3060 with all F-1 fixes (KENDALL_FIXED_WEIGHTS=1, USE_PSR_TRANSITION=False, ablation_psr_only).
 
 ## 3. The Cascade (Implementation > Multi-Task)
 
@@ -47,7 +47,7 @@ The cascade hypothesis from earlier analyses held that multi-task interference c
 
 ## 5. What's Fixed or In-Flight
 
-**PSR head repair (LeakyReLU + small-normal + zero bias) applied.** Activations confirmed alive: post_gelu mean went from -130 (dead GELU) to +4608 on sequence frames after the repair (V3 training log step 10). Training is in flight (epoch 24+ on RTX 5060 Ti). The repair replaces GELU with LeakyReLU (negative_slope=0.01), reinitializes weights with small-normal (mean=0, std=0.01), and sets bias to zero. The dead `PSRTransitionPredictor` class was confirmed absent from the pipeline and has been removed.
+**PSR head repair (LeakyReLU + small-normal + zero bias) applied.** Activations confirmed alive: post_gelu mean went from -130 (dead GELU) to +4608 on sequence frames after the repair (auditable from committed log `src/runs/rf_stages/logs/v3_psr_repair_f1fix.log`, V3 step 10; values vary 4448-4864 across steps — single-run snapshot). V4 (with USE_PSR_TRANSITION=False + KENDALL_FIXED_WEIGHTS=1 + ablation_psr_only) is running on RTX 3060 from epoch 30; PSR loss alive and varying. The repair replaces GELU with LeakyReLU (negative_slope=0.01), reinitializes weights with small-normal (mean=0, std=0.01), and sets bias to zero. The dead `PSRTransitionPredictor` class was confirmed absent from the pipeline and has been removed.
 
 **Single-task ConvNeXt detection training in flight (epoch 43+).** This is the critical denominator fix: a same-backbone, same-split single-task detection run that will provide the architecture-controlled multi-task cost measurement. Without it, the "64% cost" claim rests on a cross-architecture comparison (YOLOv8m ceiling vs ConvNeXt multi-task), which was the central unresolved debate from 134.
 
