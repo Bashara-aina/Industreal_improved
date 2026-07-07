@@ -15,8 +15,8 @@
 | **Activity (clip-level)** | top1 (16-frame majority) | **0.028** | 0.622 (MViTv2-S) | per-frame MLP cannot do temporal reasoning | `activity_clip_ep18/activity_clip.json:5` |
 | **Activity linear probe (frozen ConvNeXt)** | per-frame top1 | **0.2169** | 0.2217 (majority class) | statistically indistinguishable from majority-class baseline (95% CI +-0.0046); frozen C5 features not linearly separable for actions | `SOTA_STATUS.md:120-124` |
 | **Activity T3 baseline** | top1_69 | 0.6223 | 0.622 | matches Meccano published baseline | `t3_mecanno_eval.json` |
-| **Head Pose forward** | angular MAE (single-frame) | **9.14°** (95% CI 7.74-10.87°) | uncited | first ego-pose baseline; 16 recordings, 38k frames | `bootstrap_ci.json:7-10` |
-| **Head Pose up** | angular MAE (single-frame) | **7.78°** (95% CI 6.89-8.81°); per-rec median 5.82° | uncited | first ego-pose baseline; index [6:9] fix confirmed | `bootstrap_ci.json:27-30`; `up_vector_v3/up_vector_per_recording.json:79-81` |
+| **Head Pose forward** | angular MAE (single-frame) | **9.14°** (95% CI 7.74-10.87°) | uncited | first ego-pose baseline; 16 recordings, 38k frames; confirmed by corrected-index full_eval_stream v2 | `full_eval_ep18_v2/metrics.json`; `bootstrap_ci.json:7-10` |
+| **Head Pose up** | angular MAE (single-frame) | **7.78°** (95% CI 6.89-8.81°); all-16 weighted mean 7.78°, per-rec median 5.82° | uncited | first ego-pose baseline; index [6:9] fix confirmed by full_eval_stream v2 | `full_eval_ep18_v2/metrics.json`; `bootstrap_ci.json:27-30`; `up_vector_v3/up_vector_per_recording.json:79-81` |
 | **Head Pose forward (Kalman)** | angular MAE | **9.00°** | uncited | +0.14° (1.5%) from RTS smoother; per-frame predictions already temporally smooth | `SOTA_STATUS.md:153-154` |
 | **Head Pose up (Kalman)** | angular MAE | **7.58°** | uncited | +0.21° (2.7%) from RTS smoother | `SOTA_STATUS.md:153-155` |
 | **PSR (global thresh 0.10)** | macro F1 | **0.6788** | 0.901 STORM | 38k-frame evaluation | `psr_optimal_thr_38k/optimal_thresholds.json:31` |
