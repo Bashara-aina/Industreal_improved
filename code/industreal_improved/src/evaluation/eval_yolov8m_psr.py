@@ -295,6 +295,7 @@ def decode_and_score_psr_from_logits(
         return 1.0 - dp[m, n] / max(m, n, 1)
 
     f1s, poss, edits = [], [], []
+    per_video: Dict[str, Dict[str, float]] = {}
     for rec, logits_np in psr_logits_by_rec.items():
         gt = gt_states_by_rec.get(rec)
         if gt is None or len(logits_np) < 2:
@@ -307,21 +308,28 @@ def decode_and_score_psr_from_logits(
         gt_np = np.asarray(gt)
         gt_tr = np.clip(gt_np[1:] - gt_np[:-1], a_min=0, a_max=None)
 
-        f1s.append(_event_f1(pred_tr, gt_tr, tol=tol_frames))
-        poss.append(
-            _ordered_pair_fraction(pred_states.cpu().numpy(), gt_np)
-        )
-        edits.append(
-            _psr_edit_score(pred_states.cpu().numpy(), gt_np)
-        )
+        rec_f1 = _event_f1(pred_tr, gt_tr, tol=tol_frames)
+        rec_pos = _ordered_pair_fraction(pred_states.cpu().numpy(), gt_np)
+        rec_edit = _psr_edit_score(pred_states.cpu().numpy(), gt_np)
+
+        f1s.append(rec_f1)
+        poss.append(rec_pos)
+        edits.append(rec_edit)
+        per_video[rec] = {
+            "f1_at_t": rec_f1,
+            "pos": rec_pos,
+            "edit": rec_edit,
+            "n_frames": len(logits_np),
+        }
 
     if not f1s:
-        return {"psr_f1": 0.0, "psr_pos": 0.0, "psr_edit": 0.0}
+        return {"psr_f1": 0.0, "psr_pos": 0.0, "psr_edit": 0.0, "per_video": {}}
 
     return {
         "psr_f1": float(np.mean(f1s)),
         "psr_pos": float(np.mean(poss)),
         "psr_edit": float(np.mean(edits)),
+        "per_video": per_video,
     }
 
 
@@ -331,6 +339,7 @@ def run_yolov8m_psr_eval(
     max_batches: int = 0,
     device: str = "cuda",
     detection_thresh: float = 0.1,
+    weight_path: Optional[Path] = None,
 ) -> Dict[str, float]:
     """Run YOLOv8m -> PSR evaluation.
 
@@ -352,7 +361,8 @@ def run_yolov8m_psr_eval(
         dict with psr_f1, psr_pos, psr_edit, and metadata.
     """
     # ── Load YOLOv8m ────────────────────────────────────────────────────
-    weight_path = _download_weights(weight_url)
+    if weight_path is None:
+        weight_path = _download_weights(weight_url)
     yolo = _build_yolo_model(weight_path)
 
     # ── Build val dataset ───────────────────────────────────────────────
@@ -526,7 +536,15 @@ def main() -> None:
         "--weight_url", type=str, default=INDUSTREAL_WEIGHT_URL, help="Weight URL"
     )
     parser.add_argument(
+        "--weights", type=str, default=None,
+        help="Path to local YOLOv8m weights file (overrides --weight_url)",
+    )
+    parser.add_argument(
         "--output", type=str, default=str(_OUTPUT_PATH), help="Output JSON path"
+    )
+    parser.add_argument(
+        "--save-dir", type=str, default=None,
+        help="Directory to save metrics.json, per_video.json, verdict.md",
     )
     parser.add_argument(
         "--device",
@@ -548,12 +566,15 @@ def main() -> None:
         stream=sys.stderr,
     )
 
+    weight_path = Path(args.weights) if args.weights else None
+
     metrics = run_yolov8m_psr_eval(
         weight_url=args.weight_url,
         batch_size=args.batch_size,
         max_batches=args.max_batches,
         device=args.device,
         detection_thresh=args.detection_thresh,
+        weight_path=weight_path,
     )
 
     output_path = Path(args.output)
@@ -572,6 +593,52 @@ def main() -> None:
     with open(output_path, "w") as f:
         json.dump(clean, f, indent=2, default=str)
     logger.info("Results saved to %s", output_path)
+
+    # ── If --save-dir provided, also save per-video breakdown + verdict
+    if args.save_dir:
+        save_dir = Path(args.save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        # metrics.json
+        metrics_path = save_dir / "metrics.json"
+        with open(metrics_path, "w") as f:
+            json.dump(clean, f, indent=2, default=str)
+        logger.info("Metrics saved to %s", metrics_path)
+
+        # per_video.json
+        per_video = metrics.get("per_video", {})
+        if per_video:
+            pv_path = save_dir / "per_video.json"
+            with open(pv_path, "w") as f:
+                json.dump(per_video, f, indent=2, default=str)
+            logger.info("Per-video breakdown saved to %s", pv_path)
+
+        # verdict.md
+        psr_f1 = metrics.get("psr_f1", 0.0)
+        weight_label = args.weights if args.weights else "default (URL)"
+        threshold_label = f"detection_thresh={args.detection_thresh}"
+        if psr_f1 >= 0.6:
+            verdict = "decoder transfers given adequate detection density"
+        elif psr_f1 >= 0.4:
+            verdict = "decoder partially transfers; threshold calibration and density both contribute"
+        else:
+            verdict = "decoder is also a bottleneck; both detection density AND decoder capacity are binding"
+
+        verdict_lines = [
+            f"# D4 Evaluation Verdict\n",
+            f"**Weights:** {weight_label}\n",
+            f"**Thresholds:** {threshold_label}\n",
+            f"**PSR F1:** {psr_f1:.4f}\n",
+            f"**POS:** {metrics.get('psr_pos', 0.0):.4f}\n",
+            f"**Edit:** {metrics.get('psr_edit', 0.0):.4f}\n",
+            f"**Recordings:** {metrics.get('_num_recordings', 0)}\n",
+            f"**Frames:** {metrics.get('_num_frames', 0)}\n",
+            f"\n## Verdict\n{verdict}\n",
+        ]
+        vd_path = save_dir / "verdict.md"
+        with open(vd_path, "w") as f:
+            f.writelines(verdict_lines)
+        logger.info("Verdict saved to %s (F1=%.4f → %s)", vd_path, psr_f1, verdict)
 
 
 if __name__ == "__main__":

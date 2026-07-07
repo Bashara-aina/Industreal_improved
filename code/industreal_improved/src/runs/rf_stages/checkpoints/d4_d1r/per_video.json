@@ -1,0 +1,23 @@
+{
+  "14_main_2_2": {
+    "f1_at_t_default": 0.0,
+    "f1_at_t_retuned_global": 0.6364,
+    "f1_at_t_retuned_per_component": 0.0689,
+    "n_frames": 1404,
+    "recording": "14_main_2_2"
+  },
+  "14_main_2_3": {
+    "f1_at_t_default": 0.0,
+    "f1_at_t_retuned_global": 0.6364,
+    "f1_at_t_retuned_per_component": 0.0634,
+    "n_frames": 1679,
+    "recording": "14_main_2_3"
+  },
+  "20_assy_0_1": {
+    "f1_at_t_default": 0.0,
+    "f1_at_t_retuned_global": 0.6364,
+    "f1_at_t_retuned_per_component": 0.4545,
+    "n_frames": 917,
+    "recording": "20_assy_0_1"
+  }
+}

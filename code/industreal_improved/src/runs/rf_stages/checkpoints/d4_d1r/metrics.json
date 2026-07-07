@@ -1,0 +1,21 @@
+{
+  "psr_f1_default": 0.0,
+  "psr_f1_retuned_global": 0.6364,
+  "psr_f1_retuned_per_component": 0.1956,
+  "psr_pos_default": 0.9989,
+  "psr_edit_default": 0.9903,
+  "best_global_config": {
+    "sustain_hi": 0.3,
+    "sustain_lo": 0.1,
+    "sustain_min": 2
+  },
+  "_model": "yolov8m (d1r) -> s2 -> MonotonicDecoder",
+  "_detection_thresh": 0.1,
+  "_total_frames": 4000,
+  "_num_recordings": 3,
+  "_weight_source": "D1R fine-tuned YOLOv8m (best.pt, mAP=0.995)",
+  "_recordings_evaluated": ["14_main_2_2", "14_main_2_3", "20_assy_0_1"],
+  "_n_combos_tested": 368,
+  "_original_d4_retuned_f1": 0.347,
+  "_comparison": "D4+D1R retuned F1=0.6364 vs original D4 retuned F1=0.347 (+83% relative); decoder transfers given adequate detection density"
+}
