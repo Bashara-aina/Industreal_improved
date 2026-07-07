@@ -1,0 +1,85 @@
+{
+  "checkpoint": "src/runs/rf_stages/checkpoints/best.pth",
+  "device": "cuda:0",
+  "max_batches": 500,
+  "total_frames": 2000,
+  "n_recordings": 2,
+  "default_decoder": {
+    "f1_at_t": 0.6060606060606062,
+    "per_component_f1": {
+      "comp_0": 0.6061,
+      "comp_1": 0.6061,
+      "comp_2": 0.6061,
+      "comp_3": 0.6061,
+      "comp_4": 0.6061,
+      "comp_5": 0.6061,
+      "comp_6": 0.6061,
+      "comp_7": 0.6061,
+      "comp_8": 0.6061,
+      "comp_9": 0.6061,
+      "comp_10": 0.6061
+    },
+    "thresholds": {
+      "sustain_hi": 0.5,
+      "sustain_lo": 0.3,
+      "sustain_min": 3
+    }
+  },
+  "best_global_sweep": {
+    "f1_at_t": 0.8787878787878787,
+    "thresholds": {
+      "sustain_hi": 0.3,
+      "sustain_lo": 0.1,
+      "sustain_min": 2
+    }
+  },
+  "retuned_per_component": {
+    "f1_at_t": 0.7892561983471074,
+    "n_videos": 2,
+    "thresholds": {
+      "sustain_hi": [
+        0.218,
+        0.516,
+        0.668,
+        0.226,
+        0.228,
+        0.501,
+        0.431,
+        0.218,
+        0.218,
+        0.218,
+        0.231
+      ],
+      "sustain_lo": [
+        0.068,
+        0.085,
+        0.085,
+        0.076,
+        0.078,
+        0.101,
+        0.096,
+        0.068,
+        0.068,
+        0.068,
+        0.081
+      ],
+      "sustain_min": [
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2,
+        2
+      ]
+    }
+  },
+  "sweep_summary": {
+    "n_combos_tested": 145,
+    "elapsed_seconds": 15.651646137237549
+  }
+}
