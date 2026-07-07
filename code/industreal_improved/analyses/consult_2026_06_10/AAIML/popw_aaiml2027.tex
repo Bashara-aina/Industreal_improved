@@ -93,7 +93,7 @@ Kendall log-vars (4 learnable) & 4 & 0.0 & 0ms\\
 
 \textbf{Head pose head (0.8M params):} GAP(C4$\|$C5) $\to$ MLP(1152$\to$512$\to$256$\to$9). Trained on real HoloLens 2 pose.csv (no synthetic labels). 9-DoF output: forward gaze direction (3), up vector (3), position (3, unit scale uncertain, see limitations).
 
-\textbf{Activity head (0.7M params):} Per-frame MLP classifier, 47 hybrid verb-grouped action classes (reduced from 75 fine-grained). Macro-F1 with NA class excluded.
+\textbf{Activity head (0.7M params):} Per-frame MLP classifier, 69 hybrid verb-grouped action classes (reduced from 75 fine-grained). Macro-F1 with NA class excluded.
 
 \textbf{PSR head (3.1M params):} 3-layer causal Transformer encoder, 11 binary classifiers (one per assembly component). Operates on per-frame s2 features (detection-derived spatial-semantic). Fill-forward constraint guarantees monotone orderings.
 
@@ -169,7 +169,7 @@ We report the best validation result at epoch 17 (combined=0.4140). The checkpoi
 \textbf{Task} & \textbf{Metric} & \textbf{Subsample} & \textbf{Full val} & \textbf{Fair baseline} & \textbf{Source}\\\midrule
 Detection & mAP@0.5 (24-class) & 0.317 & 0.358 & 0.995 & D1-R YOLOv8m\textsuperscript{a}\\
 Detection & mAP@0.5\_pc (15 present) & 0.506 & 0.573 & --- & *\\
-Activity & Macro-F1 (47 hybrid) & 0.205 & 0.129 & --- & 69-class, per-frame *\\
+Activity & Macro-F1 (69 hybrid) & 0.205 & 0.129 & --- & 69-class, per-frame *\\
 Activity & Top-1 & 0.311 & 0.129 & --- & *\\
 Head pose & Forward MAE (deg) & 7.83 & 9.94 & --- & * first baseline\\
 Head pose & Up MAE (deg) & 7.06 & 8.28 & --- & * first baseline\\
@@ -352,7 +352,7 @@ Surveillance perception & 2.3$\pm$1.4/7 & Low\\\bottomrule
 
 \begin{enumerate}
 \item \textbf{PSR F1=0}: real model collapse, transition timing fails (see \S\ref{sec:psr-f1-disclosure}). Mitigations planned (inverse-prevalence weighting, per-component thresholds, temporal head retrain).
-\item \textbf{Activity class grouping}: 47 hybrid verb-grouped, not 75 fine-grained. Performance on the original activity task is strictly lower (see \S\ref{sec:disclosures} Disclosure~4).
+\item \textbf{Activity class grouping}: 69 hybrid verb-grouped, not 75 fine-grained. Performance on the original activity task is strictly lower (see \S\ref{sec:disclosures} Disclosure~4).
 \item \textbf{Head pose position (mm)}: unverified unit conversion; evaluation code warns against using. We report 6-DoF orientation only (forward, up). Pose-norm fix applied for forward/up unit normalization.
 \item \textbf{Body pose branch}: pseudo-keypoints from detection bounding boxes, no human-pose annotations in \industreal. Auxiliary FiLM conditioning only.
 \item \textbf{Detection mAP gap to dedicated detector}: 0.358 vs D1-R YOLOv8m 0.995. Multi-task cost is 64--68\% relative. Closing requires: ImageNet pretraining, stronger backbone, or reducing task count.
