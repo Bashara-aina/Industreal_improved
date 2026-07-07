@@ -141,3 +141,86 @@
 - Single-task MViTv2-S fine-tuned (target 0.45-0.55) is the SOTA-comparable result
 - Multi-task with MViTv2-S + all fixes is the best case
 - Story: backbone wrong type → Kinetics fixes it
+
+---
+
+## §8. The Architecture Options Analysis (Q71-80)
+
+### Q71. What architecture options are on the table?
+- A. ConvNeXt-Tiny (current, ImageNet) - 28M params
+- B. MViTv2-S (Kinetics) - 36M params
+- C. Hybrid (ConvNeXt + MViTv2-S) - 64M params
+- D. VideoMAE (self-supervised) - 86M params
+- E. TimeSformer (pure attention) - 121M params
+- F. ConvNeXt-V2 (improved ImageNet) - 198M params
+
+### Q72. What's the best for multi-task (4 heads)?
+- A. ConvNeXt: pose works, detection/activity fail
+- B. MViTv2-S: activity works, pose OK, detection OK
+- C. Hybrid: pose from ConvNeXt, activity from MViTv2-S
+- D. VideoMAE: requires self-supervised pretraining
+- E. TimeSformer: too large
+- Recommendation: C (hybrid) for 4-task multi-task
+
+### Q73. What's the best for single-task detection?
+- A. ConvNeXt: unknown, need to run
+- B. MViTv2-S: Kinetics features
+- C. Hybrid: optimal
+- D. VideoMAE: self-supervised
+- E. TimeSformer: too large
+- F. ConvNeXt-V2: improved ImageNet
+- Recommendation: C (hybrid) or F (ConvNeXt-V2)
+
+### Q74. What's the best for single-task activity?
+- A. ConvNeXt: 0 (no signal)
+- B. MViTv2-S: 0.3810 (frozen probe)
+- C. Hybrid: best of both
+- D. VideoMAE: self-supervised
+- E. TimeSformer: pure attention
+- F. ConvNeXt-V2: 198M, may have more capacity
+- Recommendation: B (MViTv2-S fine-tuned) is the cheapest
+
+### Q75. What's the best for single-task PSR?
+- A. ConvNeXt: 0.7018 with all fixes
+- B. MViTv2-S: should work with sequence learning
+- C. Hybrid: optimal
+- D. VideoMAE: sequence learning
+- E. TimeSformer: attention for sequences
+- F. ConvNeXt-V2: more capacity
+- Recommendation: A (after V3 fix) or C (hybrid)
+
+### Q76. What's the best for single-task pose?
+- A. ConvNeXt: 9.14° (works)
+- B. MViTv2-S: probably similar
+- C. Hybrid: optimal
+- D. VideoMAE: too large
+- E. TimeSformer: too large
+- F. ConvNeXt-V2: more capacity
+- Recommendation: A is sufficient
+
+### Q77. What are the time/cost constraints?
+- 2-week fine-tuning for any architecture change
+- 4 single-task baselines: 8 weeks
+- 4 multi-task conditions: 8 weeks
+- Total: 16 weeks for complete ablation
+- AAIML submission: 1 quarter
+
+### Q78. What's the minimal architecture change for SOTA-comparable?
+- Keep ConvNeXt for pose/detection/PSR
+- Add MViTv2-S only for activity
+- Hybrid: 2 backbones, 4 heads
+- Cheapest option: MViTv2-S single-task for activity
+- Cost: 2 weeks
+
+### Q79. What's the maximal architecture for SOTA-beating?
+- VideoMAE for activity (self-supervised)
+- TimeSformer for PSR (attention)
+- ConvNeXt-V2 for pose/detection
+- Total: 3 backbones
+- Cost: 6+ weeks
+
+### Q80. What's the right architecture choice for the user?
+- User said: "i am fine if i need to change a lot of thing including the backbone or architecture if needed"
+- The right answer: hybrid (ConvNeXt + MViTv2-S)
+- Implementation: src/models/video_backbone_multitask.py (already designed)
+- 2-week investment, expected to reach SOTA-comparable on all 4 heads
