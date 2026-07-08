@@ -1297,7 +1297,7 @@ def main():
         if args.resume is None:
             logger.error("--test-only requires --resume <checkpoint.pt>")
             sys.exit(1)
-        ckpt = torch.load(args.resume, map_location=device)
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         logger.info("Loaded checkpoint from %s (epoch %d)",
                     args.resume, ckpt.get("epoch", "?"))
@@ -1349,7 +1349,7 @@ def main():
     best_val_loss = float("inf")
     best_act_top1 = 0.0
     if args.resume:
-        ckpt = torch.load(args.resume, map_location=device)
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"])
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         start_epoch = ckpt["epoch"]
