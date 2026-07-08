@@ -72,6 +72,7 @@ from evaluate import (
     nms_numpy,
     compute_ap_per_class,
 )
+from decoder_oracle_bound import event_f1
 
 # ── Config overrides for safe full eval ─────────────────────────────────────
 FULL_EVAL_OVERRIDES = {
@@ -155,6 +156,51 @@ def prepare_images(images: torch.Tensor, device: torch.device) -> torch.Tensor:
     mean = torch.tensor(_IMAGENET_MEAN, device=device).view(1, 3, 1, 1)
     std = torch.tensor(_IMAGENET_STD, device=device).view(1, 3, 1, 1)
     return (images - mean) / std
+
+
+# ── PSR transition event helpers (175 §7.2 / 174 §3.3) ────────────────────
+
+
+def _compute_tau(
+    pred_tr: np.ndarray, gt_tr: np.ndarray, tol: int = 3
+) -> float:
+    """Mean signed delay between matched predicted and GT transition events.
+
+    For each component, matches predicted 0->1 frames to GT frames greedily
+    within tolerance. Returns mean(pred_frame - gt_frame) across all matches.
+    Positive = lag, negative = anticipation. NaN if no matches.
+    """
+    n_comp = pred_tr.shape[1]
+    delays = []
+    for c in range(n_comp):
+        p_frames = np.where(pred_tr[:, c])[0]
+        g_frames = np.where(gt_tr[:, c])[0]
+        matched_gt = set()
+        for pf in p_frames:
+            best_delay = None
+            best_gi = None
+            for gi, gf in enumerate(g_frames):
+                if gi not in matched_gt and abs(pf - gf) <= tol:
+                    d = int(pf) - int(gf)
+                    if best_delay is None or abs(d) < abs(best_delay):
+                        best_delay = d
+                        best_gi = gi
+            if best_gi is not None:
+                matched_gt.add(best_gi)
+                delays.append(best_delay)
+    if not delays:
+        return float("nan")
+    return float(np.mean(delays))
+
+
+def _compute_pos(pred_tr: np.ndarray, gt_tr: np.ndarray) -> float:
+    """Ordered-pair fraction: directional sign agreement of transitions.
+
+    POS = mean(sign(pred_diff) == sign(gt_diff)). Null-model sensitive:
+    all-zeros prediction scores ~0.9995 because most frame-pairs have no
+    transition in either direction. See 174 §3.3 caveat.
+    """
+    return float((np.sign(pred_tr) == np.sign(gt_tr)).mean())
 
 
 def streaming_eval(
@@ -465,6 +511,94 @@ def streaming_eval(
     results["psr_macro_f1"] = float(np.mean(psr_f1s))
     results["psr_per_component_f1"] = {str(c): float(f) for c, f in enumerate(psr_f1s)}
 
+    # ── PSR transition event F1 (primary metric, comparable to STORM/B3) ────
+    try:
+        # Load per-component optimal thresholds
+        _opt_path = _SRC / "runs" / "rf_stages" / "checkpoints" / "psr_optimal_thr_38k" / "optimal_thresholds.json"
+        if _opt_path.exists():
+            with open(_opt_path) as _f:
+                _opt_data = json.load(_f)
+            _per_comp_thr = np.array(_opt_data["optimal_thresholds"], dtype=np.float32)
+            logger.info("PSR transition thresholds loaded: %s", _per_comp_thr.tolist())
+        else:
+            logger.warning("PSR optimal thresholds not found at %s, using 0.10 global", _opt_path)
+            _per_comp_thr = np.full(11, 0.10, dtype=np.float32)
+
+        # Concatenate stored logits and labels
+        _all_logits = np.concatenate(psr_preds_logits, axis=0)   # [N, 11]
+        _all_labels = np.concatenate(psr_labels_list, axis=0)    # [N, 11]
+
+        # Sigmoid -> binary with per-component optimal thresholds
+        _all_sig = 1.0 / (1.0 + np.exp(-_all_logits))
+        _all_pred_bin = (_all_sig > _per_comp_thr[np.newaxis, :]).astype(np.int32)
+
+        # Group by recording ID
+        _rec_data: dict = defaultdict(lambda: {"pred": [], "label": [], "frame": []})
+        for i in range(len(psr_rec_ids)):
+            rid = psr_rec_ids[i]
+            _rec_data[rid]["pred"].append(_all_pred_bin[i])
+            _rec_data[rid]["label"].append(_all_labels[i])
+            _rec_data[rid]["frame"].append(psr_frame_nums[i])
+
+        # Per-recording transition metrics
+        _event_f1s: list[float] = []
+        _poss: list[float] = []
+        _taus: list[float] = []
+
+        for rid, _arrs in _rec_data.items():
+            _frames = np.array(_arrs["frame"], dtype=np.int64)
+            _sort = np.argsort(_frames)
+            _vp = np.array(_arrs["pred"])[_sort]   # [T, 11]
+            _vl = np.array(_arrs["label"])[_sort]  # [T, 11]
+
+            # Keep only valid frames
+            _valid = _vl.max(axis=1) >= 0
+            _vp = _vp[_valid]
+            _vl = _vl[_valid]
+            if len(_vp) < 2:
+                continue
+
+            # Transition events: 0->1 per component
+            _pred_tr = np.clip(_vp[1:] - _vp[:-1], a_min=0, a_max=None)
+            _gt_tr = np.clip(_vl[1:] - _vl[:-1], a_min=0, a_max=None)
+
+            # Filter to ground-truth-valid transition pairs
+            _valid_tr = _vl[1:].max(axis=1) >= 0
+            _pv = _pred_tr[_valid_tr]
+            _gv = _gt_tr[_valid_tr]
+
+            _ef1 = event_f1(_pv, _gv, tol=3)
+            _event_f1s.append(_ef1)
+            _poss.append(_compute_pos(_pv, _gv))
+            _tau = _compute_tau(_pv, _gv, tol=3)
+            if not np.isnan(_tau):
+                _taus.append(_tau)
+
+        if _event_f1s:
+            results["psr_event_f1_at_3"] = float(np.mean(_event_f1s))
+            results["psr_pos"] = float(np.mean(_poss)) if _poss else 0.0
+            _tau_mean = float(np.nanmean(_taus)) if _taus else float("nan")
+            results["psr_tau_frames"] = _tau_mean
+            results["psr_tau_seconds"] = _tau_mean / 30.0 if not np.isnan(_tau_mean) else float("nan")
+        else:
+            results["psr_event_f1_at_3"] = 0.0
+            results["psr_pos"] = 0.0
+            results["psr_tau_frames"] = float("nan")
+            results["psr_tau_seconds"] = float("nan")
+        logger.info(
+            "PSR event_f1@±3=%.4f  POS=%.4f  tau=%.2fs  (per-frame legacy=%.4f)",
+            results["psr_event_f1_at_3"],
+            results["psr_pos"],
+            results.get("psr_tau_seconds", float("nan")),
+            results.get("psr_macro_f1", float("nan")),
+        )
+    except Exception as _exc:
+        logger.warning("PSR transition event F1 computation failed: %s", _exc)
+        results["psr_event_f1_at_3"] = 0.0
+        results["psr_pos"] = 0.0
+        results["psr_tau_frames"] = float("nan")
+        results["psr_tau_seconds"] = float("nan")
+
     # ── NaN check ──────────────────────────────────────────────────────────
     bad = has_nan(results)
     if bad:
@@ -477,6 +611,7 @@ def streaming_eval(
     for name in ["det_mAP50", "det_mAP_50_95", "det_mAP50_all_frames",
                   "det_n_present_classes", "act_top1", "act_top1_valid_na_excluded",
                   "forward_angular_MAE_deg", "up_angular_MAE_deg",
+                  "psr_event_f1_at_3", "psr_pos", "psr_tau_seconds",
                   "psr_macro_f1"]:
         val = results.get(name)
         if isinstance(val, float):
