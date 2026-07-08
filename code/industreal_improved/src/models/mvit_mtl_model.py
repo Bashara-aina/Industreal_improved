@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from functools import partial
 from torchvision.models.video import mvit_v2_s, MViT_V2_S_Weights
 
 logger = logging.getLogger("mvit_mtl_model")
@@ -171,14 +172,16 @@ class LightweightFPN(nn.Module):
 # ===========================================================================
 
 class DetectionHead(nn.Module):
-    """Lightweight detection head — decoupled cls + box regression.
+    """Lightweight detection head — decoupled cls + box regression with DFL.
 
     Operates on FPN features [B, 256, T, H, W] (temporal-pooled to [B, 256, H, W]).
+    Box regression outputs a distribution over reg_max bins per coordinate for DFL.
     """
 
-    def __init__(self, in_channels: int = 256, num_classes: int = 24):
+    def __init__(self, in_channels: int = 256, num_classes: int = 24, reg_max: int = 16):
         super().__init__()
         self.num_classes = num_classes
+        self.reg_max = reg_max
 
         self.cls_head = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, 3, padding=1),
@@ -190,7 +193,7 @@ class DetectionHead(nn.Module):
             nn.Conv2d(in_channels, in_channels, 3, padding=1),
             nn.BatchNorm2d(in_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels, 4, 1),  # xywh box
+            nn.Conv2d(in_channels, 4 * reg_max, 1),  # DFL: 4 coords x reg_max bins
         )
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -258,7 +261,7 @@ class PSRHead(nn.Module):
             d_model=feat_dim,
             nhead=nhead,
             dim_feedforward=feat_dim * 4,
-            activation="gelu",
+            activation=partial(F.leaky_relu, negative_slope=0.01),
             batch_first=True,
         )
         self.temporal_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
@@ -267,10 +270,10 @@ class PSRHead(nn.Module):
 
     def _init_weights(self):
         for m in self.modules():
-            if isinstance(m, nn.Linear) and m is not self.projection:
-                nn.init.xavier_uniform_(m.weight, gain=0.01)
-        nn.init.xavier_uniform_(self.projection.weight, gain=0.01)
-        nn.init.zeros_(self.projection.bias)
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, std=0.01)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
 
     def forward(self, conv_proj_feat: torch.Tensor) -> torch.Tensor:
         """Forward.

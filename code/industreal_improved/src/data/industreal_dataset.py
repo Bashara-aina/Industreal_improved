@@ -1241,10 +1241,12 @@ class IndustRealMultiTaskDataset(Dataset):
 
     def _build_seq_sample_index(self) -> List[Dict[str, Any]]:
         """
-        Doc 01 §D.1: Build sequence sample index for PSR sequence training.
+        Doc 01 §D.1 + 175 §5.3: Build sequence sample index for PSR sequence training.
 
         Each sequence sample represents a T-frame window from one recording.
         Windows start at every frame (stride=1) within each recording.
+        Per-window metadata (psr_has_any, action_label, num_dets, det_classes) is
+        computed for task-aware sampling.
 
         Returns:
             list of sequence sample dicts: {recording_id, start_frame, frames}
@@ -1261,12 +1263,40 @@ class IndustRealMultiTaskDataset(Dataset):
                 )
                 continue
 
+            cache = self._anno_cache.get(recording_id)
+            coco_data = _get_coco(self._get_coco_path(recording_id))
+
             for start_idx in range(num_frames - T + 1):
                 window_frames = frame_nums[start_idx : start_idx + T]
+
+                # Per-window metadata for task-aware sampling (175 §5.3)
+                psr_window = cache.psr_per_frame[window_frames]  # [T, 11]
+                psr_has_any = bool(psr_window.any())
+
+                # AR majority vote (ignore -1 unlabeled)
+                ar_window = cache.ar_per_frame[window_frames]
+                unique, counts = np.unique(ar_window[ar_window >= 0], return_counts=True)
+                action_label = int(unique[np.argmax(counts)]) if len(unique) > 0 else -1
+
+                # Detection: middle frame only (same as _getitem_sequence)
+                mid_frame = window_frames[T // 2]
+                mid_annots = coco_data.get(mid_frame, [])
+                num_dets = len(mid_annots)
+                det_classes: set = set()
+                for ann in mid_annots:
+                    cat_id = ann.get('category_id', 0)
+                    idx = cat_id - 1  # 0-indexed
+                    if 0 <= idx < 24:
+                        det_classes.add(idx)
+
                 seq_samples.append({
                     'recording_id': recording_id,
                     'start_frame_idx': start_idx,
                     'frames': window_frames,
+                    'psr_has_any': psr_has_any,
+                    'action_label': action_label,
+                    'num_dets': num_dets,
+                    'det_classes': det_classes,
                 })
 
         return seq_samples
@@ -1393,10 +1423,17 @@ class IndustRealMultiTaskDataset(Dataset):
                 # use 0 (NA)
                 action_label = int(cache.ar_per_frame[fn]) if fn < len(cache.ar_per_frame) else 0
 
-                # Task-aware sampling metadata
+                # Task-aware sampling metadata (175 §5.3)
                 psr_row = cache.psr_per_frame[fn] if fn < len(cache.psr_per_frame) else None
                 psr_has_any = bool(psr_row.any()) if psr_row is not None else False
-                num_dets = len(coco_data.get(fn, []))
+                annots = coco_data.get(fn, [])
+                num_dets = len(annots)
+                det_classes: set = set()
+                for ann in annots:
+                    cat_id = ann.get('category_id', 0)
+                    idx = cat_id - 1  # 0-indexed (matches _extract_boxes_from_coco)
+                    if 0 <= idx < 24:
+                        det_classes.add(idx)
 
                 all_samples.append({
                     'recording_id': recording_id,
@@ -1405,6 +1442,7 @@ class IndustRealMultiTaskDataset(Dataset):
                     'action_label': action_label,
                     'psr_has_any': psr_has_any,
                     'num_dets': num_dets,
+                    'det_classes': det_classes,
                 })
 
             rec_count += 1
@@ -1561,6 +1599,136 @@ class IndustRealMultiTaskDataset(Dataset):
             i for i, s in enumerate(self.samples)
             if s.get('num_dets', 0) > 0
         ]
+
+    # =====================================================================
+    # Task-Aware Sampling (175 §5.3)
+    # =====================================================================
+
+    def _compute_det_class_frequencies(self) -> list:
+        """
+        Compute per-class detection frequency across all single-frame samples.
+
+        Counts how many frames contain at least one instance of each
+        detection class (0-23). Used by the task-aware sampler to identify
+        rare detection classes for upsampling.
+
+        Returns:
+            list of length NUM_DET_CLASSES with frame-count per class.
+        """
+        if hasattr(self, '_det_class_freq_cache'):
+            return self._det_class_freq_cache
+
+        freq = [0] * 24  # NUM_DET_CLASSES = 24
+        for s in self.samples:
+            for cls_id in s.get('det_classes', set()):
+                if 0 <= cls_id < 24:
+                    freq[cls_id] += 1
+
+        self._det_class_freq_cache = freq
+        return freq
+
+    def _compute_task_aware_weights(self) -> np.ndarray:
+        """
+        Per 175 §5.3: Task-aware sampling weights for MTL training.
+
+        Composes sampling weights so every batch provides gradient signal
+        to all four heads (detection, activity, PSR, pose):
+        - Class-balanced activity weighting (CB effective-number)
+        - PSR-transition-positive frames upsampled
+        - Rare detection class frames upsampled
+        - Pose-only frames downsampled (pose is dense and easy)
+
+        Works in both single-frame and sequence modes.
+
+        Returns:
+            np.ndarray of shape [N] with normalized per-sample weights.
+        """
+        if self.sequence_mode:
+            samples = self._seq_samples
+            activity_ids = np.array(
+                [s.get('action_label', -1) for s in self._seq_samples],
+                dtype=np.int64,
+            )
+        else:
+            samples = self.samples
+            activity_ids = self.activity_ids
+
+        N = len(samples)
+        if N == 0:
+            return np.array([], dtype=np.float64)
+
+        # Step 1: Class-balanced activity weighting (CB effective-number)
+        valid_ids = activity_ids[activity_ids >= 0]
+        num_classes = int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_CLASSES_ACT))
+        counts = np.bincount(valid_ids, minlength=num_classes).astype(np.float64)
+
+        beta = C.CB_BETA
+        effective = np.where(
+            counts > 0,
+            (1.0 - np.power(beta, counts)) / (1.0 - beta),
+            1.0,
+        )
+        class_weights = 1.0 / np.maximum(effective, 1e-8)
+        class_weights /= class_weights.sum()
+
+        weights = np.array(
+            [class_weights[aid] if 0 <= aid < len(class_weights) else 0.0
+             for aid in activity_ids],
+            dtype=np.float64,
+        )
+
+        # Step 2: PSR boost — upweight frames with any transition
+        psr_boost = float(getattr(C, 'TASK_AWARE_PSR_BOOST', 2.5))
+        for i, s in enumerate(samples):
+            if s.get('psr_has_any', False):
+                weights[i] *= psr_boost
+
+        # Step 3: Rare detection class upsampling
+        # Rare = classes appearing in <1% of detection-bearing frames
+        det_class_freq = self._compute_det_class_frequencies()
+        total_det_frames = sum(det_class_freq)
+        rare_threshold = 0.01 * total_det_frames if total_det_frames > 0 else 0
+        rare_classes = {
+            c for c, cnt in enumerate(det_class_freq)
+            if cnt > 0 and cnt < rare_threshold
+        }
+
+        if rare_classes:
+            rare_boost = float(getattr(C, 'TASK_AWARE_RARE_DET_BOOST', 3.0))
+            for i, s in enumerate(samples):
+                sample_classes = s.get('det_classes', set())
+                if sample_classes & rare_classes:
+                    weights[i] *= rare_boost
+
+        # Step 4: Pose-only downsampling
+        # Frames with only pose (no PSR transition, no detections) are
+        # downweighted since pose is dense and easy to learn.
+        pose_downscale = float(getattr(C, 'TASK_AWARE_POSE_DOWNSCALE', 0.5))
+        for i, s in enumerate(samples):
+            has_psr = s.get('psr_has_any', False)
+            has_det = s.get('num_dets', 0) > 0
+            if not has_psr and not has_det:
+                weights[i] *= pose_downscale
+
+        # Normalize
+        total = weights.sum()
+        if total > 0:
+            weights /= total
+
+        return weights
+
+    def get_sampler_weights(self) -> torch.Tensor:
+        """
+        Return task-aware sampling weights for WeightedRandomSampler.
+
+        Per 175 §5.3, composes weights that balance activity classes while
+        upsampling PSR-positive frames and rare detection class frames,
+        and downsampling pose-only frames.
+
+        Returns:
+            torch.Tensor of shape [N] with float64 normalized weights.
+        """
+        return torch.from_numpy(self._compute_task_aware_weights()).double()
 
 
 # =========================================================================

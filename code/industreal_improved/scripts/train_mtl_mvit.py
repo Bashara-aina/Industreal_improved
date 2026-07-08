@@ -23,6 +23,7 @@ import math
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import torch
@@ -48,46 +49,293 @@ OUTPUT_ROOT = _CODE_ROOT / "src" / "runs" / "rf_stages" / "checkpoints" / "mtl_m
 # Loss functions
 # ===========================================================================
 
+def ciou_loss(pred_boxes: torch.Tensor, gt_boxes: torch.Tensor) -> torch.Tensor:
+    """CIoU loss for box regression.
+
+    Args:
+        pred_boxes: [N, 4] xyxy predicted boxes.
+        gt_boxes: [N, 4] xyxy ground truth boxes.
+
+    Returns:
+        [N] CIoU loss values.
+    """
+    # Intersection
+    x1 = torch.max(pred_boxes[:, 0], gt_boxes[:, 0])
+    y1 = torch.max(pred_boxes[:, 1], gt_boxes[:, 1])
+    x2 = torch.min(pred_boxes[:, 2], gt_boxes[:, 2])
+    y2 = torch.min(pred_boxes[:, 3], gt_boxes[:, 3])
+    inter = (x2 - x1).clamp(min=0) * (y2 - y1).clamp(min=0)
+
+    # Union
+    pred_area = (pred_boxes[:, 2] - pred_boxes[:, 0]) * (pred_boxes[:, 3] - pred_boxes[:, 1])
+    gt_area = (gt_boxes[:, 2] - gt_boxes[:, 0]) * (gt_boxes[:, 3] - gt_boxes[:, 1])
+    union = pred_area + gt_area - inter
+
+    iou = inter / (union + 1e-7)
+
+    # Center distance
+    pred_cx = (pred_boxes[:, 0] + pred_boxes[:, 2]) / 2
+    pred_cy = (pred_boxes[:, 1] + pred_boxes[:, 3]) / 2
+    gt_cx = (gt_boxes[:, 0] + gt_boxes[:, 2]) / 2
+    gt_cy = (gt_boxes[:, 1] + gt_boxes[:, 3]) / 2
+    rho2 = (pred_cx - gt_cx) ** 2 + (pred_cy - gt_cy) ** 2
+
+    # Enclosing box diagonal
+    en_x1 = torch.min(pred_boxes[:, 0], gt_boxes[:, 0])
+    en_y1 = torch.min(pred_boxes[:, 1], gt_boxes[:, 1])
+    en_x2 = torch.max(pred_boxes[:, 2], gt_boxes[:, 2])
+    en_y2 = torch.max(pred_boxes[:, 3], gt_boxes[:, 3])
+    c2 = (en_x2 - en_x1) ** 2 + (en_y2 - en_y1) ** 2 + 1e-7
+
+    # Aspect ratio consistency
+    pred_w = pred_boxes[:, 2] - pred_boxes[:, 0]
+    pred_h = pred_boxes[:, 3] - pred_boxes[:, 1]
+    gt_w = gt_boxes[:, 2] - gt_boxes[:, 0]
+    gt_h = gt_boxes[:, 3] - gt_boxes[:, 1]
+    v = (4 / math.pi ** 2) * (torch.atan(gt_w / (gt_h + 1e-7)) - torch.atan(pred_w / (pred_h + 1e-7))) ** 2
+    alpha = v / ((1 - iou).detach() + v + 1e-7)
+
+    ciou = iou - rho2 / c2 - alpha * v
+    return 1 - ciou
+
+
+def dfl_loss_fn(
+    pred_dist: torch.Tensor,
+    target: torch.Tensor,
+    reg_max: int = 16,
+) -> torch.Tensor:
+    """Distribution Focal Loss (DFL).
+
+    Args:
+        pred_dist: [N, 4, reg_max] predicted distribution logits.
+        target: [N, 4] continuous target values in (l,t,r,b) grid units.
+        reg_max: number of distribution bins per coordinate.
+
+    Returns:
+        [N] DFL loss values.
+    """
+    target = target.clamp(0, reg_max - 0.01).reshape(-1)  # [N*4]
+    tl = target.long().clamp(0, reg_max - 2)
+    tr = tl + 1
+    wl = (tr - target).detach()
+    wr = 1 - wl
+    pred_flat = pred_dist.reshape(-1, reg_max)  # [N*4, reg_max]
+    loss = (
+        F.cross_entropy(pred_flat, tl, reduction="none") * wl
+        + F.cross_entropy(pred_flat, tr, reduction="none") * wr
+    )
+    return loss.reshape(-1, 4).mean(dim=1)
+
+
 def detection_loss(
     det_outputs: dict,
     det_list: list,
+    num_classes: int = 24,
+    reg_max: int = 16,
+    gamma: float = 2.0,
+    alpha: float = 0.25,
 ) -> torch.Tensor:
-    """Detection loss: global object presence BCE + box MSE for verification.
+    """YOLOv8-style detection loss over 4 FPN levels.
+
+    Combines Focal loss (cls), CIoU (box), and DFL (box distribution) with
+    center-based grid assignment per FPN level.
 
     Args:
-        det_outputs: dict of per-level {cls_logits, reg_preds}
-        det_list: list of B dicts, each {boxes: [n_i, 4], labels: [n_i]}
+        det_outputs: dict of per-level {cls_logits, reg_preds}.
+        det_list: list of B dicts, each {boxes: [n_i, 4] xyxy, labels: [n_i]}.
+        num_classes: number of detection classes.
+        reg_max: DFL bins per coordinate.
+        gamma: focal loss gamma.
+        alpha: focal loss alpha.
 
     Returns:
         scalar loss.
     """
-    level = "P3"
-    cls_logits = det_outputs[level]["cls_logits"]  # [B, 24, H, W]
-    B, _, H, W = cls_logits.shape
-    device = cls_logits.device
+    device = next(iter(det_outputs.values()))["cls_logits"].device
+    strides = {"P2": 4, "P3": 8, "P4": 16, "P5": 32}
 
-    # Binary: does this image contain any object?
-    has_any = torch.zeros(B, device=device)
-    for b in range(B):
-        if det_list[b]["boxes"].numel() > 0:
-            has_any[b] = 1.0
+    if not det_list:
+        return torch.tensor(0.0, device=device)
 
-    # Global presence BCE: avg over spatial (H,W) then avg over classes
-    presence = cls_logits.mean(dim=(2, 3))  # [B, 24]
-    presence = presence.mean(dim=1)  # [B]
-    loss = F.binary_cross_entropy_with_logits(presence, has_any)
+    loss_cls = 0.0
+    loss_iou = 0.0
+    loss_dfl = 0.0
+    n_levels = 0
 
-    return loss
+    for level_name in ("P2", "P3", "P4", "P5"):
+        if level_name not in det_outputs:
+            continue
+        n_levels += 1
+        out = det_outputs[level_name]
+        cls_logits = out["cls_logits"]  # [B, 24, H, W]
+        reg_preds = out["reg_preds"]    # [B, 4*reg_max, H, W]
+        B, _, H, W = cls_logits.shape
+        stride = strides[level_name]
+
+        # Grid cell centers
+        ys = torch.arange(H, device=device)
+        xs = torch.arange(W, device=device)
+        cell_cx = xs.float() * stride + stride / 2.0  # [W]
+        cell_cy = ys.float() * stride + stride / 2.0  # [H]
+
+        # Per-image GT assignment
+        cls_target = torch.zeros(B, H, W, dtype=torch.long, device=device)
+        pos_mask = torch.zeros(B, H, W, dtype=torch.bool, device=device)
+        dfl_target = torch.zeros(B, H, W, 4, device=device)
+        iou_target = torch.zeros(B, H, W, 4, device=device)
+
+        for b in range(B):
+            det_item = det_list[b] if isinstance(det_list[b], dict) else {}
+            boxes = det_item.get("boxes")
+            labels = det_item.get("labels")
+            if boxes is None or labels is None or boxes.numel() == 0:
+                continue
+
+            boxes = boxes.to(device, dtype=torch.float)
+            labels = labels.to(device, dtype=torch.long)
+
+            if boxes.dim() == 1:
+                boxes = boxes.unsqueeze(0)
+                labels = labels.unsqueeze(0)
+
+            # xyxy -> center
+            gt_cx = (boxes[:, 0] + boxes[:, 2]) / 2.0
+            gt_cy = (boxes[:, 1] + boxes[:, 3]) / 2.0
+
+            for n in range(boxes.shape[0]):
+                gi = (gt_cx[n] / stride).long().clamp(0, W - 1)
+                gj = (gt_cy[n] / stride).long().clamp(0, H - 1)
+
+                if pos_mask[b, gj, gi]:
+                    continue
+
+                pos_mask[b, gj, gi] = True
+                cls_target[b, gj, gi] = labels[n].long()
+
+                # DFL target: (l,t,r,b) offsets from cell center in grid units
+                dfl_target[b, gj, gi, 0] = (gt_cx[n] - boxes[n, 0]) / stride  # left
+                dfl_target[b, gj, gi, 1] = (gt_cy[n] - boxes[n, 1]) / stride  # top
+                dfl_target[b, gj, gi, 2] = (boxes[n, 2] - gt_cx[n]) / stride  # right
+                dfl_target[b, gj, gi, 3] = (boxes[n, 3] - gt_cy[n]) / stride  # bottom
+
+                iou_target[b, gj, gi] = boxes[n]
+
+        # ---- Classification: Focal loss ----
+        cls_logits_p = cls_logits.permute(0, 2, 3, 1).contiguous()  # [B, H, W, 24]
+        cls_onehot = F.one_hot(cls_target, num_classes).float()
+        cls_prob = torch.sigmoid(cls_logits_p)
+        pt = cls_onehot * cls_prob + (1 - cls_onehot) * (1 - cls_prob)
+        focal_w = (1 - pt) ** gamma
+        alpha_t = cls_onehot * alpha + (1 - cls_onehot) * (1 - alpha)
+        cls_loss = F.binary_cross_entropy_with_logits(cls_logits_p, cls_onehot, reduction="none")
+        cls_loss = (alpha_t * focal_w * cls_loss).sum(dim=-1)  # [B, H, W]
+        loss_cls = loss_cls + cls_loss.mean()
+
+        # ---- Box losses (positive cells only) ----
+        if pos_mask.any():
+            # Reshape reg_preds for DFL: [B, 4*reg_max, H, W] -> [B, 4, reg_max, H, W]
+            reg_dist = reg_preds.view(B, 4, reg_max, H, W)  # [B, 4, reg_max, H, W]
+
+            # DFL loss
+            pred_dist = reg_dist.permute(0, 3, 4, 1, 2)[pos_mask]  # [P, 4, reg_max]
+            gt_dfl = dfl_target[pos_mask]  # [P, 4]
+            loss_dfl = loss_dfl + dfl_loss_fn(pred_dist, gt_dfl, reg_max).mean()
+
+            # Decode DFL distribution to continuous offsets for CIoU
+            proj = torch.arange(reg_max, device=device).float().view(1, 1, reg_max, 1, 1)
+            decoded = (reg_dist.softmax(dim=2) * proj).sum(dim=2)  # [B, 4, H, W]
+
+            # Convert decoded (l,t,r,b) offsets to absolute xyxy
+            pred_x1 = cell_cx.view(1, 1, W) - decoded[:, 0:1] * stride  # [B, 1, H, W]
+            pred_y1 = cell_cy.view(1, H, 1) - decoded[:, 1:2] * stride  # [B, 1, H, W]
+            pred_x2 = cell_cx.view(1, 1, W) + decoded[:, 2:3] * stride  # [B, 1, H, W]
+            pred_y2 = cell_cy.view(1, H, 1) + decoded[:, 3:4] * stride  # [B, 1, H, W]
+            pred_abs = torch.cat([pred_x1, pred_y1, pred_x2, pred_y2], dim=1)  # [B, 4, H, W]
+            pred_abs = pred_abs.permute(0, 2, 3, 1).contiguous()  # [B, H, W, 4]
+
+            loss_iou = loss_iou + ciou_loss(
+                pred_abs[pos_mask],
+                iou_target[pos_mask],
+            ).mean()
+
+    n_levels = max(n_levels, 1)
+    return loss_cls / n_levels + loss_iou / n_levels + loss_dfl / n_levels
 
 
-def activity_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    """Cross-entropy with ignore-index for -1 labels."""
-    return F.cross_entropy(logits, targets, ignore_index=-1)
+def compute_activity_class_weights(
+    dataset: "IndustRealMultiTaskDataset",
+    num_classes: int = 75,
+) -> torch.Tensor:
+    """Inverse-frequency class weights for long-tailed activity labels.
+
+    Args:
+        dataset: Training dataset with ``class_counts`` attribute.
+        num_classes: Number of activity classes (default 75).
+
+    Returns:
+        [num_classes] float tensor of inverse-frequency weights.
+    """
+    counts = dataset.class_counts.astype(np.float64)
+    total = counts.sum()
+    weights = np.where(counts > 0, total / (num_classes * counts), 0.0)
+    logger.info(
+        "Class weights — min=%.4f  max=%.4f  mean=%.4f  num_nonzero=%d",
+        weights.min(), weights.max(), weights.mean(),
+        int((weights > 0).sum()),
+    )
+    return torch.from_numpy(weights).float()
 
 
-def psr_loss(psr_logits: torch.Tensor, psr_targets: torch.Tensor) -> torch.Tensor:
-    """Per-frame BCE for PSR transition logits."""
-    return F.binary_cross_entropy_with_logits(psr_logits, psr_targets)
+def activity_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    class_weights: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Class-balanced cross-entropy with label smoothing 0.1 and ignore-index -1.
+
+    Args:
+        logits: [B, 75] per-video activity logits.
+        targets: [B] per-video activity labels (0..74; -1 = unlabeled / ignore).
+        class_weights: [75] inverse-frequency weights or None for uniform.
+
+    Returns:
+        Scalar loss.
+
+    Raises:
+        AssertionError: If every label in the batch is -1 (P2 guard).
+    """
+    valid_mask = targets != -1
+    assert valid_mask.any(), (
+        f"All {len(targets)} activity labels in this batch are -1 (ignored). "
+        "No valid targets for cross-entropy — check data pipeline."
+    )
+    return F.cross_entropy(
+        logits, targets,
+        weight=class_weights,
+        ignore_index=-1,
+        label_smoothing=0.1,
+    )
+
+
+def psr_loss(
+    psr_logits: torch.Tensor,
+    psr_targets: torch.Tensor,
+    comp_weights: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Per-frame BCE for PSR transition logits with optional per-component inverse-prevalence weights.
+
+    Args:
+        psr_logits: [B, T, 11] per-frame transition logits.
+        psr_targets: [B, T, 11] per-frame transition targets.
+        comp_weights: [1, 1, 11] per-component inverse-prevalence weights or None.
+
+    Returns:
+        Scalar loss (mean over all elements).
+    """
+    loss = F.binary_cross_entropy_with_logits(psr_logits, psr_targets, reduction='none')
+    if comp_weights is not None:
+        loss = loss * comp_weights  # broadcast [B, T, 11] * [1, 1, 11]
+    return loss.mean()
 
 
 def pose_loss(pred_6d: torch.Tensor, target_6d: torch.Tensor) -> torch.Tensor:
@@ -98,6 +346,71 @@ def pose_loss(pred_6d: torch.Tensor, target_6d: torch.Tensor) -> torch.Tensor:
     cos_fwd = (fwd_pred * fwd_gt).sum(dim=1).clamp(-1.0, 1.0)
     cos_up = (up_pred * up_gt).sum(dim=1).clamp(-1.0, 1.0)
     return (1.0 - cos_fwd).mean() + (1.0 - cos_up).mean()
+
+
+# ===========================================================================
+# PCGrad gradient surgery
+# ===========================================================================
+
+def pcgrad_fn(
+    per_task_grads: list,
+    shared_params: list,
+) -> list:
+    """PCGrad: project conflicting per-task gradients onto each other.
+
+    For each task pair (i, j) with cosine similarity < 0, project g_i away
+    from the conflict direction:
+        g_i = g_i - (g_i . g_j / ||g_j||^2) * g_j
+
+    Args:
+        per_task_grads: T tuples of gradient tensors (one per shared param).
+        shared_params: list of shared backbone parameter tensors.
+
+    Returns:
+        Deconflicted summed gradients, one per shared parameter.
+    """
+    num_tasks = len(per_task_grads)
+    device = shared_params[0].device
+
+    # Flatten per-task gradients into single vectors
+    flat_grads = []
+    for task_grads in per_task_grads:
+        pieces = []
+        for g, p in zip(task_grads, shared_params):
+            if g is None:
+                pieces.append(torch.zeros(p.numel(), device=device, dtype=p.dtype))
+            else:
+                pieces.append(g.contiguous().view(-1))
+        flat_grads.append(torch.cat(pieces))
+
+    # Random task ordering (core PCGrad step)
+    task_order = torch.randperm(num_tasks, device=device)
+
+    for i_idx in range(num_tasks):
+        i = task_order[i_idx]
+        gi = flat_grads[i]
+        for j_idx in range(i_idx):
+            j = task_order[j_idx]
+            gj = flat_grads[j]
+
+            dot_ij = torch.dot(gi, gj)
+            gj_norm_sq = torch.dot(gj, gj)
+            if gj_norm_sq > 0 and dot_ij < 0:
+                gi = gi - (dot_ij / gj_norm_sq) * gj
+                flat_grads[i] = gi
+
+    # Sum all deconflicted gradients
+    sum_grad = torch.stack(flat_grads).sum(dim=0)
+
+    # Unflatten back to parameter shapes
+    result = []
+    offset = 0
+    for p in shared_params:
+        numel = p.numel()
+        result.append(sum_grad[offset:offset + numel].view_as(p).contiguous())
+        offset += numel
+
+    return result
 
 
 # ===========================================================================
@@ -113,8 +426,10 @@ def train_step(
     scaler: torch.amp.GradScaler,
     grad_clip_norm: float = 1.0,
     hp_prec_cap: bool = True,
+    pcgrad: bool = True,
+    act_class_weights: Optional[torch.Tensor] = None,
 ) -> dict:
-    """Single training step with Kendall uncertainty weighting."""
+    """Single training step with Kendall uncertainty weighting and optional PCGrad gradient surgery."""
     model.train()
     B = images.size(0)
 
@@ -130,12 +445,39 @@ def train_step(
         l_act = activity_loss(
             outputs["activity"],
             targets.get("activity", torch.zeros(B, dtype=torch.long, device=images.device)),
+            class_weights=act_class_weights,
         ) if "activity" in targets else torch.tensor(0.0, device=images.device)
+
+        # PSR per-component inverse-prevalence weights (Doc 175 §4)
+        _psr_comp_weights = None
+        psr_comp_breakdown = {}
+        if "psr_labels" in targets:
+            if hasattr(C, 'PSR_COMP_WEIGHTS') and C.PSR_COMP_WEIGHTS:
+                _psr_comp_weights = torch.tensor(
+                    C.PSR_COMP_WEIGHTS, device=images.device, dtype=torch.float32
+                ).view(1, 1, -1)
+            else:
+                # Fallback: compute inverse prevalence from current batch
+                _pos = (targets["psr_labels"] > 0).float().sum(dim=(0, 1))
+                _total = targets["psr_labels"].size(0) * targets["psr_labels"].size(1)
+                _prevalence = _pos / (_total + 1e-6)
+                _inv_weights = 1.0 / (_prevalence + 1e-6)
+                _psr_comp_weights = (_inv_weights / _inv_weights[0].clamp(min=1e-6)).view(1, 1, -1)
 
         l_psr = psr_loss(
             outputs["psr_logits"],
             targets.get("psr_labels", torch.zeros(B, 16, 11, device=images.device)),
+            comp_weights=_psr_comp_weights,
         ) if "psr_labels" in targets else torch.tensor(0.0, device=images.device)
+
+        # Per-component PSR loss breakdown for logging
+        if "psr_labels" in targets:
+            with torch.no_grad():
+                _pc = F.binary_cross_entropy_with_logits(
+                    outputs["psr_logits"], targets["psr_labels"], reduction='none'
+                ).mean(dim=(0, 1))
+            for ci in range(_pc.size(0)):
+                psr_comp_breakdown[f"loss_psr_c{ci}"] = _pc[ci].item()
 
         # Pose: head_pose is [B, T, 9], take middle frame's 6D
         if "head_pose" in targets:
@@ -156,8 +498,34 @@ def train_step(
 
     # Backward
     optimizer.zero_grad()
-    scaler.scale(total_loss).backward()
-    scaler.unscale_(optimizer)
+
+    if pcgrad:
+        shared_params = [p for p in model.feature_pyramid.backbone.parameters() if p.requires_grad]
+
+        # Per-task gradients w.r.t. shared backbone
+        per_task_grads = []
+        for name, loss in losses.items():
+            prec = torch.exp(-log_vars[name])
+            weighted_loss = prec * loss
+            g = torch.autograd.grad(
+                weighted_loss, shared_params,
+                retain_graph=True, allow_unused=True,
+            )
+            per_task_grads.append(g)
+
+        # PCGrad: project conflicting gradients
+        deconflicted = pcgrad_fn(per_task_grads, shared_params)
+
+        # Backward for head params (also populates backbone grads, overridden below)
+        scaler.scale(total_loss).backward()
+        scaler.unscale_(optimizer)
+
+        # Override backbone grads with PCGrad deconflicted grads
+        for param, grad in zip(shared_params, deconflicted):
+            param.grad = grad.to(param.dtype)
+    else:
+        scaler.scale(total_loss).backward()
+        scaler.unscale_(optimizer)
 
     # Gradient clipping
     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
@@ -171,6 +539,7 @@ def train_step(
         "loss_act": l_act.item(),
         "loss_psr": l_psr.item(),
         "loss_pose": l_pose.item(),
+        **psr_comp_breakdown,
         **{f"log_var_{k}": v.item() for k, v in log_vars.items()},
     }
 
@@ -191,6 +560,7 @@ def main():
     parser.add_argument("--lr-head", type=float, default=1e-3, help="Head LR")
     parser.add_argument("--lr-log-var", type=float, default=1e-3, help="Log var LR")
     parser.add_argument("--hp-prec-cap", action="store_true", default=True, help="Cap pose precision")
+    parser.add_argument("--pcgrad", action=argparse.BooleanOptionalAction, default=True, help="PCGrad gradient surgery (default: on; use --no-pcgrad to disable)")
     parser.add_argument("--output-dir", type=str, default=str(OUTPUT_ROOT))
     parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume")
     parser.add_argument("--cpu", action="store_true", help="Force CPU")
@@ -283,13 +653,22 @@ def main():
     # ── AMP scaler ─────────────────────────────────────────────────────────
     scaler = torch.amp.GradScaler(device.type, enabled=True)
 
+    # ── Activity class weights (Doc 175 §4) ────────────────────────────────
+    act_class_weights = compute_activity_class_weights(train_ds, num_classes=75)
+    act_class_weights = act_class_weights.to(device)
+    logger.info("Activity class weights computed — shape=%s, device=%s",
+                act_class_weights.shape, act_class_weights.device)
+
     # ── Training loop ─────────────────────────────────────────────────────
     logger.info("Starting training (%d epochs)...", args.epochs)
     metrics_log = {"train_metrics": [], "config": vars(args)}
 
     for epoch in range(start_epoch + 1, args.epochs + 1):
         t0 = time.time()
-        epoch_metrics = {"loss": 0, "loss_det": 0, "loss_act": 0, "loss_psr": 0, "loss_pose": 0}
+        epoch_metrics = {
+            "loss": 0, "loss_det": 0, "loss_act": 0, "loss_psr": 0, "loss_pose": 0,
+            **{f"loss_psr_c{i}": 0 for i in range(11)},
+        }
         n_steps = 0
 
         for batch_idx, batch in enumerate(train_loader):
@@ -316,6 +695,8 @@ def main():
             step_metrics = train_step(
                 model, images, targets, log_vars, optimizer, scaler,
                 hp_prec_cap=args.hp_prec_cap,
+                pcgrad=args.pcgrad,
+                act_class_weights=act_class_weights,
             )
 
             for k in epoch_metrics:
@@ -344,6 +725,9 @@ def main():
             lv.get("log_var_psr", 0), lv.get("log_var_pose", 0),
             avg_metrics["lr"], dt,
         )
+        # Per-component PSR loss breakdown (Doc 175 §4)
+        _pcs = [avg_metrics.get(f"loss_psr_c{i}", 0) for i in range(11)]
+        logger.info("  PSR comp: [%s]", " ".join(f"{v:.4f}" for v in _pcs))
 
         scheduler.step()
 
