@@ -67,7 +67,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("train_st_pose")
 
-from src.models.video_backbones import load_mvit_v2_s
 from src.split_config import require_split
 import src.config as C
 
@@ -76,9 +75,9 @@ import src.config as C
 # ---------------------------------------------------------------------------
 POSE_DIM = 6  # fwd(3) + up(3)
 
-# MViTv2-S Kinetics normalization
-_MEAN = torch.tensor([0.45, 0.45, 0.45]).view(3, 1, 1)
-_STD = torch.tensor([0.225, 0.225, 0.225]).view(3, 1, 1)
+# ConvNeXt-Tiny ImageNet normalization
+_MEAN = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+_STD = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
 
 OUTPUT_DIR = _CODE_ROOT / "src" / "runs" / "rf_stages" / "checkpoints" / "st_pose_run"
 
@@ -129,17 +128,21 @@ def bootstrap_ci(
 # Model
 # ===========================================================================
 
-class MViTv2STPose(nn.Module):
-    """Single-task MViTv2-S head pose model with 6D MLP regression head.
+class ConvNeXtSTPose(nn.Module):
+    """Single-task ConvNeXt-Tiny head pose model with 6D MLP regression head.
 
     Predicts 6D continuous pose (fwd 3 + up 3), renormalized at inference.
+    ConvNeXt-Tiny is a 2D backbone (no wasteful temporal expansion) — matching
+    the ST-Pose baseline spec per 175 §6.
+    Uses torchvision pretrained weights (cached in hub).
     """
 
     def __init__(self, freeze_backbone: bool = True):
         super().__init__()
-        backbone = load_mvit_v2_s(pretrained=True)
-        feat_dim = backbone.head[1].in_features  # 768
-        backbone.head = nn.Identity()
+        import torchvision.models as _tv_models
+        backbone = _tv_models.convnext_tiny(weights='DEFAULT')
+        feat_dim = backbone.classifier[2].in_features  # 768 (ConvNeXt-Tiny)
+        backbone.classifier = nn.Flatten(1)
         self.backbone = backbone
 
         # MLP regression head: 768 -> 256 -> 6 (fwd 3 + up 3)
@@ -147,14 +150,15 @@ class MViTv2STPose(nn.Module):
             nn.Linear(feat_dim, 256),
             nn.LeakyReLU(negative_slope=0.01, inplace=True),
             nn.Linear(256, POSE_DIM),
+            nn.Tanh(),  # bounded output [-1, 1] — helps stability from random init
         )
 
         if freeze_backbone:
             for p in self.backbone.parameters():
                 p.requires_grad = False
-            logger.info("Backbone frozen.")
+            logger.info("Backbone frozen (ConvNeXt-Tiny, ImageNet-1K).")
         else:
-            logger.info("Backbone trainable (not recommended for ST-Pose baseline).")
+            logger.info("Backbone trainable.")
 
         self._init_weights()
 
@@ -169,16 +173,12 @@ class MViTv2STPose(nn.Module):
         """Forward pass.
 
         Args:
-            x: [B, C, H, W] — single normalized frame (not a clip).
+            x: [B, C, H, W] — single normalized frame.
 
         Returns:
-            raw_6d: [B, 6] — raw MLP output (fwd 3 + up 3, not yet renormalized).
+            raw_6d: [B, 6] — raw MLP output (fwd 3 + up 3, Tanh-bounded).
         """
-        # MViTv2-S requires 5D input [B, C, T, H, W] with T >= 16.
-        # Unsqueeze temporal dim and repeat minimum 16 frames.
-        if x.dim() == 4:
-            x = x.unsqueeze(2)  # [B, C, 1, H, W]
-            x = x.expand(-1, -1, 16, -1, -1).contiguous()  # [B, C, 16, H, W]
+        # ConvNeXt-Tiny processes 2D [B, C, H, W] natively.
         features = self.backbone(x)  # [B, 768]
         return self.pose_head(features)  # [B, 6]
 
@@ -292,9 +292,11 @@ class PoseFrameDataset(torch.utils.data.Dataset):
             lines = pose_file.read_text().strip().split("\n")
             for line in lines:
                 parts = line.strip().split(",")
-                if len(parts) < 9:
+                if len(parts) < 10:
                     continue
                 try:
+                    from pathlib import Path as _P
+                    frame_num = int(_P(parts[0]).stem)
                     fwd = np.array([float(parts[1]), float(parts[2]), float(parts[3])], dtype=np.float32)
                     up = np.array([float(parts[7]), float(parts[8]), float(parts[9])], dtype=np.float32)
                 except (ValueError, IndexError):
@@ -304,7 +306,7 @@ class PoseFrameDataset(torch.utils.data.Dataset):
                 up_n = up / max(np.linalg.norm(up), 1e-6)
                 pose_6d = np.concatenate([fwd_n, up_n])  # [6]
 
-                self.frames.append((rec_id, count, pose_6d))
+                self.frames.append((rec_id, frame_num, pose_6d))
                 count += 1
                 if max_frames is not None and count >= max_frames:
                     return
@@ -313,12 +315,12 @@ class PoseFrameDataset(torch.utils.data.Dataset):
         return len(self.frames)
 
     def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
-        rec_id, _, pose_6d = self.frames[idx]
-        frame = self._load_frame(rec_id)
+        rec_id, frame_num, pose_6d = self.frames[idx]
+        frame = self._load_frame(rec_id, frame_num)
         return frame, torch.from_numpy(pose_6d).float()
 
-    def _load_frame(self, rec_id: str) -> torch.Tensor:
-        """Load a single frame, normalize, return [3, H, W]."""
+    def _load_frame(self, rec_id: str, frame_num: int) -> torch.Tensor:
+        """Load a single frame, normalize with ImageNet stats, return [3, H, W]."""
         split_dir = C.RECORDINGS_ROOT / self.split
         rgb_dir = split_dir / rec_id / "rgb"
         if not rgb_dir.exists():
@@ -327,16 +329,17 @@ class PoseFrameDataset(torch.utils.data.Dataset):
             from PIL import Image
             from torchvision.transforms import functional as TF
 
-            # Use first available frame as placeholder (pose is per-frame)
-            candidates = sorted(rgb_dir.glob("*.jpg"))
-            if not candidates:
-                return torch.zeros(3, 224, 224)
-            img_path = candidates[0]
+            img_path = rgb_dir / f"{frame_num:06d}.jpg"
+            if not img_path.exists():
+                candidates = sorted(rgb_dir.glob("*.jpg"))
+                if not candidates:
+                    return torch.zeros(3, 224, 224)
+                img_path = candidates[0]
             img = Image.open(img_path).convert("RGB")
-            img = TF.resize(img, [256], antialias=True)
-            img = TF.center_crop(img, [224, 224])
-            img = TF.to_tensor(img)  # [3, 224, 224], [0, 1]
-            img = (img - 0.45) / 0.225
+            img = img.resize((224, 224), Image.BILINEAR)
+            img = torch.from_numpy(np.array(img, dtype=np.float32)).permute(2, 0, 1)  # [3, 224, 224]
+            img = img / 255.0  # [0, 1]
+            img = (img - _MEAN) / _STD
             return img
         except Exception:
             return torch.zeros(3, 224, 224)
@@ -602,6 +605,8 @@ def main():
     train_loader = torch.utils.data.DataLoader(
         train_ds, batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, pin_memory=True,
+        prefetch_factor=2 if args.num_workers > 0 else None,
+        persistent_workers=args.num_workers > 0,
     )
     val_loader = torch.utils.data.DataLoader(
         val_ds, batch_size=args.batch_size, shuffle=False,
@@ -612,7 +617,7 @@ def main():
     # Model
     # ------------------------------------------------------------------
     logger.info("Initializing MViTv2-S + 6D MLP pose head...")
-    model = MViTv2STPose(freeze_backbone=True)
+    model = ConvNeXtSTPose(freeze_backbone=True)
     model = model.to(device)
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
