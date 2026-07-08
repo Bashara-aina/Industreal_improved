@@ -415,6 +415,10 @@ def main():
         help="Backbone learning rate (default: 1e-5)",
     )
     parser.add_argument(
+        "--num-workers", type=int, default=4,
+        help="DataLoader workers (default: 4)",
+    )
+    parser.add_argument(
         "--freeze-backbone", action="store_true",
         help="Freeze backbone weights",
     )
@@ -468,7 +472,9 @@ def main():
         train_ds,
         batch_size=args.batch_size or C.BATCH_SIZE,
         shuffle=True,
-        num_workers=0,
+        num_workers=args.num_workers,
+        prefetch_factor=4 if args.num_workers > 0 else None,
+        persistent_workers=args.num_workers > 0,
         collate_fn=collate_fn,
         drop_last=True,
     )

@@ -997,18 +997,11 @@ class IndustRealMultiTaskDataset(Dataset):
         cache = self._anno_cache[recording_id]
         rgb_dir = self.recordings_root / self.split / recording_id / 'rgb'
 
-        # Load all T frames as [T, 3, H, W]
+        # Load all T frames as [T, 3, H, W] via _load_image (uses RAM cache)
         frames_list: List[torch.Tensor] = []
         for fn in frame_nums:
-            img_path = rgb_dir / f'{fn:06d}.jpg'
-            try:
-                img = Image.open(img_path).convert('RGB')
-                img = img.resize((self.img_size[0], self.img_size[1]), _BILINEAR)
-                img = np.array(img, dtype=np.uint8)
-            except Exception as e:
-                logger.warning(f'Failed to load {img_path}: {e}. Using blank.')
-                img = np.zeros((self.img_size[1], self.img_size[0], 3), dtype=np.uint8)
-            frames_list.append(torch.from_numpy(img).permute(2, 0, 1))
+            img_path = str(rgb_dir / f'{fn:06d}.jpg')
+            frames_list.append(self._load_image(img_path))
 
         rgb_tensor = torch.stack(frames_list, dim=0)  # [T, 3, H, W]
 

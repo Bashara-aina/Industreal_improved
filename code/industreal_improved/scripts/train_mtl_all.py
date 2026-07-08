@@ -526,12 +526,21 @@ def get_dataloaders(
         weights, num_samples=len(weights), replacement=True
     )
 
+    # Use spawn multiprocessing context to avoid CUDA fork deadlocks.
+    # Workers are CPU-only (PIL decode + numpy), no CUDA init in workers.
+    # Pass the context directly to DataLoader (avoids process-wide set_start_method).
+    _nw = num_workers
+    _context = "spawn" if _nw > 0 else None
+
     train_loader = torch.utils.data.DataLoader(
         train_ds,
         batch_size=batch_size,
         sampler=sampler,
-        num_workers=num_workers,
+        num_workers=_nw,
         pin_memory=True,
+        prefetch_factor=4 if _nw > 0 else None,
+        persistent_workers=_nw > 0,
+        multiprocessing_context=_context,
         collate_fn=collate_fn_sequences,
         drop_last=True,
     )
@@ -937,7 +946,7 @@ def main():
     else:
         train_loader, val_info = get_dataloaders(
             batch_size=args.batch_size,
-            num_workers=0,
+            num_workers=4,
         )
 
     # ------------------------------------------------------------------
