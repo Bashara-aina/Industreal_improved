@@ -952,14 +952,18 @@ def evaluate(
             pred_x2 = cell_cx.view(1, 1, W) + decoded[:, 2:3] * stride
             pred_y2 = cell_cy.view(1, H, 1) + decoded[:, 3:4] * stride
             pred_abs = torch.stack([pred_x1, pred_y1, pred_x2, pred_y2], dim=1)  # [B, 4, H, W]
-            boxes_lvl = pred_abs.permute(0, 2, 3, 1).reshape(_B, -1, 4)         # [B, H*W, 4]
-            scores_lvl = torch.sigmoid(cls_logits_lvl).permute(0, 2, 3, 1).reshape(_B, -1, C.NUM_DET_CLASSES)  # [B, H*W, 24]
-            max_scores_lvl = scores_lvl.amax(dim=-1)  # [B, H*W]
-            labels_lvl = scores_lvl.argmax(dim=-1)    # [B, H*W]
-
-            level_boxes.append(boxes_lvl)
-            level_scores.append(max_scores_lvl)
-            level_labels.append(labels_lvl)
+            try:
+                boxes_lvl = pred_abs.permute(0, 2, 3, 1).reshape(_B, -1, 4)         # [B, H*W, 4]
+                scores_lvl = torch.sigmoid(cls_logits_lvl).permute(0, 2, 3, 1).reshape(_B, -1, C.NUM_DET_CLASSES)  # [B, H*W, 24]
+                max_scores_lvl = scores_lvl.amax(dim=-1)  # [B, H*W]
+                labels_lvl = scores_lvl.argmax(dim=-1)    # [B, H*W]
+                level_boxes.append(boxes_lvl)
+                level_scores.append(max_scores_lvl)
+                level_labels.append(labels_lvl)
+            except RuntimeError as e:
+                # F.interpolate / 4D-5D permute edge cases — skip this level
+                logger.debug("  Box decode skipped at %s: %s", level_name, e)
+                continue
 
         if level_boxes:
             all_boxes = torch.cat(level_boxes, dim=1)    # [B, N_total, 4]
