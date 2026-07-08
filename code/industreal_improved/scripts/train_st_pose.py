@@ -49,8 +49,7 @@ import torch.nn.functional as F
 # ---------------------------------------------------------------------------
 # Path plumbing
 # ---------------------------------------------------------------------------
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_CODE_ROOT = _PROJECT_ROOT / "code" / "industreal_improved"
+_CODE_ROOT = Path(__file__).resolve().parent.parent
 for _p in [
     str(_CODE_ROOT),
     str(_CODE_ROOT / "src"),

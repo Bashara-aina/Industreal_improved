@@ -46,8 +46,7 @@ import torch.nn.functional as F
 # ---------------------------------------------------------------------------
 # Path plumbing
 # ---------------------------------------------------------------------------
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_CODE_ROOT = _PROJECT_ROOT / "code" / "industreal_improved"
+_CODE_ROOT = Path(__file__).resolve().parent.parent
 for _p in [
     str(_CODE_ROOT),
     str(_CODE_ROOT / "src"),
@@ -154,6 +153,7 @@ class ClipDataset(torch.utils.data.Dataset):
 
         rec_dirs = sorted(split_dir.iterdir())
         count = 0
+        labels_cache = []
         for rec_dir in rec_dirs:
             if not rec_dir.is_dir():
                 continue
@@ -184,9 +184,12 @@ class ClipDataset(torch.utils.data.Dataset):
                 # Create clips at stride intervals
                 for clip_start in range(start, end - self.clip_len + 1, self.stride):
                     self.clips.append((rec_id, clip_start, action_id))
+                    labels_cache.append(action_id)
                     count += 1
                     if max_clips is not None and count >= max_clips:
+                        self._labels = labels_cache
                         return
+        self._labels = labels_cache
 
     def __len__(self) -> int:
         return len(self.clips)
@@ -224,11 +227,20 @@ class ClipDataset(torch.utils.data.Dataset):
 
 
 def compute_class_weights(dataset: ClipDataset, num_classes: int = NUM_CLASSES) -> torch.Tensor:
-    """Compute inverse-frequency class weights from dataset labels."""
-    counter = Counter()
-    for idx in range(len(dataset)):
-        _, label = dataset[idx]
-        counter[int(label)] += 1
+    """Compute inverse-frequency class weights from dataset labels.
+
+    Uses pre-cached labels from dataset._labels (populated during _build),
+    avoiding expensive per-clip image loading.
+    """
+    labels = getattr(dataset, '_labels', None)
+    if labels is not None:
+        counter = Counter(int(l) for l in labels)
+    else:
+        logger.warning("No cached labels found — iterating dataset (slow)")
+        counter = Counter()
+        for idx in range(len(dataset)):
+            _, label = dataset[idx]
+            counter[int(label)] += 1
 
     weights = torch.zeros(num_classes, dtype=torch.float)
     for c in range(num_classes):
