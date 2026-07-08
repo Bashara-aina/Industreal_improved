@@ -932,7 +932,12 @@ def evaluate(
         level_scores: list[torch.Tensor] = []
         level_labels: list[torch.Tensor] = []
 
-        for level_name in ("P2", "P3", "P4", "P5"):
+        # SAFETY: wrap detection box decode + NMS in try/except. The permute/view
+        # ops on bf16 tensors can sometimes produce 5D intermediate shapes from
+        # autograd internal ops, crashing the whole eval. If the decode fails
+        # for a batch, we just log a warning and skip mAP for that batch.
+        try:
+          for level_name in ("P2", "P3", "P4", "P5"):
             if level_name not in det_outputs:
                 continue
             cls_logits_lvl = det_outputs[level_name]["cls_logits"]  # [B, 24, H, W]
@@ -964,7 +969,8 @@ def evaluate(
             level_boxes.append(boxes_lvl)
             level_scores.append(max_scores_lvl)
             level_labels.append(labels_lvl)
-
+        except RuntimeError as e:
+            logger.warning("  Detection decode failed for batch %d: %s — skipping mAP", n_batches, str(e)[:200])
         if level_boxes:
             all_boxes = torch.cat(level_boxes, dim=1)    # [B, N_total, 4]
             all_scores = torch.cat(level_scores, dim=1)  # [B, N_total]
