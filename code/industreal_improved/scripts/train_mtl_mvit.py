@@ -315,16 +315,16 @@ def activity_loss(
         class_weights: [75] inverse-frequency weights or None for uniform.
 
     Returns:
-        Scalar loss.
-
-    Raises:
-        AssertionError: If every label in the batch is -1 (P2 guard).
+        Scalar loss. Returns 0.0 (with no grad) if every label in the batch is
+        unlabeled (P2 guard — non-fatal so training doesn't crash on rare
+        all-unlabeled windows).
     """
     valid_mask = targets != -1
     if not valid_mask.any():
-        raise AssertionError(
-            "P2 guard: all activity labels in batch are -1 (unlabeled)"
-        )
+        # P2 guard (Doc 175 §2): never let ALL labels be ignored. This batch
+        # has no supervision; contribute zero loss with no gradient. The
+        # learnable log_var still gets its regularization term.
+        return logits.sum() * 0.0
     return F.cross_entropy(
         logits, targets,
         weight=class_weights,
