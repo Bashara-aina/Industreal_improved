@@ -681,99 +681,321 @@ def train_step(
 
 
 # ===========================================================================
-# Evaluation
+# Validation evaluation (Doc 175 section 7.2)
 # ===========================================================================
+
+def _compute_tau(pred_tr: np.ndarray, gt_tr: np.ndarray, tol: int = 3) -> float:
+    """Mean signed delay between matched predicted and GT transition events.
+
+    Positive = lag, negative = anticipation. NaN if no matches.
+    """
+    n_comp = pred_tr.shape[1]
+    delays = []
+    for c in range(n_comp):
+        p_frames = np.where(pred_tr[:, c])[0]
+        g_frames = np.where(gt_tr[:, c])[0]
+        matched_gt = set()
+        for pf in p_frames:
+            best_delay = None
+            best_gi = None
+            for gi, gf in enumerate(g_frames):
+                if gi not in matched_gt and abs(pf - gf) <= tol:
+                    d = int(pf) - int(gf)
+                    if best_delay is None or abs(d) < abs(best_delay):
+                        best_delay = d
+                        best_gi = gi
+            if best_gi is not None:
+                matched_gt.add(best_gi)
+                delays.append(best_delay)
+    if not delays:
+        return float("nan")
+    return float(np.mean(delays))
+
+
+def _compute_pos(pred_tr: np.ndarray, gt_tr: np.ndarray) -> float:
+    """Ordered-pair fraction: directional sign agreement of transitions."""
+    return float((np.sign(pred_tr) == np.sign(gt_tr)).mean())
+
 
 @torch.no_grad()
 def evaluate(
     model: nn.Module,
     data_loader: torch.utils.data.DataLoader,
     device: torch.device,
-    act_class_weights: Optional[torch.Tensor] = None,
+    epoch: int | None = None,
 ) -> dict:
-    """Evaluate model on a given split without gradient computation.
+    """Full validation evaluation across all 4 tasks (Doc 175 section 7.2).
 
-    Computes the same per-task losses as train_step averaged over the split.
+    Computes:
+      - PSR: event_f1 at +/-3, POS, tau  (via decoder_oracle_bound.event_f1)
+      - Activity: clip-level top-1 / top-5 on 75 classes
+      - Detection: presence BCE as a lightweight eval
+      - Pose: angular MAE with bootstrap CI (fwd + up in degrees)
 
     Args:
         model: MTL-MViT model.
         data_loader: DataLoader for the evaluation split.
         device: Torch device.
-        act_class_weights: Optional class weights for activity loss.
+        epoch: Current epoch number (for logging only).
 
     Returns:
-        dict of average loss metrics.
+        dict of metric_name -> float.
     """
+    from collections import defaultdict
+    from src.evaluation.decoder_oracle_bound import event_f1
+
     model.eval()
-    total = {
-        "loss": 0.0, "loss_det": 0.0, "loss_act": 0.0,
-        "loss_psr": 0.0, "loss_pose": 0.0,
-    }
-    n_steps = 0
+    _prefix = f" (epoch {epoch})" if epoch else ""
+    logger.info("=" * 60)
+    logger.info("Starting validation evaluation%s", _prefix)
+
+    # Stream-through accumulators
+    psr_pred_logits: list[np.ndarray] = []
+    psr_labels_list: list[np.ndarray] = []
+    psr_rec_ids: list[str] = []
+    psr_frame_nums: list[list[int]] = []
+
+    act_top1_correct = 0
+    act_top5_correct = 0
+    act_total = 0
+
+    pose_fwd_maes: list[float] = []
+    pose_up_maes: list[float] = []
+
+    det_presence_preds: list[np.ndarray] = []
+    det_presence_targets: list[np.ndarray] = []
+
+    n_batches = 0
+    t_start = time.time()
 
     for batch in data_loader:
         images = batch[0].to(device, non_blocking=True)
-        targets = {}
-        for k, v in batch[1].items():
+        targets_raw = batch[1]
+
+        # Move tensors to device
+        targets: dict = {}
+        for k, v in targets_raw.items():
             if isinstance(v, torch.Tensor):
                 targets[k] = v.to(device, non_blocking=True)
             elif isinstance(v, dict):
-                targets[k] = {sk: sv.to(device) if isinstance(sv, torch.Tensor) else sv
-                              for sk, sv in v.items()}
+                targets[k] = {
+                    sk: sv.to(device) if isinstance(sv, torch.Tensor) else sv
+                    for sk, sv in v.items()
+                }
             else:
                 targets[k] = v
 
-        # Normalise and permute (same as training loop)
-        images = images.float() / 255.0
-        mean = torch.tensor([0.45, 0.45, 0.45], device=device).view(1, 1, 3, 1, 1)
-        std = torch.tensor([0.225, 0.225, 0.225], device=device).view(1, 1, 3, 1, 1)
-        images = (images - mean) / std
-        images = images.permute(0, 2, 1, 3, 4).contiguous()
-
         B = images.size(0)
 
-        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-            outputs = model(images)
+        # Normalize and permute (same as training)
+        images_f = images.float() / 255.0
+        _mean = torch.tensor([0.45, 0.45, 0.45], device=device).view(1, 1, 3, 1, 1)
+        _std = torch.tensor([0.225, 0.225, 0.225], device=device).view(1, 1, 3, 1, 1)
+        images_f = (images_f - _mean) / _std
+        images_f = images_f.permute(0, 2, 1, 3, 4).contiguous()
 
-            det_list = targets.get("detection", [])
-            l_det = detection_loss(outputs["detection"], det_list)
+        outputs = model(images_f)
 
-            l_act = activity_loss(
-                outputs["activity"],
-                targets.get("activity", torch.zeros(B, dtype=torch.long, device=device)),
-                class_weights=act_class_weights,
-            ) if "activity" in targets else torch.tensor(0.0, device=device)
+        # -- PSR --
+        psr_logits = outputs["psr_logits"]  # [B, 16, 11]
+        psr_gt = targets["psr_labels"]      # [B, 16, 11]
+        psr_pred_logits.append(psr_logits.cpu().numpy())
+        psr_labels_list.append(psr_gt.cpu().numpy())
+        for i in range(B):
+            meta = targets["metadata"][i] if i < len(targets["metadata"]) else {}
+            rid = meta.get("recording_id", f"b{n_batches}_{i}")
+            fnums = meta.get("frame_nums", list(range(16)))
+            psr_rec_ids.append(str(rid))
+            psr_frame_nums.append(
+                [int(f) for f in (fnums if isinstance(fnums, (list, tuple)) else [fnums])]
+            )
 
-            _ew = None
-            if "psr_labels" in targets:
-                if hasattr(C, 'PSR_COMP_WEIGHTS') and C.PSR_COMP_WEIGHTS:
-                    _ew = torch.tensor(
-                        C.PSR_COMP_WEIGHTS, device=device, dtype=torch.float32
-                    ).view(1, 1, -1)
+        # -- Activity: top-1 and top-5 --
+        act_logits = outputs["activity"]  # [B, 75]
+        act_gt = targets["activity"]      # [B]
+        act_mask = targets.get("activity_mask")
+        if act_mask is not None:
+            act_valid = act_mask.bool()
+        else:
+            act_valid = act_gt >= 0
 
-            l_psr = psr_loss(
-                outputs["psr_logits"],
-                targets.get("psr_labels", torch.zeros(B, 16, 11, device=device)),
-                comp_weights=_ew,
-            ) if "psr_labels" in targets else torch.tensor(0.0, device=device)
+        if act_valid.any():
+            act_preds = act_logits[act_valid]
+            act_gts = act_gt[act_valid]
+            act_top1_correct += (act_preds.argmax(dim=1) == act_gts).sum().item()
+            _, top5 = act_preds.topk(5, dim=1)
+            act_top5_correct += top5.eq(act_gts.unsqueeze(1)).any(dim=1).sum().item()
+            act_total += act_valid.sum().item()
 
-            if "head_pose" in targets:
-                hp = targets["head_pose"]
-                hp_6d = hp[:, hp.size(1) // 2, :6]
-            else:
-                hp_6d = torch.zeros(B, 6, device=device)
-            l_pose = pose_loss(outputs["pose_6d"], hp_6d)
+        # -- Detection: presence BCE (lightweight) --
+        det_outputs = outputs["detection"]
+        det_list = targets.get("detection", [])
 
-            total_loss = l_det + l_act + l_psr + l_pose
+        level_presence = []
+        for level_name in ("P2", "P3", "P4", "P5"):
+            if level_name not in det_outputs:
+                continue
+            cls_logits = det_outputs[level_name]["cls_logits"]  # [B, 24, H, W]
+            cls_sig = torch.sigmoid(cls_logits)
+            level_presence.append(cls_sig.amax(dim=(2, 3)))     # [B, 24]
 
-        total["loss"] += total_loss.item()
-        total["loss_det"] += l_det.item()
-        total["loss_act"] += l_act.item()
-        total["loss_psr"] += l_psr.item()
-        total["loss_pose"] += l_pose.item()
-        n_steps += 1
+        if level_presence:
+            pred_presence = torch.stack(level_presence, dim=0).amax(dim=0)
+        else:
+            pred_presence = torch.zeros(B, 24, device=device)
 
-    return {k: v / max(n_steps, 1) for k, v in total.items()}
+        gt_presence = torch.zeros(B, 24, device=device)
+        for b in range(B):
+            det_item = det_list[b] if isinstance(det_list[b], dict) else {}
+            labels = det_item.get("labels")
+            if labels is not None and labels.numel() > 0:
+                for lbl_idx in range(labels.size(0)):
+                    lbl = int(labels[lbl_idx].item())
+                    if 0 <= lbl < 24:
+                        gt_presence[b, lbl] = 1.0
+
+        det_presence_preds.append(pred_presence.cpu().numpy())
+        det_presence_targets.append(gt_presence.cpu().numpy())
+
+        # -- Pose: angular MAE --
+        hp = targets.get("head_pose")  # [B, 16, 9]
+        if hp is not None:
+            hp_6d = hp[:, hp.size(1) // 2, :6]  # [B, 6] middle frame
+            fwd_pred, up_pred = renormalize_pose(outputs["pose_6d"])
+            fwd_gt = F.normalize(hp_6d[:, :3], dim=1)
+            up_gt = F.normalize(hp_6d[:, 3:], dim=1)
+
+            cos_fwd = (fwd_pred * fwd_gt).sum(dim=1).clamp(-1.0, 1.0)
+            cos_up = (up_pred * up_gt).sum(dim=1).clamp(-1.0, 1.0)
+
+            pose_fwd_maes.extend(torch.rad2deg(torch.acos(cos_fwd)).cpu().numpy().tolist())
+            pose_up_maes.extend(torch.rad2deg(torch.acos(cos_up)).cpu().numpy().tolist())
+
+        n_batches += 1
+        if n_batches % 500 == 0:
+            logger.info("  Eval batch %d", n_batches)
+
+    # =====================================================================
+    # Aggregate metrics
+    # =====================================================================
+    metrics: dict = {"eval_batches": n_batches, "eval_time_s": time.time() - t_start}
+
+    # -- Activity --
+    if act_total > 0:
+        metrics["act_top1"] = act_top1_correct / act_total
+        metrics["act_top5"] = act_top5_correct / act_total
+        metrics["act_n_total"] = act_total
+        logger.info("  Activity: top1=%.4f  top5=%.4f  (n=%d)",
+                     metrics["act_top1"], metrics["act_top5"], act_total)
+    else:
+        metrics["act_top1"] = 0.0
+        metrics["act_top5"] = 0.0
+
+    # -- Detection presence BCE --
+    if det_presence_preds:
+        all_pred = np.concatenate(det_presence_preds, axis=0)   # [N, 24]
+        all_gt = np.concatenate(det_presence_targets, axis=0)  # [N, 24]
+        presence_bce = float(F.binary_cross_entropy(
+            torch.from_numpy(all_pred), torch.from_numpy(all_gt), reduction="mean"
+        ).item())
+        pred_bin = (all_pred > 0.5).astype(np.float32)
+        presence_acc = float((pred_bin == all_gt).mean())
+        metrics["det_presence_bce"] = presence_bce
+        metrics["det_presence_acc"] = presence_acc
+        logger.info("  Detection: presence_bce=%.4f  presence_acc=%.4f",
+                     presence_bce, presence_acc)
+
+    # -- PSR transition eval (Doc 175 section 7.2) --
+    if psr_pred_logits:
+        all_logits = np.concatenate(psr_pred_logits, axis=0)  # [N, 16, 11]
+        all_labels = np.concatenate(psr_labels_list, axis=0)  # [N, 16, 11]
+
+        rec_data: dict = defaultdict(lambda: {"pred": [], "label": [], "frame": []})
+        for i in range(len(psr_rec_ids)):
+            rid = psr_rec_ids[i]
+            fnums = psr_frame_nums[i]
+            for t in range(all_logits.shape[1]):
+                rec_data[rid]["pred"].append(all_logits[i, t])
+                rec_data[rid]["label"].append(all_labels[i, t])
+                rec_data[rid]["frame"].append(fnums[t] if t < len(fnums) else t)
+
+        event_f1s: list[float] = []
+        poss: list[float] = []
+        taus: list[float] = []
+
+        for rid, arrs in rec_data.items():
+            _frames = np.array(arrs["frame"], dtype=np.int64)
+            _sort = np.argsort(_frames)
+            _vp_raw = np.array(arrs["pred"])[_sort]   # [T, 11]
+            _vl_raw = np.array(arrs["label"])[_sort]  # [T, 11]
+
+            # Sigmoid -> binary at 0.5 threshold
+            _vp_bin = (1.0 / (1.0 + np.exp(-_vp_raw)) > 0.5).astype(np.int32)
+
+            # Keep only valid frames
+            _valid = _vl_raw.max(axis=1) >= 0
+            _vp = _vp_bin[_valid]
+            _vl = _vl_raw[_valid]
+            if len(_vp) < 2:
+                continue
+
+            # Transition events: 0 -> 1
+            _pred_tr = np.clip(_vp[1:] - _vp[:-1], a_min=0, a_max=None)
+            _gt_tr = np.clip(_vl[1:] - _vl[:-1], a_min=0, a_max=None)
+            _valid_tr = _vl[1:].max(axis=1) >= 0
+            _pv = _pred_tr[_valid_tr]
+            _gv = _gt_tr[_valid_tr]
+
+            _ef1 = event_f1(_pv, _gv, tol=3)
+            event_f1s.append(_ef1)
+            poss.append(_compute_pos(_pv, _gv))
+            _tau = _compute_tau(_pv, _gv, tol=3)
+            if not np.isnan(_tau):
+                taus.append(_tau)
+
+        if event_f1s:
+            metrics["psr_event_f1_at_3"] = float(np.mean(event_f1s))
+            metrics["psr_pos"] = float(np.mean(poss)) if poss else 0.0
+            metrics["psr_tau_frames"] = float(np.nanmean(taus)) if taus else float("nan")
+            logger.info("  PSR: event_f1@+-3=%.4f  POS=%.4f  tau=%.2f  (n_recs=%d)",
+                         metrics["psr_event_f1_at_3"],
+                         metrics["psr_pos"],
+                         metrics.get("psr_tau_frames", float("nan")),
+                         len(event_f1s))
+
+    # -- Pose angular MAE with bootstrap CI --
+    if pose_fwd_maes:
+        fwd_arr = np.array(pose_fwd_maes)
+        up_arr = np.array(pose_up_maes)
+        metrics["pose_fwd_mae"] = float(np.mean(fwd_arr))
+        metrics["pose_up_mae"] = float(np.mean(up_arr))
+        metrics["pose_n"] = len(fwd_arr)
+
+        # Bootstrap 95% CI (1000 resamples)
+        _rng = np.random.default_rng(42)
+        _n_boot = 1000
+        _n_samp = len(fwd_arr)
+        _fwd_boot = np.array([np.mean(_rng.choice(fwd_arr, _n_samp)) for _ in range(_n_boot)])
+        _up_boot = np.array([np.mean(_rng.choice(up_arr, _n_samp)) for _ in range(_n_boot)])
+        metrics["pose_fwd_mae_ci95"] = [
+            float(np.percentile(_fwd_boot, 2.5)),
+            float(np.percentile(_fwd_boot, 97.5)),
+        ]
+        metrics["pose_up_mae_ci95"] = [
+            float(np.percentile(_up_boot, 2.5)),
+            float(np.percentile(_up_boot, 97.5)),
+        ]
+        logger.info("  Pose: fwd_MAE=%.2fdeg [%.2f, %.2f]  up_MAE=%.2fdeg [%.2f, %.2f]  (n=%d)",
+                     metrics["pose_fwd_mae"], metrics["pose_fwd_mae_ci95"][0],
+                     metrics["pose_fwd_mae_ci95"][1],
+                     metrics["pose_up_mae"], metrics["pose_up_mae_ci95"][0],
+                     metrics["pose_up_mae_ci95"][1], metrics["pose_n"])
+
+    logger.info("Validation complete (%.1fs, %d batches)", metrics["eval_time_s"], n_batches)
+    logger.info("=" * 60)
+
+    model.train()
+    return metrics
 
 
 # ===========================================================================
@@ -795,6 +1017,8 @@ def main():
     parser.add_argument("--pcgrad", action=argparse.BooleanOptionalAction, default=True, help="PCGrad gradient surgery (default: on; use --no-pcgrad to disable)")
     parser.add_argument("--output-dir", type=str, default=str(OUTPUT_ROOT))
     parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume")
+    parser.add_argument("--eval-every", type=int, default=5,
+                        help="Run validation evaluation every N epochs (default: 5)")
     parser.add_argument("--eval-split", type=str, default="val",
                         help="Split for model selection (val) or final eval (test)")
     parser.add_argument("--test-only", action="store_true",
@@ -917,8 +1141,7 @@ def main():
             collate_fn=collate_fn_sequences,
             drop_last=False,
         )
-        test_act_weights = compute_activity_class_weights(test_ds, num_classes=len(train_ds.class_counts)).to(device)
-        test_metrics = evaluate(model, test_loader, device, test_act_weights)
+        test_metrics = evaluate(model, test_loader, device, epoch=None)
         logger.info("Test metrics: %s", test_metrics)
         with open(output_dir / "metrics.json", "w") as f:
             json.dump({"test_metrics": test_metrics, "config": vars(args)}, f, indent=2, default=str)
@@ -947,12 +1170,14 @@ def main():
     # ── Resume ────────────────────────────────────────────────────────────
     start_epoch = 0
     best_val_loss = float("inf")
+    best_act_top1 = 0.0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
         model.load_state_dict(ckpt["model_state_dict"])
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         start_epoch = ckpt["epoch"]
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
+        best_act_top1 = ckpt.get("best_act_top1", 0.0)
         log_vars = ckpt.get("log_vars", log_vars)
         logger.info("Resumed from epoch %d", start_epoch)
 
@@ -1009,6 +1234,17 @@ def main():
                 epoch_metrics[k] += step_metrics.get(k, 0)
             n_steps += 1
 
+            if batch_idx % 100 == 0:
+                logger.info(
+                    "  [batch %5d/%d] loss=%.4f det=%.4f act=%.4f psr=%.4f pose=%.4f",
+                    batch_idx, len(train_loader),
+                    step_metrics.get("loss", 0),
+                    step_metrics.get("loss_det", 0),
+                    step_metrics.get("loss_act", 0),
+                    step_metrics.get("loss_psr", 0),
+                    step_metrics.get("loss_pose", 0),
+                )
+
             if args.plumbing and batch_idx >= 10:
                 break
 
@@ -1037,29 +1273,37 @@ def main():
 
         scheduler.step()
 
-        # ── Evaluate on eval split for model selection ────────────────────
-        eval_metrics = evaluate(model, eval_loader, device, act_class_weights)
-        eval_metrics["epoch"] = epoch
-        metrics_log.setdefault("val_metrics", []).append(eval_metrics)
-        logger.info(
-            "  Eval (%s): loss=%.4f det=%.4f act=%.4f psr=%.4f pose=%.4f",
-            args.eval_split,
-            eval_metrics["loss"], eval_metrics["loss_det"], eval_metrics["loss_act"],
-            eval_metrics["loss_psr"], eval_metrics["loss_pose"],
-        )
+        # ── Evaluate on eval split (Doc 175 section 7.2) ─────────────────
+        if epoch % args.eval_every == 0:
+            eval_metrics = evaluate(model, eval_loader, device, epoch=epoch)
+            eval_metrics["epoch"] = epoch
+            metrics_log.setdefault("val_metrics", []).append(eval_metrics)
+            act1 = eval_metrics.get("act_top1", 0.0)
+            act5 = eval_metrics.get("act_top5", 0.0)
+            psr = eval_metrics.get("psr_event_f1_at_3", 0.0)
+            det = eval_metrics.get("det_presence_bce", 0.0)
+            fwd = eval_metrics.get("pose_fwd_mae", 0.0)
+            up = eval_metrics.get("pose_up_mae", 0.0)
+            logger.info(
+                "  Eval (%s): act_top1=%.4f act_top5=%.4f psr_f1=%.4f "
+                "det_bce=%.4f pose_fwd=%.2fdeg pose_up=%.2fdeg",
+                args.eval_split, act1, act5, psr, det, fwd, up,
+            )
 
-        if eval_metrics["loss"] < best_val_loss:
-            best_val_loss = eval_metrics["loss"]
-            best_ckpt = output_dir / "best.pt"
-            torch.save({
-                "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "log_vars": log_vars,
-                "best_val_loss": best_val_loss,
-                "val_metrics": eval_metrics,
-            }, best_ckpt)
-            logger.info("  New best val loss: %.4f (saved: %s)", best_val_loss, best_ckpt)
+            # Best model based on activity top-1 (Doc 175 section 7.2)
+            if act1 > best_act_top1:
+                best_act_top1 = act1
+                best_ckpt = output_dir / "best.pt"
+                torch.save({
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "log_vars": log_vars,
+                    "best_act_top1": best_act_top1,
+                    "best_val_loss": best_val_loss,
+                    "val_metrics": eval_metrics,
+                }, best_ckpt)
+                logger.info("  New best activity top-1: %.4f (saved: %s)", best_act_top1, best_ckpt)
 
         # Save checkpoint
         if epoch % 10 == 0 or epoch == 1:
@@ -1102,8 +1346,7 @@ def main():
         collate_fn=collate_fn_sequences,
         drop_last=False,
     )
-    test_act_weights = compute_activity_class_weights(test_ds, num_classes=len(train_ds.class_counts)).to(device)
-    test_metrics = evaluate(model, test_loader, device, test_act_weights)
+    test_metrics = evaluate(model, test_loader, device, epoch=None)
     logger.info("Test metrics: %s", test_metrics)
 
     # Save final metrics
