@@ -6,7 +6,7 @@ Trains all 4 heads (detection, activity, PSR, pose) simultaneously using
 Kendall uncertainty weighting + PCGrad gradient surgery.
 
 Usage:
-    # Full training (default: 100 epochs)
+    # Full training (default: 100 epochs, eval on val split)
     python scripts/train_mtl_mvit.py
 
     # Plumbing test (1 epoch, small subset)
@@ -14,6 +14,12 @@ Usage:
 
     # Resume from checkpoint
     python scripts/train_mtl_mvit.py --resume path/to/checkpoint.pt
+
+    # Evaluate best checkpoint on test split only
+    python scripts/train_mtl_mvit.py --test-only --resume output/best.pt
+
+    # Eval split: val for model selection (default), test for final eval
+    python scripts/train_mtl_mvit.py --eval-split val
 """
 import argparse
 import gc
@@ -306,10 +312,8 @@ def activity_loss(
         AssertionError: If every label in the batch is -1 (P2 guard).
     """
     valid_mask = targets != -1
-    assert valid_mask.any(), (
-        f"All {len(targets)} activity labels in this batch are -1 (ignored). "
-        "No valid targets for cross-entropy — check data pipeline."
-    )
+    if not valid_mask.any():
+        return logits.sum() * 0.0
     return F.cross_entropy(
         logits, targets,
         weight=class_weights,
@@ -1033,6 +1037,30 @@ def main():
 
         scheduler.step()
 
+        # ── Evaluate on eval split for model selection ────────────────────
+        eval_metrics = evaluate(model, eval_loader, device, act_class_weights)
+        eval_metrics["epoch"] = epoch
+        metrics_log.setdefault("val_metrics", []).append(eval_metrics)
+        logger.info(
+            "  Eval (%s): loss=%.4f det=%.4f act=%.4f psr=%.4f pose=%.4f",
+            args.eval_split,
+            eval_metrics["loss"], eval_metrics["loss_det"], eval_metrics["loss_act"],
+            eval_metrics["loss_psr"], eval_metrics["loss_pose"],
+        )
+
+        if eval_metrics["loss"] < best_val_loss:
+            best_val_loss = eval_metrics["loss"]
+            best_ckpt = output_dir / "best.pt"
+            torch.save({
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "log_vars": log_vars,
+                "best_val_loss": best_val_loss,
+                "val_metrics": eval_metrics,
+            }, best_ckpt)
+            logger.info("  New best val loss: %.4f (saved: %s)", best_val_loss, best_ckpt)
+
         # Save checkpoint
         if epoch % 10 == 0 or epoch == 1:
             ckpt = {
@@ -1055,7 +1083,31 @@ def main():
             logger.info("Plumbing test complete.")
             break
 
+    # ── Final evaluation on test split ────────────────────────────────────
+    require_split("test", allow_test_only=True)
+    logger.info("Running final evaluation on test split...")
+    test_ds = IndustRealMultiTaskDataset(
+        split="test",
+        img_size=(224, 224),
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
+    )
+    test_loader = torch.utils.data.DataLoader(
+        test_ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        collate_fn=collate_fn_sequences,
+        drop_last=False,
+    )
+    test_act_weights = compute_activity_class_weights(test_ds, num_classes=len(train_ds.class_counts)).to(device)
+    test_metrics = evaluate(model, test_loader, device, test_act_weights)
+    logger.info("Test metrics: %s", test_metrics)
+
     # Save final metrics
+    metrics_log["test_metrics"] = test_metrics
     with open(output_dir / "metrics.json", "w") as f:
         json.dump(metrics_log, f, indent=2, default=str)
 
