@@ -172,6 +172,19 @@ class V8Dataset(torch.utils.data.Dataset):
         self.num_psr_comps = num_psr_comps
         self.num_frames = num_frames
 
+        # Build stable class-to-index mapping from sorted unique class names.
+        # Replaces hash(cls_str) % num_classes which is non-deterministic
+        # because PYTHONHASHSEED is randomized per process — the same action
+        # string maps to different indices in every subprocess, making
+        # cross-entropy training impossible by construction.
+        unique_classes = sorted({s['class'] for s in self.samples})
+        if len(unique_classes) != num_classes:
+            logger.warning(
+                f"Found {len(unique_classes)} unique classes in CSV, "
+                f"expected {num_classes}. Using data-derived class count."
+            )
+        self._class_to_idx_map = {name: i for i, name in enumerate(unique_classes)}
+
     def __len__(self):
         return len(self.samples)
 
@@ -211,10 +224,11 @@ class V8Dataset(torch.utils.data.Dataset):
         return clip, targets
 
     def _class_to_idx(self, cls_str):
-        """Map class string to integer index. 69 classes total."""
+        """Map class string to integer index using stable sorted lookup."""
         if not isinstance(cls_str, str):
             return 0
-        return hash(cls_str) % self.num_classes
+        assert cls_str in self._class_to_idx_map, f"Unknown class '{cls_str}'"
+        return self._class_to_idx_map[cls_str]
 
 
 def collate_fn(batch):

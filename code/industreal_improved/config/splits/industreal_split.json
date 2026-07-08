@@ -1,0 +1,23 @@
+{
+  "_version": "1.0",
+  "_date": "2026-07-08",
+  "_source": "Official IndustReal release — recordings/ subdirectory splits",
+  "_schema": "Each split lists 2-digit zero-padded subject IDs. The val set {05,14,20,24,26} is verified against bootstrap_ci.json (16 recordings, 38036 frames).",
+
+  "train": ["01", "02", "04", "06", "07", "11", "15", "16", "21", "22", "25", "27"],
+  "val":   ["05", "14", "20", "24", "26"],
+  "test":  ["03", "08", "09", "10", "12", "13", "17", "18", "19", "23"],
+
+  "metadata": {
+    "n_train_subjects": 12,
+    "n_val_subjects": 5,
+    "n_test_subjects": 10,
+    "n_train_recordings": 36,
+    "n_val_recordings": 16,
+    "n_test_recordings": 32,
+    "total_subjects": 27,
+    "val_frame_count": 38036,
+    "frame_count_source": "bootstrap_ci.json metadata.n_frames",
+    "split_rule": "Val for model selection only. Test for all headline/SOTA numbers per §7.1."
+  }
+}
