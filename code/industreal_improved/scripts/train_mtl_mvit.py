@@ -322,7 +322,9 @@ def activity_loss(
     """
     valid_mask = targets != -1
     if not valid_mask.any():
-        return logits.sum() * 0.0
+        raise AssertionError(
+            "P2 guard: all activity labels in batch are -1 (unlabeled)"
+        )
     return F.cross_entropy(
         logits, targets,
         weight=class_weights,

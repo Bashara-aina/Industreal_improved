@@ -204,7 +204,7 @@ class DetectionHead(nn.Module):
 
         Returns:
             cls_logits: [B, num_classes, H, W]
-            reg_preds: [B, 4, H, W]
+            reg_preds: [B, 4 * reg_max, H, W]
         """
         return {
             "cls_logits": self.cls_head(x),
