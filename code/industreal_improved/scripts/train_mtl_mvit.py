@@ -39,6 +39,7 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
 import src.config as C
 from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn_sequences
 from src.models.mvit_mtl_model import MTLMViTModel, renormalize_pose
+from src.split_config import require_split
 
 logger = logging.getLogger("train_mtl_mvit")
 
@@ -349,6 +350,127 @@ def pose_loss(pred_6d: torch.Tensor, target_6d: torch.Tensor) -> torch.Tensor:
 
 
 # ===========================================================================
+# Efficiency measurement
+# ===========================================================================
+
+def measure_efficiency(args):
+    """Measure FLOPs, FPS, peak VRAM, and parameter efficiency.
+
+    Runs independently of training data pipeline — only needs model + device.
+    Saves results to ``efficiency_metrics.json`` in the output directory.
+    """
+    try:
+        from fvcore.nn import FlopCountAnalysis, parameter_count_table
+    except ImportError:
+        logger.error(
+            "fvcore is required for efficiency measurement. "
+            "Install: pip install fvcore"
+        )
+        sys.exit(1)
+
+    device = torch.device(
+        "cpu" if args.cpu or not torch.cuda.is_available() else "cuda"
+    )
+    logger.info("Device: %s", device)
+
+    model = MTLMViTModel().to(device)
+    model.eval()
+
+    # ---- 1. Parameter count ----
+    total_params = sum(p.numel() for p in model.parameters()) / 1e6
+    trainable_params = (
+        sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
+    )
+    logger.info("Params: %.1fM total, %.1fM trainable", total_params, trainable_params)
+    param_table = parameter_count_table(model)
+    logger.info("Parameter count table:\n%s", param_table)
+
+    results = {
+        "total_params_M": round(total_params, 2),
+        "trainable_params_M": round(trainable_params, 2),
+    }
+
+    # ---- 2. FLOPs analysis ----
+    logger.info("Measuring FLOPs...")
+
+    # 2a. Temporal mode: [1, 3, 16, 224, 224]
+    dummy_temporal = torch.randn(1, 3, 16, 224, 224, device=device)
+    try:
+        flops_temporal = FlopCountAnalysis(model, dummy_temporal)
+        flops_temporal_g = flops_temporal.total() / 1e9
+        results["flops_temporal_G"] = round(flops_temporal_g, 2)
+        logger.info("Temporal mode (16x224x224): %.2f GFLOPs", flops_temporal_g)
+    except Exception as e:
+        logger.warning("FLOPs measurement (temporal) failed: %s", e)
+        results["flops_temporal_G"] = None
+
+    # 2b. Per-frame: [1, 3, 1, 224, 224]
+    dummy_frame = torch.randn(1, 3, 1, 224, 224, device=device)
+    try:
+        flops_frame = FlopCountAnalysis(model, dummy_frame)
+        flops_frame_g = flops_frame.total() / 1e9
+        results["flops_per_frame_G"] = round(flops_frame_g, 2)
+        logger.info("Per-frame (1x224x224): %.2f GFLOPs", flops_frame_g)
+    except Exception as e:
+        logger.warning("FLOPs measurement (per-frame) failed: %s", e)
+        results["flops_per_frame_G"] = None
+
+    # ---- 3. FPS measurement (batch=1, temporal mode) ----
+    logger.info("Measuring FPS (batch=1, temporal, 100 forward passes)...")
+    dummy = torch.randn(1, 3, 16, 224, 224, device=device)
+
+    # Warmup
+    with torch.no_grad():
+        for _ in range(10):
+            _ = model(dummy)
+
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        for _ in range(100):
+            _ = model(dummy)
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    elapsed = time.perf_counter() - t0
+
+    fps = 100.0 / elapsed
+    results["fps_temporal"] = round(fps, 2)
+    results["fps_measurement_seconds"] = round(elapsed, 3)
+    logger.info("FPS: %.2f (%.3fs for 100 passes)", fps, elapsed)
+
+    # ---- 4. Peak VRAM ----
+    if device.type == "cuda":
+        peak_memory_gb = torch.cuda.max_memory_allocated(device) / (1024**3)
+        results["peak_vram_GB"] = round(peak_memory_gb, 3)
+        logger.info("Peak VRAM: %.3f GB", peak_memory_gb)
+    else:
+        results["peak_vram_GB"] = None
+        logger.info("Peak VRAM: N/A (CPU mode)")
+
+    # ---- 5. Comparison to single-task estimate ----
+    estimated_single_task_sum_M = 100.0  # ~100M for 4x single-task sum (Doc 175 §8 Table C)
+    results["estimated_single_task_sum_M"] = estimated_single_task_sum_M
+    results["mtl_vs_single_ratio"] = round(total_params / estimated_single_task_sum_M, 3)
+    logger.info(
+        "MTL params (%.1fM) vs estimated 4x single task (%.0fM): %.1fx smaller",
+        total_params, estimated_single_task_sum_M,
+        estimated_single_task_sum_M / total_params,
+    )
+
+    # Save
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metrics_path = output_dir / "efficiency_metrics.json"
+    with open(metrics_path, "w") as f:
+        json.dump(results, f, indent=2)
+    logger.info("Efficiency metrics saved: %s", metrics_path)
+
+    return results
+
+
+# ===========================================================================
 # PCGrad gradient surgery
 # ===========================================================================
 
@@ -487,14 +609,24 @@ def train_step(
             hp_6d = torch.zeros(B, 6, device=images.device)
         l_pose = pose_loss(outputs["pose_6d"], hp_6d)
 
-        # Kendall uncertainty weighting
+        # Kendall uncertainty weighting with precision capping
         losses = {"det": l_det, "act": l_act, "psr": l_psr, "pose": l_pose}
         total_loss = 0.0
+
+        # Compute log_vars, with head-pose precision capped by detection (Doc 175 §5.2)
+        # Pose precision (exp(-lv)) must never exceed detection precision. This prevents
+        # the shared backbone from being optimized primarily for head_pose (loss ~0.01)
+        # while neglecting detection (loss ~0.5), which has ~40x higher loss magnitude.
+        lv_values = {}
+        for name in losses:
+            lv_values[name] = log_vars[name]
+        if hp_prec_cap:
+            lv_values["pose"] = torch.maximum(log_vars["pose"], log_vars["det"].detach())
+
         for name, loss in losses.items():
-            prec = torch.exp(-log_vars[name])
-            total_loss = total_loss + prec * loss + log_vars[name] / 2
-            if hp_prec_cap and name == "pose":
-                total_loss = total_loss / 2  # halve pose contribution
+            lv = lv_values[name]
+            prec = torch.exp(-lv)
+            total_loss = total_loss + prec * loss + lv / 2
 
     # Backward
     optimizer.zero_grad()
@@ -545,6 +677,102 @@ def train_step(
 
 
 # ===========================================================================
+# Evaluation
+# ===========================================================================
+
+@torch.no_grad()
+def evaluate(
+    model: nn.Module,
+    data_loader: torch.utils.data.DataLoader,
+    device: torch.device,
+    act_class_weights: Optional[torch.Tensor] = None,
+) -> dict:
+    """Evaluate model on a given split without gradient computation.
+
+    Computes the same per-task losses as train_step averaged over the split.
+
+    Args:
+        model: MTL-MViT model.
+        data_loader: DataLoader for the evaluation split.
+        device: Torch device.
+        act_class_weights: Optional class weights for activity loss.
+
+    Returns:
+        dict of average loss metrics.
+    """
+    model.eval()
+    total = {
+        "loss": 0.0, "loss_det": 0.0, "loss_act": 0.0,
+        "loss_psr": 0.0, "loss_pose": 0.0,
+    }
+    n_steps = 0
+
+    for batch in data_loader:
+        images = batch[0].to(device, non_blocking=True)
+        targets = {}
+        for k, v in batch[1].items():
+            if isinstance(v, torch.Tensor):
+                targets[k] = v.to(device, non_blocking=True)
+            elif isinstance(v, dict):
+                targets[k] = {sk: sv.to(device) if isinstance(sv, torch.Tensor) else sv
+                              for sk, sv in v.items()}
+            else:
+                targets[k] = v
+
+        # Normalise and permute (same as training loop)
+        images = images.float() / 255.0
+        mean = torch.tensor([0.45, 0.45, 0.45], device=device).view(1, 1, 3, 1, 1)
+        std = torch.tensor([0.225, 0.225, 0.225], device=device).view(1, 1, 3, 1, 1)
+        images = (images - mean) / std
+        images = images.permute(0, 2, 1, 3, 4).contiguous()
+
+        B = images.size(0)
+
+        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
+            outputs = model(images)
+
+            det_list = targets.get("detection", [])
+            l_det = detection_loss(outputs["detection"], det_list)
+
+            l_act = activity_loss(
+                outputs["activity"],
+                targets.get("activity", torch.zeros(B, dtype=torch.long, device=device)),
+                class_weights=act_class_weights,
+            ) if "activity" in targets else torch.tensor(0.0, device=device)
+
+            _ew = None
+            if "psr_labels" in targets:
+                if hasattr(C, 'PSR_COMP_WEIGHTS') and C.PSR_COMP_WEIGHTS:
+                    _ew = torch.tensor(
+                        C.PSR_COMP_WEIGHTS, device=device, dtype=torch.float32
+                    ).view(1, 1, -1)
+
+            l_psr = psr_loss(
+                outputs["psr_logits"],
+                targets.get("psr_labels", torch.zeros(B, 16, 11, device=device)),
+                comp_weights=_ew,
+            ) if "psr_labels" in targets else torch.tensor(0.0, device=device)
+
+            if "head_pose" in targets:
+                hp = targets["head_pose"]
+                hp_6d = hp[:, hp.size(1) // 2, :6]
+            else:
+                hp_6d = torch.zeros(B, 6, device=device)
+            l_pose = pose_loss(outputs["pose_6d"], hp_6d)
+
+            total_loss = l_det + l_act + l_psr + l_pose
+
+        total["loss"] += total_loss.item()
+        total["loss_det"] += l_det.item()
+        total["loss_act"] += l_act.item()
+        total["loss_psr"] += l_psr.item()
+        total["loss_pose"] += l_pose.item()
+        n_steps += 1
+
+    return {k: v / max(n_steps, 1) for k, v in total.items()}
+
+
+# ===========================================================================
 # Main training loop
 # ===========================================================================
 
@@ -563,7 +791,15 @@ def main():
     parser.add_argument("--pcgrad", action=argparse.BooleanOptionalAction, default=True, help="PCGrad gradient surgery (default: on; use --no-pcgrad to disable)")
     parser.add_argument("--output-dir", type=str, default=str(OUTPUT_ROOT))
     parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume")
+    parser.add_argument("--eval-split", type=str, default="val",
+                        help="Split for model selection (val) or final eval (test)")
+    parser.add_argument("--test-only", action="store_true",
+                        help="Load --resume checkpoint and evaluate on test split only")
     parser.add_argument("--cpu", action="store_true", help="Force CPU")
+    parser.add_argument(
+        "--measure-efficiency", action="store_true",
+        help="Run efficiency measurement (FLOPs, FPS, VRAM) and exit",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -571,6 +807,19 @@ def main():
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
     logger.info("Args: %s", vars(args))
+
+    # ── Split discipline (Doc 175 §7.1) ──
+    if args.test_only:
+        require_split("test", allow_test_only=True)
+    else:
+        assert args.eval_split == "val", \
+            f"Model selection must use 'val' split (got '{args.eval_split}') per Doc 175 §7.1"
+
+    # ── Standalone efficiency measurement ──
+    if args.measure_efficiency:
+        logger.info("Running standalone efficiency measurement...")
+        measure_efficiency(args)
+        return
 
     device = torch.device("cpu") if args.cpu or not torch.cuda.is_available() else torch.device("cuda")
     logger.info("Device: %s", device)
@@ -612,12 +861,65 @@ def main():
         drop_last=True,
     )
 
+    # ── Eval split for model selection ────────────────────────────────────
+    eval_ds = IndustRealMultiTaskDataset(
+        split=args.eval_split,
+        img_size=(224, 224),
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
+    )
+    eval_loader = torch.utils.data.DataLoader(
+        eval_ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        collate_fn=collate_fn_sequences,
+        drop_last=False,
+    )
+    logger.info("Eval samples (%s): %d", args.eval_split, len(eval_ds))
+
     # ── Model ─────────────────────────────────────────────────────────────
     logger.info("Building MTL-MViT model...")
-    model = MTLMViTModel().to(device)
+    model = MTLMViTModel(num_act_classes=getattr(C, "NUM_ACT_OUTPUTS", 75)).to(device)
     total_params = sum(p.numel() for p in model.parameters()) / 1e6
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
     logger.info("Params: %.1fM total, %.1fM trainable", total_params, trainable_params)
+
+    # ── Test-only evaluation ──────────────────────────────────────────────
+    if args.test_only:
+        if args.resume is None:
+            logger.error("--test-only requires --resume <checkpoint.pt>")
+            sys.exit(1)
+        ckpt = torch.load(args.resume, map_location=device)
+        model.load_state_dict(ckpt["model_state_dict"])
+        logger.info("Loaded checkpoint from %s (epoch %d)",
+                    args.resume, ckpt.get("epoch", "?"))
+
+        test_ds = IndustRealMultiTaskDataset(
+            split="test",
+            img_size=(224, 224),
+            augment=False,
+            sequence_mode=True,
+            sequence_length=16,
+        )
+        test_loader = torch.utils.data.DataLoader(
+            test_ds,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=args.num_workers,
+            pin_memory=True,
+            collate_fn=collate_fn_sequences,
+            drop_last=False,
+        )
+        test_act_weights = compute_activity_class_weights(test_ds, num_classes=len(train_ds.class_counts)).to(device)
+        test_metrics = evaluate(model, test_loader, device, test_act_weights)
+        logger.info("Test metrics: %s", test_metrics)
+        with open(output_dir / "metrics.json", "w") as f:
+            json.dump({"test_metrics": test_metrics, "config": vars(args)}, f, indent=2, default=str)
+        logger.info("Test-only evaluation complete. Output: %s", output_dir)
+        return
 
     # ── Kendall log_vars ──────────────────────────────────────────────────
     log_vars = nn.ParameterDict({
@@ -654,7 +956,7 @@ def main():
     scaler = torch.amp.GradScaler(device.type, enabled=True)
 
     # ── Activity class weights (Doc 175 §4) ────────────────────────────────
-    act_class_weights = compute_activity_class_weights(train_ds, num_classes=75)
+    act_class_weights = compute_activity_class_weights(train_ds, num_classes=len(train_ds.class_counts))
     act_class_weights = act_class_weights.to(device)
     logger.info("Activity class weights computed — shape=%s, device=%s",
                 act_class_weights.shape, act_class_weights.device)
