@@ -638,16 +638,42 @@ def train_step(
         # Pose precision (exp(-lv)) must never exceed detection precision. This prevents
         # the shared backbone from being optimized primarily for head_pose (loss ~0.01)
         # while neglecting detection (loss ~0.5), which has ~40x higher loss magnitude.
+        # SAFETY: Clamp log_var to [-4, 4] to prevent exp(-lv) explosion (would cause
+        # negative total_loss and gradient NaN). Per 175 §5.1: act_min=-4, psr/pose_max=2.
+        LV_CLAMP_MIN, LV_CLAMP_MAX = -4.0, 4.0
         lv_values = {}
         for name in losses:
-            lv_values[name] = log_vars[name]
+            lv_clamped = log_vars[name].clamp(LV_CLAMP_MIN, LV_CLAMP_MAX)
+            lv_values[name] = lv_clamped
         if hp_prec_cap:
-            lv_values["pose"] = torch.maximum(log_vars["pose"], log_vars["det"].detach())
+            lv_values["pose"] = torch.maximum(
+                lv_values["pose"], lv_values["det"].detach()
+            )
 
-        for name, loss in losses.items():
+        # SAFETY: Clamp each per-task loss to [0, +inf) — BCE/CE/DFL/CIoU are all
+        # bounded ≥ 0 in theory. Negative values come from numerical drift.
+        losses_safe = {n: torch.clamp(v, min=0.0) if v.isfinite() else torch.zeros_like(v)
+                       for n, v in losses.items()}
+
+        for name, loss in losses_safe.items():
             lv = lv_values[name]
             prec = torch.exp(-lv)
             total_loss = total_loss + prec * loss + lv / 2
+
+        # SAFETY: Skip step if total_loss is non-finite (log_var explosion caught here)
+        if not torch.isfinite(total_loss):
+            logger.warning(
+                "Non-finite total_loss at step: det=%s act=%s psr=%s pose=%s | skipping optimizer step",
+                losses["det"].item(), losses["act"].item(), losses["psr"].item(), losses["pose"].item(),
+            )
+            optimizer.zero_grad()
+            return {
+                "loss": float("nan"),
+                "loss_det": losses["det"].item(), "loss_act": losses["act"].item(),
+                "loss_psr": losses["psr"].item(), "loss_pose": losses["pose"].item(),
+                **psr_comp_breakdown,
+                **{f"log_var_{k}": v.item() for k, v in log_vars.items()},
+            }
 
     # Backward
     optimizer.zero_grad()
@@ -656,10 +682,14 @@ def train_step(
         shared_params = [p for p in model.feature_pyramid.backbone.parameters() if p.requires_grad]
 
         # Per-task gradients w.r.t. shared backbone
+        # SAFETY: Use clamped log_var to match the forward pass (otherwise PCGrad
+        # uses different precisions than the actual loss, causing gradient/total
+        # loss mismatch). Also use losses_safe to prevent negative gradient.
         per_task_grads = []
-        for name, loss in losses.items():
-            prec = torch.exp(-log_vars[name])
-            weighted_loss = prec * loss
+        for name in losses:
+            lv_safe = lv_values[name]  # already clamped
+            prec = torch.exp(-lv_safe)
+            weighted_loss = prec * losses_safe[name]
             g = torch.autograd.grad(
                 weighted_loss, shared_params,
                 retain_graph=True, allow_unused=True,
@@ -755,7 +785,7 @@ def evaluate(
     Computes:
       - PSR: event_f1 at +/-3, POS, tau  (via decoder_oracle_bound.event_f1)
       - Activity: clip-level top-1 / top-5 on 75 classes
-      - Detection: presence BCE as a lightweight eval
+      - Detection: dual-protocol mAP@0.5 / mAP@0.5:0.95 + presence BCE
       - Pose: angular MAE with bootstrap CI (fwd + up in degrees)
 
     Args:
@@ -769,6 +799,7 @@ def evaluate(
     """
     from collections import defaultdict
     from src.evaluation.decoder_oracle_bound import event_f1
+    from src.evaluation.evaluate import compute_det_metrics_extended, nms_numpy
 
     model.eval()
     _prefix = f" (epoch {epoch})" if epoch else ""
@@ -790,6 +821,12 @@ def evaluate(
 
     det_presence_preds: list[np.ndarray] = []
     det_presence_targets: list[np.ndarray] = []
+    # mAP accumulators (DFL-decode + NMS per batch)
+    det_map_pred_boxes: list[np.ndarray] = []
+    det_map_pred_scores: list[np.ndarray] = []
+    det_map_pred_labels: list[np.ndarray] = []
+    det_map_gt_boxes: list[np.ndarray] = []
+    det_map_gt_labels: list[np.ndarray] = []
 
     n_batches = 0
     t_start = time.time()
@@ -883,6 +920,92 @@ def evaluate(
         det_presence_preds.append(pred_presence.cpu().numpy())
         det_presence_targets.append(gt_presence.cpu().numpy())
 
+        # -- Detection: mAP@0.5 / mAP@0.5:0.95 (DFL decode + NMS) --
+        _DFL_REG_MAX = 16
+        _strides = {"P2": 4, "P3": 8, "P4": 16, "P5": 32}
+        level_boxes: list[torch.Tensor] = []
+        level_scores: list[torch.Tensor] = []
+        level_labels: list[torch.Tensor] = []
+
+        for level_name in ("P2", "P3", "P4", "P5"):
+            if level_name not in det_outputs:
+                continue
+            cls_logits_lvl = det_outputs[level_name]["cls_logits"]  # [B, 24, H, W]
+            reg_preds_lvl = det_outputs[level_name]["reg_preds"]    # [B, 64, H, W]
+            _B, _, H, W = cls_logits_lvl.shape
+            stride = _strides[level_name]
+
+            # Decode DFL: [B, 64, H, W] -> [B, 4, 16, H, W] -> softmax -> weighted sum
+            reg_dist = reg_preds_lvl.view(_B, 4, _DFL_REG_MAX, H, W)
+            proj = torch.arange(_DFL_REG_MAX, device=device).float().view(1, 1, _DFL_REG_MAX, 1, 1)
+            decoded = (reg_dist.softmax(dim=2) * proj).sum(dim=2)  # [B, 4, H, W]
+
+            # Grid cell centers
+            ys = torch.arange(H, device=device)
+            xs = torch.arange(W, device=device)
+            cell_cx = xs.float() * stride + stride / 2.0
+            cell_cy = ys.float() * stride + stride / 2.0
+
+            # Deltas to absolute xyxy (matching detection_loss() decode)
+            pred_x1 = cell_cx.view(1, 1, W) - decoded[:, 0:1] * stride  # [B, 1, H, W]
+            pred_y1 = cell_cy.view(1, H, 1) - decoded[:, 1:2] * stride
+            pred_x2 = cell_cx.view(1, 1, W) + decoded[:, 2:3] * stride
+            pred_y2 = cell_cy.view(1, H, 1) + decoded[:, 3:4] * stride
+            pred_abs = torch.stack([pred_x1, pred_y1, pred_x2, pred_y2], dim=1)  # [B, 4, H, W]
+            boxes_lvl = pred_abs.permute(0, 2, 3, 1).reshape(_B, -1, 4)         # [B, H*W, 4]
+            scores_lvl = torch.sigmoid(cls_logits_lvl).permute(0, 2, 3, 1).reshape(_B, -1, C.NUM_DET_CLASSES)  # [B, H*W, 24]
+            max_scores_lvl = scores_lvl.amax(dim=-1)  # [B, H*W]
+            labels_lvl = scores_lvl.argmax(dim=-1)    # [B, H*W]
+
+            level_boxes.append(boxes_lvl)
+            level_scores.append(max_scores_lvl)
+            level_labels.append(labels_lvl)
+
+        if level_boxes:
+            all_boxes = torch.cat(level_boxes, dim=1)    # [B, N_total, 4]
+            all_scores = torch.cat(level_scores, dim=1)  # [B, N_total]
+            all_labels = torch.cat(level_labels, dim=1)   # [B, N_total]
+        else:
+            all_boxes = torch.zeros(B, 0, 4, device=device)
+            all_scores = torch.zeros(B, 0, device=device)
+            all_labels = torch.zeros(B, 0, dtype=torch.long, device=device)
+
+        for b in range(B):
+            # Score filter
+            keep = all_scores[b] > C.DET_EVAL_SCORE_THRESH
+            boxes_np = all_boxes[b, keep].cpu().numpy()
+            scores_np = all_scores[b, keep].cpu().numpy()
+            labels_np = all_labels[b, keep].cpu().numpy()
+
+            # Per-class NMS
+            final_boxes, final_scores, final_labels = [], [], []
+            for c in range(C.NUM_DET_CLASSES):
+                c_mask = labels_np == c
+                if not c_mask.any():
+                    continue
+                c_boxes = boxes_np[c_mask]
+                c_scores = scores_np[c_mask]
+                c_keep = nms_numpy(c_boxes, c_scores, C.DET_EVAL_NMS_IOU_THRESH)
+                final_boxes.append(c_boxes[c_keep])
+                final_scores.append(c_scores[c_keep])
+                final_labels.append(np.full(len(c_keep), c, dtype=np.int64))
+
+            if final_boxes:
+                det_map_pred_boxes.append(np.concatenate(final_boxes, axis=0))
+                det_map_pred_scores.append(np.concatenate(final_scores, axis=0))
+                det_map_pred_labels.append(np.concatenate(final_labels, axis=0))
+            else:
+                det_map_pred_boxes.append(np.zeros((0, 4), dtype=np.float32))
+                det_map_pred_scores.append(np.zeros(0, dtype=np.float32))
+                det_map_pred_labels.append(np.zeros(0, dtype=np.int64))
+
+            # GT for this image
+            det_item = det_list[b] if isinstance(det_list[b], dict) else {}
+            gt_boxes_np = det_item.get("boxes", torch.zeros(0, 4, device=device)).cpu().numpy()
+            gt_labels_np = det_item.get("labels", torch.zeros(0, dtype=torch.long, device=device)).cpu().numpy()
+            det_map_gt_boxes.append(gt_boxes_np.reshape(-1, 4) if gt_boxes_np.size > 0 else np.zeros((0, 4), dtype=np.float32))
+            det_map_gt_labels.append(gt_labels_np.ravel().astype(np.int64) if gt_labels_np.size > 0 else np.zeros(0, dtype=np.int64))
+
         # -- Pose: angular MAE --
         hp = targets.get("head_pose")  # [B, 16, 9]
         if hp is not None:
@@ -930,6 +1053,19 @@ def evaluate(
         metrics["det_presence_acc"] = presence_acc
         logger.info("  Detection: presence_bce=%.4f  presence_acc=%.4f",
                      presence_bce, presence_acc)
+
+    # -- Detection mAP@0.5 / mAP@0.5:0.95 --
+    if det_map_pred_boxes:
+        det_map_result = compute_det_metrics_extended(
+            det_map_pred_boxes, det_map_pred_scores, det_map_pred_labels,
+            det_map_gt_boxes, det_map_gt_labels,
+        )
+        metrics["det_mAP50"] = det_map_result["det_mAP50"]
+        metrics["det_mAP_50_95"] = det_map_result["det_mAP_50_95"]
+        metrics["det_mAP50_pc"] = det_map_result["det_mAP50_pc"]
+        logger.info("  Detection mAP: mAP50=%.4f  mAP50:95=%.4f  mAP50_pc=%.4f",
+                     det_map_result["det_mAP50"], det_map_result["det_mAP_50_95"],
+                     det_map_result["det_mAP50_pc"])
 
     # -- PSR transition eval (Doc 175 section 7.2) --
     if psr_pred_logits:
