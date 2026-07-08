@@ -238,10 +238,14 @@ class V8Model(nn.Module):
         self.backbone.eval()
         self.feat_dim = 400
 
-        # Heads
+        # Heads (init biases to prevent all-zero collapse in classification)
         self.activity_head = nn.Linear(self.feat_dim, num_classes)
+        # Initialize bias to log(prior) to break symmetry
+        nn.init.normal_(self.activity_head.weight, std=0.01)
         self.pose_head = nn.Linear(self.feat_dim, 6)
         self.psr_head = nn.ModuleList([nn.Linear(self.feat_dim, 1) for _ in range(num_psr_comps)])
+        for h in self.psr_head:
+            nn.init.normal_(h.weight, std=0.01)
 
         # Kendall log_vars (learnable, KENDALL_FIXED_WEIGHTS=0)
         self.log_var_act = nn.Parameter(torch.tensor(0.0))
