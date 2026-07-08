@@ -563,8 +563,14 @@ def train_step(
     hp_prec_cap: bool = True,
     pcgrad: bool = True,
     act_class_weights: Optional[torch.Tensor] = None,
+    do_step: bool = True,
 ) -> dict:
-    """Single training step with Kendall uncertainty weighting and optional PCGrad gradient surgery."""
+    """Single training step with Kendall uncertainty weighting and optional PCGrad gradient surgery.
+
+    Args:
+        do_step: if True, calls optimizer.step() and zero_grad(). Set False for gradient
+                 accumulation — caller must call optimizer.step() at the accumulation boundary.
+    """
     model.train()
     B = images.size(0)
 
@@ -662,21 +668,30 @@ def train_step(
         deconflicted = pcgrad_fn(per_task_grads, shared_params)
 
         # Backward for head params (also populates backbone grads, overridden below)
+        # For bf16 AMP, the scaler is mostly a no-op; we skip explicit unscale_() to
+        # avoid issues with gradient accumulation (unscale_ can only be called once
+        # per scaler.update() cycle).
         scaler.scale(total_loss).backward()
-        scaler.unscale_(optimizer)
 
         # Override backbone grads with PCGrad deconflicted grads
         for param, grad in zip(shared_params, deconflicted):
             param.grad = grad.to(param.dtype)
     else:
         scaler.scale(total_loss).backward()
-        scaler.unscale_(optimizer)
 
     # Gradient clipping
-    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+    if do_step:
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+        scaler.step(optimizer)
+        scaler.update()
+    # NOTE: With grad accumulation, scaler.unscale_() is only safe to call once
+    # between scaler.update() calls. The first accumulated call here would
+    # call scaler.scale(total_loss).backward(), accumulating gradients. Subsequent
+    # calls in the same accumulation cycle would also try unscale_() — we skip
+    # that since AMP bf16 doesn't need explicit unscale (no inf/nan checks).
 
-    scaler.step(optimizer)
-    scaler.update()
+    # For bf16, scaler is essentially a no-op (no inf check needed). We avoid
+    # calling unscale_() in accumulation since it would raise.
 
     return {
         "loss": total_loss.item(),
@@ -1037,6 +1052,12 @@ def main():
         "--measure-efficiency", action="store_true",
         help="Run efficiency measurement (FLOPs, FPS, VRAM) and exit",
     )
+    parser.add_argument("--grad-accum-steps", type=int, default=2,
+                        help="Gradient accumulation steps (effective batch = batch_size * this)")
+    parser.add_argument("--max-batches-per-epoch", type=int, default=0,
+                        help="Cap batches per epoch (0 = full epoch; use 200 for fast smoke)")
+    parser.add_argument("--compile", action="store_true",
+                        help="Use torch.compile() for ~2x speedup (PyTorch 2.0+)")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -1123,6 +1144,15 @@ def main():
     total_params = sum(p.numel() for p in model.parameters()) / 1e6
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
     logger.info("Params: %.1fM total, %.1fM trainable", total_params, trainable_params)
+
+    # ── torch.compile for ~2x speedup ──
+    if args.compile:
+        try:
+            logger.info("Compiling model with torch.compile()...")
+            model = torch.compile(model, mode="default")
+            logger.info("Model compiled.")
+        except Exception as e:
+            logger.warning(f"torch.compile failed: {e} — continuing without compile")
 
     # ── Test-only evaluation ──────────────────────────────────────────────
     if args.test_only:
@@ -1212,6 +1242,10 @@ def main():
         n_steps = 0
 
         for batch_idx, batch in enumerate(train_loader):
+            # Cap batches per epoch (--max-batches-per-epoch) for fast smoke runs
+            if args.max_batches_per_epoch > 0 and batch_idx >= args.max_batches_per_epoch:
+                break
+
             images = batch[0].to(device, non_blocking=True)  # [B, T, 3, H, W]
             targets = {}
             for k, v in batch[1].items():
@@ -1232,11 +1266,17 @@ def main():
             # Permute for MViTv2: [B, T, C, H, W] → [B, C, T, H, W]
             images = images.permute(0, 2, 1, 3, 4).contiguous()
 
+            # Gradient accumulation: only step optimizer on boundary
+            is_accum_boundary = ((batch_idx + 1) % args.grad_accum_steps == 0) or \
+                                (batch_idx + 1 == len(train_loader))
+            do_step = is_accum_boundary
+
             step_metrics = train_step(
                 model, images, targets, log_vars, optimizer, scaler,
                 hp_prec_cap=args.hp_prec_cap,
                 pcgrad=args.pcgrad,
                 act_class_weights=act_class_weights,
+                do_step=do_step,
             )
 
             for k in epoch_metrics:
@@ -1245,14 +1285,18 @@ def main():
 
             if batch_idx % 100 == 0:
                 logger.info(
-                    "  [batch %5d/%d] loss=%.4f det=%.4f act=%.4f psr=%.4f pose=%.4f",
+                    "  [batch %5d/%d accum=%d/%d] loss=%.4f det=%.4f act=%.4f psr=%.4f pose=%.4f",
                     batch_idx, len(train_loader),
+                    (batch_idx % args.grad_accum_steps) + 1, args.grad_accum_steps,
                     step_metrics.get("loss", 0),
                     step_metrics.get("loss_det", 0),
                     step_metrics.get("loss_act", 0),
                     step_metrics.get("loss_psr", 0),
                     step_metrics.get("loss_pose", 0),
                 )
+                # Force flush for nohup log visibility
+                for handler in logging.getLogger().handlers:
+                    handler.flush()
 
             if args.plumbing and batch_idx >= 10:
                 break
