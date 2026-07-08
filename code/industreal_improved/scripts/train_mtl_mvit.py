@@ -831,7 +831,12 @@ def evaluate(
     n_batches = 0
     t_start = time.time()
 
+    # SAFETY: cap eval at MAX_EVAL_BATCHES for fast smoke runs (otherwise full
+    # val set of 37K frames takes 3+ hours). Default 0 = unlimited.
+    MAX_EVAL_BATCHES = int(_os.environ.get("MAX_EVAL_BATCHES", "0"))
     for batch in data_loader:
+        if MAX_EVAL_BATCHES > 0 and n_batches >= MAX_EVAL_BATCHES:
+            break
         images = batch[0].to(device, non_blocking=True)
         targets_raw = batch[1]
 
