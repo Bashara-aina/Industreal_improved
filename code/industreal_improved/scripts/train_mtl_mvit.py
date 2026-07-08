@@ -42,7 +42,16 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+# Force 75-class activity for SOTA comparison (175 §7.2, §3.3)
+# Also reduce RAM cache from env (allows fork() with DataLoader workers)
+import os as _os
 import src.config as C
+C.ACT_CLASS_GROUPING = "none"
+C.RAM_CACHE_MAX_IMAGES = int(_os.environ.get("RAM_CACHE_MAX_IMAGES", C.RAM_CACHE_MAX_IMAGES))
+
+# Need to set before dataset and model init, since _act_grouping() runs at import
+C.NUM_ACT_OUTPUTS = 75
+
 from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn_sequences
 from src.models.mvit_mtl_model import MTLMViTModel, renormalize_pose
 from src.split_config import require_split

@@ -658,9 +658,10 @@ NUM_WORKERS = 0          # [FIX 2026-06-30] Set from 4 to 0 — eliminate DataLo
                         # loading, ~25% slower but stable. CUDA + multiprocessing deadlocks
                         # on Python 3.13 + PyTorch 2.12 have no other reliable fix.
                         # Override per-script: train_mtl_all.py uses spawn context + 4 workers.
-RAM_CACHE_MAX_IMAGES = 30000  # [2026-07-08] Raised from 8000 to 30000 for full ~38K train-set
-                                # coverage at 350KB avg = ~10.5GB. Sequence mode (T=16) needs
-                                # high hit rate — 30000 covers ~79% of frames.
+RAM_CACHE_MAX_IMAGES = 12000  # [2026-07-08] Reduced from 30000 to 12000 (~4GB)
+                                # Prevents fork() OOM in DataLoader workers. 12000 images
+                                # at 350KB avg = ~4.2GB. Covers ~45% of 26K train set;
+                                # remaining 55% fall back to fast SSD JPEG decode.
 PIN_MEMORY = True
 USE_AMP = True           # [OBSOLETE] Not referenced in train.py — kept for backward compat.
                          # All AMP infrastructure (GradScaler, autocast) gates on MIXED_PRECISION instead.
