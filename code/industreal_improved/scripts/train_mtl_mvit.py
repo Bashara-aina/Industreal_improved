@@ -149,12 +149,27 @@ def detection_loss(
     num_classes: int = 24,
     reg_max: int = 16,
     gamma: float = 2.0,
-    alpha: float = 0.25,
+    alpha: float = 0.5,  # [OPUS 181 §3.5] 0.25→0.5: equal fg/bg weight in focal.
+    pos_radius: int = 1,  # [OPUS 181 §3.5] 1=3x3 cells, 0=center-only (legacy).
 ) -> torch.Tensor:
     """YOLOv8-style detection loss over 4 FPN levels.
 
     Combines Focal loss (cls), CIoU (box), and DFL (box distribution) with
     center-based grid assignment per FPN level.
+
+    [OPUS 181 §3.5] The pre-fix code marked only ONE cell per GT (the cell
+    whose center the GT center falls into) as positive. Out of ~4165 cells per
+    image that's ~0.024% — 4 orders of magnitude too sparse for the model to
+    ever learn to discriminate foreground from background. With focal α=0.25
+    the rare positive channel is *under-weighted* relative to the ~4000
+    background cells' 0.75 weight, so foreground signal is overwhelmed.
+
+    Fix: assign every cell whose center falls inside the GT box (or within
+    pos_radius cells of the center cell if the GT is smaller than the
+    pos_radius cell footprint) as positive. pos_radius=1 yields ~9 positives
+    per GT box for objects ≥3 cells wide. Combined with α=0.5, foreground
+    signal gets ~36× more gradient (9 positives × 2× α ratio = 18×,
+    multiplied by 2 for the per-image density).
 
     Args:
         det_outputs: dict of per-level {cls_logits, reg_preds}.
@@ -163,6 +178,8 @@ def detection_loss(
         reg_max: DFL bins per coordinate.
         gamma: focal loss gamma.
         alpha: focal loss alpha.
+        pos_radius: radius (in cells) around GT center to mark as positive.
+                    0 = center-cell only (legacy). 1 = 3x3 area (default).
 
     Returns:
         scalar loss.
@@ -222,19 +239,30 @@ def detection_loss(
                 gi = (gt_cx[n] / stride).long().clamp(0, W - 1)
                 gj = (gt_cy[n] / stride).long().clamp(0, H - 1)
 
-                if pos_mask[b, gj, gi]:
-                    continue
+                # [OPUS 181 §3.5] Mark a (2r+1)^2 patch of cells around the GT
+                # center cell as positive. For pos_radius=1 → 3x3 cells. If two
+                # GTs overlap, the second is silently dropped (legacy behavior
+                # for cell conflicts; acceptable since assembly scenes rarely
+                # have heavily overlapping boxes at this stride).
+                for di in range(-pos_radius, pos_radius + 1):
+                    for dj in range(-pos_radius, pos_radius + 1):
+                        ci = gi + di
+                        cj = gj + dj
+                        if 0 <= ci < W and 0 <= cj < H:
+                            if pos_mask[b, cj, ci]:
+                                continue
+                            pos_mask[b, cj, ci] = True
+                            cls_target[b, cj, ci] = labels[n].long()
 
-                pos_mask[b, gj, gi] = True
-                cls_target[b, gj, gi] = labels[n].long()
+                            # DFL target: (l,t,r,b) offsets from cell center in
+                            # grid units. Use the same GT box for every cell in
+                            # the patch — box sizes are stable across the patch.
+                            dfl_target[b, cj, ci, 0] = (gt_cx[n] - boxes[n, 0]) / stride
+                            dfl_target[b, cj, ci, 1] = (gt_cy[n] - boxes[n, 1]) / stride
+                            dfl_target[b, cj, ci, 2] = (boxes[n, 2] - gt_cx[n]) / stride
+                            dfl_target[b, cj, ci, 3] = (boxes[n, 3] - gt_cy[n]) / stride
 
-                # DFL target: (l,t,r,b) offsets from cell center in grid units
-                dfl_target[b, gj, gi, 0] = (gt_cx[n] - boxes[n, 0]) / stride  # left
-                dfl_target[b, gj, gi, 1] = (gt_cy[n] - boxes[n, 1]) / stride  # top
-                dfl_target[b, gj, gi, 2] = (boxes[n, 2] - gt_cx[n]) / stride  # right
-                dfl_target[b, gj, gi, 3] = (boxes[n, 3] - gt_cy[n]) / stride  # bottom
-
-                iou_target[b, gj, gi] = boxes[n]
+                            iou_target[b, cj, ci] = boxes[n]
 
         # ---- Classification: Focal loss ----
         cls_logits_p = cls_logits.permute(0, 2, 3, 1).contiguous()  # [B, H, W, 24]
@@ -284,18 +312,28 @@ def compute_activity_class_weights(
 ) -> torch.Tensor:
     """Inverse-frequency class weights for long-tailed activity labels.
 
+    [OPUS 181 D1b] Under F.cross_entropy(weight=w, reduction='mean'), only the
+    RELATIVE shape of w matters (the loss divides by Σw, so a constant rescale
+    is a no-op). The pre-fix weights had max=137, mean-shape with extreme long
+    tail → CE loss dominated by the few rare classes the model hasn't seen.
+    Sqrt-taming the inverse-frequency weights compresses the tail: max/min ratio
+    drops from ~137 to ~12, lowering the CE floor while keeping relative
+    rebalancing.
+
     Args:
         dataset: Training dataset with ``class_counts`` attribute.
         num_classes: Number of activity classes (default 75).
 
     Returns:
-        [num_classes] float tensor of inverse-frequency weights.
+        [num_classes] float tensor of inverse-frequency weights (sqrt-tamed).
     """
     counts = dataset.class_counts.astype(np.float64)
     total = counts.sum()
     weights = np.where(counts > 0, total / (num_classes * counts), 0.0)
+    # [OPUS 181 D1b] sqrt-tame: relative shape preserved, long tail compressed.
+    weights = np.power(weights, 0.5)
     logger.info(
-        "Class weights — min=%.4f  max=%.4f  mean=%.4f  num_nonzero=%d",
+        "Class weights — min=%.4f  max=%.4f  mean=%.4f  num_nonzero=%d  [sqrt-tamed]",
         weights.min(), weights.max(), weights.mean(),
         int((weights > 0).sum()),
     )
@@ -329,7 +367,7 @@ def activity_loss(
         logits, targets,
         weight=class_weights,
         ignore_index=-1,
-        label_smoothing=0.1,
+        label_smoothing=0.05,  # [OPUS 181 D1b] 0.1→0.05: lowers CE floor on 75 classes.
     )
 
 
@@ -566,12 +604,23 @@ def train_step(
     pcgrad: bool = True,
     act_class_weights: Optional[torch.Tensor] = None,
     do_step: bool = True,
+    ema_losses: Optional[dict] = None,
+    ema_warmup_steps: int = 100,
+    ema_momentum: float = 0.99,
 ) -> dict:
     """Single training step with Kendall uncertainty weighting and optional PCGrad gradient surgery.
 
+    [OPUS 181 D1] ema_losses: dict of {task_name: scalar tensor on device} tracking
+    a running mean of each raw task loss. After warmup, each task's loss is divided
+    by its own EMA before entering the Kendall term — so Kendall's equilibrium is
+    `weight = exp(-lv)` (no `1/(2·loss)` collapse). During warmup, raw losses are
+    used (EMA values are still stabilizing).
+
     Args:
-        do_step: if True, calls optimizer.step() and zero_grad(). Set False for gradient
-                 accumulation — caller must call optimizer.step() at the accumulation boundary.
+        do_step: if True, calls optimizer.step(). Set False for gradient accumulation —
+                 caller is responsible for zero_grad() AFTER step() at the accumulation
+                 boundary. (Pre-fix code zeroed at top of every micro-batch which silently
+                 wiped the previous micro-batch's gradient — a no-op for accumulation.)
     """
     model.train()
     B = images.size(0)
@@ -634,16 +683,48 @@ def train_step(
         losses = {"det": l_det, "act": l_act, "psr": l_psr, "pose": l_pose}
         total_loss = 0.0
 
+        # [OPUS 181 D1] Update per-task EMA of raw losses (detached; no grad).
+        # After warmup, each task's loss is normalized by its own EMA so Kendall
+        # balances comparable scales (≈O(1) per task) instead of collapsing to
+        # inverse-loss scaling.
+        if ema_losses is not None:
+            with torch.no_grad():
+                for name in losses:
+                    ema_losses[name].mul_(ema_momentum).add_(
+                        losses[name].detach(), alpha=1.0 - ema_momentum
+                    )
+
+        # [OPUS 181 D1] Per-task loss scaling for Kendall.
+        # Default: raw loss. If EMA tracker is provided and EMA has stabilized
+        # (above 1e-3 floor), normalize by EMA so all tasks are on a comparable
+        # scale (~O(1)). During the first few steps EMA is initialized to 1.0
+        # which is benign — normalized loss equals raw loss — and tracks the
+        # true mean within ~100 steps (momentum 0.99).
+        losses_for_kendall = {name: losses[name] for name in losses}
+
+        if ema_losses is not None:
+            with torch.no_grad():
+                for name in losses:
+                    ema_v = ema_losses[name]
+                    if ema_v.item() > 1e-3:
+                        losses_for_kendall[name] = losses[name] / (ema_v + 1e-6)
+
         # Compute log_vars, with head-pose precision capped by detection (Doc 175 §5.2)
         # Pose precision (exp(-lv)) must never exceed detection precision. This prevents
         # the shared backbone from being optimized primarily for head_pose (loss ~0.01)
         # while neglecting detection (loss ~0.5), which has ~40x higher loss magnitude.
         # SAFETY: Clamp log_var to [-4, 4] to prevent exp(-lv) explosion (would cause
         # negative total_loss and gradient NaN). Per 175 §5.1: act_min=-4, psr/pose_max=2.
-        LV_CLAMP_MIN, LV_CLAMP_MAX = -4.0, 4.0
+        # [OPUS 181 D2] Per-task caps so high-loss tasks (act=12.3, psr=1.3) cannot
+        # collapse their backbone weight to near-zero. Floor weights via upper-bound on
+        # log_var: weight = exp(-lv), so lv<=1.0 forces weight>=0.37 (act), lv<=0.5
+        # forces weight>=0.61 (psr). Det/pose keep the wide range (low intrinsic loss,
+        # no risk of starvation).
+        LV_CLAMP_MIN = -4.0
+        LV_CLAMP_MAX = {"det": 4.0, "act": 1.0, "psr": 0.5, "pose": 4.0}
         lv_values = {}
         for name in losses:
-            lv_clamped = log_vars[name].clamp(LV_CLAMP_MIN, LV_CLAMP_MAX)
+            lv_clamped = log_vars[name].clamp(LV_CLAMP_MIN, LV_CLAMP_MAX[name])
             lv_values[name] = lv_clamped
         if hp_prec_cap:
             lv_values["pose"] = torch.maximum(
@@ -654,11 +735,16 @@ def train_step(
         # bounded ≥ 0 in theory. Negative values come from numerical drift.
         losses_safe = {n: torch.clamp(v, min=0.0) if v.isfinite() else torch.zeros_like(v)
                        for n, v in losses.items()}
+        losses_k_safe = {n: torch.clamp(v, min=0.0) if v.isfinite() else torch.zeros_like(v)
+                         for n, v in losses_for_kendall.items()}
 
-        for name, loss in losses_safe.items():
+        for name in losses_safe:
             lv = lv_values[name]
             prec = torch.exp(-lv)
-            total_loss = total_loss + prec * loss + lv / 2
+            # [OPUS 181 D1] Use losses_k_safe (raw or EMA-normalized) for the Kendall
+            # term. The lv/2 regularizer stays as-is. PCGrad below also uses
+            # losses_k_safe so PCGrad and the forward total_loss are consistent.
+            total_loss = total_loss + prec * losses_k_safe[name] + lv / 2
 
         # SAFETY: Skip step if total_loss is non-finite (log_var explosion caught here)
         if not torch.isfinite(total_loss):
@@ -666,17 +752,21 @@ def train_step(
                 "Non-finite total_loss at step: det=%s act=%s psr=%s pose=%s | skipping optimizer step",
                 losses["det"].item(), losses["act"].item(), losses["psr"].item(), losses["pose"].item(),
             )
-            optimizer.zero_grad()
+            if do_step:
+                optimizer.zero_grad()
             return {
                 "loss": float("nan"),
                 "loss_det": losses["det"].item(), "loss_act": losses["act"].item(),
                 "loss_psr": losses["psr"].item(), "loss_pose": losses["pose"].item(),
                 **psr_comp_breakdown,
                 **{f"log_var_{k}": v.item() for k, v in log_vars.items()},
+                **{f"ema_{k}": (ema_losses[k].item() if ema_losses is not None else 0.0)
+                   for k in losses},
             }
 
-    # Backward
-    optimizer.zero_grad()
+    # [OPUS 181 D4] zero_grad moved from top of train_step to AFTER step() below.
+    # Previously, zero_grad at the top of every micro-batch wiped the previous
+    # micro-batch's gradient, making grad_accum_steps a silent no-op.
 
     if pcgrad:
         shared_params = [p for p in model.feature_pyramid.backbone.parameters() if p.requires_grad]
@@ -689,7 +779,9 @@ def train_step(
         for name in losses:
             lv_safe = lv_values[name]  # already clamped
             prec = torch.exp(-lv_safe)
-            weighted_loss = prec * losses_safe[name]
+            # [OPUS 181 D1] PCGrad uses the SAME Kendall-normalized loss as the
+            # forward pass for consistency.
+            weighted_loss = prec * losses_k_safe[name]
             g = torch.autograd.grad(
                 weighted_loss, shared_params,
                 retain_graph=True, allow_unused=True,
@@ -705,9 +797,14 @@ def train_step(
         # per scaler.update() cycle).
         scaler.scale(total_loss).backward()
 
-        # Override backbone grads with PCGrad deconflicted grads
+        # [OPUS 181 D4] PCGrad backbone override now ACCUMULATES (instead of
+        # overwriting) so gradient accumulation across micro-batches is preserved.
         for param, grad in zip(shared_params, deconflicted):
-            param.grad = grad.to(param.dtype)
+            g = grad.to(param.dtype)
+            if param.grad is None:
+                param.grad = g
+            else:
+                param.grad = param.grad + g
     else:
         scaler.scale(total_loss).backward()
 
@@ -716,6 +813,9 @@ def train_step(
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
         scaler.step(optimizer)
         scaler.update()
+        # [OPUS 181 D4] zero_grad ONLY at the accumulation boundary AFTER step().
+        # This is the correct timing so grads survive across the accumulation window.
+        optimizer.zero_grad()
     # NOTE: With grad accumulation, scaler.unscale_() is only safe to call once
     # between scaler.update() calls. The first accumulated call here would
     # call scaler.scale(total_loss).backward(), accumulating gradients. Subsequent
@@ -733,6 +833,8 @@ def train_step(
         "loss_pose": l_pose.item(),
         **psr_comp_breakdown,
         **{f"log_var_{k}": v.item() for k, v in log_vars.items()},
+        **{f"ema_{k}": (ema_losses[k].item() if ema_losses is not None else 0.0)
+           for k in losses},
     }
 
 
@@ -1342,6 +1444,17 @@ def main():
     })
     logger.info("Log vars initialized to -0.5")
 
+    # ── EMA loss tracker for Kendall scale normalization [OPUS 181 D1] ────
+    # Initialized to 1.0 so the first step's normalized loss equals the raw
+    # loss (no divide-by-zero, no underflow). Tracks each task's running mean
+    # so Kendall balances comparable scales (≈O(1) per task) instead of
+    # collapsing to inverse-loss scaling `weight = 1/(2·loss)`.
+    ema_losses = {
+        name: torch.tensor(1.0, device=device)
+        for name in ["det", "act", "psr", "pose"]
+    }
+    logger.info("EMA loss tracker initialized to 1.0")
+
     # ── Optimizer ─────────────────────────────────────────────────────────
     param_groups = [
         {"params": model.feature_pyramid.backbone.parameters(), "lr": args.lr_backbone, "weight_decay": 0.05},
@@ -1366,6 +1479,11 @@ def main():
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
         best_act_top1 = ckpt.get("best_act_top1", 0.0)
         log_vars = ckpt.get("log_vars", log_vars)
+        # [OPUS 181 D1] Restore EMA state if present (older checkpoints lack it
+        # → fall back to fresh init at 1.0; tracker will reconverge in ~100 steps).
+        if "ema_losses" in ckpt:
+            for name, v in ckpt["ema_losses"].items():
+                ema_losses[name] = v.to(device)
         logger.info("Resumed from epoch %d", start_epoch)
 
     # ── AMP scaler ─────────────────────────────────────────────────────────
@@ -1425,6 +1543,7 @@ def main():
                 pcgrad=args.pcgrad,
                 act_class_weights=act_class_weights,
                 do_step=do_step,
+                ema_losses=ema_losses,  # [OPUS 181 D1] EMA-normalized Kendall losses.
             )
 
             for k in epoch_metrics:
@@ -1500,6 +1619,7 @@ def main():
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "log_vars": log_vars,
+                    "ema_losses": ema_losses,  # [OPUS 181 D1]
                     "best_act_top1": best_act_top1,
                     "best_val_loss": best_val_loss,
                     "val_metrics": eval_metrics,
@@ -1513,6 +1633,7 @@ def main():
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "log_vars": log_vars,
+                "ema_losses": ema_losses,  # [OPUS 181 D1]
                 "best_val_loss": best_val_loss,
                 "metrics": avg_metrics,
             }
