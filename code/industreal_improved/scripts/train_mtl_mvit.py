@@ -1432,11 +1432,17 @@ def main():
             logger.error("--test-only requires --resume <checkpoint.pt>")
             sys.exit(1)
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
-        # [OPUS 186] strict=False for head shape changes (see resume path above).
-        load_result = model.load_state_dict(ckpt["model_state_dict"], strict=False)
-        logger.info("Loaded checkpoint from %s (epoch %d) — %d missing, %d unexpected keys",
+        # [OPUS 186] Pre-filter state_dict to matching shapes (see resume path).
+        ckpt_sd = ckpt["model_state_dict"]
+        model_sd = model.state_dict()
+        filtered_sd = {k: v for k, v in ckpt_sd.items()
+                       if k in model_sd and model_sd[k].shape == v.shape}
+        skipped = sum(1 for k, v in ckpt_sd.items()
+                      if k not in model_sd or model_sd[k].shape != v.shape)
+        load_result = model.load_state_dict(filtered_sd, strict=False)
+        logger.info("Loaded checkpoint from %s (epoch %d) — %d skipped (shape mismatch), %d missing",
                     args.resume, ckpt.get("epoch", "?"),
-                    len(load_result.missing_keys), len(load_result.unexpected_keys))
+                    skipped, len(load_result.missing_keys))
 
         test_ds = IndustRealMultiTaskDataset(
             split="test",
@@ -1509,16 +1515,31 @@ def main():
     best_act_top1 = 0.0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
-        # [OPUS 186] strict=False: PSR head reshape (96→768ch) and 2-layer
-        # activity MLP mean the checkpoint's head weights are not directly
-        # loadable. Backbone, FPN, pose head, and (most of) the activity
-        # head can still load — the new layers initialize fresh.
-        load_result = model.load_state_dict(ckpt["model_state_dict"], strict=False)
-        if load_result.missing_keys or load_result.unexpected_keys:
-            logger.warning(
-                "Resume: %d missing keys, %d unexpected keys (head shapes changed; new layers initialize fresh)",
-                len(load_result.missing_keys), len(load_result.unexpected_keys),
-            )
+        # [OPUS 186] Pre-filter checkpoint state_dict to only keys with matching
+        # shapes. PyTorch's strict=False still RAISES on size mismatches (only
+        # missing/unexpected keys are tolerated). PSR head reshape (96→768ch) and
+        # 2-layer activity MLP mean the checkpoint's head weights are not directly
+        # loadable. Backbone, FPN, pose head load fully; new layers init fresh.
+        ckpt_sd = ckpt["model_state_dict"]
+        model_sd = model.state_dict()
+        filtered_sd = {}
+        skipped = []
+        for k, v in ckpt_sd.items():
+            if k in model_sd and model_sd[k].shape == v.shape:
+                filtered_sd[k] = v
+            else:
+                skipped.append((k, tuple(v.shape) if hasattr(v, "shape") else None,
+                                tuple(model_sd[k].shape) if k in model_sd else None))
+        if skipped:
+            logger.warning("Resume: skipped %d keys with shape mismatch:", len(skipped))
+            for k, ckpt_shape, model_shape in skipped[:5]:
+                logger.warning("  %s: ckpt=%s vs model=%s", k, ckpt_shape, model_shape)
+            if len(skipped) > 5:
+                logger.warning("  ... and %d more", len(skipped) - 5)
+        load_result = model.load_state_dict(filtered_sd, strict=False)
+        if load_result.missing_keys:
+            logger.warning("Resume: %d missing keys (new layers initialize fresh): %s",
+                           len(load_result.missing_keys), load_result.missing_keys[:3])
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         start_epoch = ckpt["epoch"]
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
