@@ -1802,6 +1802,39 @@ def main():
 
         scheduler.step()
 
+        # ── Per-epoch quick health check (2 val batches) ─────────────────
+        # [OPUS 192 §5] Lightweight signal between full evals. Only runs
+        # when a full eval is NOT happening this epoch. Takes ~5 seconds.
+        if epoch % args.eval_every != 0:
+            model.eval()
+            with torch.no_grad():
+                _qc_B = 0
+                for _qc_batch in eval_loader:
+                    if _qc_B >= 2:
+                        break
+                    _qc_images = _qc_batch[0][:args.batch_size].to(device, non_blocking=True)
+                    _qc_images = _qc_images.float() / 255.0
+                    _mean = torch.tensor([0.45, 0.45, 0.45], device=device).view(1, 1, 3, 1, 1)
+                    _std = torch.tensor([0.225, 0.225, 0.225], device=device).view(1, 1, 3, 1, 1)
+                    _qc_images = (_qc_images - _mean) / _std
+                    _qc_images = _qc_images.permute(0, 2, 1, 3, 4).contiguous()
+                    _qc_out = model(_qc_images)
+                    _qc_B += 1
+                # Activity: how many classes are predicted across the batch?
+                _qc_preds = _qc_out["activity"].argmax(dim=-1)
+                _qc_n_pred = len(_qc_preds.unique())
+                _qc_max_conf = torch.softmax(_qc_out["activity"], dim=-1).max(dim=-1)[0].mean().item()
+                # PSR: stddev across frames per component
+                _qc_psr_std = _qc_out["psr_logits"].float().std(dim=(0, 1)).tolist()
+                _qc_psr_std_max = max(_qc_psr_std)
+                # Detection: max sigmoid score per level
+                _qc_det_levels = list(_qc_out["detection"].keys())
+                logger.info(
+                    "  Quick: act_preds=%duniq/%.2fmaxconf | psr_stdmax=%.4f | det_lvls=%s",
+                    _qc_n_pred, _qc_max_conf, _qc_psr_std_max, _qc_det_levels,
+                )
+            model.train()
+
         # ── Evaluate on eval split (Doc 175 section 7.2) ─────────────────
         if epoch % args.eval_every == 0:
             # [OPUS 186 E-3/I-8] Swap in EMA model weights for evaluation;
