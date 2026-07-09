@@ -385,14 +385,29 @@ def psr_loss(
 ) -> torch.Tensor:
     """Per-frame BCE for PSR transition logits with optional per-component inverse-prevalence weights.
 
+    [OPUS 192 FC-4] Downsample targets from T=16 → T=8 to match the PSR head's
+    native T=8 prediction (per OPUS 192: predict at native T=8, not interpolated
+    T=16). Max-pool over 2-frame windows preserves transition events (any 1 in
+    the window → 1 in the downsampled label).
+
     Args:
-        psr_logits: [B, T, 11] per-frame transition logits.
-        psr_targets: [B, T, 11] per-frame transition targets.
+        psr_logits: [B, T, 11] per-frame transition logits (T=8 from PSR head).
+        psr_targets: [B, T, 11] per-frame transition targets (T=16 from dataset).
         comp_weights: [1, 1, 11] per-component inverse-prevalence weights or None.
 
     Returns:
         Scalar loss (mean over all elements).
     """
+    # If logits and targets have different T, downsample targets via max-pool.
+    if psr_logits.size(1) != psr_targets.size(1):
+        T_target = psr_targets.size(1)
+        T_logit = psr_logits.size(1)
+        # Use adaptive_max_pool1d on the time dim
+        psr_targets = F.adaptive_max_pool1d(
+            psr_targets.transpose(1, 2),  # [B, 11, T_target]
+            output_size=T_logit,
+        ).transpose(1, 2)  # [B, T_logit, 11]
+
     loss = F.binary_cross_entropy_with_logits(psr_logits, psr_targets, reduction='none')
     if comp_weights is not None:
         loss = loss * comp_weights  # broadcast [B, T, 11] * [1, 1, 11]
@@ -987,10 +1002,18 @@ def evaluate(
         outputs = model(images_f)
 
         # -- PSR --
-        psr_logits = outputs["psr_logits"]  # [B, 16, 11]
+        # [OPUS 192 FC-4] PSR now predicts at T=8 (backbone's native pooled
+        # resolution). Downsample the T=16 ground-truth labels to T=8 via
+        # max-pool to match the prediction temporal resolution.
+        psr_logits = outputs["psr_logits"]  # [B, 8, 11]
         psr_gt = targets["psr_labels"]      # [B, 16, 11]
+        # Downsample labels T=16 → T=8 via max-pool (preserves transition events)
+        psr_gt_t8 = torch.nn.functional.adaptive_max_pool1d(
+            psr_gt.transpose(1, 2),  # [B, 11, 16]
+            output_size=8,
+        ).transpose(1, 2)  # [B, 8, 11]
         psr_pred_logits.append(psr_logits.cpu().numpy())
-        psr_labels_list.append(psr_gt.cpu().numpy())
+        psr_labels_list.append(psr_gt_t8.cpu().numpy())
         for i in range(B):
             meta = targets["metadata"][i] if i < len(targets["metadata"]) else {}
             rid = meta.get("recording_id", f"b{n_batches}_{i}")

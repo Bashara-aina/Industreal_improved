@@ -317,24 +317,27 @@ class PSRHead(nn.Module):
             conv_proj_feat: [B, 96, T=8, H=56, W=56] from conv_proj forward hook.
 
         Returns:
-            psr_logits: [B, T=16, 11] per-frame transition logits.
+            psr_logits: [B, T=8, 11] per-frame transition logits.
+
+        [OPUS 192 FC-4] Predict at native T=8 (backbone's pooled resolution) instead
+        of post-encoder linear interpolation 8→16. Linear interpolation blends
+        adjacent frames, making sharp per-frame transitions unrepresentable.
+        Labels are downsampled to T=8 in psr_loss() via max-pool to preserve
+        transition events (any 1 in a 2-frame window → 1 in the downsampled
+        label).
         """
         # Pool spatial dims → [B, 96, T=8, 1, 1] → [B, T=8, 96]
         x = self.spatial_pool(conv_proj_feat).squeeze(-1).squeeze(-1).transpose(1, 2)
 
-        # Interpolate T=8 to T=16 for per-frame predictions
-        x = x.permute(0, 2, 1)  # [B, 96, 8]
-        x = F.interpolate(x, size=16, mode="linear", align_corners=False)  # [B, 96, 16]
-        x = x.permute(0, 2, 1)  # [B, 16, 96]
-
-        # Causal masking: each frame can only attend to past+present
+        # Predict at native T=8 — no interpolation. Causal mask is 8x8.
+        T = x.size(1)
         mask = torch.triu(
-            torch.full((16, 16), float("-inf"), device=x.device),
+            torch.full((T, T), float("-inf"), device=x.device),
             diagonal=1,
         )
 
-        x = self.temporal_encoder(x, mask=mask)  # [B, 16, 96]
-        return self.projection(x)  # [B, 16, 11]
+        x = self.temporal_encoder(x, mask=mask)  # [B, 8, 96]
+        return self.projection(x)  # [B, 8, 11]
 
 
 # ===========================================================================
@@ -444,9 +447,18 @@ class MTLMViTModel(nn.Module):
         fpn_feats, cls_token = self.feature_pyramid(clip)
 
         # Detection: FPN → decoupled head
+        # [OPUS 192 FC-2 / Layer 5] Use only P3/P4/P5 for detection. P2 reads
+        # raw `conv_proj` patch-embeddings (semantics-free, same issue that
+        # starved PSR before B-3). Drop P2 from detection — classification on
+        # semantic levels (P3=192ch, P4=384ch, P5=768ch) is the load-bearing
+        # change. P2 remains in the FPN top-down pathway (so PSR's P5 still
+        # gets its top-down context) but is not used for detection heads.
         fpn_out = self.fpn(fpn_feats)
         det_outputs = {}
         for level_name, feat in fpn_out.items():
+            if level_name == "P2":
+                # Skip P2 (raw conv_proj features, no semantics — FC-2)
+                continue
             # Temporal-pool T dimension for 2D detection
             pooled = feat.mean(dim=2)  # [B, 256, H, W]
             det_outputs[level_name] = self.det_head(pooled)
