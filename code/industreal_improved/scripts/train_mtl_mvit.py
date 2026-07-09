@@ -336,7 +336,14 @@ def compute_activity_class_weights(
     """
     counts = dataset.class_counts.astype(np.float64)
     total = counts.sum()
-    weights = np.where(counts > 0, total / (num_classes * counts), 0.0)
+    # Use np.divide with where= to avoid RuntimeWarning: divide by zero.
+    # np.where evaluates both branches; np.divide with where= skips zeros.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        weights = np.divide(
+            total, num_classes * counts,
+            out=np.zeros_like(counts, dtype=np.float64),
+            where=counts > 0,
+        )
     # [OPUS 181 D1b] sqrt-tame: relative shape preserved, long tail compressed.
     weights = np.power(weights, 0.5)
     logger.info(
