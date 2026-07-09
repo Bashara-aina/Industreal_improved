@@ -382,6 +382,9 @@ def psr_loss(
     psr_logits: torch.Tensor,
     psr_targets: torch.Tensor,
     comp_weights: Optional[torch.Tensor] = None,
+    use_focal: bool = False,
+    focal_alpha: float = 0.25,
+    focal_gamma: float = 2.0,
 ) -> torch.Tensor:
     """Per-frame BCE for PSR transition logits with optional per-component inverse-prevalence weights.
 
@@ -390,10 +393,18 @@ def psr_loss(
     T=16). Max-pool over 2-frame windows preserves transition events (any 1 in
     the window → 1 in the downsampled label).
 
+    [OPUS 192 Q2] Optional Focal-BCE (γ=2.0, α=0.25). Rare-event loss that
+    down-weights easy negatives. Standard for sparse positive labels. Use
+    use_focal=True to activate. Default is plain BCE (per Opus: "Focal γ=2.0
+    reduces loss contribution from confidently-classified cells by ~100×").
+
     Args:
         psr_logits: [B, T, 11] per-frame transition logits (T=8 from PSR head).
         psr_targets: [B, T, 11] per-frame transition targets (T=16 from dataset).
         comp_weights: [1, 1, 11] per-component inverse-prevalence weights or None.
+        use_focal: if True, use Focal-BCE instead of plain BCE.
+        focal_alpha: weight on positive class in focal loss.
+        focal_gamma: focal loss focusing parameter.
 
     Returns:
         Scalar loss (mean over all elements).
@@ -408,7 +419,18 @@ def psr_loss(
             output_size=T_logit,
         ).transpose(1, 2)  # [B, T_logit, 11]
 
-    loss = F.binary_cross_entropy_with_logits(psr_logits, psr_targets, reduction='none')
+    bce = F.binary_cross_entropy_with_logits(psr_logits, psr_targets, reduction='none')
+
+    if use_focal:
+        # Focal-BCE: down-weight easy examples
+        p = torch.sigmoid(psr_logits)
+        pt = psr_targets * p + (1 - psr_targets) * (1 - p)
+        alpha_t = psr_targets * focal_alpha + (1 - psr_targets) * (1 - focal_alpha)
+        focal_weight = alpha_t * (1 - pt) ** focal_gamma
+        loss = focal_weight * bce
+    else:
+        loss = bce
+
     if comp_weights is not None:
         loss = loss * comp_weights  # broadcast [B, T, 11] * [1, 1, 11]
     return loss.mean()
@@ -630,6 +652,7 @@ def train_step(
     ema_warmup_steps: int = 100,
     ema_momentum: float = 0.99,
     grad_accum_steps: int = 1,  # [OPUS 186 §5.1] Divide loss by this so accum MEANS, not SUMS.
+    psr_focal: bool = False,   # [OPUS 192 Q2] Optional Focal-BCE for PSR (rare-event loss).
 ) -> dict:
     """Single training step with Kendall uncertainty weighting and optional PCGrad gradient surgery.
 
@@ -688,6 +711,7 @@ def train_step(
             outputs["psr_logits"],
             targets.get("psr_labels", torch.zeros(B, 16, 11, device=images.device)),
             comp_weights=_psr_comp_weights,
+            use_focal=psr_focal,
         ) if "psr_labels" in targets else torch.tensor(0.0, device=images.device)
 
         # Per-component PSR loss breakdown for logging
@@ -1340,6 +1364,8 @@ def main():
     parser.add_argument("--lr-log-var", type=float, default=1e-3, help="Log var LR")
     parser.add_argument("--hp-prec-cap", action="store_true", default=True, help="Cap pose precision")
     parser.add_argument("--pcgrad", action=argparse.BooleanOptionalAction, default=True, help="PCGrad gradient surgery (default: on; use --no-pcgrad to disable)")
+    parser.add_argument("--psr-focal", action="store_true", default=False,
+                        help="[OPUS 192 Q2] Use Focal-BCE (γ=2.0, α=0.25) for PSR instead of plain BCE. Useful for rare-event labels.")
     parser.add_argument("--output-dir", type=str, default=str(OUTPUT_ROOT))
     parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume")
     parser.add_argument("--eval-every", type=int, default=5,
@@ -1691,6 +1717,7 @@ def main():
                 do_step=do_step,
                 ema_losses=ema_losses,  # [OPUS 181 D1] EMA-normalized Kendall losses.
                 grad_accum_steps=args.grad_accum_steps,  # [OPUS 186 §5.1] Mean-scale accumulation.
+                psr_focal=args.psr_focal,  # [OPUS 192 Q2] Optional Focal-BCE for PSR.
             )
 
             for k in epoch_metrics:
