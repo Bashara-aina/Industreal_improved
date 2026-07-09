@@ -1505,6 +1505,26 @@ def main():
     })
     logger.info("Log vars initialized to -0.5")
 
+    # ── Auto-soup init [OPUS 192 §5 step 8] ──────────────────────────────
+    # If a soup backbone (averaged from single-task specialists via
+    # scripts/build_soup.py) exists in the output dir, load its backbone
+    # weights. This is a near-free init increment for MTL finetune per
+    # Wortsman 2022. If --resume is also given, soup is skipped (resume wins).
+    if not args.resume:
+        soup_path = output_dir / "soup_backbone.pt"
+        if soup_path.exists():
+            logger.info("Auto-loading soup backbone from %s", soup_path)
+            soup_sd = torch.load(soup_path, map_location="cpu", weights_only=False)
+            filtered = {k: v for k, v in soup_sd.items()
+                         if k in model.state_dict()
+                         and model.state_dict()[k].shape == v.shape}
+            load_result = model.load_state_dict(filtered, strict=False)
+            logger.info("  Loaded %d/%d soup tensors (skipped %d shape-mismatched)",
+                        len(filtered), len(soup_sd),
+                        len(soup_sd) - len(filtered))
+        else:
+            logger.info("No soup backbone found at %s — using random init", soup_path)
+
     # ── EMA loss tracker for Kendall scale normalization [OPUS 181 D1] ────
     # Initialized to 1.0 so the first step's normalized loss equals the raw
     # loss (no divide-by-zero, no underflow). Tracks each task's running mean
