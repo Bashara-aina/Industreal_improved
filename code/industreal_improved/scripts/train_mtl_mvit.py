@@ -660,6 +660,7 @@ def train_step(
     ema_momentum: float = 0.99,
     grad_accum_steps: int = 1,  # [OPUS 186 §5.1] Divide loss by this so accum MEANS, not SUMS.
     psr_focal: bool = False,   # [OPUS 192 Q2] Optional Focal-BCE for PSR (rare-event loss).
+    det_aug: bool = False,     # [OPUS 192 §5.5 / Q6] Detection augmentation (flip+color+crop).
 ) -> dict:
     """Single training step with Kendall uncertainty weighting and optional PCGrad gradient surgery.
 
@@ -683,13 +684,23 @@ def train_step(
     model.train()
     B = images.size(0)
 
+    # [OPUS 192 §5.5 / Q6] Detection augmentation BEFORE model forward.
+    # Augments images + bboxes for detection only; backbone sees augmented
+    # images for all tasks. Temporally-consistent (same aug to all frames).
+    aug_images = images
+    aug_targets = targets
+    if det_aug:
+        from src.data.det_augment import DetectionAugment
+        _det_aug = DetectionAugment(p_flip=0.5, p_color=0.5, p_crop=0.3)
+        aug_images, aug_targets = _det_aug(images, targets)
+
     # Forward
     with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-        outputs = model(images)
+        outputs = model(aug_images)
 
         # Per-task losses
-        # Detection: simple presence BCE
-        det_list = targets.get("detection", [])
+        # Detection: use augmented targets (bboxes adjusted to augmentation)
+        det_list = aug_targets.get("detection", [])
         l_det = detection_loss(outputs["detection"], det_list)
 
         l_act = activity_loss(
@@ -1373,6 +1384,10 @@ def main():
     parser.add_argument("--pcgrad", action=argparse.BooleanOptionalAction, default=True, help="PCGrad gradient surgery (default: on; use --no-pcgrad to disable)")
     parser.add_argument("--psr-focal", action="store_true", default=False,
                         help="[OPUS 192 Q2] Use Focal-BCE (γ=2.0, α=0.25) for PSR instead of plain BCE. Useful for rare-event labels.")
+    parser.add_argument("--det-aug", action="store_true", default=False,
+                        help="[OPUS 192 §5.5 / Q6] Enable detection-specific augmentation (random horizontal flip, "
+                             "color jitter, random crop). Augments images and adjusts bboxes for detection only. "
+                             "Other heads see original images. Helps data-limited detection branch.")
     parser.add_argument("--output-dir", type=str, default=str(OUTPUT_ROOT))
     parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume")
     parser.add_argument("--eval-every", type=int, default=5,
@@ -1725,6 +1740,7 @@ def main():
                 ema_losses=ema_losses,  # [OPUS 181 D1] EMA-normalized Kendall losses.
                 grad_accum_steps=args.grad_accum_steps,  # [OPUS 186 §5.1] Mean-scale accumulation.
                 psr_focal=args.psr_focal,  # [OPUS 192 Q2] Optional Focal-BCE for PSR.
+                det_aug=args.det_aug,  # [OPUS 192 §5.5 / Q6] Detection-specific augmentation.
             )
 
             for k in epoch_metrics:

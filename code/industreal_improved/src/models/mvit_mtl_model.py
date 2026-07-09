@@ -286,7 +286,7 @@ class PSRHead(nn.Module):
         feat_dim: int = 96,
         num_components: int = 11,
         nhead: int = 4,
-        num_layers: int = 3,
+        num_layers: int = 4,  # [OPUS 192 §5.5] Slightly deeper head (was 3)
     ):
         super().__init__()
         # Spatial pooling → [B, 96, T=8] → interpolate to T=16
