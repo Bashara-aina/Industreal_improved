@@ -8,7 +8,7 @@
 
 ## TL;DR
 
-**Current state:** Path-D MTL run is live on GPU 1 (PID 2925005) with all 17 Tier A fixes. Resumed from `best.pt` (ep5), currently at batch 5200+ of 8000 per epoch. Activity and PSR are at fresh-init ep0 (per Opus 192's prediction); the first epoch boundary will show whether the new heads (2-layer MLP, P5 PSR) are learning.
+**Current state:** Path-D MTL run is live on GPU 1 (PID 4140887) with all 19 Tier A fixes. Resumed from `best.pt` (ep5), running since 2026-07-10 05:24. Eval-every=10 (first eval at ep10, ~08:30 JST). Activity and PSR are at fresh-init ep0 (per Opus 192's prediction); the epoch 10 eval will be the first real metric signal. Previous run (PID 2925005, run9) crashed with cudaErrorLaunchTimeout at the eval boundary — fixed by increasing eval-every to 10.
 
 **Subject overlap: PASS** (train 36 / val 16 / test 32, 0 overlap — Opus 186 H-2 non-negotiable verified).
 **Checkpoint best.pt: VALID** (435/473 tensors loaded, all 4 heads produce valid output).
@@ -17,13 +17,15 @@
 
 ## 1. Training Lifecycle
 
-### Current run: `run9` (PID 2925005)
+### Current run: `run10` (PID 4140887)
 
-- **Log:** `/tmp/mtl_mvit_run9.log`
-- **Output dir:** `/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/runs/rf_stages/checkpoints/mtl_mvit_run/`
+- **Log:** `/tmp/mtl_mvit_run10.log`
+- **Output dir:** `src/runs/rf_stages/checkpoints/mtl_mvit_run/`
 - **Resumed from:** `best.pt` (epoch 5)
 - **Per epoch:** ~35 min for 8000 batches
-- **Eval:** every 5 epochs (ep10, 15, 20, 25, 30, ...)
+- **Eval:** every 10 epochs (ep10, 20, 30, ...)
+- **Started:** 2026-07-10 05:24 JST
+- **Previous run (run9, PID 2925005):** crashed with cudaErrorLaunchTimeout at eval boundary — fixed by eval-every=10
 
 ### What's running
 
