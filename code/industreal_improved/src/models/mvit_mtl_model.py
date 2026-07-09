@@ -217,12 +217,43 @@ class DetectionHead(nn.Module):
 # ===========================================================================
 
 class ActivityHead(nn.Module):
-    """75-class activity recognition from MViTv2 class token."""
+    """75-class activity recognition from MViTv2 class token.
 
-    def __init__(self, feat_dim: int = 768, num_classes: int = 75):
+    [OPUS 186 Q3/C-1] 2-layer MLP for ~10% capacity boost. The WACV activity SOTA
+    (0.652) was set with a single linear layer on the pooled class token — so
+    head capacity is *not* the bottleneck (Opus 186 §0). The 2-layer MLP is
+    cheap insurance in case MTL transfer pulls features off the SOTA optimum.
+    Per Q3: "If ST-activity(clip) on the frozen class token clears ~0.45–0.55,
+    the head is proven adequate and the residual gap is pure MTL cost."
+
+    Args:
+        feat_dim: input feature dim (768 for MViTv2-S class token).
+        num_classes: number of activity classes (75 for full IndustReal).
+        hidden: hidden dim of the 2-layer MLP.
+        dropout: dropout before the classifier.
+    """
+
+    def __init__(
+        self,
+        feat_dim: int = 768,
+        num_classes: int = 75,
+        hidden: int = 1024,
+        dropout: float = 0.1,
+    ):
         super().__init__()
         self.norm = nn.LayerNorm(feat_dim)
-        self.classifier = nn.Linear(feat_dim, num_classes)
+        self.fc1 = nn.Linear(feat_dim, hidden)
+        self.act = nn.GELU()
+        self.drop = nn.Dropout(dropout)
+        self.classifier = nn.Linear(hidden, num_classes)
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
 
     def forward(self, cls_token: torch.Tensor) -> torch.Tensor:
         """Forward.
@@ -233,7 +264,11 @@ class ActivityHead(nn.Module):
         Returns:
             logits: [B, 75]
         """
-        return self.classifier(self.norm(cls_token))
+        x = self.norm(cls_token)
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop(x)
+        return self.classifier(x)
 
 
 # ===========================================================================
@@ -374,8 +409,14 @@ class MTLMViTModel(nn.Module):
         # Activity head
         self.act_head = ActivityHead(feat_dim=backbone_dim, num_classes=num_act_classes)
 
-        # PSR head (uses conv_proj features from feature_pyramid hooks)
-        self.psr_head = PSRHead(feat_dim=96, num_components=num_psr_components)
+        # [OPUS 186 B-6] PSR head on `blocks[14]` features (768ch, post-all-attention),
+        # NOT on `conv_proj` (96ch, layer 0, no semantics). The pre-fix code read
+        # `fpn_feats.get("P2")` which is conv_proj output — raw patch embeddings
+        # with no object/state semantics. The PSR causal-transformer was
+        # learning from semantics-free features, which is why PSR loss was flat
+        # at base-rate entropy. blocks[14] features carry semantic information
+        # after 14 transformer blocks; PSR can finally learn transition events.
+        self.psr_head = PSRHead(feat_dim=backbone_dim, num_components=num_psr_components)
 
         # Pose head
         self.pose_head = PoseHead(feat_dim=backbone_dim)
@@ -413,8 +454,10 @@ class MTLMViTModel(nn.Module):
         # Activity
         act_logits = self.act_head(cls_token)
 
-        # PSR (uses conv_proj features at P2 resolution)
-        psr_input = fpn_feats.get("P2")  # [B, 96, T=8, 56, 56]
+        # PSR (uses blocks[14] features at P5 resolution — semantic-rich post-attention)
+        # [OPUS 186 B-6] Was fpn_feats.get("P2") (conv_proj, 96ch, layer 0).
+        # Now uses fpn_feats.get("P5") (blocks[14], 768ch, post-all-attention).
+        psr_input = fpn_feats.get("P5")  # [B, 768, T=8, 7, 7]
         if psr_input is not None:
             psr_logits = self.psr_head(psr_input)
         else:

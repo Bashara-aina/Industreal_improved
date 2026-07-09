@@ -254,13 +254,20 @@ def detection_loss(
                             pos_mask[b, cj, ci] = True
                             cls_target[b, cj, ci] = labels[n].long()
 
-                            # DFL target: (l,t,r,b) offsets from cell center in
-                            # grid units. Use the same GT box for every cell in
-                            # the patch — box sizes are stable across the patch.
-                            dfl_target[b, cj, ci, 0] = (gt_cx[n] - boxes[n, 0]) / stride
-                            dfl_target[b, cj, ci, 1] = (gt_cy[n] - boxes[n, 1]) / stride
-                            dfl_target[b, cj, ci, 2] = (boxes[n, 2] - gt_cx[n]) / stride
-                            dfl_target[b, cj, ci, 3] = (boxes[n, 3] - gt_cy[n]) / stride
+                            # [OPUS 186 §5.2] DFL/IoU targets are PER-CELL distances
+                            # (each cell's own center → box edges), not the GT
+                            # center → box edges. The pre-fix code used gt_cx[n]/
+                            # gt_cy[n] for all 9 cells in the patch, which made
+                            # off-center positives train to regress boxes as if
+                            # they sat at the GT center → biased localization,
+                            # capping mAP even after the density fix helps cls.
+                            # Use cell_cx[ci] / cell_cy[cj] so each cell sees the
+                            # offsets it would actually need to predict to localize
+                            # the GT box from its own anchor point.
+                            dfl_target[b, cj, ci, 0] = (cell_cx[ci] - boxes[n, 0]) / stride  # left
+                            dfl_target[b, cj, ci, 1] = (cell_cy[cj] - boxes[n, 1]) / stride  # top
+                            dfl_target[b, cj, ci, 2] = (boxes[n, 2] - cell_cx[ci]) / stride  # right
+                            dfl_target[b, cj, ci, 3] = (boxes[n, 3] - cell_cy[cj]) / stride  # bottom
 
                             iou_target[b, cj, ci] = boxes[n]
 
@@ -599,7 +606,7 @@ def train_step(
     log_vars: nn.ParameterDict,
     optimizer: torch.optim.Optimizer,
     scaler: torch.amp.GradScaler,
-    grad_clip_norm: float = 1.0,
+    grad_clip_norm: float = 5.0,  # [OPUS 186 E-6] 1.0 was over-clipping; 5.0 is ViT-standard.
     hp_prec_cap: bool = True,
     pcgrad: bool = True,
     act_class_weights: Optional[torch.Tensor] = None,
@@ -607,6 +614,7 @@ def train_step(
     ema_losses: Optional[dict] = None,
     ema_warmup_steps: int = 100,
     ema_momentum: float = 0.99,
+    grad_accum_steps: int = 1,  # [OPUS 186 §5.1] Divide loss by this so accum MEANS, not SUMS.
 ) -> dict:
     """Single training step with Kendall uncertainty weighting and optional PCGrad gradient surgery.
 
@@ -615,6 +623,11 @@ def train_step(
     by its own EMA before entering the Kendall term — so Kendall's equilibrium is
     `weight = exp(-lv)` (no `1/(2·loss)` collapse). During warmup, raw losses are
     used (EMA values are still stabilizing).
+
+    [OPUS 186 §5.1] grad_accum_steps: loss is divided by this before backward() so
+    that gradient accumulation produces a MEAN of micro-batch gradients, not a SUM.
+    Without this, the boundary step sees `grad_accum_steps`× the intended magnitude
+    and `grad_clip_norm` clips most of it.
 
     Args:
         do_step: if True, calls optimizer.step(). Set False for gradient accumulation —
@@ -795,18 +808,25 @@ def train_step(
         # For bf16 AMP, the scaler is mostly a no-op; we skip explicit unscale_() to
         # avoid issues with gradient accumulation (unscale_ can only be called once
         # per scaler.update() cycle).
-        scaler.scale(total_loss).backward()
+        # [OPUS 186 §5.1] Divide by grad_accum_steps so the boundary step sees the
+        # MEAN of micro-batch gradients, not the SUM. (Otherwise grad_clip_norm=1.0
+        # clips most of the doubled magnitude, coupling accumulation with clipping.)
+        scaler.scale(total_loss / grad_accum_steps).backward()
 
         # [OPUS 181 D4] PCGrad backbone override now ACCUMULATES (instead of
         # overwriting) so gradient accumulation across micro-batches is preserved.
+        # [OPUS 186 §5.1] Also scale by 1/grad_accum_steps so the deconflicted
+        # backbone grads match the (already-scaled) head grads from backward().
+        accum_scale = 1.0 / grad_accum_steps
         for param, grad in zip(shared_params, deconflicted):
-            g = grad.to(param.dtype)
+            g = (grad.to(param.dtype)) * accum_scale
             if param.grad is None:
                 param.grad = g
             else:
                 param.grad = param.grad + g
     else:
-        scaler.scale(total_loss).backward()
+        # [OPUS 186 §5.1] Same mean-scaling as the PCGrad branch.
+        scaler.scale(total_loss / grad_accum_steps).backward()
 
     # Gradient clipping
     if do_step:
@@ -1304,8 +1324,10 @@ def main():
     )
     parser.add_argument("--grad-accum-steps", type=int, default=2,
                         help="Gradient accumulation steps (effective batch = batch_size * this)")
-    parser.add_argument("--max-batches-per-epoch", type=int, default=0,
-                        help="Cap batches per epoch (0 = full epoch; use 200 for fast smoke)")
+    parser.add_argument("--max-batches-per-epoch", type=int, default=8000,
+                        help="[OPUS 186 E-7] Cap batches per epoch (0 = full epoch of ~39k; default 8000 = 2x the legacy 4000; 200 for fast smoke)")
+    parser.add_argument("--grad-clip-norm", type=float, default=5.0,
+                        help="[OPUS 186 E-6] Grad-clip norm (1.0 was over-clipping after §5.1 mean fix; 5.0 is standard for ViT).")
     parser.add_argument("--compile", action="store_true",
                         help="Use torch.compile() for ~2x speedup (PyTorch 2.0+)")
     args = parser.parse_args()
@@ -1455,6 +1477,18 @@ def main():
     }
     logger.info("EMA loss tracker initialized to 1.0")
 
+    # ── EMA model weights [OPUS 186 E-3/I-8] ─────────────────────────────
+    # Exponential-moving-average of model parameters. Cheap, reliable +1-2%
+    # across all metrics. Initialized to the model state_dict on the first
+    # update; used for eval instead of the raw model state. Momentum 0.999
+    # (≈ last 1000 steps dominate). Detached from autograd.
+    ema_model_state: dict = {
+        k: v.detach().clone().float()
+        for k, v in model.state_dict().items()
+    }
+    ema_momentum_model = 0.999
+    logger.info("EMA model weights initialized to current model state_dict")
+
     # ── Optimizer ─────────────────────────────────────────────────────────
     param_groups = [
         {"params": model.feature_pyramid.backbone.parameters(), "lr": args.lr_backbone, "weight_decay": 0.05},
@@ -1484,6 +1518,12 @@ def main():
         if "ema_losses" in ckpt:
             for name, v in ckpt["ema_losses"].items():
                 ema_losses[name] = v.to(device)
+        # [OPUS 186 E-3] Restore EMA model state if present.
+        if "ema_model_state" in ckpt:
+            for k, v in ckpt["ema_model_state"].items():
+                if k in ema_model_state:
+                    ema_model_state[k] = v.to(ema_model_state[k].dtype).to(device)
+            logger.info("Resumed EMA model state (size=%d tensors)", len(ema_model_state))
         logger.info("Resumed from epoch %d", start_epoch)
 
     # ── AMP scaler ─────────────────────────────────────────────────────────
@@ -1539,16 +1579,30 @@ def main():
 
             step_metrics = train_step(
                 model, images, targets, log_vars, optimizer, scaler,
+                grad_clip_norm=args.grad_clip_norm,  # [OPUS 186 E-6]
                 hp_prec_cap=args.hp_prec_cap,
                 pcgrad=args.pcgrad,
                 act_class_weights=act_class_weights,
                 do_step=do_step,
                 ema_losses=ema_losses,  # [OPUS 181 D1] EMA-normalized Kendall losses.
+                grad_accum_steps=args.grad_accum_steps,  # [OPUS 186 §5.1] Mean-scale accumulation.
             )
 
             for k in epoch_metrics:
                 epoch_metrics[k] += step_metrics.get(k, 0)
             n_steps += 1
+
+            # [OPUS 186 E-3/I-8] Update EMA model weights. Only update on
+            # boundary steps (after the optimizer has actually stepped) so
+            # the EMA tracks post-step weights, not mid-accumulation weights.
+            if do_step:
+                with torch.no_grad():
+                    msd = model.state_dict()
+                    for k, v in ema_model_state.items():
+                        if k in msd:
+                            v.mul_(ema_momentum_model).add_(
+                                msd[k].detach().float(), alpha=1.0 - ema_momentum_model
+                            )
 
             if batch_idx % 100 == 0:
                 logger.info(
@@ -1595,7 +1649,19 @@ def main():
 
         # ── Evaluate on eval split (Doc 175 section 7.2) ─────────────────
         if epoch % args.eval_every == 0:
-            eval_metrics = evaluate(model, eval_loader, device, epoch=epoch)
+            # [OPUS 186 E-3/I-8] Swap in EMA model weights for evaluation;
+            # restore raw weights afterwards. EMA averages across recent
+            # checkpoints, smoothing late-stage noise and giving +1-2%.
+            raw_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            # Cast EMA state back to model's param dtypes (some keys may be int/long)
+            ema_swap = {k: v.to(raw_state[k].dtype) for k, v in ema_model_state.items()}
+            model.load_state_dict(ema_swap, strict=False)
+            try:
+                eval_metrics = evaluate(model, eval_loader, device, epoch=epoch)
+            finally:
+                # Always restore raw weights so training continues from the
+                # latest optimizer state.
+                model.load_state_dict(raw_state, strict=False)
             eval_metrics["epoch"] = epoch
             metrics_log.setdefault("val_metrics", []).append(eval_metrics)
             act1 = eval_metrics.get("act_top1", 0.0)
@@ -1620,6 +1686,7 @@ def main():
                     "optimizer_state_dict": optimizer.state_dict(),
                     "log_vars": log_vars,
                     "ema_losses": ema_losses,  # [OPUS 181 D1]
+                    "ema_model_state": ema_model_state,  # [OPUS 186 E-3]
                     "best_act_top1": best_act_top1,
                     "best_val_loss": best_val_loss,
                     "val_metrics": eval_metrics,
@@ -1634,6 +1701,7 @@ def main():
                 "optimizer_state_dict": optimizer.state_dict(),
                 "log_vars": log_vars,
                 "ema_losses": ema_losses,  # [OPUS 181 D1]
+                "ema_model_state": ema_model_state,  # [OPUS 186 E-3]
                 "best_val_loss": best_val_loss,
                 "metrics": avg_metrics,
             }
@@ -1669,10 +1737,21 @@ def main():
         drop_last=False,
     )
     test_metrics = evaluate(model, test_loader, device, epoch=None)
-    logger.info("Test metrics: %s", test_metrics)
+    logger.info("Test metrics (raw): %s", test_metrics)
+
+    # [OPUS 186 E-3/I-8] Also report EMA-weighted test metrics for the paper.
+    raw_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+    ema_swap = {k: v.to(raw_state[k].dtype) for k, v in ema_model_state.items()}
+    model.load_state_dict(ema_swap, strict=False)
+    try:
+        ema_test_metrics = evaluate(model, test_loader, device, epoch=None)
+    finally:
+        model.load_state_dict(raw_state, strict=False)
+    logger.info("Test metrics (EMA): %s", ema_test_metrics)
 
     # Save final metrics
     metrics_log["test_metrics"] = test_metrics
+    metrics_log["test_metrics_ema"] = ema_test_metrics
     with open(output_dir / "metrics.json", "w") as f:
         json.dump(metrics_log, f, indent=2, default=str)
 
