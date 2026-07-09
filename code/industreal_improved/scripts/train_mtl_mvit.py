@@ -1540,7 +1540,20 @@ def main():
         if load_result.missing_keys:
             logger.warning("Resume: %d missing keys (new layers initialize fresh): %s",
                            len(load_result.missing_keys), load_result.missing_keys[:3])
-        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        # [OPUS 186] Optimizer state may also have shape mismatches (param
+        # groups changed because new layers were added). Try to load; if it
+        # fails, skip and start fresh optimizer momentum.
+        try:
+            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+            logger.info("Loaded optimizer state from checkpoint")
+        except (ValueError, KeyError) as e:
+            logger.warning("Could not load optimizer state (%s) — starting fresh momentum", e)
+            # Rebuild optimizer with current model params (already done above).
+            for group in optimizer.param_groups:
+                for p in group["params"]:
+                    if p.grad is not None:
+                        p.grad.detach_()
+                        p.grad.zero_()
         start_epoch = ckpt["epoch"]
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
         best_act_top1 = ckpt.get("best_act_top1", 0.0)
