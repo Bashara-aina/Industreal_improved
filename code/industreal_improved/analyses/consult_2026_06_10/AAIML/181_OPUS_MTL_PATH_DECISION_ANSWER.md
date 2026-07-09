@@ -9,7 +9,7 @@
 
 ## 0. READ THIS FIRST — The one-paragraph answer
 
-Take **Path D (a hybrid)**, not A, B, or C as written. The "Kendall paradox" is **not a paradox and not aleatoric uncertainty** — with the exact loss in your code it is provably identical to *dividing each task's backbone gradient by its own loss magnitude* (`weight_i = 1/(2·loss_i)`), so a task whose loss is structurally inflated (activity: 75-way CE × class weights up to 137 × label smoothing) is mechanically starved. The fix therefore has two independent halves that you should do **together**: (1) **stop inflating activity's loss** (kill the ×10 class-weight inflation, cut label smoothing) so Kendall's equilibrium is not insane, and (2) **cap `log_var_act ≤ 1.0` and `log_var_psr ≤ 0.5`** so no task can be driven below a floor. Keep Kendall (now well-behaved) and keep PCGrad. **Separately, three of the doc's premises are factually wrong** (PSR is *not* detached in this run; detection "class-0 collapse" is class 0 = *background*, which is correct-by-design; and your gradient accumulation is a silent no-op wasting ~50% of every step). Prove MTL helps with just **two** baselines (single-task activity clip-level + single-task detection) plus the capped-MTL run — everything else in file 179 is optional. The single highest-leverage change you can make in the next 10 minutes is the 4-line log-var cap; the single highest-value *free* change is fixing the grad-accum bug.
+Take **Path D (a hybrid)**, not A, B, or C as written. The "Kendall paradox" is **not a paradox and not aleatoric uncertainty** — with the exact loss in your code it is provably identical to *scaling each task's backbone gradient by `1/(2·loss_i)`*, so a task whose loss sits at a structurally larger absolute scale (activity: 75-way weighted CE — inherently a much larger loss than CIoU/DFL, and further shaped by inverse-frequency weights up to 137 and label smoothing) is mechanically starved. The fix has two independent halves you should do **together**: (1) **make the per-task losses comparable in scale before Kendall sees them** (normalize each loss by a running mean, and flatten activity's extreme class-weight distribution + cut label smoothing) so Kendall's equilibrium is sane, and (2) **cap `log_var_act ≤ 1.0` and `log_var_psr ≤ 0.5`** so no task can be driven below a floor — this cap is the *primary* lever; the loss-normalization is what makes the cap unnecessary to fight. Keep Kendall (now well-conditioned) and keep PCGrad. **Separately, three of the doc's premises are factually wrong** (PSR is *not* detached in this run; detection "class-0 collapse" is class 0 = *background*, which is correct-by-design; and your gradient accumulation is a silent no-op wasting ~50% of every step). Prove MTL helps with just **two** baselines (single-task activity clip-level + single-task detection) plus the capped-MTL run — everything else in file 179 is optional. The single highest-leverage change you can make in the next 10 minutes is the 4-line log-var cap; the single highest-value *free* change is fixing the grad-accum bug.
 
 ---
 
@@ -42,9 +42,9 @@ Treat `s = log_var` as a free parameter optimized by SGD. The stationary point i
 | Detection | 0.31 | 1.61 | 1.51 | ✅ (still drifting to equilibrium) |
 | Pose | 0.19 | 2.63 → capped | 1.63 | ✅ (hp_prec_cap binds) |
 
-**Why this starves activity, precisely.** The gradient delivered to the backbone by task *i* is `weight_i · ∂L_i/∂θ`. For softmax cross-entropy the logit-gradient is `(p − y)`, whose norm is **bounded (~√2) regardless of how large the loss value is** — a CE of 12 does *not* produce 40× the gradient of a CIoU of 0.3; the gradients are comparable in norm. So the *only* thing that differs across tasks at the backbone is the scalar `weight_i`. Activity's is `0.04`, detection's is `1.51` → activity influences the shared backbone at **~1/37 of detection's rate**. It cannot shape features, so its loss stays high, which *by construction* keeps its weight low. This is a stable pin at `weight≈0.04`, not a runaway "death spiral to +4" (the product `weight·loss` is held at 0.5; `log_var_act` only climbs if the *loss itself* climbs).
+**Why this starves activity, precisely.** The gradient delivered to the backbone by task *i* is `weight_i · ∂L_i/∂θ`. For softmax cross-entropy the per-sample logit-gradient is `(p − y)`, whose norm is **bounded (≤√2) no matter how large the loss *value* is** (a mispredicted sample has huge CE but its `(p−y)` is still ≤√2). Class weights and mean-reduction turn the batch gradient into a weighted average of those bounded vectors — still O(1), still **not** scaling with the loss magnitude. So a CE of 12 does *not* hand the backbone 40× the gradient of a CIoU of 0.3; the raw gradients are comparable in norm, and the *only* thing that differs at the backbone is the scalar `weight_i`. Activity's is `0.04`, detection's is `1.51` → activity influences the shared backbone at **~1/37 of detection's rate**. It cannot shape features, so its loss stays high, which keeps its weight low — a **negative-feedback loop mediated by the loss**, not an independent `log_var` runaway. (The observed Ep5→Ep6 jump `act 3.98→12.31` is exactly this: a starved head degrading, which *lowers* the weight further. `log_var` tracks the loss to hold `weight·loss ≈ 0.5`; it is bounded, but the loop is self-reinforcing until you break it with a floor.)
 
-**Direct answer to K-4 (the pivotal question in file 178):** *Yes — with your loss functions Kendall is doing loss-scale normalization, not uncertainty estimation.* The uncertainty interpretation is only valid when every task loss is a comparable log-likelihood. You are mixing class-weighted CE (weights up to 137 + label smoothing) against CIoU+DFL+focal. The "uncertainty" Kendall infers for activity is dominated by your arbitrary class-weighting choice, not by any property of the data. **This is the whole ballgame** and it makes the fix obvious (Section 3).
+**Direct answer to K-4 (the pivotal question in file 178):** *Yes — with your loss functions Kendall is doing loss-scale normalization, not uncertainty estimation.* The uncertainty interpretation is only valid when every task loss is a comparable log-likelihood. You are mixing 75-way weighted CE — intrinsically a much larger-scale loss — against CIoU+DFL+focal. The "uncertainty" Kendall infers for activity is dominated by the **absolute scale of its loss function**, not by any property of the data. **This is the whole ballgame** and it makes the fix obvious (Section 3): put the losses on a common scale, then floor the weights.
 
 ### Correction 2 — PSR is NOT detached in this run.
 
@@ -72,7 +72,7 @@ In `detection_loss()` (`train_mtl_mvit.py:198`) `cls_target` is initialized to z
 The *real* detection problem (why mAP@0.5 = 0) is different and is **independent of MTL**:
 
 1. **One positive cell per GT box.** `detection_loss` marks only the box-center cell positive (`gi,gj`), and if two boxes share a center cell the second is silently dropped (`:225` `if pos_mask: continue`). Out of ~4165 cells/image you get a handful of positives (~0.1%). YOLOv8 reaches its mAP because `TaskAlignedAssigner` assigns *many* cells per GT dynamically. Your foreground supervision is ~1–2 orders of magnitude too sparse.
-2. **Focal `alpha=0.25` downweights the foreground term.** `alpha_t = onehot·0.25 + (1−onehot)·0.75` puts weight 0.25 on the true-class channel of a positive cell. Standard focal uses α on the *rare* class — but here the rare thing is foreground, so you are downweighting exactly the signal you're starved for. Combined with (1) this makes foreground emergence glacial.
+2. **Focal `alpha=0.25` compounds the sparsity.** `alpha_t = onehot·0.25 + (1−onehot)·0.75` puts weight 0.25 on the true-class channel of a positive cell and 0.75 on every negative channel. This is the standard RetinaNet default and is fine when positives are plentiful — but here ~4000 background cells push every foreground channel *down* at 0.75 while only ~1 positive cell pushes its true channel *up* at 0.25. With the near-total positive sparsity from (1), foreground signal is overwhelmed and emergence is glacial. Raising α (→0.5) or adding positive cells fixes it; α alone is not "wrong," it just amplifies the assignment problem.
 
 Detection is not "the healthy head." It is a head whose *localization* works (DFL boxes are valid) but whose *classification* is under-supervised. Fixing this is orthogonal to the Kendall question but is required before any "MTL detection mAP" number is meaningful.
 
@@ -85,7 +85,7 @@ micro-batch 1 (do_step=False): zero_grad → backward → grads sit in .grad →
 micro-batch 2 (do_step=True):  zero_grad  ← WIPES micro-batch 1's grads → backward → step
 ```
 
-The boundary `zero_grad()` erases the previous micro-batch's gradient. **`grad_accum_steps=2` does not double the effective batch; it throws away every other forward/backward.** Your "effective batch 4" is really batch 2 at 2× the wall-clock. This directly undercuts the paper's "faster / more efficient training" claim and is a pure-win fix (Section 3.4). (The PCGrad path has the same issue plus it *overwrites* `.grad` for the backbone at `:709`, so accumulation there is doubly dead.)
+The boundary `zero_grad()` erases the previous micro-batch's gradient. **`grad_accum_steps=2` does not double the effective batch; it throws away every other forward/backward.** Your "effective batch 4" is really batch 2 at 2× the wall-clock. This directly undercuts the paper's "faster / more efficient training" claim and is a pure-win fix (Section 3.2, item D4). (The PCGrad path has the same issue plus it *overwrites* `.grad` for the backbone at `:709`, so accumulation there is doubly dead.)
 
 ---
 
@@ -93,9 +93,9 @@ The boundary `zero_grad()` erases the previous micro-batch's gradient. **`grad_a
 
 | Head | Symptom | True root cause (verified) | Is it MTL's fault? |
 |------|---------|----------------------------|--------------------|
-| **Activity** | top-1 ≈ chance, weight 0.04 | Kendall weight = `1/(2·loss_act)`, and `loss_act` is inflated ~×10 by inverse-freq class weights (mean 9.98, max 137.2) + label smoothing 0.1. Head is starved *and* the head is only `LayerNorm→Linear` on the class token. | **Mostly yes** (optimization). Head capacity is a secondary risk — E2 resolves it. |
+| **Activity** | top-1 ≈ chance, weight 0.04 | Kendall weight = `1/(2·loss_act)`. 75-way weighted CE is *intrinsically* a large-scale loss vs CIoU/DFL; the inverse-freq weights (max 137.2) + label smoothing + the collapsed head (predicting one class → huge CE on all other samples) keep it near 12, so `1/(2·12.3)=0.04`. Head is starved *and* is only `LayerNorm→Linear` on the class token. | **Mostly yes** (optimization). Head capacity is a secondary risk — E2 resolves it. |
 | **PSR** | loss flat 1.30, F1 0 | (a) input is `conv_proj` = the *first* layer only → no high-level temporal features; (b) transition labels are sparse so BCE sits at base-rate entropy; (c) weight 0.39. **NOT detach** (Correction 2). | **Partly.** Even single-task PSR on conv_proj features may be weak — it's a feature-source problem more than a weighting problem. |
-| **Detection** | mAP 0.0, all-background | Class 0 = background is correct. mAP≈0 from **sparse center-cell-only assignment + focal α downweighting foreground** (Correction 3). | **No.** This is a detection-head design issue independent of MTL. |
+| **Detection** | mAP 0.0, all-background | Class 0 = background is correct. mAP≈0 from **~1 positive cell per GT box** (center-cell-only assignment), and with focal α=0.25 the true-class channel is weighted 0.25 while ~4000 background cells suppress every foreground channel at 0.75 — foreground signal is overwhelmed (Correction 3). | **No.** This is a detection-head design issue independent of MTL. |
 | **Pose** | loss 0.19, healthy | Class token from Kinetics-pretrained MViT already encodes spatial pose cues; cosine loss is well-scaled. hp_prec_cap keeps it from dominating. | Working. Likely a **positive-transfer** win for the paper. |
 
 **Net:** Of the "3/4 heads MTL is hurting," exactly **one** (activity) is genuinely an MTL-optimization casualty. PSR and detection are architecture/label problems that would *also* hurt a single-task model. This reframes the whole hypothesis: MTL is not the villain the docs think it is.
@@ -108,30 +108,34 @@ The boundary `zero_grad()` erases the previous micro-batch's gradient. **`grad_a
 
 - **Path B (accept):** Rejected. It ships a paper whose headline ("MTL hurts") is an artifact of a loss-scaling choice and a grad-accum bug. Scientifically wrong conclusion.
 - **Path C (fixed weights `[1.0, 0.025, 0.24, 1.63]`):** Note that `0.025 ≈ 1/(2·12.31)` — *these "fixed" weights are just the Kendall equilibrium frozen.* So Path C as specified reproduces the starvation on purpose. Fixed weights only help if you set activity **higher** than its loss-equalizing value (e.g. 0.3–0.5), i.e. deliberately over-weight the hard task. Viable but hand-tuned and loses the adaptivity story.
-- **Path A (caps only):** Correct direction, but capping `log_var` *without* fixing the loss inflation leaves Kendall permanently pinned at the cap (its gradient `−weight·L+0.5` stays positive, so `s` glues to the ceiling). You get a fixed weight in disguise, and activity's loss is still a noisy ×10-inflated signal feeding det/pose balancing.
+- **Path A (caps only):** Correct direction, but capping `log_var` *without* also making the losses comparable in scale leaves Kendall permanently pinned at the cap (its gradient `−weight·L+0.5` stays positive whenever `weight·L < 0.5`, so `s` glues to the ceiling). You get a fixed weight in disguise, and activity's large, noisy raw loss is still what Kendall balances det/pose against. Caps are necessary but not sufficient on their own.
 
 ### 3.2 Path D = normalize losses + narrow caps + keep Kendall/PCGrad + fix grad-accum
 
 Do all four. They are cheap, independent, and each attacks a distinct verified cause.
 
-**(D1) De-inflate the activity loss** so Kendall's equilibrium is sane and the signal is less noisy. The ×137 inverse-frequency weights are the single biggest loss inflator.
+**(D1) Make the per-task losses comparable in scale before Kendall balances them.** This is what makes "uncertainty weighting" actually about uncertainty instead of about which loss happens to have the bigger units. The *principled, robust* form is to normalize each task loss by its own running mean (EMA) before the Kendall term, so at equilibrium every task's normalized loss ≈ 1 and Kendall's `log_var` captures genuine relative difficulty rather than absolute magnitude:
 
 ```python
-# compute_activity_class_weights() — replace raw inverse-frequency with a
-# temperature-softened / normalized-mean scheme so mean(weight) ≈ 1.0.
+# maintain an EMA of each raw task loss (detached); feed the RATIO to Kendall
+ema[name] = 0.99 * ema[name] + 0.01 * loss.detach()
+loss_for_kendall = loss / (ema[name] + 1e-6)          # ~O(1) for every task
+total_loss += torch.exp(-lv) * loss_for_kendall + lv / 2
+```
+
+> ⚠️ **Important correctness note (why the "obvious" class-weight fix does nothing):** PyTorch's `F.cross_entropy(weight=w, reduction='mean')` computes `Σ w_{y_i}·ℓ_i / Σ w_{y_i}` — it divides by the **sum of weights**, so *multiplying every class weight by a constant leaves the loss unchanged.* Only the **relative shape** of the weight vector matters. Therefore, to actually lower `loss_act` you must **flatten** the distribution (sqrt-tame or drop weighting), not rescale it, and you must cut label smoothing (which raises the CE floor):
+
+```python
+# compute_activity_class_weights(): flatten the long tail (RELATIVE shape is what matters)
 weights = np.where(counts > 0, total / (num_classes * counts), 0.0)
-weights = np.power(weights, 0.5)                 # sqrt-tame the long tail (137 → ~11.7)
-weights = weights / weights[weights > 0].mean()  # renormalize so mean ≈ 1.0  → loss no longer ×10 inflated
+weights = np.power(weights, 0.5)     # sqrt-tame: 137 → ~11.7 relative to the smallest
+# (a constant rescale here would be a no-op under weighted-mean CE — do not rely on it)
+
+# activity_loss():
+label_smoothing=0.05,   # was 0.1  (lowers the irreducible CE floor on 75 classes)
 ```
 
-And soften label smoothing (it raises the CE floor on 75 classes):
-
-```python
-# activity_loss()
-label_smoothing=0.05,   # was 0.1
-```
-
-Expected: `loss_act` drops from ~12 to ~3–5, so Kendall's *own* equilibrium weight rises from 0.04 to ~0.10–0.17 before any cap.
+Expected direction (not a promise of exact magnitude): flattening the weights + softer smoothing lowers `loss_act` somewhat, and the EMA normalization removes the scale mismatch entirely — but the **cap (D2) is the primary lever** that guarantees a usable activity gradient regardless of where the raw loss settles. Do not count on D1 alone to lift activity's weight far above 0.04.
 
 **(D2) Per-task log-var caps** (the file-180 Path A change, but narrower and paired with D1):
 
@@ -144,26 +148,25 @@ for name in losses:
     lv_values[name] = log_vars[name].clamp(LV_MIN, LV_MAX[name])
 ```
 
-With D1 lowering the loss and D2 flooring the weight, activity lands at `weight≈0.37` with a *stable* loss — enough gradient to actually learn (≈24% of detection's rate, and CE gradients are dense).
+With D2 flooring the weight (and D1 removing the scale mismatch so the cap isn't fighting a runaway loss), activity lands at `weight≈0.37` — enough gradient to actually learn (≈24% of detection's current weight 1.51, and CE gradients are dense, not scaled down by the loss value). The EMA-normalized Kendall then still adapts *within* the capped range.
 
 **(D3) Keep Kendall and keep PCGrad.** After D1+D2 Kendall is well-conditioned; PCGrad still resolves genuine direction conflicts. Do **not** rip them out — that throws away the paper's methodological contribution.
 
 **(D4) Fix grad accumulation** (free 2× effective batch or free 2× throughput). Move `zero_grad` out of the per-micro-batch path:
 
 ```python
-# in train_step: only zero at the accumulation boundary, and scale loss by 1/accum
-if do_step:                         # was: unconditional optimizer.zero_grad() at :679
-    pass                            # grads were zeroed at the previous boundary
-...
-scaler.scale(total_loss / grad_accum_steps).backward()   # accumulate
-...
-if do_step:
+# DELETE the unconditional `optimizer.zero_grad()` currently at :679.
+# Accumulate on every micro-batch (scale by 1/accum so the effective loss is a mean):
+scaler.scale(total_loss / grad_accum_steps).backward()
+# PCGrad branch: ACCUMULATE the deconflicted backbone grad instead of overwriting (:709):
+#   param.grad = grad if param.grad is None else param.grad + grad
+if do_step:                                   # only at the accumulation boundary
     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
     scaler.step(optimizer); scaler.update()
-    optimizer.zero_grad()           # zero AFTER stepping, ready for next window
+    optimizer.zero_grad()                     # zero ONLY after stepping → ready for next window
 ```
 
-For the PCGrad branch, accumulate the deconflicted backbone grads with `+=` instead of overwriting (`:709`). If a correct accumulation is too fiddly with PCGrad, the honest interim is **set `grad_accum_steps=1`** and stop pretending it's effective-batch-4.
+The key change is: `zero_grad()` must move from the top of every micro-batch to *after* `optimizer.step()`, so grads survive across the accumulation window. If correct accumulation is too fiddly with the PCGrad `autograd.grad` path, the honest interim is **set `grad_accum_steps=1`** and stop reporting "effective batch 4."
 
 ### 3.3 What Path D buys you (realistic, not the doc's optimism)
 
@@ -189,7 +192,7 @@ You do **not** need the 10-experiment, 13-day grid in file 179. To make a defens
 | Priority | Run | Answers | Cost | Why essential |
 |----------|-----|---------|------|---------------|
 | **1** | **MTL + Path D** (current run, restarted with D1–D4) | Does fixing the optimization unstarve activity/PSR? | ~1 run | This *is* your headline model. |
-| **2** | **E2b: single-task activity, clip-level** (temporal-pooled, no class-weight inflation) | The activity **ceiling** with this backbone. If ST hits 40–50% and MTL hits 25–35%, you've quantified MTL's cost *and* proven the head/backbone are adequate (so the gap is transfer, not capacity). | ~1 run | Without it, every activity number is uninterpretable. |
+| **2** | **E2b: single-task activity, clip-level** (class token → head, as in MTL; use uniform or lightly-flattened class weights for a clean ceiling) | The activity **ceiling** with this backbone. If ST hits 40–50% and MTL hits 25–35%, you've quantified MTL's cost *and* proven the head/backbone are adequate (so the gap is transfer, not capacity). | ~1 run | Without it, every activity number is uninterpretable. |
 | **3** | **E1: single-task detection** (with the Sec 3.5 assignment fix) | Detection ceiling → is MTL detection within ~90%? | ~1 run | The reviewer's #1 question ("does the shared backbone cost detection?"). |
 | **4** | **E8: gradient-flow diagnostic** (100 batches, no training) | Log per-task cosine similarity + pre/post-PCGrad grad norms on the backbone. | ~2 h | Turns "MTL helps" from assertion into evidence: shows *which* task pairs align (positive transfer) vs conflict. This one plot is worth more to reviewers than 5 training runs. |
 
@@ -222,11 +225,11 @@ Yes — but frame it as **L2+L3**, not as beating SOTA. "One 43.5M model perform
 **Q4 — Is there a Path D we missed?**
 Yes, and you're reading it. Beyond the hybrid, three further levers worth knowing:
 - **GradNorm** (balance gradient *norms*, not losses) — the principled cure for exactly this failure; more code than caps, keep as a fallback if D under-delivers.
-- **Uncertainty weighting on *normalized* losses only** — i.e. never let raw class-weighted CE into Kendall; feed it a running-mean-normalized loss. (D1 is the lightweight version of this.)
+- **Uncertainty weighting on *normalized* losses only** — i.e. never let raw class-weighted CE into Kendall; feed it a running-mean-normalized loss. (This *is* D1's EMA normalization — the principled core of the recommended fix.)
 - **Deeper feature source for PSR** (block-3/blocks[3] features instead of conv_proj) and **a 2-layer temporal head for activity** — architecture fixes that E2/E3 will tell you whether you need.
 
 **Q5 — The single most important change right now?**
-Two-line priority: **(a) if you touch one thing, add the `log_var_act ≤ 1.0` cap** (unblocks the starved head, cheapest possible test, minutes to write). **(b) The single most valuable *free* change is fixing the grad-accum no-op** (Correction 3 / D4) — it's a latent 2× and it's needed for your efficiency claims to be true. Do both; they don't conflict. And *in parallel*, launch the single-task activity baseline, because no MTL activity number is interpretable without it.
+Two-line priority: **(a) if you touch one thing, add the `log_var_act ≤ 1.0` cap** (unblocks the starved head, cheapest possible test, minutes to write). **(b) The single most valuable *free* change is fixing the grad-accum no-op** (Bonus correction / D4) — it's a latent 2× and it's needed for your efficiency claims to be true. Do both; they don't conflict. And *in parallel*, launch the single-task activity baseline, because no MTL activity number is interpretable without it.
 
 ---
 
@@ -240,7 +243,7 @@ Only the questions whose answers actually move the decision are listed; the rest
 - **K-4 (uncertainty vs loss-scaling?):** **Loss-scaling. Definitively.** (Section 1, Correction 1.) This is the key that unlocks everything.
 - **K-5/P-3/P-4 (PCGrad worth it?):** Answer empirically with E8. Given activity's weight is 0.04, PCGrad is *not* the thing starving it (Kendall is). Keep PCGrad for now; E8 tells you if it's a no-op you can drop for throughput.
 - **A-1/A-2 (head capacity vs weight):** Weight explains most of it, capacity is the residual. E2b settles it. If ST clip-level activity < 20%, add a 2-layer temporal head; if > 40%, the head is fine and the gap is pure MTL cost.
-- **A-3/A-4 (class weights / smoothing inflate loss?):** **Yes — this is the concrete mechanism behind K-4.** Max weight 137, mean ~10 → loss ×~10. D1 fixes it. This is the most under-appreciated lever in the entire consultation.
+- **A-3/A-4 (class weights / smoothing inflate loss?):** They shape it, but be precise: under weighted-mean CE the *scale* of the weights is a no-op (Σw normalization) — only their **relative shape** and label smoothing move the loss, and the dominant driver of the current 12.31 is the **collapsed head** (predicting one class → large CE on all other samples). So D1 helps by flattening/normalizing, but the **cap (D2) is the real fix**. Don't oversell class-weight tuning as "the" lever.
 - **S-1/S-2 (PSR: Kendall vs detach vs arch?):** **Not detach** (Correction 2). It's feature-source (conv_proj is layer 1) + label sparsity + moderate weight. E3 on *block-3* features would be the informative version.
 - **D-1/D-2 (det collapse normal? MTL hurting det?):** Class-0 = background (Correction 3). Detection's ceiling is gated by assignment sparsity, not MTL. Fix assignment (Sec 3.5) before judging MTL's effect on detection.
 - **H-2/H-4/H-7 (what bar / Pareto / reviewer):** Target **L2/L3**. You already satisfy the params half of H-7's bar (43.5M ≪ ~100M). Add the two single-task baselines and the gradient-flow evidence and you clear a skeptical reviewer's bar for an *efficiency + positive-transfer + methodological-fix* paper. Do not aim for L1 (beat single-task on all four) — that's a trap that delays publication indefinitely.
@@ -261,7 +264,7 @@ The user asked for MTL that is **more efficient, faster to train, and more accur
 
 1. **Now (10 min):** Apply D2 caps (`act≤1.0, psr≤0.5`) — 4 lines at `train_mtl_mvit.py:646`. Restart `mtl_mvit_run3` from `latest.pt` or fresh.
 2. **Now (10 min):** Apply D4 grad-accum fix (or set `--grad-accum-steps 1`). Verify one step: log `param.grad.norm()` before/after the boundary to confirm accumulation.
-3. **Same session (20 min):** Apply D1 (tame class weights + `label_smoothing=0.05`). Watch `loss_act` drop toward 3–5 within an epoch and `log_var_act` settle *below* the 1.0 cap (if it still glues to 1.0, the loss is still too big — lower the exponent in D1).
+3. **Same session (20 min):** Apply D1 (EMA loss normalization is the principled piece; flattening class weights + `label_smoothing=0.05` is the cheap piece). Success signal: with EMA normalization the normalized `loss_act` sits ~O(1), so `log_var_act` settles *below* the 1.0 cap and Kendall adapts within range. If `log_var_act` still glues to the cap, that's acceptable — the cap (D2) is holding the floor by design; D1 just makes Kendall stop fighting it.
 4. **In parallel (launch, then walk away):** E2b single-task activity (clip-level) and E1 single-task detection **with the Sec 3.5 assignment fix**.
 5. **One afternoon:** E8 gradient-flow diagnostic — produce the per-task cosine-similarity heatmap. This is your Figure 1.
 6. **Before writing detection numbers:** land the Sec 3.5 assignment fix in the MTL model too, so MTL and single-task detection are compared on equal footing.
@@ -275,8 +278,9 @@ The user asked for MTL that is **more efficient, faster to train, and more accur
 CLAIM IN DOCS 176–180              →  VERIFIED REALITY (from code)
 ──────────────────────────────────────────────────────────────────────────
 "Kendall paradox, uncertainty"     →  weight = 1/(2·loss). Pure inverse-loss
-                                      scaling. Activity starved because its
-                                      loss is ×10 inflated by class weights.
+                                      scaling. Activity starved because 75-way
+                                      weighted CE is intrinsically large-scale.
+DECISION lever: normalize loss scale + CAP the weight (not class-wt tuning).
 "PSR starved by DETACH_PSR_FPN"    →  Flag not on this code path. PSR is NOT
                                       detached. It's a feature-source problem.
 "Detection class-0 collapse (norm)" →  Class 0 = background. Correct-by-design.
@@ -284,7 +288,7 @@ CLAIM IN DOCS 176–180              →  VERIFIED REALITY (from code)
 "grad_accum=2 → effective batch 4" →  No-op. zero_grad every micro-batch wipes
                                       accumulation. ~50% compute wasted.
 ──────────────────────────────────────────────────────────────────────────
-DECISION: Path D  =  de-inflate act loss (D1) + caps act≤1.0/psr≤0.5 (D2)
+DECISION: Path D  =  normalize per-task loss scale (D1) + caps act≤1.0/psr≤0.5 (D2, primary)
                      + keep Kendall & PCGrad (D3) + fix grad-accum (D4)
 PROVE IT:  Path-D MTL  +  ST-activity(clip)  +  ST-detection(assign-fixed)  +  grad-flow diag
 PAPER:     L2 (positive transfer, ≥1 task) + L3 (efficiency) + method fix. NOT L1.
