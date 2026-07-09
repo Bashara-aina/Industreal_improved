@@ -6,6 +6,10 @@
 /data/
 external/
 
+# Exclude large binary/executable files
+*.out
+**/industrealpaper/linux-x64
+
 # Exclude logs and model files
 *.log
 *.pth
