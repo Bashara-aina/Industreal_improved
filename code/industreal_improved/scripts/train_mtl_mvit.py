@@ -1432,9 +1432,11 @@ def main():
             logger.error("--test-only requires --resume <checkpoint.pt>")
             sys.exit(1)
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
-        model.load_state_dict(ckpt["model_state_dict"])
-        logger.info("Loaded checkpoint from %s (epoch %d)",
-                    args.resume, ckpt.get("epoch", "?"))
+        # [OPUS 186] strict=False for head shape changes (see resume path above).
+        load_result = model.load_state_dict(ckpt["model_state_dict"], strict=False)
+        logger.info("Loaded checkpoint from %s (epoch %d) — %d missing, %d unexpected keys",
+                    args.resume, ckpt.get("epoch", "?"),
+                    len(load_result.missing_keys), len(load_result.unexpected_keys))
 
         test_ds = IndustRealMultiTaskDataset(
             split="test",
@@ -1507,7 +1509,16 @@ def main():
     best_act_top1 = 0.0
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device, weights_only=False)
-        model.load_state_dict(ckpt["model_state_dict"])
+        # [OPUS 186] strict=False: PSR head reshape (96→768ch) and 2-layer
+        # activity MLP mean the checkpoint's head weights are not directly
+        # loadable. Backbone, FPN, pose head, and (most of) the activity
+        # head can still load — the new layers initialize fresh.
+        load_result = model.load_state_dict(ckpt["model_state_dict"], strict=False)
+        if load_result.missing_keys or load_result.unexpected_keys:
+            logger.warning(
+                "Resume: %d missing keys, %d unexpected keys (head shapes changed; new layers initialize fresh)",
+                len(load_result.missing_keys), len(load_result.unexpected_keys),
+            )
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         start_epoch = ckpt["epoch"]
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
@@ -1524,6 +1535,15 @@ def main():
                 if k in ema_model_state:
                     ema_model_state[k] = v.to(ema_model_state[k].dtype).to(device)
             logger.info("Resumed EMA model state (size=%d tensors)", len(ema_model_state))
+        # [OPUS 186] After loading the checkpoint, re-anchor ema_model_state
+        # to the now-loaded model. This way any keys that didn't load (e.g.,
+        # the reshaped PSR head) start EMA-tracking the *new* random init
+        # rather than carrying over stale shapes.
+        ema_model_state = {
+            k: v.detach().clone().float()
+            for k, v in model.state_dict().items()
+        }
+        logger.info("Re-anchored EMA model state to current model (post-resume)")
         logger.info("Resumed from epoch %d", start_epoch)
 
     # ── AMP scaler ─────────────────────────────────────────────────────────
