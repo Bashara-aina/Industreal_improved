@@ -693,8 +693,16 @@ def train_step(
         # Per-component PSR loss breakdown for logging
         if "psr_labels" in targets:
             with torch.no_grad():
+                # [OPUS 192 FC-4] PSR now predicts at T=8; downsample labels
+                # to match (max-pool preserves transition events).
+                _psr_labels_for_pc = targets["psr_labels"]
+                if _psr_labels_for_pc.size(1) != outputs["psr_logits"].size(1):
+                    _psr_labels_for_pc = F.adaptive_max_pool1d(
+                        _psr_labels_for_pc.transpose(1, 2),
+                        output_size=outputs["psr_logits"].size(1),
+                    ).transpose(1, 2)
                 _pc = F.binary_cross_entropy_with_logits(
-                    outputs["psr_logits"], targets["psr_labels"], reduction='none'
+                    outputs["psr_logits"], _psr_labels_for_pc, reduction='none'
                 ).mean(dim=(0, 1))
             for ci in range(_pc.size(0)):
                 psr_comp_breakdown[f"loss_psr_c{ci}"] = _pc[ci].item()
