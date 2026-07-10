@@ -95,34 +95,28 @@ def run_overfit(args):
         sequence_mode=True, sequence_length=16,
     )
     # Find clips with valid labels for the target head
+    # Dataset items are dicts with keys: images, gt_boxes, gt_classes, head_pose,
+    # psr_labels, hand_joints, action_label, clip_rgb, metadata
     valid_indices = []
     for idx in range(len(ds)):
         try:
-            sample = ds[idx]
+            sample = ds[idx]  # dict
         except Exception:
             continue
-        # sample is (images, targets) tuple
-        images, targets = sample
         if args.head == "det":
-            det_list = targets.get("detection", [])
-            if isinstance(det_list, list):
-                for d in det_list:
-                    if isinstance(d, dict) and d.get("boxes") is not None and len(d.get("boxes", [])) > 0:
-                        valid_indices.append(idx)
-                        break
-            elif isinstance(det_list, dict):
-                if det_list.get("boxes") is not None and len(det_list.get("boxes", [])) > 0:
-                    valid_indices.append(idx)
+            gt_boxes = sample.get("gt_boxes", {}).get("rgb")
+            if gt_boxes is not None and len(gt_boxes) > 0:
+                valid_indices.append(idx)
         elif args.head == "act":
-            act = targets.get("activity")
+            act = sample.get("action_label")
             if act is not None and act.item() >= 0:
                 valid_indices.append(idx)
         elif args.head == "psr":
-            psr = targets.get("psr_labels")
+            psr = sample.get("psr_labels")
             if psr is not None and psr.sum() > 0:  # at least one transition
                 valid_indices.append(idx)
         elif args.head == "pose":
-            hp = targets.get("head_pose")
+            hp = sample.get("head_pose")
             if hp is not None and hp.shape[0] > 0:
                 valid_indices.append(idx)
         if len(valid_indices) >= args.n_clips:
@@ -171,25 +165,50 @@ def run_overfit(args):
     model.train()
 
     for step in range(1, args.steps + 1):
-        # Cycle through subset samples
+        # Cycle through subset samples (each is a dict)
         sample_idx = (step - 1) % len(subset_samples)
-        images, targets = subset_samples[sample_idx]
+        sample = subset_samples[sample_idx]  # dict
 
-        # Add batch dim if needed
-        if images.dim() == 4:
+        # Extract images [T, 3, H, W] and add batch dim
+        images = sample["images"]["rgb"].clone()
+        if images.dim() == 3:
+            images = images.unsqueeze(0)  # [1, T, 3, H, W]
+        elif images.dim() == 4:
             images = images.unsqueeze(0)
         images = normalize_clip(images, device)
-        targets = to_device(targets, device)
+
+        # Move targets to device
+        targets = {}
+        for k in ["head_pose", "psr_labels", "action_label"]:
+            if k in sample:
+                v = sample[k]
+                if hasattr(v, 'clone'):
+                    targets[k] = v.clone().to(device)
+                else:
+                    targets[k] = v
+        # Detection targets
+        gt_boxes = sample.get("gt_boxes", {}).get("rgb")
+        gt_classes = sample.get("gt_classes", {}).get("rgb")
+        if gt_boxes is not None and isinstance(gt_boxes, torch.Tensor):
+            targets["det_boxes"] = gt_boxes.clone().to(device)
+            targets["det_labels"] = gt_classes.clone().to(device)
 
         optimizer.zero_grad()
         outputs = model(images)
 
         if args.head == "det":
-            det_list = targets.get("detection", [])
-            loss = detection_loss(outputs["detection"], det_list)
+            if "det_boxes" in targets and targets["det_boxes"].numel() > 0:
+                det_list = [{"boxes": targets["det_boxes"], "labels": targets["det_labels"]}]
+                loss = detection_loss(outputs["detection"], det_list)
+            else:
+                continue
         elif args.head == "act":
-            act_target = targets.get("activity")
-            if act_target is None:
+            act_target = targets.get("action_label")
+            if act_target is None or act_target.numel() == 0:
+                continue
+            if act_target.dim() == 0:
+                act_target = act_target.unsqueeze(0)
+            if act_target.item() < 0:
                 continue
             loss = activity_loss(outputs["activity"], act_target)
         elif args.head == "psr":
@@ -224,39 +243,30 @@ def run_overfit(args):
     print(f"\n[4] Running eval on the overfit subset ({len(used)} clips)...")
     model.eval()
 
-    # Build a DataLoader from the subset
-    from torch.utils.data import DataLoader, Dataset
-    class SubsetDS(Dataset):
-        def __init__(self, samples):
-            self.samples = samples
-        def __len__(self):
-            return len(self.samples)
-        def __getitem__(self, i):
-            return self.samples[i]
-
-    eval_ds = SubsetDS(subset_samples)
-    eval_loader = DataLoader(
-        eval_ds, batch_size=1, shuffle=False,
-        collate_fn=lambda batch: batch[0], num_workers=0,
-    )
-
-    # Quick eval: just the target head
     head_metrics = {}
     with torch.no_grad():
-        for images, targets in eval_loader:
-            if images.dim() == 4:
+        for sample in subset_samples:
+            images = sample["images"]["rgb"].clone()
+            if images.dim() == 3:
+                images = images.unsqueeze(0)
+            elif images.dim() == 4:
                 images = images.unsqueeze(0)
             images = normalize_clip(images, device)
-            outputs = model(images)
+            image_batch = images  # already [1, 3, T, H, W]
+            outputs = model(image_batch)
 
             if args.head == "act":
-                act = targets.get("activity")
-                if act is not None:
-                    pred = outputs["activity"].argmax(dim=1).item()
-                    head_metrics.setdefault("correct", 0)
-                    head_metrics.setdefault("total", 0)
-                    head_metrics["correct"] += int(pred == act.item())
-                    head_metrics["total"] += 1
+                act = sample.get("action_label")
+                if act is not None and act.numel() > 0:
+                    if act.dim() == 0:
+                        act = act.unsqueeze(0)
+                    if act.item() >= 0:
+                        act = act.to(device)
+                        pred = outputs["activity"].argmax(dim=1).item()
+                        head_metrics.setdefault("correct", 0)
+                        head_metrics.setdefault("total", 0)
+                        head_metrics["correct"] += int(pred == act.item())
+                        head_metrics["total"] += 1
             elif args.head == "psr":
                 # Check if predictions are non-trivial
                 psr_pred = torch.sigmoid(outputs["psr_logits"])
@@ -265,10 +275,11 @@ def run_overfit(args):
                 head_metrics.setdefault("frac_positive", [])
                 head_metrics["frac_positive"].append((psr_pred > 0.5).float().mean().item())
             elif args.head == "pose":
-                hp = targets.get("head_pose")
+                hp = sample.get("head_pose")
                 if hp is not None:
+                    hp = hp.to(device).unsqueeze(0)
                     fwd_p, up_p = renormalize_pose(outputs["pose_6d"])
-                    fwd_g = F.normalize(hp[:, hp.size(1)//2, :3].to(device), dim=1)
+                    fwd_g = F.normalize(hp[:, hp.size(1)//2, :3], dim=1)
                     cos_f = (fwd_p * fwd_g).sum(dim=1).clamp(-1, 1)
                     head_metrics.setdefault("fwd_mae", [])
                     head_metrics["fwd_mae"].append(
