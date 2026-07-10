@@ -127,8 +127,8 @@ def run_overfit(args):
     used = valid_indices[:args.n_clips]
     print(f"  Using {len(used)} clips for {args.head} overfit")
 
-    # Subset via list of samples
-    subset_samples = [ds[i] for i in used]
+    # Subset via indices (lazy-load to avoid CPU OOM)
+    subset_indices = used
 
     # ── Build model ────────────────────────────────────────────────────
     print("\n[2] Building model (freeze backbone)...")
@@ -165,9 +165,9 @@ def run_overfit(args):
     model.train()
 
     for step in range(1, args.steps + 1):
-        # Cycle through subset samples (each is a dict)
-        sample_idx = (step - 1) % len(subset_samples)
-        sample = subset_samples[sample_idx]  # dict
+        # Cycle through subset indices (lazy-load to avoid CPU OOM)
+        sample_idx = (step - 1) % len(subset_indices)
+        sample = ds[subset_indices[sample_idx]]  # dict
 
         # Extract images [T, 3, H, W] and add batch dim
         images = sample["images"]["rgb"].clone()
@@ -250,7 +250,8 @@ def run_overfit(args):
 
     head_metrics = {}
     with torch.no_grad():
-        for sample in subset_samples:
+        for idx in subset_indices:
+            sample = ds[idx]
             images = sample["images"]["rgb"].clone()
             if images.dim() == 3:
                 images = images.unsqueeze(0)
