@@ -628,6 +628,7 @@ def train_step(
     scaler: torch.amp.GradScaler,
     grad_clip_norm: float = 5.0,  # [OPUS 186 E-6] 1.0 was over-clipping; 5.0 is ViT-standard.
     hp_prec_cap: bool = True,
+    kendall_uncapped: bool = False,  # [OPUS 201] Ablation: disable per-task log_var caps
     pcgrad: bool = True,
     act_class_weights: Optional[torch.Tensor] = None,
     do_step: bool = True,
@@ -775,12 +776,18 @@ def train_step(
         # forces weight>=0.61 (psr). Det/pose keep the wide range (low intrinsic loss,
         # no risk of starvation).
         LV_CLAMP_MIN = -4.0
-        LV_CLAMP_MAX = {"det": 4.0, "act": 1.0, "psr": 0.5, "pose": 4.0}
+        # [OPUS 201] Kendall-collapse ablation: when uncapped, all tasks get wide
+        # bounds (4.0) — the natural Kendall dynamics then starve the highest-loss
+        # task (activity). This is the "before" of the Figure 1 ablation.
+        if kendall_uncapped:
+            LV_CLAMP_MAX = {"det": 4.0, "act": 4.0, "psr": 4.0, "pose": 4.0}
+        else:
+            LV_CLAMP_MAX = {"det": 4.0, "act": 1.0, "psr": 0.5, "pose": 4.0}
         lv_values = {}
         for name in losses:
             lv_clamped = log_vars[name].clamp(LV_CLAMP_MIN, LV_CLAMP_MAX[name])
             lv_values[name] = lv_clamped
-        if hp_prec_cap:
+        if hp_prec_cap and not kendall_uncapped:
             lv_values["pose"] = torch.maximum(
                 lv_values["pose"], lv_values["det"].detach()
             )
@@ -1357,6 +1364,8 @@ def main():
     parser.add_argument("--lr-head", type=float, default=1e-3, help="Head LR")
     parser.add_argument("--lr-log-var", type=float, default=1e-3, help="Log var LR")
     parser.add_argument("--hp-prec-cap", action="store_true", default=True, help="Cap pose precision")
+    parser.add_argument("--kendall-uncapped", action="store_true", default=False,
+                        help="[OPUS 201 Ablation] Disable per-task log_var caps. Demonstrates Kendall collapse.")
     parser.add_argument("--pcgrad", action=argparse.BooleanOptionalAction, default=True, help="PCGrad gradient surgery (default: on; use --no-pcgrad to disable)")
     parser.add_argument("--psr-focal", action=argparse.BooleanOptionalAction, default=True,
                         help="[EP10] Use Focal-BCE (γ=2.0, α=0.25) for PSR (default: on; use --no-psr-focal to disable).")
@@ -1664,6 +1673,14 @@ def main():
     logger.info("Activity class weights computed — shape=%s, device=%s",
                 act_class_weights.shape, act_class_weights.device)
 
+    # [OPUS 201] Enable logit-adjustment on ActivityHead (Menon et al. 2020).
+    # Balanced softmax corrects for long-tail class distribution at eval time,
+    # counteracting the class-weight collapse that produces below-random top-1.
+    class_counts_tensor = torch.from_numpy(train_ds.class_counts.astype(np.int64))
+    model.act_head.enable_logit_adjust(class_counts_tensor)
+    logger.info("Activity logit-adjust enabled (%d classes, %d total samples)",
+                len(train_ds.class_counts), int(class_counts_tensor.sum()))
+
     # ── Training loop ─────────────────────────────────────────────────────
     logger.info("Starting training (%d epochs)...", args.epochs)
     metrics_log = {"train_metrics": [], "config": vars(args)}
@@ -1710,6 +1727,7 @@ def main():
                 model, images, targets, log_vars, optimizer, scaler,
                 grad_clip_norm=args.grad_clip_norm,  # [OPUS 186 E-6]
                 hp_prec_cap=args.hp_prec_cap,
+                kendall_uncapped=args.kendall_uncapped,  # [OPUS 201] Kendall-collapse ablation
                 pcgrad=args.pcgrad,
                 act_class_weights=act_class_weights,
                 do_step=do_step,

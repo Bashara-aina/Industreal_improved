@@ -1,17 +1,17 @@
 """
 MViTv2-S Multi-Task Model — shared backbone for Detection + Activity + PSR + Pose.
 
+[OPUS 201] PSR head on a diet: 70.9M → ~1.8M. Efficiency spine restored.
+Total ~45M params (34.5M backbone + ~10M heads) vs ~100M specialists = ~2.2× win.
+
 Architecture:
   - Backbone: MViTv2-S (Kinetics-400 pretrained, 34.5M)
-  - Detection: forward hooks at stages {conv_proj, blocks[1], blocks[3], blocks[14]}
-               → FPN neck (lateral 1×1 + top-down 2× upsample + 3×3 conv, 256ch)
-               → decoupled cls+box head (24 assembly-state classes)
-  - Activity: class token → LayerNorm(768) → Linear(768, 75) → 75-class CE
-  - PSR: conv_proj spatial-pooled [B, 96, T=8] → interpolate to T=16
-         → causal TransformerEncoder (3 layers) → Linear(96, 11) → per-frame transition logits
-  - Pose: class token → MLP(768→256→6) → Tanh → renormalized fwd+up
-
-Total ~40M params (34.5M backbone + ~5.5M heads).
+  - Detection: P5/P4/P3 → FPN (256ch) → decoupled cls+reg head + TAL assigner
+  - Activity: cls_token → 3-layer MLP (768→2048→1024→75) + optional logit-adjust
+  - PSR: P5 features [B,768,T=8,7²] → spatial pool → Linear(768→256)
+         → 2-layer causal Transformer (d=256, nhead=4, ff=1024)
+         → Linear(256→11) per-frame transition logits. Total ≈1.8M.
+  - Pose: cls_token → MLP(768→256→6) → Tanh → renormalized fwd+up
 """
 from __future__ import annotations
 
@@ -282,12 +282,28 @@ class ActivityHead(nn.Module):
         x = self.act2(x)
         x = self.drop2(x)
         logits = self.classifier(x)
-        if self.logit_adjust and hasattr(self, "class_freq"):
-            # Balanced softmax: subtract tau * log(class_freq) from logits.
+        if self.logit_adjust and hasattr(self, "class_freq") and self.training:
+            # [OPUS 207 §2.6 FIX] Logit-adjust only during training.
+            # At eval, predict from raw logits. This follows Menon et al. (2020)
+            # protocol: adjustment inside loss, raw logits for argmax prediction.
             logits = logits + self.logit_adjust_tau * torch.log(
                 self.class_freq + 1e-9
             ).unsqueeze(0)
         return logits
+
+    def enable_logit_adjust(self, class_counts: torch.Tensor):
+        """[OPUS 201] Enable logit-adjustment with dataset class frequencies.
+
+        Args:
+            class_counts: [num_classes] integer tensor of per-class sample counts.
+        """
+        total = class_counts.sum()
+        freq = class_counts.float() / total.clamp(min=1)
+        # Register buffer on the model's device so it matches logits at forward time
+        device = next(self.parameters()).device
+        self.register_buffer("class_freq", freq.to(device))
+        self.logit_adjust = True
+        self.logit_adjust_tau = 1.0
 
 
 # ===========================================================================
@@ -297,28 +313,36 @@ class ActivityHead(nn.Module):
 class PSRHead(nn.Module):
     """PSR head — causal Transformer on spatial-pooled temporal features.
 
-    [EP10 EVIDENCE] 4-layer T=8 P5 transformer at ep10 = F1 0.004, flat loss 1.56.
-    Head capacity is too low for transition detection on sparse assembly events.
-    Upgrade: 6 layers, feedforward 8× dim, dropout in encoder layers.
+    [OPUS 201 DIET] 70.9M → ~1.8M. The P5 feature-source fix (96-dim conv_proj
+    → 768-dim semantic) was the load-bearing change — not head size. An 8-token
+    sequence producing 8×11=88 outputs needs ≤15M, not 70.9M. The old 6-layer
+    d=768 ff=8× head was 14-23× larger than the PSR specialist (3-5M), inverting
+    the paper's efficiency claim.
+
+    Architecture: Linear(768→256) input projection + 2-layer causal Transformer
+    (d=256, nhead=4, ff=1024=4×) + Linear(256→11) output. Total ≈1.8M.
 
     Reads spatial-pooled features from the backbone's hook output (blocks[14] = P5).
     """
 
     def __init__(
         self,
-        feat_dim: int = 96,
+        feat_dim: int = 256,      # [OPUS 201] internal transformer dim (was 768)
+        input_dim: int = 768,     # [OPUS 201] P5 source feature dim
         num_components: int = 11,
         nhead: int = 4,
-        num_layers: int = 6,  # [EP10] 4→6 layers — more capacity for transition detection
+        num_layers: int = 2,      # [OPUS 201] 2 layers (was 6). 8 tokens needs ≤3.
     ):
         super().__init__()
         self.spatial_pool = nn.AdaptiveAvgPool3d((None, 1, 1))  # pool H,W
+        # [OPUS 201] Project P5 features (768-dim) down to internal transformer dim
+        self.input_proj = nn.Linear(input_dim, feat_dim)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=feat_dim,
             nhead=nhead,
-            dim_feedforward=feat_dim * 8,  # [EP10] 4×→8× — bigger feedforward
-            dropout=0.1,  # [EP10] add dropout to encoder layers
+            dim_feedforward=feat_dim * 4,  # [OPUS 201] standard 4× (was 8×)
+            dropout=0.1,
             activation=partial(F.leaky_relu, negative_slope=0.01),
             batch_first=True,
         )
@@ -337,7 +361,7 @@ class PSRHead(nn.Module):
         """Forward.
 
         Args:
-            conv_proj_feat: [B, 96, T=8, H=56, W=56] from conv_proj forward hook.
+            conv_proj_feat: [B, 768, T=8, H=7, W=7] from P5 (blocks[14] hook).
 
         Returns:
             psr_logits: [B, T=8, 11] per-frame transition logits.
@@ -349,8 +373,10 @@ class PSRHead(nn.Module):
         transition events (any 1 in a 2-frame window → 1 in the downsampled
         label).
         """
-        # Pool spatial dims → [B, 96, T=8, 1, 1] → [B, T=8, 96]
+        # Pool spatial dims → [B, 768, T=8, 1, 1] → [B, T=8, 768]
         x = self.spatial_pool(conv_proj_feat).squeeze(-1).squeeze(-1).transpose(1, 2)
+        # [OPUS 201] Project from 768-dim P5 features to internal transformer dim
+        x = self.input_proj(x)  # [B, T=8, feat_dim]
 
         # Predict at native T=8 — no interpolation. Causal mask is 8x8.
         T = x.size(1)
@@ -359,9 +385,8 @@ class PSRHead(nn.Module):
             diagonal=1,
         )
 
-        x = self.temporal_encoder(x, mask=mask)  # [B, 8, 96]
+        x = self.temporal_encoder(x, mask=mask)  # [B, 8, feat_dim]
         return self.projection(x)  # [B, 8, 11]
-
 
 # ===========================================================================
 # Pose Head
@@ -442,7 +467,9 @@ class MTLMViTModel(nn.Module):
         # learning from semantics-free features, which is why PSR loss was flat
         # at base-rate entropy. blocks[14] features carry semantic information
         # after 14 transformer blocks; PSR can finally learn transition events.
-        self.psr_head = PSRHead(feat_dim=backbone_dim, num_components=num_psr_components)
+        # [OPUS 201] PSRHead now defaults to internal d=256 with input_proj(768→256).
+        # Only pass input_dim (P5 source); feat_dim defaults to 256 internally.
+        self.psr_head = PSRHead(input_dim=backbone_dim, num_components=num_psr_components)
 
         # Pose head
         self.pose_head = PoseHead(feat_dim=backbone_dim)

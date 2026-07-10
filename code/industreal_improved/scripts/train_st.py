@@ -134,7 +134,8 @@ def train_one_task(task: str, args):
                     loss = activity_loss(outputs["activity"], targets["activity"])
                 elif task == "psr":
                     loss = psr_loss(outputs["psr_logits"], targets.get("psr_labels",
-                                          torch.zeros(images.size(0), 16, 11, device=device)))
+                                          torch.zeros(images.size(0), 16, 11, device=device)),
+                                    use_focal=True)
                 elif task == "pose":
                     if "head_pose" in targets:
                         hp = targets["head_pose"]
@@ -200,8 +201,9 @@ def train_one_task(task: str, args):
         }, output_dir / "latest.pt")
 
     # Final save
+    metric_key = "best_metric_key" if 'key' in dir() else "metric_key"
     metrics_log = {"task": task, "best_metric": best_metric,
-                   "best_metric_key" if 'key' in dir() else "metric_key": key,
+                   metric_key: key,
                    "best_epoch": best_epoch, "epochs": args.epochs}
     with open(output_dir / "metrics.json", "w") as f:
         json.dump(metrics_log, f, indent=2, default=str)

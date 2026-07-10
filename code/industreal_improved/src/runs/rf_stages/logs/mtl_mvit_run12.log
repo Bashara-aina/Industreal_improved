@@ -1,0 +1,483 @@
+2026-07-10 12:00:19,396 [INFO] Args: {'plumbing': False, 'epochs': 100, 'batch_size': 2, 'num_workers': 0, 'lr_backbone': 0.0001, 'lr_head': 0.001, 'lr_log_var': 0.001, 'hp_prec_cap': True, 'kendall_uncapped': False, 'pcgrad': True, 'psr_focal': True, 'det_aug': False, 'output_dir': 'src/runs/rf_stages/checkpoints/mtl_mvit_run', 'resume': 'src/runs/rf_stages/checkpoints/mtl_mvit_run/best.pt', 'eval_every': 10, 'eval_split': 'val', 'test_only': False, 'cpu': False, 'measure_efficiency': False, 'grad_accum_steps': 2, 'max_batches_per_epoch': 8000, 'grad_clip_norm': 5.0, 'compile': False}
+2026-07-10 12:00:19,443 [INFO] Device: cuda
+2026-07-10 12:00:19,443 [INFO] Building train dataset (sequence_mode=True, T=16)...
+2026-07-10 12:00:21,028 [INFO] [RAM_CACHE] Pre-loading 12000 train images as JPEG bytes (cap=12000)...
+2026-07-10 12:00:21,083 [INFO] [RAM_CACHE] 1000/12000 scanned — 1000 cached, 0s
+2026-07-10 12:00:21,137 [INFO] [RAM_CACHE] 2000/12000 scanned — 2000 cached, 0s
+2026-07-10 12:00:21,186 [INFO] [RAM_CACHE] 3000/12000 scanned — 3000 cached, 0s
+2026-07-10 12:00:21,237 [INFO] [RAM_CACHE] 4000/12000 scanned — 4000 cached, 0s
+2026-07-10 12:00:23,862 [INFO] [RAM_CACHE] 5000/12000 scanned — 5000 cached, 3s
+2026-07-10 12:00:26,009 [INFO] [RAM_CACHE] 6000/12000 scanned — 6000 cached, 5s
+2026-07-10 12:00:28,019 [INFO] [RAM_CACHE] 7000/12000 scanned — 7000 cached, 7s
+2026-07-10 12:00:30,839 [INFO] [RAM_CACHE] 8000/12000 scanned — 8000 cached, 10s
+2026-07-10 12:00:34,252 [INFO] [RAM_CACHE] 9000/12000 scanned — 9000 cached, 13s
+2026-07-10 12:00:37,084 [INFO] [RAM_CACHE] 10000/12000 scanned — 10000 cached, 16s
+2026-07-10 12:00:39,813 [INFO] [RAM_CACHE] 11000/12000 scanned — 11000 cached, 19s
+2026-07-10 12:00:41,950 [INFO] [RAM_CACHE] Cap reached (12000) — stopping cache fill
+2026-07-10 12:00:41,950 [INFO] [RAM_CACHE] Done — 12000 images cached in 21s (~4101.6MB estimated)
+2026-07-10 12:00:42,934 [INFO] [industreal_dataset] Sequence mode: 78391 windows (T=16, stride=1) across 36 recordings
+2026-07-10 12:00:42,934 [INFO] [industreal_dataset] Loaded 26322 frames (split=train, recordings=all)
+2026-07-10 12:00:42,935 [INFO] Train samples: 78391
+2026-07-10 12:00:43,855 [INFO] [RAM_CACHE] Pre-loading 2000 val images as JPEG bytes (cap=2000)...
+2026-07-10 12:00:43,901 [INFO] [RAM_CACHE] 1000/2000 scanned — 1000 cached, 0s
+2026-07-10 12:00:43,944 [INFO] [RAM_CACHE] Cap reached (2000) — stopping cache fill
+2026-07-10 12:00:43,945 [INFO] [RAM_CACHE] Done — 2000 images cached in 0s (~683.6MB estimated)
+2026-07-10 12:00:44,340 [INFO] [industreal_dataset] Sequence mode: 37796 windows (T=16, stride=1) across 16 recordings
+2026-07-10 12:00:44,341 [INFO] [industreal_dataset] Loaded 38036 frames (split=val, recordings=all)
+2026-07-10 12:00:44,341 [INFO] Eval samples (val): 37796
+2026-07-10 12:00:44,341 [INFO] Building MTL-MViT model...
+/media/newadmin/master/POPW/working/code/industreal_improved/code/industreal_improved/src/models/mvit_mtl_model.py:347: UserWarning: enable_nested_tensor is True, but self.use_nested_tensor is False because encoder_layer.activation_relu_or_gelu was not True
+  self.temporal_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+2026-07-10 12:00:44,744 [INFO] MTLMViTModel: feats=768, act=75-cls, det=24-cls, psr=11-comp, fpn=256ch
+2026-07-10 12:00:44,870 [INFO] Params: 48.6M total, 48.6M trainable
+2026-07-10 12:00:44,871 [INFO] Log vars initialized to -0.5
+2026-07-10 12:00:44,871 [INFO] EMA loss tracker initialized to 1.0
+2026-07-10 12:00:44,883 [INFO] EMA model weights initialized to current model state_dict
+2026-07-10 12:00:45,172 [WARNING] Resume: skipped 38 keys with shape mismatch:
+2026-07-10 12:00:45,172 [WARNING]   act_head.classifier.weight: ckpt=(75, 768) vs model=(75, 1024)
+2026-07-10 12:00:45,172 [WARNING]   psr_head.temporal_encoder.layers.0.self_attn.in_proj_weight: ckpt=(288, 96) vs model=(768, 256)
+2026-07-10 12:00:45,172 [WARNING]   psr_head.temporal_encoder.layers.0.self_attn.in_proj_bias: ckpt=(288,) vs model=(768,)
+2026-07-10 12:00:45,172 [WARNING]   psr_head.temporal_encoder.layers.0.self_attn.out_proj.weight: ckpt=(96, 96) vs model=(256, 256)
+2026-07-10 12:00:45,172 [WARNING]   psr_head.temporal_encoder.layers.0.self_attn.out_proj.bias: ckpt=(96,) vs model=(256,)
+2026-07-10 12:00:45,172 [WARNING]   ... and 33 more
+2026-07-10 12:00:45,177 [WARNING] Resume: 32 missing keys (new layers initialize fresh): ['act_head.fc1.weight', 'act_head.fc1.bias', 'act_head.fc2.weight']
+2026-07-10 12:00:45,178 [WARNING] Could not load optimizer state (loaded state dict contains a parameter group that doesn't match the size of optimizer's group) — starting fresh momentum
+2026-07-10 12:00:45,183 [INFO] Re-anchored EMA model state to current model (post-resume)
+2026-07-10 12:00:45,183 [INFO] Resumed from epoch 5
+2026-07-10 12:00:45,183 [INFO] Class weights — min=0.0000  max=11.7127  mean=2.2867  num_nonzero=72  [sqrt-tamed]
+2026-07-10 12:00:45,184 [INFO] Activity class weights computed — shape=torch.Size([75]), device=cuda:0
+2026-07-10 12:00:45,185 [INFO] Activity logit-adjust enabled (75 classes, 20578 total samples)
+2026-07-10 12:00:45,185 [INFO] Starting training (100 epochs)...
+2026-07-10 12:00:45,879 [INFO]   [batch     0/39195 accum=1/2] loss=2.3101 det=0.0013 act=4.7215 psr=0.1750 pose=0.0657
+2026-07-10 12:01:17,802 [INFO]   [batch   100/39195 accum=1/2] loss=1.3202 det=0.0012 act=4.3980 psr=0.2655 pose=0.0303
+2026-07-10 12:01:50,057 [INFO]   [batch   200/39195 accum=1/2] loss=2.3439 det=0.0012 act=8.3752 psr=0.1899 pose=0.1728
+2026-07-10 12:02:20,181 [INFO]   [batch   300/39195 accum=1/2] loss=8.8012 det=0.0010 act=4.5963 psr=0.2617 pose=1.5278
+2026-07-10 12:02:50,695 [INFO]   [batch   400/39195 accum=1/2] loss=1.8306 det=0.0013 act=7.6312 psr=0.2254 pose=0.0371
+2026-07-10 12:03:20,900 [INFO]   [batch   500/39195 accum=1/2] loss=1.3745 det=0.0011 act=4.6465 psr=0.1995 pose=0.0072
+2026-07-10 12:03:51,092 [INFO]   [batch   600/39195 accum=1/2] loss=6.7279 det=4.2426 act=4.5727 psr=0.2618 pose=0.0608
+2026-07-10 12:04:21,163 [INFO]   [batch   700/39195 accum=1/2] loss=1.6804 det=0.0014 act=5.3004 psr=0.2603 pose=0.0213
+2026-07-10 12:04:51,165 [INFO]   [batch   800/39195 accum=1/2] loss=1.6168 det=0.0014 act=4.5156 psr=0.2528 pose=0.0221
+2026-07-10 12:05:21,154 [INFO]   [batch   900/39195 accum=1/2] loss=10.5300 det=0.0011 act=4.9871 psr=0.1664 pose=1.5686
+2026-07-10 12:05:50,826 [INFO]   [batch  1000/39195 accum=1/2] loss=1.5958 det=0.0012 act=4.7689 psr=0.2414 pose=0.0222
+2026-07-10 12:06:21,121 [INFO]   [batch  1100/39195 accum=1/2] loss=6.3272 det=4.6976 act=6.0411 psr=0.1641 pose=0.0305
+2026-07-10 12:06:51,145 [INFO]   [batch  1200/39195 accum=1/2] loss=6.9728 det=4.4187 act=5.9860 psr=0.2018 pose=0.0322
+2026-07-10 12:07:21,359 [INFO]   [batch  1300/39195 accum=1/2] loss=6.1770 det=4.5876 act=4.7488 psr=0.2253 pose=0.0097
+2026-07-10 12:07:51,577 [INFO]   [batch  1400/39195 accum=1/2] loss=6.3869 det=4.2449 act=4.5816 psr=0.2499 pose=0.1197
+2026-07-10 12:08:21,630 [INFO]   [batch  1500/39195 accum=1/2] loss=1.7534 det=0.0011 act=5.0285 psr=0.2425 pose=0.0364
+2026-07-10 12:08:52,253 [INFO]   [batch  1600/39195 accum=1/2] loss=1.5891 det=0.0021 act=4.3162 psr=0.2756 pose=0.0078
+2026-07-10 12:09:22,225 [INFO]   [batch  1700/39195 accum=1/2] loss=1.7134 det=0.0012 act=4.3862 psr=0.2412 pose=0.0409
+2026-07-10 12:09:52,467 [INFO]   [batch  1800/39195 accum=1/2] loss=1.7599 det=0.0013 act=4.9078 psr=0.2101 pose=0.0511
+2026-07-10 12:10:22,208 [INFO]   [batch  1900/39195 accum=1/2] loss=9.2980 det=0.0011 act=4.2910 psr=0.2249 pose=1.4604
+2026-07-10 12:10:51,982 [INFO]   [batch  2000/39195 accum=1/2] loss=5.9457 det=4.5714 act=4.4180 psr=0.2666 pose=0.0049
+2026-07-10 12:11:22,459 [INFO]   [batch  2100/39195 accum=1/2] loss=7.2747 det=4.2293 act=4.6541 psr=0.2167 pose=0.0761
+2026-07-10 12:11:52,830 [INFO]   [batch  2200/39195 accum=1/2] loss=6.7689 det=4.4507 act=4.4174 psr=0.2170 pose=0.0624
+2026-07-10 12:12:23,127 [INFO]   [batch  2300/39195 accum=1/2] loss=6.0530 det=3.8799 act=4.8548 psr=0.2133 pose=0.0396
+2026-07-10 12:12:53,899 [INFO]   [batch  2400/39195 accum=1/2] loss=6.8663 det=4.6905 act=5.2194 psr=0.2166 pose=0.0326
+2026-07-10 12:13:23,860 [INFO]   [batch  2500/39195 accum=1/2] loss=1.6936 det=0.0013 act=4.4259 psr=0.2897 pose=0.0244
+2026-07-10 12:13:53,675 [INFO]   [batch  2600/39195 accum=1/2] loss=13.4381 det=4.2089 act=4.2279 psr=0.1882 pose=1.4634
+2026-07-10 12:14:23,831 [INFO]   [batch  2700/39195 accum=1/2] loss=2.0118 det=0.0016 act=4.4879 psr=0.2098 pose=0.1159
+2026-07-10 12:14:54,455 [INFO]   [batch  2800/39195 accum=1/2] loss=1.6128 det=0.0010 act=6.2815 psr=0.2007 pose=0.0181
+2026-07-10 12:15:24,209 [INFO]   [batch  2900/39195 accum=1/2] loss=1.6602 det=0.0012 act=4.3291 psr=0.2343 pose=0.0325
+2026-07-10 12:15:54,238 [INFO]   [batch  3000/39195 accum=1/2] loss=7.0182 det=4.5367 act=4.5812 psr=0.1893 pose=0.1509
+2026-07-10 12:16:24,396 [INFO]   [batch  3100/39195 accum=1/2] loss=6.8941 det=4.4131 act=4.5802 psr=0.2172 pose=0.0118
+2026-07-10 12:16:54,048 [INFO]   [batch  3200/39195 accum=1/2] loss=16.1083 det=3.9798 act=6.6345 psr=0.2070 pose=1.5314
+2026-07-10 12:17:24,268 [INFO]   [batch  3300/39195 accum=1/2] loss=12.9474 det=4.9067 act=4.9910 psr=0.1733 pose=1.1153
+2026-07-10 12:17:54,546 [INFO]   [batch  3400/39195 accum=1/2] loss=1.4575 det=0.0012 act=4.5123 psr=0.2026 pose=0.0132
+2026-07-10 12:18:24,526 [INFO]   [batch  3500/39195 accum=1/2] loss=1.9426 det=0.0010 act=4.4843 psr=0.1766 pose=0.0961
+2026-07-10 12:18:54,488 [INFO]   [batch  3600/39195 accum=1/2] loss=7.3869 det=4.3552 act=4.6254 psr=0.2526 pose=0.0242
+2026-07-10 12:19:24,462 [INFO]   [batch  3700/39195 accum=1/2] loss=8.7748 det=4.3327 act=4.6771 psr=0.2282 pose=0.1515
+2026-07-10 12:19:54,171 [INFO]   [batch  3800/39195 accum=1/2] loss=7.0396 det=3.7335 act=5.5658 psr=0.2704 pose=0.0284
+2026-07-10 12:20:23,894 [INFO]   [batch  3900/39195 accum=1/2] loss=1.8168 det=0.0012 act=4.3236 psr=0.1967 pose=0.0766
+2026-07-10 12:20:54,039 [INFO]   [batch  4000/39195 accum=1/2] loss=1.5848 det=0.0019 act=5.2030 psr=0.2312 pose=0.0191
+2026-07-10 12:21:24,164 [INFO]   [batch  4100/39195 accum=1/2] loss=1.6633 det=0.0012 act=4.6520 psr=0.2319 pose=0.0388
+2026-07-10 12:21:54,315 [INFO]   [batch  4200/39195 accum=1/2] loss=2.3691 det=0.0011 act=4.5592 psr=0.1887 pose=0.1974
+2026-07-10 12:22:24,341 [INFO]   [batch  4300/39195 accum=1/2] loss=1.5112 det=0.0016 act=4.5496 psr=0.2205 pose=0.0221
+2026-07-10 12:22:54,421 [INFO]   [batch  4400/39195 accum=1/2] loss=5.2737 det=3.7713 act=4.5354 psr=0.2340 pose=0.0251
+2026-07-10 12:23:24,066 [INFO]   [batch  4500/39195 accum=1/2] loss=1.3803 det=0.0012 act=4.4907 psr=0.1753 pose=0.0166
+2026-07-10 12:23:54,364 [INFO]   [batch  4600/39195 accum=1/2] loss=2.2912 det=0.0019 act=4.4564 psr=0.2115 pose=0.1511
+2026-07-10 12:24:24,014 [INFO]   [batch  4700/39195 accum=1/2] loss=6.2035 det=4.4245 act=4.1845 psr=0.2630 pose=0.0147
+2026-07-10 12:24:53,900 [INFO]   [batch  4800/39195 accum=1/2] loss=1.5960 det=0.0014 act=4.4462 psr=0.2029 pose=0.0361
+2026-07-10 12:25:23,591 [INFO]   [batch  4900/39195 accum=1/2] loss=1.5856 det=0.0011 act=4.4876 psr=0.2471 pose=0.0185
+2026-07-10 12:25:53,441 [INFO]   [batch  5000/39195 accum=1/2] loss=11.4909 det=0.0011 act=4.5448 psr=0.2285 pose=1.5621
+2026-07-10 12:26:23,274 [INFO]   [batch  5100/39195 accum=1/2] loss=3.3080 det=0.0014 act=7.2717 psr=0.2096 pose=0.2028
+2026-07-10 12:26:53,349 [INFO]   [batch  5200/39195 accum=1/2] loss=7.5330 det=4.7433 act=6.3299 psr=0.2139 pose=0.1266
+2026-07-10 12:27:23,030 [INFO]   [batch  5300/39195 accum=1/2] loss=1.6629 det=0.0012 act=5.8769 psr=0.2377 pose=0.0174
+2026-07-10 12:27:53,494 [INFO]   [batch  5400/39195 accum=1/2] loss=1.8579 det=0.0015 act=6.7374 psr=0.2563 pose=0.0219
+2026-07-10 12:28:23,206 [INFO]   [batch  5500/39195 accum=1/2] loss=1.7071 det=0.0012 act=4.5150 psr=0.2592 pose=0.0295
+2026-07-10 12:28:53,111 [INFO]   [batch  5600/39195 accum=1/2] loss=1.4546 det=0.0013 act=5.3088 psr=0.1822 pose=0.0208
+2026-07-10 12:29:23,705 [INFO]   [batch  5700/39195 accum=1/2] loss=1.5226 det=0.0018 act=4.7315 psr=0.1717 pose=0.0468
+2026-07-10 12:29:54,369 [INFO]   [batch  5800/39195 accum=1/2] loss=2.1256 det=0.0010 act=4.3820 psr=0.1934 pose=0.1496
+2026-07-10 12:30:24,743 [INFO]   [batch  5900/39195 accum=1/2] loss=2.5828 det=0.0015 act=5.1184 psr=0.1990 pose=0.2350
+2026-07-10 12:30:54,807 [INFO]   [batch  6000/39195 accum=1/2] loss=6.9622 det=5.0733 act=4.5823 psr=0.2087 pose=0.0667
+2026-07-10 12:31:24,774 [INFO]   [batch  6100/39195 accum=1/2] loss=1.8484 det=0.0017 act=4.3911 psr=0.1520 pose=0.1078
+2026-07-10 12:31:54,860 [INFO]   [batch  6200/39195 accum=1/2] loss=10.6743 det=0.0015 act=4.0668 psr=0.2254 pose=1.5123
+2026-07-10 12:32:24,811 [INFO]   [batch  6300/39195 accum=1/2] loss=1.3983 det=0.0011 act=4.9534 psr=0.1867 pose=0.0088
+2026-07-10 12:32:54,982 [INFO]   [batch  6400/39195 accum=1/2] loss=1.6529 det=0.0012 act=4.6221 psr=0.2301 pose=0.0351
+2026-07-10 12:33:25,058 [INFO]   [batch  6500/39195 accum=1/2] loss=10.4843 det=0.0011 act=4.2517 psr=0.2329 pose=1.3984
+2026-07-10 12:33:54,872 [INFO]   [batch  6600/39195 accum=1/2] loss=2.1767 det=0.0012 act=6.0512 psr=0.2661 pose=0.0614
+2026-07-10 12:34:24,997 [INFO]   [batch  6700/39195 accum=1/2] loss=7.1572 det=3.6275 act=4.2946 psr=0.2022 pose=0.1565
+2026-07-10 12:34:54,994 [INFO]   [batch  6800/39195 accum=1/2] loss=7.1021 det=3.9726 act=4.9611 psr=0.1895 pose=0.0854
+2026-07-10 12:35:24,837 [INFO]   [batch  6900/39195 accum=1/2] loss=1.5967 det=0.0011 act=4.9752 psr=0.2153 pose=0.0239
+2026-07-10 12:35:54,896 [INFO]   [batch  7000/39195 accum=1/2] loss=9.0073 det=4.8045 act=5.0324 psr=0.1781 pose=0.0700
+2026-07-10 12:36:25,084 [INFO]   [batch  7100/39195 accum=1/2] loss=2.0643 det=0.0011 act=7.1323 psr=0.2264 pose=0.0727
+2026-07-10 12:36:54,960 [INFO]   [batch  7200/39195 accum=1/2] loss=1.8013 det=0.0011 act=4.1761 psr=0.2608 pose=0.0464
+2026-07-10 12:37:25,035 [INFO]   [batch  7300/39195 accum=1/2] loss=16.5400 det=3.9164 act=5.3142 psr=0.1640 pose=1.5859
+2026-07-10 12:37:54,695 [INFO]   [batch  7400/39195 accum=1/2] loss=1.5421 det=0.0010 act=4.6198 psr=0.2247 pose=0.0239
+2026-07-10 12:38:24,377 [INFO]   [batch  7500/39195 accum=1/2] loss=1.5636 det=0.0011 act=6.1764 psr=0.2274 pose=0.0027
+2026-07-10 12:38:54,234 [INFO]   [batch  7600/39195 accum=1/2] loss=3.3048 det=0.0016 act=6.2699 psr=0.2358 pose=0.2057
+2026-07-10 12:39:24,059 [INFO]   [batch  7700/39195 accum=1/2] loss=1.6714 det=0.0011 act=4.3777 psr=0.2628 pose=0.0253
+2026-07-10 12:39:54,396 [INFO]   [batch  7800/39195 accum=1/2] loss=1.5123 det=0.0015 act=4.3529 psr=0.2268 pose=0.0152
+2026-07-10 12:40:24,252 [INFO]   [batch  7900/39195 accum=1/2] loss=1.5777 det=0.0013 act=4.6891 psr=0.2287 pose=0.0218
+2026-07-10 12:40:53,960 [INFO] Epoch   6/100 | loss=4.0757 det=1.1792 act=4.7236 psr=0.2203 pose=0.2132 | lv=[-0.31,3.13,0.95,-0.49] | lr=1.00e-04 | 2408.8s
+2026-07-10 12:40:53,960 [INFO]   PSR comp: [0.4927 0.6079 0.7622 0.6897 0.7046 0.7194 0.6878 0.7168 0.6855 0.6987 0.6751]
+2026-07-10 12:40:54,759 [INFO]   Quick: act_preds=1uniq/0.13maxconf | psr_stdmax=0.1195 | det_lvls=['P5', 'P4', 'P3']
+2026-07-10 12:40:55,058 [INFO]   [batch     0/39195 accum=1/2] loss=3.1122 det=0.0012 act=4.5533 psr=0.2511 pose=0.2878
+2026-07-10 12:41:24,739 [INFO]   [batch   100/39195 accum=1/2] loss=10.1179 det=0.0014 act=4.6171 psr=0.2165 pose=1.5201
+2026-07-10 12:41:53,946 [INFO]   [batch   200/39195 accum=1/2] loss=1.6947 det=0.0012 act=4.5352 psr=0.1913 pose=0.0628
+2026-07-10 12:42:23,028 [INFO]   [batch   300/39195 accum=1/2] loss=2.9157 det=0.0013 act=4.4259 psr=0.1893 pose=0.2034
+2026-07-10 12:42:52,312 [INFO]   [batch   400/39195 accum=1/2] loss=1.4998 det=0.0012 act=4.6405 psr=0.2083 pose=0.0178
+2026-07-10 12:43:22,039 [INFO]   [batch   500/39195 accum=1/2] loss=7.5707 det=4.6193 act=5.2331 psr=0.2309 pose=0.0095
+2026-07-10 12:43:51,276 [INFO]   [batch   600/39195 accum=1/2] loss=6.4661 det=4.1249 act=4.5755 psr=0.2793 pose=0.0153
+2026-07-10 12:44:20,584 [INFO]   [batch   700/39195 accum=1/2] loss=7.3697 det=4.3182 act=4.1329 psr=0.2873 pose=0.0754
+2026-07-10 12:44:49,915 [INFO]   [batch   800/39195 accum=1/2] loss=1.6414 det=0.0014 act=4.3968 psr=0.1745 pose=0.0472
+2026-07-10 12:45:19,009 [INFO]   [batch   900/39195 accum=1/2] loss=2.2598 det=0.0014 act=4.7842 psr=0.2138 pose=0.1203
+2026-07-10 12:45:48,458 [INFO]   [batch  1000/39195 accum=1/2] loss=1.6043 det=0.0011 act=6.0940 psr=0.2284 pose=0.0094
+2026-07-10 12:46:17,913 [INFO]   [batch  1100/39195 accum=1/2] loss=1.6654 det=0.0017 act=4.9078 psr=0.2665 pose=0.0152
+2026-07-10 12:46:47,114 [INFO]   [batch  1200/39195 accum=1/2] loss=9.1392 det=4.0828 act=4.3315 psr=0.2219 pose=0.4967
+2026-07-10 12:47:16,413 [INFO]   [batch  1300/39195 accum=1/2] loss=5.3190 det=3.7974 act=5.1284 psr=0.2333 pose=0.0058
+2026-07-10 12:47:46,066 [INFO]   [batch  1400/39195 accum=1/2] loss=1.5584 det=0.0021 act=5.3481 psr=0.1945 pose=0.0261
+2026-07-10 12:48:15,198 [INFO]   [batch  1500/39195 accum=1/2] loss=1.8548 det=0.0013 act=4.3048 psr=0.2602 pose=0.0564
+2026-07-10 12:48:44,483 [INFO]   [batch  1600/39195 accum=1/2] loss=1.9324 det=0.0018 act=4.4450 psr=0.2401 pose=0.0781
+2026-07-10 12:49:13,619 [INFO]   [batch  1700/39195 accum=1/2] loss=6.6417 det=3.7718 act=4.2946 psr=0.2756 pose=0.0718
+2026-07-10 12:49:42,924 [INFO]   [batch  1800/39195 accum=1/2] loss=1.6035 det=0.0013 act=4.3143 psr=0.2745 pose=0.0120
+2026-07-10 12:50:12,623 [INFO]   [batch  1900/39195 accum=1/2] loss=1.5524 det=0.0010 act=4.3340 psr=0.1851 pose=0.0393
+2026-07-10 12:50:41,668 [INFO]   [batch  2000/39195 accum=1/2] loss=2.0104 det=0.0014 act=4.6912 psr=0.2464 pose=0.0710
+2026-07-10 12:51:11,177 [INFO]   [batch  2100/39195 accum=1/2] loss=5.8361 det=3.3399 act=-0.0000 psr=0.2455 pose=0.0150
+2026-07-10 12:51:41,460 [INFO]   [batch  2200/39195 accum=1/2] loss=1.8681 det=0.0012 act=3.8920 psr=0.2288 pose=0.0712
+2026-07-10 12:52:11,272 [INFO]   [batch  2300/39195 accum=1/2] loss=6.7784 det=4.3113 act=4.6862 psr=0.2341 pose=0.0261
+2026-07-10 12:52:40,828 [INFO]   [batch  2400/39195 accum=1/2] loss=1.7456 det=0.0014 act=4.2037 psr=0.2260 pose=0.0712
+2026-07-10 12:53:09,883 [INFO]   [batch  2500/39195 accum=1/2] loss=2.1420 det=0.0011 act=4.4199 psr=0.2718 pose=0.1109
+2026-07-10 12:53:40,317 [INFO]   [batch  2600/39195 accum=1/2] loss=8.6442 det=0.0012 act=4.5301 psr=0.2295 pose=1.2972
+2026-07-10 12:54:09,571 [INFO]   [batch  2700/39195 accum=1/2] loss=1.5018 det=0.0011 act=4.3974 psr=0.1793 pose=0.0425
+2026-07-10 12:54:38,958 [INFO]   [batch  2800/39195 accum=1/2] loss=3.0337 det=0.0015 act=4.8243 psr=0.1708 pose=0.3172
+2026-07-10 12:55:09,024 [INFO]   [batch  2900/39195 accum=1/2] loss=1.5752 det=0.0018 act=4.8311 psr=0.1674 pose=0.0475
+2026-07-10 12:55:39,090 [INFO]   [batch  3000/39195 accum=1/2] loss=1.9549 det=0.0013 act=4.5481 psr=0.2380 pose=0.1065
+2026-07-10 12:56:09,385 [INFO]   [batch  3100/39195 accum=1/2] loss=6.3912 det=3.7904 act=4.2302 psr=0.2564 pose=0.0303
+2026-07-10 12:56:38,931 [INFO]   [batch  3200/39195 accum=1/2] loss=7.5089 det=0.0014 act=4.6417 psr=0.2286 pose=1.2920
+2026-07-10 12:57:08,528 [INFO]   [batch  3300/39195 accum=1/2] loss=7.0048 det=4.2191 act=4.3050 psr=0.2351 pose=0.0254
+2026-07-10 12:57:38,835 [INFO]   [batch  3400/39195 accum=1/2] loss=2.1960 det=0.0012 act=4.2181 psr=0.2396 pose=0.1099
+2026-07-10 12:58:08,920 [INFO]   [batch  3500/39195 accum=1/2] loss=2.3571 det=0.0013 act=4.1019 psr=0.2033 pose=0.1364
+2026-07-10 12:58:38,576 [INFO]   [batch  3600/39195 accum=1/2] loss=1.5291 det=0.0011 act=4.8692 psr=0.2203 pose=0.0173
+2026-07-10 12:59:07,906 [INFO]   [batch  3700/39195 accum=1/2] loss=2.4473 det=0.0011 act=4.5525 psr=0.1885 pose=0.2071
+2026-07-10 12:59:37,443 [INFO]   [batch  3800/39195 accum=1/2] loss=7.2928 det=4.3199 act=4.8926 psr=0.2742 pose=0.1008
+2026-07-10 13:00:06,710 [INFO]   [batch  3900/39195 accum=1/2] loss=2.0764 det=0.0013 act=4.2485 psr=0.2534 pose=0.1084
+2026-07-10 13:00:35,914 [INFO]   [batch  4000/39195 accum=1/2] loss=9.4399 det=4.0819 act=4.4546 psr=0.2192 pose=0.3506
+2026-07-10 13:01:05,646 [INFO]   [batch  4100/39195 accum=1/2] loss=1.5381 det=0.0012 act=-0.0000 psr=0.2938 pose=0.0360
+2026-07-10 13:01:35,266 [INFO]   [batch  4200/39195 accum=1/2] loss=1.7377 det=0.0016 act=4.5839 psr=0.2960 pose=0.0221
+2026-07-10 13:02:04,700 [INFO]   [batch  4300/39195 accum=1/2] loss=1.6306 det=0.0013 act=4.7472 psr=0.2234 pose=0.0278
+2026-07-10 13:02:33,858 [INFO]   [batch  4400/39195 accum=1/2] loss=1.6701 det=0.0014 act=5.1782 psr=0.2106 pose=0.0463
+2026-07-10 13:03:03,187 [INFO]   [batch  4500/39195 accum=1/2] loss=5.3534 det=3.7661 act=-0.0000 psr=0.2601 pose=0.0274
+2026-07-10 13:03:32,504 [INFO]   [batch  4600/39195 accum=1/2] loss=16.5472 det=4.2117 act=4.5295 psr=0.2423 pose=1.6806
+2026-07-10 13:04:01,744 [INFO]   [batch  4700/39195 accum=1/2] loss=1.5691 det=0.0012 act=4.5791 psr=0.2092 pose=0.0294
+2026-07-10 13:04:30,831 [INFO]   [batch  4800/39195 accum=1/2] loss=5.9696 det=0.0012 act=4.5781 psr=0.1655 pose=0.8406
+2026-07-10 13:04:59,905 [INFO]   [batch  4900/39195 accum=1/2] loss=6.4338 det=4.2507 act=4.5149 psr=0.1939 pose=0.0244
+2026-07-10 13:05:29,897 [INFO]   [batch  5000/39195 accum=1/2] loss=1.3975 det=0.0014 act=4.4106 psr=0.1977 pose=0.0186
+2026-07-10 13:05:59,259 [INFO]   [batch  5100/39195 accum=1/2] loss=1.4970 det=0.0018 act=4.6572 psr=0.2234 pose=0.0142
+2026-07-10 13:06:28,790 [INFO]   [batch  5200/39195 accum=1/2] loss=8.4369 det=3.8734 act=4.3036 psr=0.1789 pose=0.3730
+2026-07-10 13:06:58,661 [INFO]   [batch  5300/39195 accum=1/2] loss=8.8561 det=0.0011 act=4.5513 psr=0.2037 pose=1.3905
+2026-07-10 13:07:27,992 [INFO]   [batch  5400/39195 accum=1/2] loss=1.9341 det=0.0011 act=-0.0000 psr=0.2034 pose=0.1795
+2026-07-10 13:07:57,187 [INFO]   [batch  5500/39195 accum=1/2] loss=1.6072 det=0.0019 act=6.7214 psr=0.1747 pose=0.0295
+2026-07-10 13:08:26,612 [INFO]   [batch  5600/39195 accum=1/2] loss=1.7433 det=0.0013 act=4.4974 psr=0.1755 pose=0.0649
+2026-07-10 13:08:55,841 [INFO]   [batch  5700/39195 accum=1/2] loss=3.7932 det=0.0013 act=4.7034 psr=0.2101 pose=0.2853
+2026-07-10 13:09:25,202 [INFO]   [batch  5800/39195 accum=1/2] loss=2.3360 det=0.0012 act=4.2490 psr=0.2911 pose=0.0936
+2026-07-10 13:09:54,334 [INFO]   [batch  5900/39195 accum=1/2] loss=3.3014 det=0.0011 act=4.6711 psr=0.2716 pose=0.2017
+2026-07-10 13:10:23,589 [INFO]   [batch  6000/39195 accum=1/2] loss=1.7746 det=0.0010 act=4.9232 psr=0.2377 pose=0.0473
+2026-07-10 13:10:53,074 [INFO]   [batch  6100/39195 accum=1/2] loss=1.6729 det=0.0012 act=4.3741 psr=0.2376 pose=0.0339
+2026-07-10 13:11:22,354 [INFO]   [batch  6200/39195 accum=1/2] loss=1.6265 det=0.0010 act=4.5598 psr=0.2295 pose=0.0343
+2026-07-10 13:11:51,936 [INFO]   [batch  6300/39195 accum=1/2] loss=5.9315 det=0.0012 act=6.4280 psr=0.2178 pose=0.6847
+2026-07-10 13:12:21,217 [INFO]   [batch  6400/39195 accum=1/2] loss=8.5560 det=0.0010 act=5.2118 psr=0.1828 pose=1.1938
+2026-07-10 13:12:50,378 [INFO]   [batch  6500/39195 accum=1/2] loss=1.5705 det=0.0012 act=4.1963 psr=0.2541 pose=0.0155
+2026-07-10 13:13:19,668 [INFO]   [batch  6600/39195 accum=1/2] loss=1.8875 det=0.0018 act=6.2726 psr=0.2182 pose=0.0672
+2026-07-10 13:13:48,756 [INFO]   [batch  6700/39195 accum=1/2] loss=1.7370 det=0.0013 act=6.7809 psr=0.2542 pose=0.0143
+2026-07-10 13:14:18,115 [INFO]   [batch  6800/39195 accum=1/2] loss=1.5407 det=0.0013 act=6.8557 psr=0.1859 pose=0.0110
+2026-07-10 13:14:47,409 [INFO]   [batch  6900/39195 accum=1/2] loss=1.8863 det=0.0012 act=4.6522 psr=0.2338 pose=0.0667
+2026-07-10 13:15:16,633 [INFO]   [batch  7000/39195 accum=1/2] loss=1.5634 det=0.0014 act=4.4005 psr=0.2270 pose=0.0279
+2026-07-10 13:15:46,139 [INFO]   [batch  7100/39195 accum=1/2] loss=1.6983 det=0.0011 act=4.1939 psr=0.2209 pose=0.0499
+2026-07-10 13:16:15,371 [INFO]   [batch  7200/39195 accum=1/2] loss=1.7570 det=0.0017 act=5.6287 psr=0.3062 pose=0.0078
+2026-07-10 13:16:44,827 [INFO]   [batch  7300/39195 accum=1/2] loss=1.3814 det=0.0012 act=4.4238 psr=0.2013 pose=0.0113
+2026-07-10 13:17:14,325 [INFO]   [batch  7400/39195 accum=1/2] loss=1.5862 det=0.0013 act=4.6098 psr=0.2559 pose=0.0152
+2026-07-10 13:17:44,007 [INFO]   [batch  7500/39195 accum=1/2] loss=2.0130 det=0.0012 act=4.5152 psr=0.2026 pose=0.1228
+2026-07-10 13:18:13,305 [INFO]   [batch  7600/39195 accum=1/2] loss=1.7069 det=0.0016 act=4.6554 psr=0.2588 pose=0.0353
+2026-07-10 13:18:42,432 [INFO]   [batch  7700/39195 accum=1/2] loss=10.5909 det=0.0012 act=4.4339 psr=0.2385 pose=1.5493
+2026-07-10 13:19:11,601 [INFO]   [batch  7800/39195 accum=1/2] loss=1.6327 det=0.0015 act=5.1748 psr=0.1954 pose=0.0338
+2026-07-10 13:19:40,887 [INFO]   [batch  7900/39195 accum=1/2] loss=1.3249 det=0.0013 act=4.2401 psr=0.1692 pose=0.0127
+2026-07-10 13:20:10,059 [INFO] Epoch   7/100 | loss=4.0993 det=1.1254 act=4.7113 psr=0.2191 pose=0.2289 | lv=[-0.31,3.13,0.95,-0.49] | lr=1.00e-04 | 2355.3s
+2026-07-10 13:20:10,059 [INFO]   PSR comp: [0.4959 0.6101 0.7567 0.6906 0.6998 0.7180 0.6873 0.7156 0.6852 0.6999 0.6741]
+2026-07-10 13:20:10,793 [INFO]   Quick: act_preds=1uniq/0.13maxconf | psr_stdmax=0.1146 | det_lvls=['P5', 'P4', 'P3']
+2026-07-10 13:20:11,099 [INFO]   [batch     0/39195 accum=1/2] loss=1.8692 det=0.0016 act=5.0236 psr=0.2330 pose=0.0613
+2026-07-10 13:20:40,534 [INFO]   [batch   100/39195 accum=1/2] loss=1.7767 det=0.0019 act=5.3417 psr=0.2711 pose=0.0319
+2026-07-10 13:21:10,160 [INFO]   [batch   200/39195 accum=1/2] loss=7.0297 det=0.0014 act=5.0453 psr=0.2834 pose=0.8396
+2026-07-10 13:21:39,468 [INFO]   [batch   300/39195 accum=1/2] loss=1.4518 det=0.0014 act=-0.0000 psr=0.1855 pose=0.0889
+2026-07-10 13:22:09,053 [INFO]   [batch   400/39195 accum=1/2] loss=1.4477 det=0.0012 act=4.4587 psr=0.1726 pose=0.0354
+2026-07-10 13:22:38,737 [INFO]   [batch   500/39195 accum=1/2] loss=1.8405 det=0.0011 act=4.2957 psr=0.1833 pose=0.0953
+2026-07-10 13:23:07,786 [INFO]   [batch   600/39195 accum=1/2] loss=1.6082 det=0.0013 act=4.2140 psr=0.2469 pose=0.0269
+2026-07-10 13:23:37,151 [INFO]   [batch   700/39195 accum=1/2] loss=6.9896 det=4.5639 act=-0.0000 psr=0.1438 pose=0.0465
+2026-07-10 13:24:06,481 [INFO]   [batch   800/39195 accum=1/2] loss=6.7439 det=3.8586 act=5.9943 psr=0.2060 pose=0.0258
+2026-07-10 13:24:35,834 [INFO]   [batch   900/39195 accum=1/2] loss=7.1769 det=4.2777 act=5.2055 psr=0.2404 pose=0.0227
+2026-07-10 13:25:05,289 [INFO]   [batch  1000/39195 accum=1/2] loss=1.9977 det=0.0013 act=5.7559 psr=0.1869 pose=0.0929
+2026-07-10 13:25:34,406 [INFO]   [batch  1100/39195 accum=1/2] loss=2.0396 det=0.0014 act=4.5670 psr=0.1799 pose=0.1191
+2026-07-10 13:26:03,548 [INFO]   [batch  1200/39195 accum=1/2] loss=2.0290 det=0.0017 act=4.7241 psr=0.1591 pose=0.1470
+2026-07-10 13:26:32,652 [INFO]   [batch  1300/39195 accum=1/2] loss=7.0860 det=4.6239 act=5.2242 psr=0.2304 pose=0.0295
+2026-07-10 13:27:01,828 [INFO]   [batch  1400/39195 accum=1/2] loss=1.6942 det=0.0014 act=4.5624 psr=0.2324 pose=0.0463
+2026-07-10 13:27:31,039 [INFO]   [batch  1500/39195 accum=1/2] loss=1.3870 det=0.0016 act=4.9958 psr=0.1459 pose=0.0337
+2026-07-10 13:28:00,171 [INFO]   [batch  1600/39195 accum=1/2] loss=2.6343 det=0.0012 act=4.5494 psr=0.2693 pose=0.1869
+2026-07-10 13:28:29,569 [INFO]   [batch  1700/39195 accum=1/2] loss=1.9098 det=0.0011 act=4.7033 psr=0.1914 pose=0.1000
+2026-07-10 13:28:58,816 [INFO]   [batch  1800/39195 accum=1/2] loss=1.9261 det=0.0012 act=4.3970 psr=0.2675 pose=0.0745
+2026-07-10 13:29:28,343 [INFO]   [batch  1900/39195 accum=1/2] loss=2.0668 det=0.0017 act=4.4708 psr=0.2193 pose=0.1166
+2026-07-10 13:29:57,315 [INFO]   [batch  2000/39195 accum=1/2] loss=7.2710 det=0.0014 act=4.5968 psr=0.2205 pose=0.9857
+2026-07-10 13:30:26,498 [INFO]   [batch  2100/39195 accum=1/2] loss=1.5910 det=0.0012 act=4.4371 psr=0.2269 pose=0.0288
+2026-07-10 13:30:55,936 [INFO]   [batch  2200/39195 accum=1/2] loss=11.0024 det=0.0012 act=4.5678 psr=0.2102 pose=1.5455
+2026-07-10 13:31:25,070 [INFO]   [batch  2300/39195 accum=1/2] loss=1.4302 det=0.0012 act=4.4278 psr=0.2098 pose=0.0100
+2026-07-10 13:31:54,453 [INFO]   [batch  2400/39195 accum=1/2] loss=7.4344 det=4.4191 act=5.1677 psr=0.2133 pose=0.0353
+2026-07-10 13:32:23,739 [INFO]   [batch  2500/39195 accum=1/2] loss=6.0253 det=3.4694 act=4.9514 psr=0.2182 pose=0.0240
+2026-07-10 13:32:52,819 [INFO]   [batch  2600/39195 accum=1/2] loss=1.5386 det=0.0016 act=4.3862 psr=0.2538 pose=0.0085
+2026-07-10 13:33:22,181 [INFO]   [batch  2700/39195 accum=1/2] loss=4.3521 det=0.0013 act=4.6362 psr=0.2182 pose=0.5050
+2026-07-10 13:33:51,886 [INFO]   [batch  2800/39195 accum=1/2] loss=1.4316 det=0.0012 act=5.0616 psr=0.1752 pose=0.0208
+2026-07-10 13:34:22,167 [INFO]   [batch  2900/39195 accum=1/2] loss=1.6396 det=0.0013 act=4.4234 psr=0.2309 pose=0.0320
+2026-07-10 13:34:52,308 [INFO]   [batch  3000/39195 accum=1/2] loss=1.7298 det=0.0014 act=4.5083 psr=0.2403 pose=0.0375
+2026-07-10 13:35:22,689 [INFO]   [batch  3100/39195 accum=1/2] loss=1.3645 det=0.0014 act=4.7120 psr=0.1702 pose=0.0124
+2026-07-10 13:35:52,403 [INFO]   [batch  3200/39195 accum=1/2] loss=1.2897 det=0.0012 act=4.5398 psr=0.1599 pose=0.0102
+2026-07-10 13:36:22,001 [INFO]   [batch  3300/39195 accum=1/2] loss=1.5022 det=0.0012 act=5.0151 psr=0.2273 pose=0.0079
+2026-07-10 13:36:51,450 [INFO]   [batch  3400/39195 accum=1/2] loss=6.1415 det=4.1787 act=4.5199 psr=0.2432 pose=0.0584
+2026-07-10 13:37:20,904 [INFO]   [batch  3500/39195 accum=1/2] loss=1.5433 det=0.0013 act=6.4013 psr=0.2002 pose=0.0098
+2026-07-10 13:37:50,136 [INFO]   [batch  3600/39195 accum=1/2] loss=3.2120 det=0.0014 act=4.5444 psr=0.1611 pose=0.4740
+2026-07-10 13:38:19,280 [INFO]   [batch  3700/39195 accum=1/2] loss=1.6359 det=0.0012 act=4.4443 psr=0.2739 pose=0.0169
+2026-07-10 13:38:48,760 [INFO]   [batch  3800/39195 accum=1/2] loss=1.8722 det=0.0011 act=6.0300 psr=0.1815 pose=0.0890
+2026-07-10 13:39:18,053 [INFO]   [batch  3900/39195 accum=1/2] loss=6.0279 det=3.9496 act=4.5096 psr=0.2273 pose=0.0419
+2026-07-10 13:39:47,186 [INFO]   [batch  4000/39195 accum=1/2] loss=1.6238 det=0.0013 act=5.6360 psr=0.2227 pose=0.0171
+2026-07-10 13:40:16,227 [INFO]   [batch  4100/39195 accum=1/2] loss=10.8149 det=0.0012 act=4.3252 psr=0.2005 pose=1.5918
+2026-07-10 13:40:45,589 [INFO]   [batch  4200/39195 accum=1/2] loss=9.0067 det=4.2522 act=5.0234 psr=0.2291 pose=0.3037
+2026-07-10 13:41:15,092 [INFO]   [batch  4300/39195 accum=1/2] loss=1.5842 det=0.0014 act=4.5346 psr=0.2248 pose=0.0352
+2026-07-10 13:41:44,511 [INFO]   [batch  4400/39195 accum=1/2] loss=1.6660 det=0.0014 act=4.4717 psr=0.2393 pose=0.0331
+2026-07-10 13:42:13,888 [INFO]   [batch  4500/39195 accum=1/2] loss=1.4482 det=0.0012 act=4.3962 psr=0.2144 pose=0.0142
+2026-07-10 13:42:43,077 [INFO]   [batch  4600/39195 accum=1/2] loss=11.7109 det=0.0012 act=4.7685 psr=0.2769 pose=1.5716
+2026-07-10 13:43:12,775 [INFO]   [batch  4700/39195 accum=1/2] loss=1.7448 det=0.0012 act=4.5260 psr=0.2347 pose=0.0434
+2026-07-10 13:43:42,187 [INFO]   [batch  4800/39195 accum=1/2] loss=1.5224 det=0.0018 act=4.5672 psr=0.2390 pose=0.0117
+2026-07-10 13:44:11,320 [INFO]   [batch  4900/39195 accum=1/2] loss=1.7930 det=0.0011 act=4.6482 psr=0.2446 pose=0.0585
+2026-07-10 13:44:40,478 [INFO]   [batch  5000/39195 accum=1/2] loss=5.4710 det=0.0016 act=4.6172 psr=0.2280 pose=0.8417
+2026-07-10 13:45:09,661 [INFO]   [batch  5100/39195 accum=1/2] loss=1.5036 det=0.0011 act=5.5830 psr=0.1933 pose=0.0166
+2026-07-10 13:45:38,765 [INFO]   [batch  5200/39195 accum=1/2] loss=5.5473 det=0.0014 act=4.5889 psr=0.2309 pose=0.9179
+2026-07-10 13:46:08,058 [INFO]   [batch  5300/39195 accum=1/2] loss=1.5245 det=0.0016 act=4.2379 psr=0.1921 pose=0.0361
+2026-07-10 13:46:37,069 [INFO]   [batch  5400/39195 accum=1/2] loss=6.6961 det=4.0538 act=4.9412 psr=0.2061 pose=0.0148
+2026-07-10 13:47:06,728 [INFO]   [batch  5500/39195 accum=1/2] loss=1.4493 det=0.0016 act=4.2105 psr=0.1953 pose=0.0216
+2026-07-10 13:47:35,753 [INFO]   [batch  5600/39195 accum=1/2] loss=1.5090 det=0.0015 act=4.2124 psr=0.2165 pose=0.0230
+2026-07-10 13:48:04,933 [INFO]   [batch  5700/39195 accum=1/2] loss=6.9129 det=4.6452 act=4.3629 psr=0.2405 pose=0.0195
+2026-07-10 13:48:34,030 [INFO]   [batch  5800/39195 accum=1/2] loss=1.8165 det=0.0013 act=7.8853 psr=0.2267 pose=0.0270
+2026-07-10 13:49:03,723 [INFO]   [batch  5900/39195 accum=1/2] loss=7.2466 det=4.8410 act=4.9541 psr=0.2070 pose=0.0595
+2026-07-10 13:49:33,070 [INFO]   [batch  6000/39195 accum=1/2] loss=1.5689 det=0.0015 act=5.0133 psr=0.2065 pose=0.0286
+2026-07-10 13:50:02,538 [INFO]   [batch  6100/39195 accum=1/2] loss=8.9093 det=0.0012 act=4.2806 psr=0.2908 pose=1.5302
+2026-07-10 13:50:31,757 [INFO]   [batch  6200/39195 accum=1/2] loss=9.1466 det=0.0011 act=4.3579 psr=0.2052 pose=1.5500
+2026-07-10 13:51:01,211 [INFO]   [batch  6300/39195 accum=1/2] loss=11.1952 det=0.0014 act=4.0760 psr=0.2151 pose=1.5076
+2026-07-10 13:51:30,483 [INFO]   [batch  6400/39195 accum=1/2] loss=1.6136 det=0.0013 act=5.3463 psr=0.2436 pose=0.0130
+2026-07-10 13:52:00,085 [INFO]   [batch  6500/39195 accum=1/2] loss=16.1989 det=4.4778 act=4.3163 psr=0.1802 pose=1.6789
+2026-07-10 13:52:29,242 [INFO]   [batch  6600/39195 accum=1/2] loss=7.0767 det=4.2612 act=4.6653 psr=0.2136 pose=0.0844
+2026-07-10 13:52:58,519 [INFO]   [batch  6700/39195 accum=1/2] loss=7.0311 det=0.0015 act=4.9605 psr=0.2455 pose=1.1008
+2026-07-10 13:53:27,828 [INFO]   [batch  6800/39195 accum=1/2] loss=1.6284 det=0.0013 act=4.5880 psr=0.2666 pose=0.0155
+2026-07-10 13:53:56,838 [INFO]   [batch  6900/39195 accum=1/2] loss=9.2157 det=4.0833 act=-0.0000 psr=0.1913 pose=0.3810
+2026-07-10 13:54:26,033 [INFO]   [batch  7000/39195 accum=1/2] loss=5.8545 det=3.6848 act=-0.0000 psr=0.2632 pose=0.0245
+2026-07-10 13:54:55,093 [INFO]   [batch  7100/39195 accum=1/2] loss=2.1970 det=0.0015 act=4.6165 psr=0.2255 pose=0.1141
+2026-07-10 13:55:24,206 [INFO]   [batch  7200/39195 accum=1/2] loss=1.6521 det=0.0012 act=4.1549 psr=0.2414 pose=0.0348
+2026-07-10 13:55:53,830 [INFO]   [batch  7300/39195 accum=1/2] loss=1.6748 det=0.0011 act=4.6107 psr=0.1993 pose=0.0571
+2026-07-10 13:56:23,121 [INFO]   [batch  7400/39195 accum=1/2] loss=1.8108 det=0.0012 act=4.4836 psr=0.2163 pose=0.0886
+2026-07-10 13:56:52,259 [INFO]   [batch  7500/39195 accum=1/2] loss=1.5602 det=0.0011 act=4.5443 psr=0.2174 pose=0.0275
+2026-07-10 13:57:21,588 [INFO]   [batch  7600/39195 accum=1/2] loss=1.5277 det=0.0014 act=4.5552 psr=0.2319 pose=0.0147
+2026-07-10 13:57:50,667 [INFO]   [batch  7700/39195 accum=1/2] loss=1.7308 det=0.0015 act=4.6519 psr=0.2922 pose=0.0209
+2026-07-10 13:58:20,024 [INFO]   [batch  7800/39195 accum=1/2] loss=1.5445 det=0.0011 act=4.5633 psr=0.2176 pose=0.0280
+2026-07-10 13:58:49,411 [INFO]   [batch  7900/39195 accum=1/2] loss=1.5423 det=0.0015 act=4.3142 psr=0.2021 pose=0.0452
+2026-07-10 13:59:18,687 [INFO] Epoch   8/100 | loss=4.1094 det=1.1211 act=4.6927 psr=0.2173 pose=0.2475 | lv=[-0.31,3.13,0.95,-0.49] | lr=9.99e-05 | 2347.9s
+2026-07-10 13:59:18,687 [INFO]   PSR comp: [0.4996 0.6101 0.7525 0.6890 0.6947 0.7183 0.6878 0.7155 0.6840 0.7007 0.6730]
+2026-07-10 13:59:19,398 [INFO]   Quick: act_preds=1uniq/0.13maxconf | psr_stdmax=0.1071 | det_lvls=['P5', 'P4', 'P3']
+2026-07-10 13:59:19,687 [INFO]   [batch     0/39195 accum=1/2] loss=1.7635 det=0.0013 act=4.2568 psr=0.2367 pose=0.0649
+2026-07-10 13:59:48,706 [INFO]   [batch   100/39195 accum=1/2] loss=1.8208 det=0.0015 act=7.5073 psr=0.1795 pose=0.0561
+2026-07-10 14:00:17,768 [INFO]   [batch   200/39195 accum=1/2] loss=1.7152 det=0.0012 act=4.4751 psr=0.3005 pose=0.0127
+2026-07-10 14:00:47,003 [INFO]   [batch   300/39195 accum=1/2] loss=6.9447 det=4.5555 act=4.5198 psr=0.2027 pose=0.0573
+2026-07-10 14:01:16,381 [INFO]   [batch   400/39195 accum=1/2] loss=1.5745 det=0.0015 act=4.7022 psr=0.2510 pose=0.0137
+2026-07-10 14:01:45,447 [INFO]   [batch   500/39195 accum=1/2] loss=11.8442 det=4.4327 act=4.6989 psr=0.1942 pose=0.7315
+2026-07-10 14:02:14,734 [INFO]   [batch   600/39195 accum=1/2] loss=1.6237 det=0.0012 act=4.6340 psr=0.2072 pose=0.0434
+2026-07-10 14:02:44,110 [INFO]   [batch   700/39195 accum=1/2] loss=1.6545 det=0.0013 act=4.6369 psr=0.2392 pose=0.0354
+2026-07-10 14:03:13,887 [INFO]   [batch   800/39195 accum=1/2] loss=1.6986 det=0.0017 act=5.3774 psr=0.1672 pose=0.0597
+2026-07-10 14:03:42,989 [INFO]   [batch   900/39195 accum=1/2] loss=1.7416 det=0.0019 act=4.8867 psr=0.2156 pose=0.0541
+2026-07-10 14:04:12,008 [INFO]   [batch  1000/39195 accum=1/2] loss=1.3249 det=0.0016 act=4.3919 psr=0.1746 pose=0.0109
+2026-07-10 14:04:41,341 [INFO]   [batch  1100/39195 accum=1/2] loss=1.7633 det=0.0011 act=4.8527 psr=0.2506 pose=0.0389
+2026-07-10 14:05:10,747 [INFO]   [batch  1200/39195 accum=1/2] loss=7.0064 det=4.4964 act=5.0082 psr=0.2041 pose=0.0182
+2026-07-10 14:05:39,854 [INFO]   [batch  1300/39195 accum=1/2] loss=1.7149 det=0.0012 act=5.4676 psr=0.1566 pose=0.0605
+2026-07-10 14:06:09,328 [INFO]   [batch  1400/39195 accum=1/2] loss=1.6079 det=0.0015 act=4.5202 psr=0.1754 pose=0.0551
+2026-07-10 14:06:38,661 [INFO]   [batch  1500/39195 accum=1/2] loss=1.8397 det=0.0014 act=4.4136 psr=0.2397 pose=0.0637
+2026-07-10 14:07:08,021 [INFO]   [batch  1600/39195 accum=1/2] loss=2.3390 det=0.0018 act=4.3191 psr=0.3109 pose=0.1234
+2026-07-10 14:07:37,354 [INFO]   [batch  1700/39195 accum=1/2] loss=1.4568 det=0.0013 act=4.5928 psr=0.1573 pose=0.0374
+2026-07-10 14:08:06,577 [INFO]   [batch  1800/39195 accum=1/2] loss=6.0490 det=0.0015 act=4.3797 psr=0.2450 pose=0.8587
+2026-07-10 14:08:36,034 [INFO]   [batch  1900/39195 accum=1/2] loss=1.8354 det=0.0013 act=4.6139 psr=0.2166 pose=0.0663
+2026-07-10 14:09:05,317 [INFO]   [batch  2000/39195 accum=1/2] loss=2.1492 det=0.0011 act=4.8894 psr=0.2081 pose=0.1060
+2026-07-10 14:09:34,462 [INFO]   [batch  2100/39195 accum=1/2] loss=6.6663 det=3.9382 act=4.4588 psr=0.2634 pose=0.0896
+2026-07-10 14:10:03,715 [INFO]   [batch  2200/39195 accum=1/2] loss=1.7027 det=0.0013 act=5.3575 psr=0.2558 pose=0.0233
+2026-07-10 14:10:32,910 [INFO]   [batch  2300/39195 accum=1/2] loss=9.0316 det=0.0011 act=4.6248 psr=0.2795 pose=1.5207
+2026-07-10 14:11:02,334 [INFO]   [batch  2400/39195 accum=1/2] loss=2.4571 det=0.0019 act=4.2553 psr=0.1783 pose=0.2346
+2026-07-10 14:11:32,712 [INFO]   [batch  2500/39195 accum=1/2] loss=1.6632 det=0.0014 act=4.7129 psr=0.2357 pose=0.0313
+2026-07-10 14:12:02,081 [INFO]   [batch  2600/39195 accum=1/2] loss=1.8865 det=0.0016 act=4.3884 psr=0.2390 pose=0.0622
+2026-07-10 14:12:31,821 [INFO]   [batch  2700/39195 accum=1/2] loss=1.5327 det=0.0011 act=4.3137 psr=0.2215 pose=0.0151
+2026-07-10 14:13:01,575 [INFO]   [batch  2800/39195 accum=1/2] loss=1.7735 det=0.0015 act=4.6834 psr=0.2393 pose=0.0404
+2026-07-10 14:13:31,732 [INFO]   [batch  2900/39195 accum=1/2] loss=2.1851 det=0.0015 act=4.5925 psr=0.1704 pose=0.1420
+2026-07-10 14:14:02,020 [INFO]   [batch  3000/39195 accum=1/2] loss=5.8844 det=0.0016 act=5.3481 psr=0.1725 pose=0.8765
+2026-07-10 14:14:31,937 [INFO]   [batch  3100/39195 accum=1/2] loss=10.0348 det=0.0018 act=4.3815 psr=0.2226 pose=1.6565
+2026-07-10 14:15:01,143 [INFO]   [batch  3200/39195 accum=1/2] loss=6.1340 det=4.4567 act=4.7786 psr=0.1529 pose=0.0405
+2026-07-10 14:15:30,654 [INFO]   [batch  3300/39195 accum=1/2] loss=3.2605 det=0.0019 act=4.8984 psr=0.2388 pose=0.3386
+2026-07-10 14:16:00,431 [INFO]   [batch  3400/39195 accum=1/2] loss=1.4611 det=0.0013 act=5.7163 psr=0.1753 pose=0.0183
+2026-07-10 14:16:30,673 [INFO]   [batch  3500/39195 accum=1/2] loss=5.6249 det=3.5343 act=4.5576 psr=0.1945 pose=0.0277
+2026-07-10 14:17:00,335 [INFO]   [batch  3600/39195 accum=1/2] loss=2.3479 det=0.0014 act=4.4179 psr=0.2456 pose=0.1811
+2026-07-10 14:17:30,930 [INFO]   [batch  3700/39195 accum=1/2] loss=1.6053 det=0.0012 act=4.3319 psr=0.2538 pose=0.0173
+2026-07-10 14:18:01,274 [INFO]   [batch  3800/39195 accum=1/2] loss=6.3511 det=3.6881 act=6.1971 psr=0.2354 pose=0.0394
+2026-07-10 14:18:30,965 [INFO]   [batch  3900/39195 accum=1/2] loss=14.9872 det=3.9831 act=3.9735 psr=0.2503 pose=1.5299
+2026-07-10 14:19:00,277 [INFO]   [batch  4000/39195 accum=1/2] loss=1.5498 det=0.0013 act=4.7164 psr=0.2221 pose=0.0205
+2026-07-10 14:19:29,951 [INFO]   [batch  4100/39195 accum=1/2] loss=6.2453 det=3.7274 act=6.9282 psr=0.2461 pose=0.0449
+2026-07-10 14:19:59,913 [INFO]   [batch  4200/39195 accum=1/2] loss=2.0304 det=0.0042 act=5.1261 psr=0.2188 pose=0.1084
+2026-07-10 14:20:29,304 [INFO]   [batch  4300/39195 accum=1/2] loss=3.6937 det=0.0014 act=4.8559 psr=0.2056 pose=0.4455
+2026-07-10 14:20:59,610 [INFO]   [batch  4400/39195 accum=1/2] loss=1.6278 det=0.0014 act=4.7365 psr=0.1917 pose=0.0549
+2026-07-10 14:21:29,945 [INFO]   [batch  4500/39195 accum=1/2] loss=1.8899 det=0.0014 act=4.9089 psr=0.2336 pose=0.0734
+2026-07-10 14:22:00,382 [INFO]   [batch  4600/39195 accum=1/2] loss=1.4198 det=0.0012 act=4.4836 psr=0.1778 pose=0.0206
+2026-07-10 14:22:31,448 [INFO]   [batch  4700/39195 accum=1/2] loss=1.5856 det=0.0018 act=4.9035 psr=0.1937 pose=0.0436
+2026-07-10 14:23:01,483 [INFO]   [batch  4800/39195 accum=1/2] loss=10.3564 det=3.9978 act=5.0765 psr=0.2372 pose=0.7578
+2026-07-10 14:23:31,571 [INFO]   [batch  4900/39195 accum=1/2] loss=2.0134 det=0.0022 act=5.5761 psr=0.2633 pose=0.0893
+2026-07-10 14:24:01,947 [INFO]   [batch  5000/39195 accum=1/2] loss=1.7900 det=0.0010 act=4.5834 psr=0.2374 pose=0.0752
+2026-07-10 14:24:31,559 [INFO]   [batch  5100/39195 accum=1/2] loss=6.8524 det=0.0013 act=4.3237 psr=0.1859 pose=1.0731
+2026-07-10 14:25:01,237 [INFO]   [batch  5200/39195 accum=1/2] loss=1.7568 det=0.0014 act=4.4220 psr=0.2193 pose=0.0675
+2026-07-10 14:25:30,773 [INFO]   [batch  5300/39195 accum=1/2] loss=1.9193 det=0.0011 act=8.4528 psr=0.2165 pose=0.0405
+2026-07-10 14:26:00,790 [INFO]   [batch  5400/39195 accum=1/2] loss=6.7918 det=4.8058 act=4.8642 psr=0.1567 pose=0.0183
+2026-07-10 14:26:31,055 [INFO]   [batch  5500/39195 accum=1/2] loss=6.4083 det=4.6636 act=4.6329 psr=0.2137 pose=0.0219
+2026-07-10 14:27:00,884 [INFO]   [batch  5600/39195 accum=1/2] loss=1.4563 det=0.0015 act=4.6980 psr=0.1775 pose=0.0328
+2026-07-10 14:27:31,024 [INFO]   [batch  5700/39195 accum=1/2] loss=6.3534 det=4.0469 act=4.2740 psr=0.2421 pose=0.0784
+2026-07-10 14:28:01,497 [INFO]   [batch  5800/39195 accum=1/2] loss=9.0419 det=0.0010 act=4.4509 psr=0.1637 pose=1.4733
+2026-07-10 14:28:31,496 [INFO]   [batch  5900/39195 accum=1/2] loss=9.3177 det=0.0012 act=3.9699 psr=0.2227 pose=1.6050
+2026-07-10 14:29:01,677 [INFO]   [batch  6000/39195 accum=1/2] loss=1.8803 det=0.0013 act=6.1429 psr=0.2704 pose=0.0372
+2026-07-10 14:29:32,298 [INFO]   [batch  6100/39195 accum=1/2] loss=9.2987 det=5.4040 act=4.3625 psr=0.2048 pose=0.0323
+2026-07-10 14:30:02,972 [INFO]   [batch  6200/39195 accum=1/2] loss=10.4631 det=0.0011 act=4.7536 psr=0.1947 pose=1.5689
+2026-07-10 14:30:33,738 [INFO]   [batch  6300/39195 accum=1/2] loss=6.7174 det=3.6633 act=4.2286 psr=0.2421 pose=0.0104
+2026-07-10 14:31:05,636 [INFO]   [batch  6400/39195 accum=1/2] loss=2.0674 det=0.0015 act=4.2841 psr=0.2126 pose=0.1340
+2026-07-10 14:31:37,157 [INFO]   [batch  6500/39195 accum=1/2] loss=7.6805 det=0.0013 act=4.0910 psr=0.2416 pose=1.0832
+2026-07-10 14:32:08,195 [INFO]   [batch  6600/39195 accum=1/2] loss=1.5783 det=0.0015 act=4.3617 psr=0.1994 pose=0.0440
+2026-07-10 14:32:39,173 [INFO]   [batch  6700/39195 accum=1/2] loss=1.5068 det=0.0020 act=4.6417 psr=0.1478 pose=0.0560
+2026-07-10 14:33:11,095 [INFO]   [batch  6800/39195 accum=1/2] loss=6.9914 det=4.8098 act=4.6824 psr=0.2186 pose=0.0275
+2026-07-10 14:33:42,322 [INFO]   [batch  6900/39195 accum=1/2] loss=1.2995 det=0.0013 act=4.4599 psr=0.1384 pose=0.0184
+2026-07-10 14:34:12,971 [INFO]   [batch  7000/39195 accum=1/2] loss=1.3625 det=0.0020 act=4.3223 psr=0.1820 pose=0.0130
+2026-07-10 14:34:43,073 [INFO]   [batch  7100/39195 accum=1/2] loss=1.5390 det=0.0012 act=4.4225 psr=0.2237 pose=0.0248
+2026-07-10 14:35:15,074 [INFO]   [batch  7200/39195 accum=1/2] loss=1.6335 det=0.0014 act=6.0406 psr=0.2001 pose=0.0248
+2026-07-10 14:35:46,845 [INFO]   [batch  7300/39195 accum=1/2] loss=1.6194 det=0.0012 act=4.5834 psr=0.1887 pose=0.0669
+2026-07-10 14:36:19,297 [INFO]   [batch  7400/39195 accum=1/2] loss=1.6535 det=0.0018 act=5.3198 psr=0.1994 pose=0.0447
+2026-07-10 14:36:52,076 [INFO]   [batch  7500/39195 accum=1/2] loss=2.0711 det=0.0010 act=4.6268 psr=0.1970 pose=0.1147
+2026-07-10 14:37:25,413 [INFO]   [batch  7600/39195 accum=1/2] loss=2.1754 det=0.0012 act=4.5570 psr=0.2400 pose=0.1262
+2026-07-10 14:37:59,002 [INFO]   [batch  7700/39195 accum=1/2] loss=1.6443 det=0.0013 act=4.8808 psr=0.2571 pose=0.0171
+2026-07-10 14:38:30,926 [INFO]   [batch  7800/39195 accum=1/2] loss=7.7139 det=0.0013 act=4.4060 psr=0.2131 pose=1.5614
+2026-07-10 14:39:04,089 [INFO]   [batch  7900/39195 accum=1/2] loss=2.1331 det=0.0013 act=4.4171 psr=0.2174 pose=0.1607
+2026-07-10 14:39:37,365 [INFO] Epoch   9/100 | loss=4.0987 det=1.1322 act=4.7179 psr=0.2152 pose=0.2502 | lv=[-0.31,3.13,0.95,-0.49] | lr=9.98e-05 | 2418.0s
+2026-07-10 14:39:37,365 [INFO]   PSR comp: [0.5041 0.6113 0.7475 0.6909 0.6894 0.7159 0.6883 0.7118 0.6862 0.7000 0.6712]
+2026-07-10 14:39:38,067 [INFO]   Quick: act_preds=1uniq/0.13maxconf | psr_stdmax=0.0951 | det_lvls=['P5', 'P4', 'P3']
+2026-07-10 14:39:38,361 [INFO]   [batch     0/39195 accum=1/2] loss=1.8563 det=0.0014 act=6.2198 psr=0.2935 pose=0.0213
+2026-07-10 14:40:09,873 [INFO]   [batch   100/39195 accum=1/2] loss=1.9092 det=0.0021 act=4.4431 psr=0.2239 pose=0.0876
+2026-07-10 14:40:42,493 [INFO]   [batch   200/39195 accum=1/2] loss=8.8937 det=4.7090 act=5.2510 psr=0.1796 pose=0.3373
+2026-07-10 14:41:16,587 [INFO]   [batch   300/39195 accum=1/2] loss=9.8153 det=0.0013 act=5.1622 psr=0.2080 pose=1.5873
+2026-07-10 14:41:52,284 [INFO]   [batch   400/39195 accum=1/2] loss=1.5202 det=0.0014 act=5.8480 psr=0.1859 pose=0.0174
+2026-07-10 14:42:32,507 [INFO]   [batch   500/39195 accum=1/2] loss=1.5249 det=0.0012 act=4.9552 psr=0.2230 pose=0.0109
+2026-07-10 14:43:32,395 [INFO]   [batch   600/39195 accum=1/2] loss=9.1741 det=4.9305 act=4.5553 psr=0.2009 pose=0.2205
+2026-07-10 14:44:31,572 [INFO]   [batch   700/39195 accum=1/2] loss=1.4901 det=0.0016 act=4.4762 psr=0.2033 pose=0.0270
+2026-07-10 14:45:32,351 [INFO]   [batch   800/39195 accum=1/2] loss=1.5122 det=0.0013 act=4.8143 psr=0.2180 pose=0.0164
+2026-07-10 14:46:29,915 [INFO]   [batch   900/39195 accum=1/2] loss=1.4645 det=0.0013 act=4.1970 psr=0.2150 pose=0.0143
+2026-07-10 14:47:23,348 [INFO]   [batch  1000/39195 accum=1/2] loss=5.8398 det=3.8851 act=4.5151 psr=0.2514 pose=0.0496
+2026-07-10 14:48:11,449 [INFO]   [batch  1100/39195 accum=1/2] loss=1.0724 det=0.0013 act=-0.0000 psr=0.2109 pose=0.0095
+2026-07-10 14:49:00,728 [INFO]   [batch  1200/39195 accum=1/2] loss=1.6852 det=0.0017 act=4.3520 psr=0.2851 pose=0.0240
+2026-07-10 14:49:44,112 [INFO]   [batch  1300/39195 accum=1/2] loss=1.4859 det=0.0012 act=4.3107 psr=0.2239 pose=0.0148
+2026-07-10 14:50:26,234 [INFO]   [batch  1400/39195 accum=1/2] loss=1.7478 det=0.0011 act=4.4473 psr=0.2453 pose=0.0432
+2026-07-10 14:51:07,159 [INFO]   [batch  1500/39195 accum=1/2] loss=2.5901 det=0.0020 act=4.5960 psr=0.1951 pose=0.2235
+2026-07-10 14:51:50,720 [INFO]   [batch  1600/39195 accum=1/2] loss=1.6760 det=0.0014 act=4.3341 psr=0.1567 pose=0.1039
+2026-07-10 14:52:35,222 [INFO]   [batch  1700/39195 accum=1/2] loss=1.4957 det=0.0021 act=5.6738 psr=0.1967 pose=0.0116
+2026-07-10 14:53:20,338 [INFO]   [batch  1800/39195 accum=1/2] loss=2.7362 det=0.0013 act=4.9377 psr=0.1798 pose=0.2223
+2026-07-10 14:53:53,415 [INFO]   [batch  1900/39195 accum=1/2] loss=1.6753 det=0.0011 act=4.4268 psr=0.2410 pose=0.0295
+2026-07-10 14:54:25,970 [INFO]   [batch  2000/39195 accum=1/2] loss=2.5968 det=0.0018 act=4.6993 psr=0.1791 pose=0.2523
+2026-07-10 14:54:57,917 [INFO]   [batch  2100/39195 accum=1/2] loss=1.7919 det=0.0014 act=5.0636 psr=0.2134 pose=0.0629
+2026-07-10 14:55:30,060 [INFO]   [batch  2200/39195 accum=1/2] loss=10.6665 det=4.7061 act=4.2077 psr=0.1687 pose=0.6614
+2026-07-10 14:56:02,232 [INFO]   [batch  2300/39195 accum=1/2] loss=2.2951 det=0.0019 act=5.4306 psr=0.2604 pose=0.1484
+2026-07-10 14:56:34,637 [INFO]   [batch  2400/39195 accum=1/2] loss=1.9160 det=0.0014 act=5.2356 psr=0.1643 pose=0.0982
+2026-07-10 14:57:06,693 [INFO]   [batch  2500/39195 accum=1/2] loss=1.4982 det=0.0012 act=4.7884 psr=0.2301 pose=0.0041
+2026-07-10 14:57:38,130 [INFO]   [batch  2600/39195 accum=1/2] loss=1.6325 det=0.0011 act=4.4541 psr=0.2385 pose=0.0387
+2026-07-10 14:58:09,442 [INFO]   [batch  2700/39195 accum=1/2] loss=2.6847 det=0.0013 act=4.4967 psr=0.1795 pose=0.2706
+2026-07-10 14:58:40,977 [INFO]   [batch  2800/39195 accum=1/2] loss=1.3899 det=0.0012 act=4.2849 psr=0.1584 pose=0.0341
+2026-07-10 14:59:12,324 [INFO]   [batch  2900/39195 accum=1/2] loss=9.6087 det=4.4262 act=4.4414 psr=0.2025 pose=0.8756
+2026-07-10 14:59:43,836 [INFO]   [batch  3000/39195 accum=1/2] loss=2.2731 det=0.0017 act=4.8817 psr=0.2578 pose=0.1309
+2026-07-10 15:00:15,422 [INFO]   [batch  3100/39195 accum=1/2] loss=2.5588 det=0.0012 act=4.9908 psr=0.1704 pose=0.2396
+2026-07-10 15:00:47,835 [INFO]   [batch  3200/39195 accum=1/2] loss=13.6685 det=4.4345 act=6.6074 psr=0.2016 pose=1.5332
+2026-07-10 15:01:19,544 [INFO]   [batch  3300/39195 accum=1/2] loss=6.9870 det=4.5559 act=4.3462 psr=0.2512 pose=0.1217
+2026-07-10 15:01:52,065 [INFO]   [batch  3400/39195 accum=1/2] loss=5.5299 det=3.6003 act=4.6485 psr=0.1977 pose=0.0166
+2026-07-10 15:02:23,208 [INFO]   [batch  3500/39195 accum=1/2] loss=8.7655 det=0.0011 act=6.8173 psr=0.1826 pose=1.3593
+2026-07-10 15:02:56,052 [INFO]   [batch  3600/39195 accum=1/2] loss=2.2395 det=0.0013 act=4.8350 psr=0.1869 pose=0.2111
+2026-07-10 15:03:27,653 [INFO]   [batch  3700/39195 accum=1/2] loss=1.6438 det=0.0013 act=4.4954 psr=0.1912 pose=0.0671
+2026-07-10 15:03:58,411 [INFO]   [batch  3800/39195 accum=1/2] loss=5.8252 det=0.0013 act=4.6253 psr=0.2510 pose=0.9820
+2026-07-10 15:04:29,083 [INFO]   [batch  3900/39195 accum=1/2] loss=1.6826 det=0.0014 act=4.3691 psr=0.1793 pose=0.0862
+2026-07-10 15:05:00,287 [INFO]   [batch  4000/39195 accum=1/2] loss=2.2946 det=0.0017 act=4.6278 psr=0.2296 pose=0.1532
+2026-07-10 15:05:31,512 [INFO]   [batch  4100/39195 accum=1/2] loss=1.5069 det=0.0016 act=4.3876 psr=0.1760 pose=0.0453
+2026-07-10 15:06:03,403 [INFO]   [batch  4200/39195 accum=1/2] loss=12.9087 det=3.8213 act=4.4241 psr=0.1791 pose=1.1211
+2026-07-10 15:06:35,202 [INFO]   [batch  4300/39195 accum=1/2] loss=6.6076 det=3.8208 act=5.1424 psr=0.2311 pose=0.1142
+2026-07-10 15:07:05,945 [INFO]   [batch  4400/39195 accum=1/2] loss=1.7905 det=0.0011 act=4.3457 psr=0.2385 pose=0.0562
+2026-07-10 15:07:36,165 [INFO]   [batch  4500/39195 accum=1/2] loss=6.5221 det=3.8350 act=4.9451 psr=0.2099 pose=0.0348
+2026-07-10 15:08:06,545 [INFO]   [batch  4600/39195 accum=1/2] loss=7.1989 det=4.3781 act=4.5015 psr=0.1836 pose=0.0768
+2026-07-10 15:08:36,902 [INFO]   [batch  4700/39195 accum=1/2] loss=1.9903 det=0.0012 act=5.2429 psr=0.2743 pose=0.0697
+2026-07-10 15:09:08,070 [INFO]   [batch  4800/39195 accum=1/2] loss=1.7903 det=0.0013 act=4.3011 psr=0.2378 pose=0.0535
+2026-07-10 15:09:43,889 [INFO]   [batch  4900/39195 accum=1/2] loss=6.5193 det=4.5647 act=4.4780 psr=0.2174 pose=0.0477
+2026-07-10 15:10:15,586 [INFO]   [batch  5000/39195 accum=1/2] loss=5.7934 det=4.0112 act=4.7003 psr=0.2009 pose=0.0314
+2026-07-10 15:10:48,614 [INFO]   [batch  5100/39195 accum=1/2] loss=1.4260 det=0.0016 act=4.3146 psr=0.1901 pose=0.0204
+2026-07-10 15:11:29,716 [INFO]   [batch  5200/39195 accum=1/2] loss=1.6450 det=0.0012 act=4.9737 psr=0.2136 pose=0.0409
+2026-07-10 15:12:01,614 [INFO]   [batch  5300/39195 accum=1/2] loss=1.4563 det=0.0015 act=5.1974 psr=0.1876 pose=0.0155
+2026-07-10 15:12:34,218 [INFO]   [batch  5400/39195 accum=1/2] loss=4.0424 det=0.0015 act=5.5632 psr=0.2093 pose=0.6172
+2026-07-10 15:13:06,336 [INFO]   [batch  5500/39195 accum=1/2] loss=1.5680 det=0.0013 act=4.5613 psr=0.2364 pose=0.0173
+2026-07-10 15:13:37,051 [INFO]   [batch  5600/39195 accum=1/2] loss=3.1489 det=0.0015 act=4.4974 psr=0.1926 pose=0.3545
+2026-07-10 15:14:07,594 [INFO]   [batch  5700/39195 accum=1/2] loss=1.4787 det=0.0013 act=4.1154 psr=0.1760 pose=0.0463
+2026-07-10 15:14:39,657 [INFO]   [batch  5800/39195 accum=1/2] loss=6.9907 det=4.7717 act=4.5332 psr=0.2466 pose=0.0603
+2026-07-10 15:15:10,029 [INFO]   [batch  5900/39195 accum=1/2] loss=1.5468 det=0.0015 act=5.2246 psr=0.1943 pose=0.0270
+2026-07-10 15:15:40,741 [INFO]   [batch  6000/39195 accum=1/2] loss=10.5146 det=0.0016 act=6.4390 psr=0.2426 pose=1.7407
+2026-07-10 15:16:11,390 [INFO]   [batch  6100/39195 accum=1/2] loss=1.5212 det=0.0017 act=4.4164 psr=0.1827 pose=0.0399
+2026-07-10 15:16:42,216 [INFO]   [batch  6200/39195 accum=1/2] loss=7.6724 det=4.2401 act=4.7148 psr=0.1778 pose=0.0273
+2026-07-10 15:17:13,282 [INFO]   [batch  6300/39195 accum=1/2] loss=2.0632 det=0.0013 act=4.9614 psr=0.2072 pose=0.1423
+2026-07-10 15:17:43,400 [INFO]   [batch  6400/39195 accum=1/2] loss=5.9956 det=3.8148 act=4.4502 psr=0.2101 pose=0.1253
+2026-07-10 15:18:14,271 [INFO]   [batch  6500/39195 accum=1/2] loss=1.5044 det=0.0017 act=4.4918 psr=0.2213 pose=0.0177
+2026-07-10 15:18:45,324 [INFO]   [batch  6600/39195 accum=1/2] loss=12.2595 det=0.0014 act=4.0617 psr=0.2265 pose=2.5165
+2026-07-10 15:19:16,623 [INFO]   [batch  6700/39195 accum=1/2] loss=6.5559 det=4.2213 act=5.7423 psr=0.1855 pose=0.0072
+2026-07-10 15:19:47,519 [INFO]   [batch  6800/39195 accum=1/2] loss=2.3789 det=0.0017 act=6.3826 psr=0.2527 pose=0.1283
+2026-07-10 15:20:18,720 [INFO]   [batch  6900/39195 accum=1/2] loss=1.5305 det=0.0014 act=4.3915 psr=0.1808 pose=0.0390
+2026-07-10 15:20:49,558 [INFO]   [batch  7000/39195 accum=1/2] loss=1.6086 det=0.0012 act=4.6061 psr=0.2356 pose=0.0242
+2026-07-10 15:21:21,512 [INFO]   [batch  7100/39195 accum=1/2] loss=1.8187 det=0.0016 act=4.4850 psr=0.1963 pose=0.0746
+2026-07-10 15:21:53,488 [INFO]   [batch  7200/39195 accum=1/2] loss=5.2101 det=0.0016 act=6.2342 psr=0.1849 pose=0.7522
+2026-07-10 15:22:23,862 [INFO]   [batch  7300/39195 accum=1/2] loss=1.6770 det=0.0019 act=4.6576 psr=0.2091 pose=0.0578
+2026-07-10 15:22:54,702 [INFO]   [batch  7400/39195 accum=1/2] loss=1.8043 det=0.0013 act=4.2778 psr=0.3070 pose=0.0288
+2026-07-10 15:23:25,396 [INFO]   [batch  7500/39195 accum=1/2] loss=4.3800 det=0.0019 act=4.5106 psr=0.1791 pose=0.6082
+2026-07-10 15:23:57,178 [INFO]   [batch  7600/39195 accum=1/2] loss=1.6184 det=0.0012 act=5.2380 psr=0.2126 pose=0.0268
+2026-07-10 15:24:27,627 [INFO]   [batch  7700/39195 accum=1/2] loss=10.2601 det=4.3720 act=4.4538 psr=0.2085 pose=0.5611
+2026-07-10 15:24:59,055 [INFO]   [batch  7800/39195 accum=1/2] loss=1.4688 det=0.0014 act=5.6880 psr=0.1861 pose=0.0102
+2026-07-10 15:25:29,733 [INFO]   [batch  7900/39195 accum=1/2] loss=1.7115 det=0.0014 act=4.4956 psr=0.2333 pose=0.0485
+2026-07-10 15:26:00,305 [INFO] Epoch  10/100 | loss=4.1051 det=1.1529 act=4.7054 psr=0.2129 pose=0.2598 | lv=[-0.31,3.13,0.95,-0.49] | lr=9.96e-05 | 2782.2s
+2026-07-10 15:26:00,306 [INFO]   PSR comp: [0.5077 0.6098 0.7439 0.6883 0.6847 0.7165 0.6885 0.7106 0.6865 0.6999 0.6701]
+2026-07-10 15:26:02,051 [INFO] ============================================================
+2026-07-10 15:26:02,051 [INFO] Starting validation evaluation (epoch 10)
+2026-07-10 15:28:29,178 [INFO]   Eval batch 500
+2026-07-10 15:30:55,307 [INFO]   Eval batch 1000
+2026-07-10 15:33:27,695 [INFO]   Eval batch 1500
+2026-07-10 15:36:11,311 [INFO]   Eval batch 2000
+2026-07-10 15:38:49,412 [INFO]   Eval batch 2500
+2026-07-10 15:41:30,912 [INFO]   Eval batch 3000
+2026-07-10 15:44:14,219 [INFO]   Eval batch 3500
+2026-07-10 15:46:51,887 [INFO]   Eval batch 4000
+2026-07-10 15:49:26,553 [INFO]   Eval batch 4500
+2026-07-10 15:51:59,427 [INFO]   Eval batch 5000
+2026-07-10 15:54:31,649 [INFO]   Eval batch 5500
+2026-07-10 15:57:03,169 [INFO]   Eval batch 6000
+2026-07-10 15:59:34,190 [INFO]   Eval batch 6500
+2026-07-10 16:02:04,313 [INFO]   Eval batch 7000
+2026-07-10 16:04:32,459 [INFO]   Eval batch 7500
+2026-07-10 16:07:03,087 [INFO]   Eval batch 8000
+2026-07-10 16:09:33,894 [INFO]   Eval batch 8500
