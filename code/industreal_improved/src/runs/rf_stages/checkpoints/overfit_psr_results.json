@@ -1,0 +1,11 @@
+{
+  "head": "psr",
+  "n_clips": 50,
+  "steps": 51,
+  "final_loss": 1.97185709112091e-05,
+  "verdict": "PASS \u2014 PSR head CAN overfit + produces non-trivial predictions.",
+  "head_metrics": {
+    "mean_prob": 0.8772358846664429,
+    "frac_positive": 0.9090909361839294
+  }
+}

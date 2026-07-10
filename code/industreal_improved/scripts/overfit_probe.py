@@ -215,12 +215,17 @@ def run_overfit(args):
             psr_labels = targets.get("psr_labels")
             if psr_labels is None:
                 psr_labels = torch.zeros(images.size(0), 16, 11, device=device)
+            elif psr_labels.dim() == 2:  # [T, 11] → [1, T, 11]
+                psr_labels = psr_labels.unsqueeze(0)
             loss = psr_loss(outputs["psr_logits"], psr_labels, use_focal=True)
         elif args.head == "pose":
             hp = targets.get("head_pose")
             if hp is None:
                 continue
-            hp_6d = hp[:, hp.size(1) // 2, :6]
+            if hp.dim() == 2:  # [T, 9] → take middle frame
+                hp_6d = hp[hp.size(0) // 2, :6].unsqueeze(0)  # [1, 6]
+            else:
+                hp_6d = hp[:, hp.size(1) // 2, :6]
             loss = pose_loss(outputs["pose_6d"], hp_6d)
 
         loss.backward()
@@ -277,9 +282,12 @@ def run_overfit(args):
             elif args.head == "pose":
                 hp = sample.get("head_pose")
                 if hp is not None:
-                    hp = hp.to(device).unsqueeze(0)
+                    if hp.dim() == 2:
+                        hp_6d = hp[hp.size(0)//2, :6].unsqueeze(0).to(device)
+                    else:
+                        hp_6d = hp[:, hp.size(1)//2, :6].to(device)
                     fwd_p, up_p = renormalize_pose(outputs["pose_6d"])
-                    fwd_g = F.normalize(hp[:, hp.size(1)//2, :3], dim=1)
+                    fwd_g = F.normalize(hp_6d[:, :3], dim=1)
                     cos_f = (fwd_p * fwd_g).sum(dim=1).clamp(-1, 1)
                     head_metrics.setdefault("fwd_mae", [])
                     head_metrics["fwd_mae"].append(

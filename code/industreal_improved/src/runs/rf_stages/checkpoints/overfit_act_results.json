@@ -1,0 +1,11 @@
+{
+  "head": "act",
+  "n_clips": 50,
+  "steps": 200,
+  "final_loss": 0.4249808192253113,
+  "verdict": "FAIL \u2014 Activity head cannot overfit. Architecture or label-noise problem.",
+  "head_metrics": {
+    "correct": 8,
+    "total": 50
+  }
+}

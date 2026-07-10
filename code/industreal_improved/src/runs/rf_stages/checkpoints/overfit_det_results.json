@@ -1,0 +1,8 @@
+{
+  "head": "det",
+  "n_clips": 50,
+  "steps": 500,
+  "final_loss": 1.1440019607543945,
+  "verdict": "FAIL \u2014 Detection head cannot overfit (loss=1.1440).",
+  "head_metrics": {}
+}
