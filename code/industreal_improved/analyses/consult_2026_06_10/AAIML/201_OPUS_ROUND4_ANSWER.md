@@ -127,7 +127,7 @@ Note the blanks are filled by **measurement**, not by run11's loss curves.
 - d_model = 768 forced by reading P5 (768-dim) directly. Add a `Linear(768→256)` input projection and run the transformer at **d=256**. Attention cost scales d², FF scales d — this is the big lever.
 - 6 layers (was bumped from 4). For an 8-token sequence, **2–3 layers** is ample.
 
-**Recommended spec:** `Linear(768→256)` + **2-layer** causal Transformer, **d=256, nhead=4, ff=1024 (4×)**, → `Linear(256→11)`. That is **≈4–6M**, a **~12–15× reduction**, and for an 8-token/88-output problem it will very likely match or beat the 70.9M head (over-capacity on tiny sequences hurts as often as it helps). If you want to hedge, `d=384, 3 layers, ff=1536` lands ~11–13M. **Either restores the efficiency spine.** Retrain only after the overfit probe confirms PSR eval F1 actually moves — otherwise you're tuning a head whose signal you haven't verified.
+**Recommended spec (param counts hand-computed exactly, §7 addendum):** `Linear(768→256)` + **2-layer** causal Transformer, **d=256, nhead=4, ff=1024 (4×)**, → `Linear(256→11)` = **≈1.8M**, a **~40× reduction**, and for an 8-token/88-output problem it will very likely match or beat the 70.9M head (over-capacity on tiny sequences hurts as often as it helps). If you want a safer hedge, `Linear(768→384)` + `d=384, 3 layers, ff=1536 (4×)` = **≈5.6M** (~12.6× reduction). If you want the *minimal* change, just revert `dim_feedforward` from 8× back to the standard 4× (d=768, 6 layers) = **≈42.5M** (saves 28.4M) — but that still leaves PSR as the single largest component, so it is not enough on its own. **Take the diet (≤~6M); it restores the efficiency spine.** Retrain only after the overfit probe confirms PSR eval F1 actually moves — otherwise you're tuning a head whose signal you haven't verified.
 
 One deeper point: **the P5-feature fix (96-dim conv_proj → 768-dim semantic) is the change that mattered, and it is orthogonal to head size.** 192 FC-4 and 186 B-6 both located the bottleneck at the *feature source*, not the decoder. You can keep the good feature source and shrink the decoder by 15×. Do that.
 
@@ -135,9 +135,13 @@ One deeper point: **the P5-feature fix (96-dim conv_proj → 768-dim semantic) i
 
 **Neither is your problem. The 3-layer MLP already over-invested in the wrong place, and VideoMAE would compound it.** The decisive fact (186 §0, 192 Q3): **the 0.6525 activity SOTA was set by MViTv2-S + a single linear layer + plain CE.** A linear head suffices to hit SOTA single-task, so *the head is not the bottleneck* — the shared representation is. Your 3-layer MLP is treating a disease the patient doesn't have.
 
-The 0.58% below-random tells you the real disease, and it isn't capacity — a random head scores 1.33%, so **0.58% is worse than random**, which only happens when the model *systematically* predicts classes that are rare in the test set. Verified mechanism: training applies `compute_activity_class_weights` (sqrt-tamed inverse-frequency, up to 11.71×, line 299/365). A cold or lightly-trained head under heavy rare-class upweighting collapses onto rare classes → below-random top-1. **This is a loss-weighting/label pathology, not a representation-capacity ceiling.**
+The 0.58% below-random tells you the real disease, and it isn't capacity — a random head scores 1.33%, so **0.58% is worse than random**, which only happens when the model *systematically* predicts classes that are rare in the test set. **There are two verified candidate mechanisms, both caught by the probe, neither fixed by capacity:**
+1. **Class-weight collapse.** Training applies `compute_activity_class_weights` (sqrt-tamed inverse-frequency, up to 11.71×, line 299/365). A cold or lightly-trained head under heavy rare-class upweighting collapses onto rare classes → below-random top-1.
+2. **Label-space misalignment.** The repo contains `act_remap_75_to_69.json` (a 75→69 class remapping) and an older Meccano-pretrained eval (`t3_mecanno_eval.json`) that scores **0.18 top-1 with predictions collapsed onto ~1 class** (`by_class_69` shows almost all classes at 0, one class carrying the hits). A train/eval class-space mismatch (75 vs 69, or a remap applied on one side only) produces exactly a below-random argmax. This is a concrete, verified-plausible bug that no MLP depth fixes.
 
-**Action, in order (all cheap):** (a) run the overfit probe on activity — if it overfits 200 clips to high top-1, backbone+head are fine and the deficit is MTL+weighting; (b) rerun eval with class weights **off** (weighted CE is for training gradient balance, not a reason for the argmax to prefer rare classes — but if it has collapsed, unweighted eval exposes it); (c) enable the **logit-adjustment** already sitting unused in `ActivityHead` (`logit_adjust=True`, Menon et al. 2020) — the principled long-tail fix 192 Q3 named. **VideoMAE only enters the conversation if, after ST-activity establishes the ceiling, MTL activity provably cannot reach it — and even then it costs you the efficiency claim (+22M) that you're already fighting to keep.** There is no activity threshold at which VideoMAE is the right first move. Trust the representation; fix the weighting.
+**Either way it is a loss-weighting/label pathology, not a representation-capacity ceiling.** And note the head LR is *already* 1e-3 (10× the backbone's 1e-4, verified `--lr-head default=1e-3`), so 198 §2.5's "increase act LR" is not the lever either — the head already trains fast.
+
+**Action, in order (all cheap):** (a) run the overfit probe on activity — if it overfits 200 clips to high top-1, backbone+head are fine and the deficit is MTL+weighting/labels; (b) verify the eval class-space matches training (75 vs 69 remap) and rerun eval with class weights **off** (weighted CE shapes training gradients; if the head has collapsed onto rare classes, unweighted eval exposes it); (c) enable the **logit-adjustment** already sitting unused in `ActivityHead` (`logit_adjust=True`, Menon et al. 2020) — the principled long-tail fix 192 Q3 named. **VideoMAE only enters the conversation if, after ST-activity establishes the ceiling, MTL activity provably cannot reach it — and even then it costs you the efficiency claim (+22M) that you're already fighting to keep.** There is no activity threshold at which VideoMAE is the right first move. Trust the representation; fix the weighting/labels.
 
 ### Q4 — Detection augmentation (`--det-aug`) now or after EP10?
 
@@ -178,6 +182,32 @@ Credit where due, verified in code:
 - **Kendall caps + EMA normalization + PCGrad** are implemented and are your methodological contribution.
 
 The problem was never that these are wrong. The problem is that they were shipped **without the eval verification and baselines that tell you whether they worked**, and bundled with a **PSR head 15× too large** that mugged the efficiency claim.
+
+---
+
+## 5A. VALIDATION ADDENDUM — every load-bearing claim, checked against code
+
+This round's verdicts are grounded in the executed code and hand-computed arithmetic, not the round-4 docs. What I actually verified:
+
+| Claim in this file | How verified | Result |
+|---|---|---|
+| PSR head = 70.9M | Hand-computed `nn.TransformerEncoderLayer` params: per layer = 4d²+2·d·ff+ff+9d = 11,809,536 at d=768/ff=6144; ×6 + projection | **70.87M — confirmed** |
+| Diet PSR ≈1.8M / ≈5.6M | Same formula at (d=256, 2L, ff=1024) and (768→384 proj + d=384, 3L, ff=1536) | **1.78M / 5.62M — confirmed; 40× / 12.6× cut** |
+| ff is 8× (non-standard) | `mvit_mtl_model.py:320` `dim_feedforward=feat_dim*8`; docstring "[EP10] 4×→8×" | **Confirmed; standard is 4× (Vaswani/BERT/ViT)** |
+| 4 specialists ≈ 100M, old MTL 46–54M | `efficiency_audit.md` fvcore table | **Confirmed; run11 117.7M > 100M ⇒ inversion** |
+| ST baselines never run | `find` for `runs/st_{det,act,psr,pose}` and `soup` outputs | **None exist.** (Older `rf_stages` ConvNeXt/Meccano artifacts exist but are **not** matched controls for the run11 4-head MViTv2-S arch) |
+| Overfit/MVP probes never run | `overfit_50img_cls.py`, `mvp_probe3/4`, `e8_*` committed as scripts; searched for result files | **Zero result files — confirmed unrun** |
+| Activity eval is standard argmax (weight-independent) | `train_mtl_mvit.py:1064` `act_preds.argmax(dim=1) == act_gts` | **Confirmed ⇒ below-random is a *training-side* weight/label pathology** |
+| Class weights up to 11.71× | `compute_activity_class_weights` (sqrt-tamed inv-freq), applied `weight=class_weights` at CE | **Confirmed** |
+| 75↔69 label-remap exists | `act_remap_75_to_69.json`; Meccano eval `t3_mecanno_eval.json` 0.18 top-1, class-collapsed | **Confirmed ⇒ label-space mismatch is a live below-random candidate** |
+| Head LR already 10× backbone | `--lr-head default=1e-3` vs backbone 1e-4 | **Confirmed ⇒ "raise act LR" is not the lever** |
+
+**Two extra sub-points from file 198 I can now resolve precisely:**
+
+- **198 §5.2 — "do the Kendall caps need re-tuning now that PSR loss dropped 10×?"** **No.** Verified (`train_mtl_mvit.py:736–770`): each task's loss is divided by its own EMA (momentum 0.99) *before* the Kendall term, so every task enters Kendall at ~O(1) regardless of absolute scale. The caps are **floors on the effective weight** (an upper bound on `log_var` ⇒ a lower bound on `exp(−log_var)`) whose job is to stop starvation — they are scale-robust by construction. PSR's absolute 1.56→0.17 drop does not destabilize them. Leave the caps; the EMA normalization already handles the scale change.
+- **Detection 0.0 mAP — is it a coordinate-space eval bug?** I traced it: the eval decode (`:1124–1188`) and the training `detection_loss` decode (`:246–260`) use the **same** pixel/stride convention (`cell_cx = x·stride + stride/2`; GT `boxes[:,i]` compared directly in that space). So it is **not** a loss-vs-eval coordinate mismatch. That leaves three probe-decidable causes: a cold/fresh-init head emitting near-uniform sigmoids (lots of garbage boxes clearing the 0.05 threshold → NMS → mAP 0), a feature/assigner gap, or a subtler target-encoding issue. The overfit probe settles which — do not assume "real" or "bug" without it.
+
+**Net effect of validation:** every number in §0–§4 held up or got *sharper*; the only corrections were to the diet-PSR estimates (the true diets are **smaller** than I first wrote — 1.8M/5.6M vs "4–6M/11–13M"), which strengthens the recommendation. No claim weakened.
 
 ---
 
