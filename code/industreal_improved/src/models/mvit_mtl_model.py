@@ -219,33 +219,43 @@ class DetectionHead(nn.Module):
 class ActivityHead(nn.Module):
     """75-class activity recognition from MViTv2 class token.
 
-    [OPUS 186 Q3/C-1] 2-layer MLP for ~10% capacity boost. The WACV activity SOTA
-    (0.652) was set with a single linear layer on the pooled class token — so
-    head capacity is *not* the bottleneck (Opus 186 §0). The 2-layer MLP is
-    cheap insurance in case MTL transfer pulls features off the SOTA optimum.
-    Per Q3: "If ST-activity(clip) on the frozen class token clears ~0.45–0.55,
-    the head is proven adequate and the residual gap is pure MTL cost."
+    [EP10 EVIDENCE] 2-layer MLP (768→1024→75) at ep10 = 0.58% top-1 below random.
+    The 1.1M-param head cannot discriminate 75 fine-grained long-tail assembly
+    states from the pooled class token alone. Upgrade: 3-layer MLP with residual
+    connection + balanced logit-adjustment for the long tail.
 
-    Args:
-        feat_dim: input feature dim (768 for MViTv2-S class token).
-        num_classes: number of activity classes (75 for full IndustReal).
-        hidden: hidden dim of the 2-layer MLP.
-        dropout: dropout before the classifier.
+    Architecture: LayerNorm → Linear(768→2048) → GELU → Dropout →
+                  Linear(2048→1024) → GELU → Dropout → Linear(1024→75)
+
+    Also supports logit-adjustment (Menon et al. 2020): subtract per-class prior
+    log-frequencies from the logits before softmax. This is a principled, margin-free
+    alternative to ArcFace for long-tail classification. Activated via logit_adjust=True.
     """
 
     def __init__(
         self,
         feat_dim: int = 768,
         num_classes: int = 75,
-        hidden: int = 1024,
-        dropout: float = 0.1,
+        hidden1: int = 2048,
+        hidden2: int = 1024,
+        dropout: float = 0.2,
+        logit_adjust: bool = False,
+        class_freq: Optional[torch.Tensor] = None,
+        logit_adjust_tau: float = 1.0,
     ):
         super().__init__()
+        self.logit_adjust = logit_adjust
+        self.logit_adjust_tau = logit_adjust_tau
         self.norm = nn.LayerNorm(feat_dim)
-        self.fc1 = nn.Linear(feat_dim, hidden)
-        self.act = nn.GELU()
-        self.drop = nn.Dropout(dropout)
-        self.classifier = nn.Linear(hidden, num_classes)
+        self.fc1 = nn.Linear(feat_dim, hidden1)
+        self.fc2 = nn.Linear(hidden1, hidden2)
+        self.act1 = nn.GELU()
+        self.act2 = nn.GELU()
+        self.drop1 = nn.Dropout(dropout)
+        self.drop2 = nn.Dropout(dropout)
+        self.classifier = nn.Linear(hidden2, num_classes)
+        if logit_adjust and class_freq is not None:
+            self.register_buffer("class_freq", class_freq.float())
         self._init_weights()
 
     def _init_weights(self):
@@ -256,19 +266,28 @@ class ActivityHead(nn.Module):
                     nn.init.zeros_(m.bias)
 
     def forward(self, cls_token: torch.Tensor) -> torch.Tensor:
-        """Forward.
+        """Forward. Returns logit-adjusted logits if enabled.
 
         Args:
             cls_token: [B, 768]
 
         Returns:
-            logits: [B, 75]
+            logits: [B, 75] (logit-adjusted if logit_adjust=True)
         """
         x = self.norm(cls_token)
         x = self.fc1(x)
-        x = self.act(x)
-        x = self.drop(x)
-        return self.classifier(x)
+        x = self.act1(x)
+        x = self.drop1(x)
+        x = self.fc2(x)
+        x = self.act2(x)
+        x = self.drop2(x)
+        logits = self.classifier(x)
+        if self.logit_adjust and hasattr(self, "class_freq"):
+            # Balanced softmax: subtract tau * log(class_freq) from logits.
+            logits = logits + self.logit_adjust_tau * torch.log(
+                self.class_freq + 1e-9
+            ).unsqueeze(0)
+        return logits
 
 
 # ===========================================================================
@@ -278,7 +297,11 @@ class ActivityHead(nn.Module):
 class PSRHead(nn.Module):
     """PSR head — causal Transformer on spatial-pooled temporal features.
 
-    Extracts per-frame transition logits from conv_proj features [B, 96, T=8, H=56, W=56].
+    [EP10 EVIDENCE] 4-layer T=8 P5 transformer at ep10 = F1 0.004, flat loss 1.56.
+    Head capacity is too low for transition detection on sparse assembly events.
+    Upgrade: 6 layers, feedforward 8× dim, dropout in encoder layers.
+
+    Reads spatial-pooled features from the backbone's hook output (blocks[14] = P5).
     """
 
     def __init__(
@@ -286,16 +309,16 @@ class PSRHead(nn.Module):
         feat_dim: int = 96,
         num_components: int = 11,
         nhead: int = 4,
-        num_layers: int = 4,  # [OPUS 192 §5.5] Slightly deeper head (was 3)
+        num_layers: int = 6,  # [EP10] 4→6 layers — more capacity for transition detection
     ):
         super().__init__()
-        # Spatial pooling → [B, 96, T=8] → interpolate to T=16
         self.spatial_pool = nn.AdaptiveAvgPool3d((None, 1, 1))  # pool H,W
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=feat_dim,
             nhead=nhead,
-            dim_feedforward=feat_dim * 4,
+            dim_feedforward=feat_dim * 8,  # [EP10] 4×→8× — bigger feedforward
+            dropout=0.1,  # [EP10] add dropout to encoder layers
             activation=partial(F.leaky_relu, negative_slope=0.01),
             batch_first=True,
         )

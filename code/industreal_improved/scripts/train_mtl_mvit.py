@@ -149,168 +149,151 @@ def detection_loss(
     num_classes: int = 24,
     reg_max: int = 16,
     gamma: float = 2.0,
-    alpha: float = 0.5,  # [OPUS 181 §3.5] 0.25→0.5: equal fg/bg weight in focal.
-    pos_radius: int = 1,  # [OPUS 181 §3.5] 1=3x3 cells, 0=center-only (legacy).
+    alpha: float = 0.5,
+    pos_radius: int = 1,
+    use_tal: bool = True,
+    tal_topk: int = 10,
 ) -> torch.Tensor:
-    """YOLOv8-style detection loss over 4 FPN levels.
+    """Detection loss with TAL assigner (TOOD, ICCV 2021).
 
-    Combines Focal loss (cls), CIoU (box), and DFL (box distribution) with
-    center-based grid assignment per FPN level.
-
-    [OPUS 181 §3.5] The pre-fix code marked only ONE cell per GT (the cell
-    whose center the GT center falls into) as positive. Out of ~4165 cells per
-    image that's ~0.024% — 4 orders of magnitude too sparse for the model to
-    ever learn to discriminate foreground from background. With focal α=0.25
-    the rare positive channel is *under-weighted* relative to the ~4000
-    background cells' 0.75 weight, so foreground signal is overwhelmed.
-
-    Fix: assign every cell whose center falls inside the GT box (or within
-    pos_radius cells of the center cell if the GT is smaller than the
-    pos_radius cell footprint) as positive. pos_radius=1 yields ~9 positives
-    per GT box for objects ≥3 cells wide. Combined with α=0.5, foreground
-    signal gets ~36× more gradient (9 positives × 2× α ratio = 18×,
-    multiplied by 2 for the per-image density).
-
-    Args:
-        det_outputs: dict of per-level {cls_logits, reg_preds}.
-        det_list: list of B dicts, each {boxes: [n_i, 4] xyxy, labels: [n_i]}.
-        num_classes: number of detection classes.
-        reg_max: DFL bins per coordinate.
-        gamma: focal loss gamma.
-        alpha: focal loss alpha.
-        pos_radius: radius (in cells) around GT center to mark as positive.
-                    0 = center-cell only (legacy). 1 = 3x3 area (default).
-
-    Returns:
-        scalar loss.
+    [EP10 EVIDENCE] Sparse 3×3 at ep10 = mAP 0.0. TAL gives dense positives.
+    When use_tal=True, each GT is assigned to topk cells per FPN level.
+    P2 is skipped (semantics-free conv_proj features — Opus 192 FC-2).
     """
     device = next(iter(det_outputs.values()))["cls_logits"].device
-    strides = {"P2": 4, "P3": 8, "P4": 16, "P5": 32}
-
     if not det_list:
         return torch.tensor(0.0, device=device)
 
-    loss_cls = 0.0
-    loss_iou = 0.0
-    loss_dfl = 0.0
-    n_levels = 0
+    from src.losses.tal_assigner import TaskAlignedAssigner
+    tal = TaskAlignedAssigner(topk=tal_topk, alpha=1.0, beta=6.0)
 
-    for level_name in ("P2", "P3", "P4", "P5"):
+    loss_cls = 0.0; loss_iou = 0.0; loss_dfl = 0.0; n_levels_active = 0
+    levels = ("P3", "P4", "P5") if use_tal else ("P2", "P3", "P4", "P5")
+    strides = {"P2": 4, "P3": 8, "P4": 16, "P5": 32}
+
+    for level_name in levels:
         if level_name not in det_outputs:
             continue
-        n_levels += 1
+        n_levels_active += 1
         out = det_outputs[level_name]
-        cls_logits = out["cls_logits"]  # [B, 24, H, W]
-        reg_preds = out["reg_preds"]    # [B, 4*reg_max, H, W]
-        B, _, H, W = cls_logits.shape
-        stride = strides[level_name]
+        cls_logits = out["cls_logits"]; reg_preds = out["reg_preds"]
+        B, nc, H, W = cls_logits.shape; stride = strides[level_name]
 
-        # Grid cell centers
-        ys = torch.arange(H, device=device)
-        xs = torch.arange(W, device=device)
-        cell_cx = xs.float() * stride + stride / 2.0  # [W]
-        cell_cy = ys.float() * stride + stride / 2.0  # [H]
+        ys = torch.arange(H, device=device); xs = torch.arange(W, device=device)
+        cell_cx = xs.float() * stride + stride / 2.0
+        cell_cy = ys.float() * stride + stride / 2.0
+        anchor_points = torch.stack([cell_cx.unsqueeze(0).expand(H, -1),
+                                     cell_cy.unsqueeze(1).expand(-1, W)], dim=0).reshape(2, -1).t()
 
-        # Per-image GT assignment
         cls_target = torch.zeros(B, H, W, dtype=torch.long, device=device)
         pos_mask = torch.zeros(B, H, W, dtype=torch.bool, device=device)
         dfl_target = torch.zeros(B, H, W, 4, device=device)
         iou_target = torch.zeros(B, H, W, 4, device=device)
 
-        for b in range(B):
-            det_item = det_list[b] if isinstance(det_list[b], dict) else {}
-            boxes = det_item.get("boxes")
-            labels = det_item.get("labels")
-            if boxes is None or labels is None or boxes.numel() == 0:
-                continue
+        if use_tal:
+            # === TAL assignment per image ===
+            for b in range(B):
+                det_item = det_list[b] if isinstance(det_list[b], dict) else {}
+                boxes = det_item.get("boxes"); labels = det_item.get("labels")
+                if boxes is None or labels is None or boxes.numel() == 0:
+                    continue
+                boxes = boxes.to(device, torch.float); labels = labels.to(device, torch.long)
+                if boxes.dim() == 1: boxes = boxes.unsqueeze(0); labels = labels.unsqueeze(0)
+                n_gt = boxes.size(0)
+                if n_gt == 0: continue
 
-            boxes = boxes.to(device, dtype=torch.float)
-            labels = labels.to(device, dtype=torch.long)
+                cls_sig = torch.sigmoid(cls_logits[b]).permute(1,2,0).reshape(-1,nc)
+                reg_dist_v = reg_preds[b].view(4, reg_max, H, W)
+                proj = torch.arange(reg_max, device=device).float().view(1,reg_max,1,1)
+                decoded_o = (reg_dist_v.softmax(dim=1)*proj).sum(dim=1)
+                px1=(cell_cx.view(1,1,W)-decoded_o[0:1]*stride).reshape(H,W)
+                py1=(cell_cy.view(1,H,1)-decoded_o[1:2]*stride).reshape(H,W)
+                px2=(cell_cx.view(1,1,W)+decoded_o[2:3]*stride).reshape(H,W)
+                py2=(cell_cy.view(1,H,1)+decoded_o[3:4]*stride).reshape(H,W)
+                pred_xyxy=torch.stack([px1,py1,px2,py2],dim=-1).reshape(-1,4)
 
-            if boxes.dim() == 1:
-                boxes = boxes.unsqueeze(0)
-                labels = labels.unsqueeze(0)
+                mn=20; pb=torch.zeros(mn,4,device=device); pb[:n_gt]=boxes
+                pl=torch.zeros(mn,dtype=torch.long,device=device); pl[:n_gt]=labels
+                tl,tb,_,mk,_=tal(cls_sig.unsqueeze(0),pred_xyxy.unsqueeze(0),
+                                 anchor_points,pb.unsqueeze(0),pl.unsqueeze(0),
+                                 anchor_points,torch.tensor([stride],device=device))
+                mask_flat=mk.squeeze(0).squeeze(-1)
+                if mask_flat.sum()==0: continue
+                assigned=mask_flat.bool()
+                h_idx=assigned.nonzero(as_tuple=False)[:,0]
+                hi=(h_idx%W).long(); hj=(h_idx//W).long()
+                for k in range(len(hi)):
+                    ci,cj=hi[k].item(),hj[k].item()
+                    if 0<=ci<W and 0<=cj<H and not pos_mask[b,cj,ci]:
+                        pos_mask[b,cj,ci]=True
+                        tcls=tl.squeeze(0)[h_idx[k]].argmax().item()
+                        cls_target[b,cj,ci]=tcls+1
+                        tbox=tb.squeeze(0)[h_idx[k]]
+                        dfl_target[b,cj,ci,0]=(cell_cx[ci]-tbox[0])/stride
+                        dfl_target[b,cj,ci,1]=(cell_cy[cj]-tbox[1])/stride
+                        dfl_target[b,cj,ci,2]=(tbox[2]-cell_cx[ci])/stride
+                        dfl_target[b,cj,ci,3]=(tbox[3]-cell_cy[cj])/stride
+                        iou_target[b,cj,ci]=tbox
+        else:
+            # Legacy 3×3 sparse assignment (fallback)
+            for b in range(B):
+                det_item = det_list[b] if isinstance(det_list[b], dict) else {}
+                boxes = det_item.get("boxes"); labels = det_item.get("labels")
+                if boxes is None or labels is None or boxes.numel() == 0:
+                    continue
+                boxes = boxes.to(device, torch.float); labels = labels.to(device, torch.long)
+                if boxes.dim() == 1: boxes = boxes.unsqueeze(0); labels = labels.unsqueeze(0)
+                gt_cx=(boxes[:,0]+boxes[:,2])/2.0; gt_cy=(boxes[:,1]+boxes[:,3])/2.0
+                for n in range(boxes.shape[0]):
+                    gi=(gt_cx[n]/stride).long().clamp(0,W-1)
+                    gj=(gt_cy[n]/stride).long().clamp(0,H-1)
+                    for di in range(-pos_radius,pos_radius+1):
+                        for dj in range(-pos_radius,pos_radius+1):
+                            ci=gi+di; cj=gj+dj
+                            if 0<=ci<W and 0<=cj<H and not pos_mask[b,cj,ci]:
+                                pos_mask[b,cj,ci]=True
+                                cls_target[b,cj,ci]=labels[n].long()
+                                dfl_target[b,cj,ci,0]=(cell_cx[ci]-boxes[n,0])/stride
+                                dfl_target[b,cj,ci,1]=(cell_cy[cj]-boxes[n,1])/stride
+                                dfl_target[b,cj,ci,2]=(boxes[n,2]-cell_cx[ci])/stride
+                                dfl_target[b,cj,ci,3]=(boxes[n,3]-cell_cy[cj])/stride
+                                iou_target[b,cj,ci]=boxes[n]
 
-            # xyxy -> center
-            gt_cx = (boxes[:, 0] + boxes[:, 2]) / 2.0
-            gt_cy = (boxes[:, 1] + boxes[:, 3]) / 2.0
-
-            for n in range(boxes.shape[0]):
-                gi = (gt_cx[n] / stride).long().clamp(0, W - 1)
-                gj = (gt_cy[n] / stride).long().clamp(0, H - 1)
-
-                # [OPUS 181 §3.5] Mark a (2r+1)^2 patch of cells around the GT
-                # center cell as positive. For pos_radius=1 → 3x3 cells. If two
-                # GTs overlap, the second is silently dropped (legacy behavior
-                # for cell conflicts; acceptable since assembly scenes rarely
-                # have heavily overlapping boxes at this stride).
-                for di in range(-pos_radius, pos_radius + 1):
-                    for dj in range(-pos_radius, pos_radius + 1):
-                        ci = gi + di
-                        cj = gj + dj
-                        if 0 <= ci < W and 0 <= cj < H:
-                            if pos_mask[b, cj, ci]:
-                                continue
-                            pos_mask[b, cj, ci] = True
-                            cls_target[b, cj, ci] = labels[n].long()
-
-                            # [OPUS 186 §5.2] DFL/IoU targets are PER-CELL distances
-                            # (each cell's own center → box edges), not the GT
-                            # center → box edges. The pre-fix code used gt_cx[n]/
-                            # gt_cy[n] for all 9 cells in the patch, which made
-                            # off-center positives train to regress boxes as if
-                            # they sat at the GT center → biased localization,
-                            # capping mAP even after the density fix helps cls.
-                            # Use cell_cx[ci] / cell_cy[cj] so each cell sees the
-                            # offsets it would actually need to predict to localize
-                            # the GT box from its own anchor point.
-                            dfl_target[b, cj, ci, 0] = (cell_cx[ci] - boxes[n, 0]) / stride  # left
-                            dfl_target[b, cj, ci, 1] = (cell_cy[cj] - boxes[n, 1]) / stride  # top
-                            dfl_target[b, cj, ci, 2] = (boxes[n, 2] - cell_cx[ci]) / stride  # right
-                            dfl_target[b, cj, ci, 3] = (boxes[n, 3] - cell_cy[cj]) / stride  # bottom
-
-                            iou_target[b, cj, ci] = boxes[n]
-
-        # ---- Classification: Focal loss ----
-        cls_logits_p = cls_logits.permute(0, 2, 3, 1).contiguous()  # [B, H, W, 24]
-        cls_onehot = F.one_hot(cls_target, num_classes).float()
-        cls_prob = torch.sigmoid(cls_logits_p)
-        pt = cls_onehot * cls_prob + (1 - cls_onehot) * (1 - cls_prob)
-        focal_w = (1 - pt) ** gamma
-        alpha_t = cls_onehot * alpha + (1 - cls_onehot) * (1 - alpha)
-        cls_loss = F.binary_cross_entropy_with_logits(cls_logits_p, cls_onehot, reduction="none")
-        cls_loss = (alpha_t * focal_w * cls_loss).sum(dim=-1)  # [B, H, W]
-        loss_cls = loss_cls + cls_loss.mean()
+        # ---- Classification: Focal BCE ----
+        cls_p = cls_logits.permute(0,2,3,1).contiguous()
+        cls_oh = F.one_hot(cls_target, num_classes).float()
+        cls_prob = torch.sigmoid(cls_p)
+        pt = cls_oh*cls_prob+(1-cls_oh)*(1-cls_prob)
+        focal_w = (1-pt)**gamma
+        alpha_t = cls_oh*alpha+(1-cls_oh)*(1-alpha)
+        cls_loss_bce = F.binary_cross_entropy_with_logits(cls_p, cls_oh, reduction="none")
+        loss_cls = loss_cls + (alpha_t*focal_w*cls_loss_bce).sum(dim=-1).mean()
 
         # ---- Box losses (positive cells only) ----
         if pos_mask.any():
-            # Reshape reg_preds for DFL: [B, 4*reg_max, H, W] -> [B, 4, reg_max, H, W]
-            reg_dist = reg_preds.view(B, 4, reg_max, H, W)  # [B, 4, reg_max, H, W]
+            reg_dist = reg_preds.view(B,4,reg_max,H,W)
+            pred_dist = reg_dist.permute(0,3,4,1,2)[pos_mask]
+            gt_dfl = dfl_target[pos_mask]
+            if pred_dist.size(0)>0:
+                dfl_inst=0.0
+                for k in range(4):
+                    pk=pred_dist[:,k,:]; tk=gt_dfl[:,k].clamp(0,reg_max-1.01)
+                    tl=tk.long().clamp(0,reg_max-2); th=(tl+1).clamp(0,reg_max-1)
+                    wh=tk-tl.float(); wl=1-wh
+                    dfl_inst=dfl_inst+(F.cross_entropy(pk,tl,reduction="none")*wl+
+                                       F.cross_entropy(pk,th,reduction="none")*wh).mean()
+                loss_dfl = loss_dfl + dfl_inst/4
+            proj=torch.arange(reg_max,device=device).float().view(1,1,reg_max,1,1)
+            dec=(reg_dist.softmax(dim=2)*proj).sum(dim=2)
+            px1=cell_cx.view(1,1,W)-dec[:,0:1]*stride
+            py1=cell_cy.view(1,H,1)-dec[:,1:2]*stride
+            px2=cell_cx.view(1,1,W)+dec[:,2:3]*stride
+            py2=cell_cy.view(1,H,1)+dec[:,3:4]*stride
+            pa=torch.cat([px1,py1,px2,py2],dim=1).permute(0,2,3,1).contiguous()
+            loss_iou = loss_iou + ciou_loss(pa[pos_mask], iou_target[pos_mask]).mean()
 
-            # DFL loss
-            pred_dist = reg_dist.permute(0, 3, 4, 1, 2)[pos_mask]  # [P, 4, reg_max]
-            gt_dfl = dfl_target[pos_mask]  # [P, 4]
-            loss_dfl = loss_dfl + dfl_loss_fn(pred_dist, gt_dfl, reg_max).mean()
-
-            # Decode DFL distribution to continuous offsets for CIoU
-            proj = torch.arange(reg_max, device=device).float().view(1, 1, reg_max, 1, 1)
-            decoded = (reg_dist.softmax(dim=2) * proj).sum(dim=2)  # [B, 4, H, W]
-
-            # Convert decoded (l,t,r,b) offsets to absolute xyxy
-            pred_x1 = cell_cx.view(1, 1, W) - decoded[:, 0:1] * stride  # [B, 1, H, W]
-            pred_y1 = cell_cy.view(1, H, 1) - decoded[:, 1:2] * stride  # [B, 1, H, W]
-            pred_x2 = cell_cx.view(1, 1, W) + decoded[:, 2:3] * stride  # [B, 1, H, W]
-            pred_y2 = cell_cy.view(1, H, 1) + decoded[:, 3:4] * stride  # [B, 1, H, W]
-            pred_abs = torch.cat([pred_x1, pred_y1, pred_x2, pred_y2], dim=1)  # [B, 4, H, W]
-            pred_abs = pred_abs.permute(0, 2, 3, 1).contiguous()  # [B, H, W, 4]
-
-            loss_iou = loss_iou + ciou_loss(
-                pred_abs[pos_mask],
-                iou_target[pos_mask],
-            ).mean()
-
-    n_levels = max(n_levels, 1)
-    return loss_cls / n_levels + loss_iou / n_levels + loss_dfl / n_levels
+    n_levels_active = max(n_levels_active, 1)
+    return loss_cls/n_levels_active + loss_iou/n_levels_active + loss_dfl/n_levels_active
 
 
 def compute_activity_class_weights(
@@ -389,27 +372,20 @@ def psr_loss(
     psr_logits: torch.Tensor,
     psr_targets: torch.Tensor,
     comp_weights: Optional[torch.Tensor] = None,
-    use_focal: bool = False,
+    use_focal: bool = True,  # [EP10] Focal-BCE default for PSR (rare-event data)
     focal_alpha: float = 0.25,
     focal_gamma: float = 2.0,
 ) -> torch.Tensor:
-    """Per-frame BCE for PSR transition logits with optional per-component inverse-prevalence weights.
+    """Per-frame (focal) BCE for PSR transition logits.
 
-    [OPUS 192 FC-4] Downsample targets from T=16 → T=8 to match the PSR head's
-    native T=8 prediction (per OPUS 192: predict at native T=8, not interpolated
-    T=16). Max-pool over 2-frame windows preserves transition events (any 1 in
-    the window → 1 in the downsampled label).
-
-    [OPUS 192 Q2] Optional Focal-BCE (γ=2.0, α=0.25). Rare-event loss that
-    down-weights easy negatives. Standard for sparse positive labels. Use
-    use_focal=True to activate. Default is plain BCE (per Opus: "Focal γ=2.0
-    reduces loss contribution from confidently-classified cells by ~100×").
+    [EP10] use_focal=True by default. Focal-BCE down-weights easy negatives.
+    T=16→T=8 label downsampling via max-pool (Opus 192 FC-4).
 
     Args:
         psr_logits: [B, T, 11] per-frame transition logits (T=8 from PSR head).
         psr_targets: [B, T, 11] per-frame transition targets (T=16 from dataset).
         comp_weights: [1, 1, 11] per-component inverse-prevalence weights or None.
-        use_focal: if True, use Focal-BCE instead of plain BCE.
+        use_focal: if True, use Focal-BCE (default: True).
         focal_alpha: weight on positive class in focal loss.
         focal_gamma: focal loss focusing parameter.
 
@@ -659,7 +635,7 @@ def train_step(
     ema_warmup_steps: int = 100,
     ema_momentum: float = 0.99,
     grad_accum_steps: int = 1,  # [OPUS 186 §5.1] Divide loss by this so accum MEANS, not SUMS.
-    psr_focal: bool = False,   # [OPUS 192 Q2] Optional Focal-BCE for PSR (rare-event loss).
+    psr_focal: bool = True,    # [EP10] Focal-BCE default for PSR (rare-event loss).
     det_aug: bool = False,     # [OPUS 192 §5.5 / Q6] Detection augmentation (flip+color+crop).
 ) -> dict:
     """Single training step with Kendall uncertainty weighting and optional PCGrad gradient surgery.
@@ -1382,8 +1358,8 @@ def main():
     parser.add_argument("--lr-log-var", type=float, default=1e-3, help="Log var LR")
     parser.add_argument("--hp-prec-cap", action="store_true", default=True, help="Cap pose precision")
     parser.add_argument("--pcgrad", action=argparse.BooleanOptionalAction, default=True, help="PCGrad gradient surgery (default: on; use --no-pcgrad to disable)")
-    parser.add_argument("--psr-focal", action="store_true", default=False,
-                        help="[OPUS 192 Q2] Use Focal-BCE (γ=2.0, α=0.25) for PSR instead of plain BCE. Useful for rare-event labels.")
+    parser.add_argument("--psr-focal", action=argparse.BooleanOptionalAction, default=True,
+                        help="[EP10] Use Focal-BCE (γ=2.0, α=0.25) for PSR (default: on; use --no-psr-focal to disable).")
     parser.add_argument("--det-aug", action="store_true", default=False,
                         help="[OPUS 192 §5.5 / Q6] Enable detection-specific augmentation (random horizontal flip, "
                              "color jitter, random crop). Augments images and adjusts bboxes for detection only. "

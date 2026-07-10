@@ -98,6 +98,8 @@ class TaskAlignedAssigner(nn.Module):
         # topk_metrics: [B, max_n, topk]
         # topk_idxs: [B, max_n, topk]
         topk_metrics, topk_idxs = align_metric.topk(self.topk, dim=1)  # [B, topk, max_n]
+        topk_metrics = topk_metrics.transpose(1, 2)  # [B, max_n, topk]
+        topk_idxs = topk_idxs.transpose(1, 2)  # [B, max_n, topk]
 
         # === Build target_labels, target_bboxes, target_scores, mask ===
         target_labels = torch.zeros(B, n_anchors, nc, device=device)
