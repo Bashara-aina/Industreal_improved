@@ -375,11 +375,17 @@ def psr_loss(
     use_focal: bool = True,  # [EP10] Focal-BCE default for PSR (rare-event data)
     focal_alpha: float = 0.25,
     focal_gamma: float = 2.0,
+    transition_boost: float = 3.0,  # [OPUS 207] Boost weight on transitions
 ) -> torch.Tensor:
     """Per-frame (focal) BCE for PSR transition logits.
 
     [EP10] use_focal=True by default. Focal-BCE down-weights easy negatives.
     T=16→T=8 label downsampling via max-pool (Opus 192 FC-4).
+
+    [OPUS 207] Transition-aware weighting: frames near 0→1 transitions get
+    transition_boost× higher weight. Directly attacks the focal-collapse-to-negatives
+    failure mode where loss is low (0.17-0.27) but event_F1 is ~0.006 because
+    <1% positives are being ignored.
 
     Args:
         psr_logits: [B, T, 11] per-frame transition logits (T=8 from PSR head).
@@ -388,6 +394,7 @@ def psr_loss(
         use_focal: if True, use Focal-BCE (default: True).
         focal_alpha: weight on positive class in focal loss.
         focal_gamma: focal loss focusing parameter.
+        transition_boost: extra weight multiplier for frames near transitions.
 
     Returns:
         Scalar loss (mean over all elements).
@@ -404,6 +411,20 @@ def psr_loss(
 
     bce = F.binary_cross_entropy_with_logits(psr_logits, psr_targets, reduction='none')
 
+    # [OPUS 207] Transition-aware frame weighting.
+    # Detect 0→1 transitions along time axis; boost weight on those frames
+    # and their immediate neighbors (±1 frame).
+    with torch.no_grad():
+        # transitions: [B, T-1, 11] — 1 where a component transitions 0→1
+        transitions = (psr_targets[:, 1:, :] - psr_targets[:, :-1, :]).clamp(min=0)
+        transitions = F.pad(transitions, (0, 0, 0, 1))  # pad last frame → [B, T, 11]
+        # Any component transition at time t → boost frame t and t-1
+        has_transition = (transitions.sum(dim=-1) > 0).float()  # [B, T]
+        neighbor_boost = F.pad(has_transition[:, :-1], (1, 0))  # shift right
+        frame_weight = 1.0 + (transition_boost - 1.0) * (
+            has_transition + neighbor_boost
+        ).clamp(0, 1).unsqueeze(-1)  # [B, T, 1]
+
     if use_focal:
         # Focal-BCE: down-weight easy examples
         p = torch.sigmoid(psr_logits)
@@ -413,6 +434,9 @@ def psr_loss(
         loss = focal_weight * bce
     else:
         loss = bce
+
+    # Apply transition-aware frame weighting
+    loss = loss * frame_weight
 
     if comp_weights is not None:
         loss = loss * comp_weights  # broadcast [B, T, 11] * [1, 1, 11]
@@ -782,7 +806,11 @@ def train_step(
         if kendall_uncapped:
             LV_CLAMP_MAX = {"det": 4.0, "act": 4.0, "psr": 4.0, "pose": 4.0}
         else:
-            LV_CLAMP_MAX = {"det": 4.0, "act": 1.0, "psr": 0.5, "pose": 4.0}
+            # [OPUS 207 §1b FIX] Detection cap was 4.0 (weight floor exp(-4)≈0.018) —
+            # weakest starvation protection in the system. Detection has shown 0.000 mAP
+            # in every eval. Fix caps to documented values: det≤1.5 (floor 0.22),
+            # pose≤2.0 (floor 0.14). Also tighten PSR cap slightly.
+            LV_CLAMP_MAX = {"det": 1.5, "act": 1.0, "psr": 0.5, "pose": 2.0}
         lv_values = {}
         for name in losses:
             lv_clamped = log_vars[name].clamp(LV_CLAMP_MIN, LV_CLAMP_MAX[name])
@@ -1373,6 +1401,13 @@ def main():
                         help="[OPUS 192 §5.5 / Q6] Enable detection-specific augmentation (random horizontal flip, "
                              "color jitter, random crop). Augments images and adjusts bboxes for detection only. "
                              "Other heads see original images. Helps data-limited detection branch.")
+    parser.add_argument("--act-decoupled", action="store_true", default=False,
+                        help="[OPUS 207] Decoupled activity training (Kang et al. ICLR 2020). "
+                             "Phase A (epochs 1-25): instance-balanced sampling. "
+                             "Phase B (epochs 26+): freeze backbone, retrain activity classifier "
+                             "with class-balanced sampling + raw logits (no class weights).")
+    parser.add_argument("--act-decoupled-epoch", type=int, default=25,
+                        help="[OPUS 207] Epoch to switch from Phase A to Phase B in decoupled training.")
     parser.add_argument("--output-dir", type=str, default=str(OUTPUT_ROOT))
     parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume")
     parser.add_argument("--eval-every", type=int, default=5,
@@ -1683,9 +1718,44 @@ def main():
 
     # ── Training loop ─────────────────────────────────────────────────────
     logger.info("Starting training (%d epochs)...", args.epochs)
+    if args.act_decoupled:
+        logger.info("Decoupled activity training: Phase A (epochs 1-%d) → Phase B (epochs %d+)",
+                    args.act_decoupled_epoch, args.act_decoupled_epoch + 1)
     metrics_log = {"train_metrics": [], "config": vars(args)}
+    act_decoupled_phase_b = False  # [OPUS 207] Tracks whether we've transitioned
 
     for epoch in range(start_epoch + 1, args.epochs + 1):
+        # [OPUS 207] Decoupled training Phase B transition.
+        # Freeze backbone, retrain only activity classifier with class-balanced sampling.
+        if args.act_decoupled and epoch > args.act_decoupled_epoch and not act_decoupled_phase_b:
+            logger.info("=== Decoupled Phase B: freezing backbone, class-balanced activity retrain ===")
+            for name, param in model.named_parameters():
+                if "act_head.classifier" not in name:
+                    param.requires_grad = False
+            # Recompute class-balanced sampler: oversample rare classes
+            from torch.utils.data import WeightedRandomSampler
+            class_counts = train_ds.class_counts
+            class_weights_bal = 1.0 / np.maximum(class_counts, 1)
+            sample_weights = np.array([class_weights_bal[train_ds[i][1]["activity"].item()]
+                                       if train_ds[i][1].get("activity") is not None
+                                       and train_ds[i][1]["activity"].item() >= 0
+                                       else 0.0 for i in range(len(train_ds))])
+            balanced_sampler = WeightedRandomSampler(
+                torch.from_numpy(sample_weights).float(),
+                num_samples=len(train_ds), replacement=True
+            )
+            train_loader = torch.utils.data.DataLoader(
+                train_ds, batch_size=args.batch_size, shuffle=False,
+                sampler=balanced_sampler,
+                collate_fn=collate_fn_sequences, num_workers=args.num_workers,
+                pin_memory=True, drop_last=True,
+            )
+            # Disable class weights — balanced batches handle long-tail
+            act_class_weights = None
+            # Disable logit-adjust during pure classifier retrain
+            model.act_head.logit_adjust = False
+            act_decoupled_phase_b = True
+            logger.info("Phase B active: backbone frozen, class-balanced sampler, raw logits")
         t0 = time.time()
         epoch_metrics = {
             "loss": 0, "loss_det": 0, "loss_act": 0, "loss_psr": 0, "loss_pose": 0,
