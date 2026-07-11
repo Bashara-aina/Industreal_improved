@@ -386,6 +386,7 @@ class PSRHead(nn.Module):
         self.spatial_pool = nn.AdaptiveAvgPool3d((None, 1, 1))  # pool H,W
         # [OPUS 201] Project P5 features (768-dim) down to internal transformer dim
         self.input_proj = nn.Linear(input_dim, feat_dim)
+        self.dropout = nn.Dropout(0.15)
 
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=feat_dim,
@@ -435,6 +436,7 @@ class PSRHead(nn.Module):
         )
 
         x = self.temporal_encoder(x, mask=mask)  # [B, 8, feat_dim]
+        x = self.dropout(x)
         return self.projection(x)  # [B, 8, 11]
 
 # ===========================================================================
@@ -449,6 +451,7 @@ class PoseHead(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(feat_dim, 256),
             nn.LeakyReLU(0.01, inplace=True),
+            nn.Dropout(0.15),
             nn.Linear(256, POSE_DIM),
             nn.Tanh(),
         )

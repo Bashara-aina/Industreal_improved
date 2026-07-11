@@ -913,25 +913,25 @@ def train_step(
     model: nn.Module,
     images: torch.Tensor,
     targets: dict,
-    log_vars: nn.ParameterDict,
     optimizer: torch.optim.Optimizer,
     scaler: torch.amp.GradScaler,
-    grad_clip_norm: float = 5.0,  # [OPUS 186 E-6] 1.0 was over-clipping; 5.0 is ViT-standard.
-    hp_prec_cap: bool = True,
-    kendall_uncapped: bool = False,  # [OPUS 201] Ablation: disable per-task log_var caps
+    grad_clip_norm: float = 1.0,  # [Tier 1 Item 4] Standard clip for MTL stability
     pcgrad: bool = True,
     act_class_weights: Optional[torch.Tensor] = None,
-    act_logit_adjust_freq: Optional[torch.Tensor] = None,  # [OPUS 207 §2.6] Menon logit-adjust in loss
+    act_logit_adjust_freq: Optional[torch.Tensor] = None,
     do_step: bool = True,
     ema_losses: Optional[dict] = None,
-    ema_warmup_steps: int = 100,
     ema_momentum: float = 0.99,
-    grad_accum_steps: int = 1,  # [OPUS 186 §5.1] Divide loss by this so accum MEANS, not SUMS.
-    psr_focal: bool = True,    # [EP10] Focal-BCE default for PSR (rare-event loss).
-    det_aug: bool = True,      # [OPUS 192 §5.5 / Q6] Detection augmentation (flip+color+crop).
-    distill_teachers: Optional[dict] = None,  # [Task #261] Frozen ST teacher models.
-    distill_alpha: float = 0.1,  # [Task #261] Distillation loss weight.
-    distill_temperature: float = 4.0,  # [Task #261] Softmax temperature for KD.
+    grad_accum_steps: int = 1,
+    psr_focal: bool = True,
+    det_aug: bool = True,
+    distill_teachers: Optional[dict] = None,
+    distill_alpha: float = 0.1,
+    distill_temperature: float = 4.0,
+    uw_so_temperature: float = 1.0,      # [Tier 1 Item 1] UW-SO temperature
+    db_mtl: bool = False,                # [Tier 1 Item 12] DB-MTL log-transform
+    psr_asl: bool = False,               # [Tier 1 Item 8] Asymmetric Loss for PSR
+    psr_asl_gamma_neg: float = 4.0,      # ASL gamma for negative examples
 ) -> dict:
     """Single training step with Kendall uncertainty weighting and optional PCGrad gradient surgery.
 
@@ -997,13 +997,18 @@ def train_step(
                 _inv_weights = 1.0 / (_prevalence + 1e-6)
                 _psr_comp_weights = (_inv_weights / _inv_weights[0].clamp(min=1e-6)).view(1, 1, -1)
 
-        l_psr = psr_loss(
-            outputs["psr_logits"],
-            targets.get("psr_labels", torch.zeros(B, 16, 11, device=images.device)),
-            comp_weights=_psr_comp_weights,
-            use_focal=psr_focal,
-            transition_boost=C.PSR_TRANSITION_BOOST,
-        ) if "psr_labels" in targets else torch.tensor(0.0, device=images.device)
+        if psr_asl and "psr_labels" in targets:
+            from src.losses.asymmetric_loss import AsymmetricLoss
+            _asl = AsymmetricLoss(gamma_neg=psr_asl_gamma_neg, gamma_pos=0.0)
+            l_psr = _asl(outputs["psr_logits"], targets["psr_labels"])
+        else:
+            l_psr = psr_loss(
+                outputs["psr_logits"],
+                targets.get("psr_labels", torch.zeros(B, 16, 11, device=images.device)),
+                comp_weights=_psr_comp_weights,
+                use_focal=psr_focal,
+                transition_boost=C.PSR_TRANSITION_BOOST,
+            ) if "psr_labels" in targets else torch.tensor(0.0, device=images.device)
 
         # Per-component PSR loss breakdown for logging
         if "psr_labels" in targets:
@@ -1038,127 +1043,57 @@ def train_step(
                 outputs, teacher_outputs, distill_temperature, distill_alpha,
             )
 
-        # Kendall uncertainty weighting with precision capping
-        losses = {"det": l_det, "act": l_act, "psr": l_psr, "pose": l_pose,
-                  "distill": l_distill}
-        total_loss = 0.0
+        # ── UW-SO Loss Weighting (Kirchdorfer 2025 IJCV) ──────────────────
+        # Replaces Kendall uncertainty weighting. Analytical softmax on
+        # stop-gradient task losses — eliminates learned weight collapse.
+        # Keep Kendall as --loss-weighting kendall for ablation.
+        task_losses = {"det": l_det, "act": l_act, "psr": l_psr, "pose": l_pose}
+        losses = {**task_losses, "distill": l_distill}
 
-        # [OPUS 181 D1] Update per-task EMA of raw losses (detached; no grad).
-        # After warmup, each task's loss is normalized by its own EMA so Kendall
-        # balances comparable scales (≈O(1) per task) instead of collapsing to
-        # inverse-loss scaling.
-        if ema_losses is not None:
-            with torch.no_grad():
-                for name in ["det", "act", "psr", "pose"]:  # Task heads only
-                    ema_losses[name].mul_(ema_momentum).add_(
-                        losses[name].detach(), alpha=1.0 - ema_momentum
-                    )
+        # DB-MTL log-transform normalizes loss scales across tasks
+        if db_mtl:
+            task_losses = {k: torch.log1p(v) for k, v in task_losses.items()}
 
-        # [OPUS 181 D1] Per-task loss scaling for Kendall.
-        # Default: raw loss. If EMA tracker is provided and EMA has stabilized
-        # (above 1e-3 floor), normalize by EMA so all tasks are on a comparable
-        # scale (~O(1)). During the first few steps EMA is initialized to 1.0
-        # which is benign — normalized loss equals raw loss — and tracks the
-        # true mean within ~100 steps (momentum 0.99).
-        losses_for_kendall = {name: losses[name] for name in ["det", "act", "psr", "pose"]}
+        # UW-SO: weights = softmax(-sg(losses) / T)
+        from src.losses.uw_so import uw_so_loss
+        task_total = uw_so_loss(task_losses, temperature=uw_so_temperature)
 
+        # Update EMA of task losses for logging
         if ema_losses is not None:
             with torch.no_grad():
                 for name in ["det", "act", "psr", "pose"]:
-                    ema_v = ema_losses[name]
-                    if ema_v.item() > 1e-3:
-                        losses_for_kendall[name] = losses[name] / (ema_v + 1e-6)
+                    ema_losses[name].mul_(ema_momentum).add_(
+                        task_losses[name].detach(), alpha=1.0 - ema_momentum
+                    )
 
-        # Compute log_vars, with head-pose precision capped by detection (Doc 175 §5.2)
-        # Pose precision (exp(-lv)) must never exceed detection precision. This prevents
-        # the shared backbone from being optimized primarily for head_pose (loss ~0.01)
-        # while neglecting detection (loss ~0.5), which has ~40x higher loss magnitude.
-        # SAFETY: Clamp log_var to [-4, 4] to prevent exp(-lv) explosion (would cause
-        # negative total_loss and gradient NaN). Per 175 §5.1: act_min=-4, psr/pose_max=2.
-        # [OPUS 181 D2] Per-task caps so high-loss tasks (act=12.3, psr=1.3) cannot
-        # collapse their backbone weight to near-zero. Floor weights via upper-bound on
-        # log_var: weight = exp(-lv), so lv<=1.0 forces weight>=0.37 (act), lv<=0.5
-        # forces weight>=0.61 (psr). Det/pose keep the wide range (low intrinsic loss,
-        # no risk of starvation).
-        LV_CLAMP_MIN = -4.0
-        # [OPUS 201] Kendall-collapse ablation: when uncapped, all tasks get wide
-        # bounds (4.0) — the natural Kendall dynamics then starve the highest-loss
-        # task (activity). This is the "before" of the Figure 1 ablation.
-        if kendall_uncapped:
-            LV_CLAMP_MAX = {"det": 4.0, "act": 4.0, "psr": 4.0, "pose": 4.0}
-        else:
-            # [OPUS 207 §1b FIX] Detection cap was 4.0 (weight floor exp(-4)≈0.018) —
-            # weakest starvation protection in the system. Detection has shown 0.000 mAP
-            # in every eval. Fix caps to documented values: det≤1.5 (floor 0.22),
-            # pose≤2.0 (floor 0.14). Also tighten PSR cap slightly.
-            LV_CLAMP_MAX = {"det": 1.5, "act": 1.0, "psr": 0.5, "pose": 2.0}
-        lv_values = {}
-        for name in ["det", "act", "psr", "pose"]:  # Only task heads have log_vars
-            lv_clamped = log_vars[name].clamp(LV_CLAMP_MIN, LV_CLAMP_MAX[name])
-            lv_values[name] = lv_clamped
-        if hp_prec_cap and not kendall_uncapped:
-            lv_values["pose"] = torch.maximum(
-                lv_values["pose"], lv_values["det"].detach()
-            )
+        total_loss = task_total + l_distill
 
-        # SAFETY: Clamp each per-task loss to [0, +inf) — BCE/CE/DFL/CIoU are all
-        # bounded ≥ 0 in theory. Negative values come from numerical drift.
-        losses_safe = {n: torch.clamp(v, min=0.0) if v.isfinite() else torch.zeros_like(v)
-                       for n, v in losses.items()}
-        losses_k_safe = {n: torch.clamp(v, min=0.0) if v.isfinite() else torch.zeros_like(v)
-                         for n, v in losses_for_kendall.items()}
-
-        # Kendall-weighted per-task losses (det/act/psr/pose)
-        for name in losses_safe:
-            if name == "distill":
-                # Distillation loss bypasses Kendall — added directly below
-                continue
-            lv = lv_values[name]
-            prec = torch.exp(-lv)
-            total_loss = total_loss + prec * losses_k_safe[name] + lv / 2
-
-        # Distillation loss added directly (weighted by distill_alpha, not by Kendall)
-        # This is correct: distill loss measures agreement with teacher, not task error.
-        total_loss = total_loss + losses_safe.get("distill", torch.tensor(0.0, device=images.device))
-
-        # SAFETY: Skip step if total_loss is non-finite (log_var explosion caught here)
+        # SAFETY: Skip step if total_loss is non-finite
         if not torch.isfinite(total_loss):
             logger.warning(
                 "Non-finite total_loss at step: det=%s act=%s psr=%s pose=%s | skipping optimizer step",
-                losses["det"].item(), losses["act"].item(), losses["psr"].item(), losses["pose"].item(),
+                l_det.item(), l_act.item(), l_psr.item(), l_pose.item(),
             )
             if do_step:
                 optimizer.zero_grad()
             return {
                 "loss": float("nan"),
-                "loss_det": losses["det"].item(), "loss_act": losses["act"].item(),
-                "loss_psr": losses["psr"].item(), "loss_pose": losses["pose"].item(),
+                "loss_det": l_det.item(), "loss_act": l_act.item(),
+                "loss_psr": l_psr.item(), "loss_pose": l_pose.item(),
+                "loss_distill": l_distill.item(),
                 **psr_comp_breakdown,
-                **{f"log_var_{k}": v.item() for k, v in log_vars.items()},
                 **{f"ema_{k}": (ema_losses[k].item() if ema_losses is not None and k in ema_losses else 0.0)
                    for k in ["det", "act", "psr", "pose"]},
             }
 
     # [OPUS 181 D4] zero_grad moved from top of train_step to AFTER step() below.
-    # Previously, zero_grad at the top of every micro-batch wiped the previous
-    # micro-batch's gradient, making grad_accum_steps a silent no-op.
 
     if pcgrad:
         shared_params = [p for p in model.feature_pyramid.backbone.parameters() if p.requires_grad]
-
-        # Per-task gradients w.r.t. shared backbone
-        # SAFETY: Use clamped log_var to match the forward pass (otherwise PCGrad
-        # uses different precisions than the actual loss, causing gradient/total
-        # loss mismatch). Also use losses_safe to prevent negative gradient.
         per_task_grads = []
-        for name in ["det", "act", "psr", "pose"]:  # PCGrad only for task heads
-            lv_safe = lv_values[name]  # already clamped
-            prec = torch.exp(-lv_safe)
-            # [OPUS 181 D1] PCGrad uses the SAME Kendall-normalized loss as the
-            # forward pass for consistency.
-            weighted_loss = prec * losses_k_safe[name]
+        for name in ["det", "act", "psr", "pose"]:
             g = torch.autograd.grad(
-                weighted_loss, shared_params,
+                task_losses[name], shared_params,
                 retain_graph=True, allow_unused=True,
             )
             per_task_grads.append(g)
@@ -1215,7 +1150,6 @@ def train_step(
         "loss_pose": l_pose.item(),
         "loss_distill": l_distill.item(),
         **psr_comp_breakdown,
-        **{f"log_var_{k}": v.item() for k, v in log_vars.items()},
         **{f"ema_{k}": (ema_losses[k].item() if ema_losses is not None else 0.0)
            for k in ["det", "act", "psr", "pose"]},
     }
@@ -1717,11 +1651,14 @@ def main():
     parser.add_argument("--num-workers", type=int, default=4, help="DataLoader workers")
     parser.add_argument("--lr-backbone", type=float, default=1e-4, help="Backbone LR")
     parser.add_argument("--lr-head", type=float, default=1e-3, help="Head LR")
-    parser.add_argument("--lr-log-var", type=float, default=1e-3, help="Log var LR")
     parser.add_argument("--hp-prec-cap", action="store_true", default=True, help="Cap pose precision")
-    parser.add_argument("--kendall-uncapped", action="store_true", default=False,
-                        help="[OPUS 201 Ablation] Disable per-task log_var caps. Demonstrates Kendall collapse.")
+    parser.add_argument("--uw-so-temperature", type=float, default=1.0,
+                        help="UW-SO temperature scaling (default: 1.0)")
+    parser.add_argument("--db-mtl", action="store_true", default=False,
+                        help="DB-MTL log-transform for uncertainty weighting")
     parser.add_argument("--pcgrad", action=argparse.BooleanOptionalAction, default=True, help="PCGrad gradient surgery (default: on; use --no-pcgrad to disable)")
+    parser.add_argument("--psr-asl", action="store_true", default=False,
+                        help="[Tier 1 Item 8] Use Asymmetric Loss for PSR (Ridnik 2021)")
     parser.add_argument("--psr-focal", action=argparse.BooleanOptionalAction, default=True,
                         help="[EP10] Use Focal-BCE (γ=2.0, α=0.25) for PSR (default: on; use --no-psr-focal to disable).")
     parser.add_argument("--det-aug", action="store_true", default=True,
@@ -1757,7 +1694,7 @@ def main():
     parser.add_argument("--compile", action="store_true",
                         help="Use torch.compile() for ~2x speedup (PyTorch 2.0+)")
     # ── SWA within-run checkpoint averaging (Task #259 / §6 lever #3) ─────
-    parser.add_argument("--swa-checkpoints", type=int, default=5,
+    parser.add_argument("--swa-checkpoints", type=int, default=10,
                         help="Average the last N periodic checkpoints for final eval (0=disabled, default 5)")
     # ── Head warm-starting (Task #260 / §6 lever #4) ──────────────────────
     parser.add_argument("--warm-start-dir", type=str, default=None,
@@ -1920,13 +1857,6 @@ def main():
         n_teachers = sum(1 for t in distill_teachers.values() if t is not None)
         logger.info("Loaded %d distillation teachers", n_teachers)
 
-    # ── Kendall log_vars ──────────────────────────────────────────────────
-    log_vars = nn.ParameterDict({
-        name: nn.Parameter(torch.tensor([-0.5], device=device))
-        for name in ["det", "act", "psr", "pose"]
-    })
-    logger.info("Log vars initialized to -0.5")
-
     # ── Auto-soup init [OPUS 192 §5 step 8] ──────────────────────────────
     # If a soup backbone (averaged from single-task specialists via
     # scripts/build_soup.py) exists in the output dir, load its backbone
@@ -1970,13 +1900,27 @@ def main():
     ema_momentum_model = 0.999
     logger.info("EMA model weights initialized to current model state_dict")
 
-    # ── Optimizer ─────────────────────────────────────────────────────────
+    # ── Optimizer — per-task learning rates [Tier 1 Item 2] ──────────────
+    def _group_params(prefixes, lr_mult):
+        """Collect params matching any prefix, with LR = lr_head * lr_mult."""
+        params = []
+        for n, p in model.named_parameters():
+            if any(n.startswith(pref) for pref in prefixes):
+                params.append(p)
+        return {"params": params, "lr": args.lr_head * lr_mult, "weight_decay": 0.05}
+
+    # Task-specific LR multipliers: detection/activity at 1.0x, PSR/pose at 0.3x
     param_groups = [
         {"params": model.feature_pyramid.backbone.parameters(), "lr": args.lr_backbone, "weight_decay": 0.05},
-        {"params": [p for n, p in model.named_parameters()
-                    if "backbone" not in n and "log_var" not in n], "lr": args.lr_head, "weight_decay": 0.05},
-        {"params": log_vars.parameters(), "lr": args.lr_log_var, "weight_decay": 0},
+        _group_params(["feature_pyramid.fpn", "det_head"], 1.0),
+        _group_params(["act_head"], 1.0),
+        _group_params(["psr_head"], 0.3),
+        _group_params(["pose_head"], 0.3),
     ]
+    # Log the LR structure
+    for pg in param_groups:
+        lr_val = pg["lr"]; n_params = sum(p.numel() for p in pg["params"])
+        logger.info("  lr=%.2e | params=%.2fM", lr_val, n_params / 1e6)
     optimizer = torch.optim.AdamW(param_groups)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=args.epochs
@@ -2030,7 +1974,7 @@ def main():
         start_epoch = ckpt["epoch"]
         best_val_loss = ckpt.get("best_val_loss", float("inf"))
         best_act_top1 = ckpt.get("best_act_top1", 0.0)
-        log_vars = ckpt.get("log_vars", log_vars)
+        # log_vars removed — UW-SO uses analytical weighting, no learnable params
         # [OPUS 181 D1] Restore EMA state if present (older checkpoints lack it
         # → fall back to fresh init at 1.0; tracker will reconverge in ~100 steps).
         if "ema_losses" in ckpt:
@@ -2083,7 +2027,7 @@ def main():
     if args.act_decoupled:
         logger.info("Decoupled activity training: Phase A (epochs 1-%d) → Phase B (epochs %d+)",
                     args.act_decoupled_epoch, args.act_decoupled_epoch + 1)
-    metrics_log = {"train_metrics": [], "log_var_history": {}, "config": vars(args)}
+    metrics_log = {"train_metrics": [], "config": vars(args)}
     act_decoupled_phase_b = False  # [OPUS 207] Tracks whether we've transitioned
 
     for epoch in range(start_epoch + 1, args.epochs + 1):
@@ -2123,9 +2067,7 @@ def main():
             "loss": 0, "loss_det": 0, "loss_act": 0, "loss_psr": 0, "loss_pose": 0,
             "loss_distill": 0,
             **{f"loss_psr_c{i}": 0 for i in range(11)},
-            "log_var_det": 0, "log_var_act": 0, "log_var_psr": 0, "log_var_pose": 0,
         }
-        log_var_trajectory = {k: [] for k in ["det", "act", "psr", "pose"]}
         n_steps = 0
 
         for batch_idx, batch in enumerate(train_loader):
@@ -2159,35 +2101,32 @@ def main():
             do_step = is_accum_boundary
 
             step_metrics = train_step(
-                model, images, targets, log_vars, optimizer, scaler,
-                grad_clip_norm=args.grad_clip_norm,  # [OPUS 186 E-6]
-                hp_prec_cap=args.hp_prec_cap,
-                kendall_uncapped=args.kendall_uncapped,  # [OPUS 201] Kendall-collapse ablation
+                model, images, targets, optimizer, scaler,
+                grad_clip_norm=args.grad_clip_norm,
                 pcgrad=args.pcgrad,
                 act_class_weights=act_class_weights,
-                act_logit_adjust_freq=act_logit_adjust_freq,  # [OPUS 207 §2.6]
+                act_logit_adjust_freq=act_logit_adjust_freq,
                 do_step=do_step,
-                ema_losses=ema_losses,  # [OPUS 181 D1] EMA-normalized Kendall losses.
-                grad_accum_steps=args.grad_accum_steps,  # [OPUS 186 §5.1] Mean-scale accumulation.
-                psr_focal=args.psr_focal,  # [OPUS 192 Q2] Optional Focal-BCE for PSR.
-                det_aug=args.det_aug,  # [OPUS 192 §5.5 / Q6] Detection-specific augmentation.
-                distill_teachers=distill_teachers,  # [Task #261] Distillation teachers.
-                distill_alpha=args.distill_alpha,   # [Task #261]
-                distill_temperature=args.distill_temperature,  # [Task #261]
+                ema_losses=ema_losses,
+                grad_accum_steps=args.grad_accum_steps,
+                psr_focal=args.psr_focal,
+                det_aug=args.det_aug,
+                distill_teachers=distill_teachers,
+                distill_alpha=args.distill_alpha,
+                distill_temperature=args.distill_temperature,
+                uw_so_temperature=args.uw_so_temperature,  # [Tier 1 Item 1]
+                db_mtl=args.db_mtl,                          # [Tier 1 Item 12]
+                psr_asl=args.psr_asl,                        # [Tier 1 Item 8]
             )
 
             for k in epoch_metrics:
                 epoch_metrics[k] += step_metrics.get(k, 0)
-            for tag in ["det", "act", "psr", "pose"]:
-                lv_val = step_metrics.get(f"log_var_{tag}")
-                if lv_val is not None:
-                    log_var_trajectory[tag].append(lv_val)
             n_steps += 1
 
             # [OPUS 186 E-3/I-8] Update EMA model weights. Only update on
             # boundary steps (after the optimizer has actually stepped) so
             # the EMA tracks post-step weights, not mid-accumulation weights.
-            if do_step:
+            if do_step and epoch >= 5:
                 with torch.no_grad():
                     msd = model.state_dict()
                     for k, v in ema_model_state.items():
@@ -2222,30 +2161,15 @@ def main():
 
         # Log
         dt = time.time() - t0
-        # ── log_var trajectory analysis (Kendall collapse diagnosis) ────────
-        lv_mean = {k: avg_metrics.get(f"log_var_{k}", 0) for k in ["det", "act", "psr", "pose"]}
-        lv_min = {k: min(v) if v else 0 for k, v in log_var_trajectory.items()}
-        lv_max = {k: max(v) if v else 0 for k, v in log_var_trajectory.items()}
         logger.info(
             "Epoch %3d/%d | loss=%.4f det=%.4f act=%.4f psr=%.4f pose=%.4f distill=%.4f | "
-            "lv_mean=[%.2f,%.2f,%.2f,%.2f] lv_min=[%.2f,%.2f,%.2f,%.2f] lv_max=[%.2f,%.2f,%.2f,%.2f] | "
             "lr=%.2e | %.1fs",
             epoch, args.epochs,
             avg_metrics["loss"], avg_metrics["loss_det"], avg_metrics["loss_act"],
             avg_metrics["loss_psr"], avg_metrics["loss_pose"],
             avg_metrics.get("loss_distill", 0),
-            lv_mean["det"], lv_mean["act"], lv_mean["psr"], lv_mean["pose"],
-            lv_min["det"], lv_min["act"], lv_min["psr"], lv_min["pose"],
-            lv_max["det"], lv_max["act"], lv_max["psr"], lv_max["pose"],
             avg_metrics["lr"], dt,
         )
-        # Save log_var per-epoch trajectory to metrics_log
-        metrics_log.setdefault("log_var_history", {})
-        for tag in ["det", "act", "psr", "pose"]:
-            metrics_log["log_var_history"].setdefault(tag, {})
-            metrics_log["log_var_history"][tag][str(epoch)] = {
-                "mean": lv_mean[tag], "min": lv_min[tag], "max": lv_max[tag],
-            }
         # Per-component PSR loss breakdown (Doc 175 §4)
         _pcs = [avg_metrics.get(f"loss_psr_c{i}", 0) for i in range(11)]
         logger.info("  PSR comp: [%s]", " ".join(f"{v:.4f}" for v in _pcs))
@@ -2322,7 +2246,6 @@ def main():
                     "epoch": epoch,
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
-                    "log_vars": log_vars,
                     "ema_losses": ema_losses,  # [OPUS 181 D1]
                     "ema_model_state": ema_model_state,  # [OPUS 186 E-3]
                     "best_act_top1": best_act_top1,
@@ -2337,7 +2260,6 @@ def main():
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
-                "log_vars": log_vars,
                 "ema_losses": ema_losses,  # [OPUS 181 D1]
                 "ema_model_state": ema_model_state,  # [OPUS 186 E-3]
                 "best_val_loss": best_val_loss,
