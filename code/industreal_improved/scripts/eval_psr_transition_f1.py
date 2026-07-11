@@ -22,6 +22,7 @@ import sys
 import argparse
 from collections import defaultdict
 from pathlib import Path
+from scipy.ndimage import median_filter
 
 import numpy as np
 import torch
@@ -243,19 +244,15 @@ def main():
         if pl is None or pl_lbl is None:
             continue
 
-        # Sigmoid -> binary prediction
+        # Sigmoid probabilities (threshold+monotonicity per-recording)
         sig = torch.sigmoid(pl[0]).cpu().numpy()
-        if per_comp_thresholds is not None:
-            pred_bin = (sig > per_comp_thresholds).astype(np.int32)
-        else:
-            pred_bin = (sig > args.threshold).astype(np.int32)
         lbl = pl_lbl[0].cpu().numpy()
 
         meta = targets.get("metadata", [])
         rec_id = meta[0].get("recording_id", "unknown")
         frame_num = meta[0].get("frame_num", 0)
 
-        rec_preds[rec_id].append(pred_bin)
+        rec_preds[rec_id].append(sig)
         rec_labels[rec_id].append(lbl)
         rec_frame_nums[rec_id].append(frame_num)
         n_frames += 1
@@ -275,7 +272,7 @@ def main():
         gt = rec_labels[rec]
         frames = np.array(rec_frame_nums[rec])
         sort_idx = np.argsort(frames)
-        preds_sorted = np.array(preds)[sort_idx]
+        preds_sorted = np.array(preds)[sort_idx]   # [T, 11] sigmoid probabilities
         gt_sorted = np.array(gt)[sort_idx]
 
         # Keep only frames with valid GT labels
@@ -283,8 +280,16 @@ def main():
         n_valid = int(valid_mask.sum())
         if n_valid < 2:
             continue
-        vp = preds_sorted[valid_mask]
+        vp_prob = preds_sorted[valid_mask]
         vl = gt_sorted[valid_mask]
+
+        # Monotonicity constraint: smooth then running-max (once-on stays-on)
+        _vp_smooth = median_filter(vp_prob, size=(5, 1), mode="nearest")
+        _vp_mono = np.maximum.accumulate(_vp_smooth, axis=0)
+        if per_comp_thresholds is not None:
+            vp = (_vp_mono > per_comp_thresholds[np.newaxis, :]).astype(np.int32)
+        else:
+            vp = (_vp_mono > args.threshold).astype(np.int32)
 
         # Per-frame (secondary)
         pf1 = per_frame_f1(vp, vl)

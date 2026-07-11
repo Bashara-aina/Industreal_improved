@@ -90,22 +90,34 @@ def run_overfit(args):
 
     # ── Build dataset (full, then subset) ──────────────────────────────
     print("[1] Loading dataset...")
+    # [FIX Task #252] Disable RAM cache. Use train split for detection
+    # (val has only ~7% frames with GT boxes). Val for non-det heads (faster).
+    C.RAM_CACHE_MAX_IMAGES = 0
+    _split = "train" if args.head == "det" else "val"
     ds = IndustRealMultiTaskDataset(
-        split="train", img_size=(224, 224), augment=False,
+        split=_split, img_size=(224, 224), augment=False,
         sequence_mode=True, sequence_length=16,
     )
-    # Find clips with valid labels for the target head
-    # Dataset items are dicts with keys: images, gt_boxes, gt_classes, head_pose,
-    # psr_labels, hand_joints, action_label, clip_rgb, metadata
+    # Cap search to avoid CPU OOM.
+    MAX_SEARCH = min(len(ds), 5000 if args.head == "det" else 2000)
     valid_indices = []
-    for idx in range(len(ds)):
+    for idx in range(MAX_SEARCH):
         try:
             sample = ds[idx]  # dict
         except Exception:
             continue
         if args.head == "det":
-            gt_boxes = sample.get("gt_boxes", {}).get("rgb")
-            if gt_boxes is not None and len(gt_boxes) > 0:
+            # Dataset returns gt_boxes as dict of {cam: Tensor(N,4) or [Tensor,...]}
+            gb = sample.get("gt_boxes", {})
+            has_gt = False
+            if isinstance(gb, dict):
+                for v in gb.values():
+                    if isinstance(v, torch.Tensor) and v.numel() > 0:
+                        has_gt = True; break
+                    elif isinstance(v, (list,)):
+                        if any(isinstance(b, torch.Tensor) and b.numel() > 0 for b in v):
+                            has_gt = True; break
+            if has_gt:
                 valid_indices.append(idx)
         elif args.head == "act":
             act = sample.get("action_label")
@@ -126,6 +138,9 @@ def run_overfit(args):
         print(f"  WARNING: Only found {len(valid_indices)} valid clips, using all")
     used = valid_indices[:args.n_clips]
     print(f"  Using {len(used)} clips for {args.head} overfit")
+    if len(used) == 0:
+        print("  FATAL: No valid clips found for this head. Check GT labels.")
+        return False
 
     # Subset via indices (lazy-load to avoid CPU OOM)
     subset_indices = used
@@ -186,19 +201,33 @@ def run_overfit(args):
                     targets[k] = v.clone().to(device)
                 else:
                     targets[k] = v
-        # Detection targets
-        gt_boxes = sample.get("gt_boxes", {}).get("rgb")
-        gt_classes = sample.get("gt_classes", {}).get("rgb")
-        if gt_boxes is not None and isinstance(gt_boxes, torch.Tensor):
-            targets["det_boxes"] = gt_boxes.clone().to(device)
-            targets["det_labels"] = gt_classes.clone().to(device)
+        # Detection targets: gt_boxes is dict of {cam_name: Tensor(N,4)}
+        # Convert to list of {boxes, labels} dicts for detection_loss
+        gt_boxes = sample.get("gt_boxes", {})
+        gt_classes = sample.get("gt_classes", {})
+        det_list = []
+        if isinstance(gt_boxes, dict):
+            for cam in gt_boxes:
+                boxes = gt_boxes[cam]  # Tensor(N,4) or [Tensor,...]
+                labels = gt_classes.get(cam, None) if isinstance(gt_classes, dict) else None
+                if isinstance(boxes, torch.Tensor) and boxes.numel() > 0:
+                    lbl = labels if isinstance(labels, torch.Tensor) and labels.numel() > 0 else None
+                    if lbl is not None:
+                        det_list.append({"boxes": boxes.clone().to(device),
+                                         "labels": lbl.clone().to(device)})
+                elif isinstance(boxes, (list,)):
+                    for bi, b in enumerate(boxes):
+                        if isinstance(b, torch.Tensor) and b.numel() > 0:
+                            lb = labels[bi] if isinstance(labels, (list,)) and bi < len(labels) else None
+                            if lb is not None and isinstance(lb, torch.Tensor) and lb.numel() > 0:
+                                det_list.append({"boxes": b.clone().to(device),
+                                                 "labels": lb.clone().to(device)})
 
         optimizer.zero_grad()
         outputs = model(images)
 
         if args.head == "det":
-            if "det_boxes" in targets and targets["det_boxes"].numel() > 0:
-                det_list = [{"boxes": targets["det_boxes"], "labels": targets["det_labels"]}]
+            if det_list:
                 loss = detection_loss(outputs["detection"], det_list)
             else:
                 continue

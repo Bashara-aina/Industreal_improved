@@ -723,7 +723,7 @@ TRAIN_PREFETCH_FACTOR = 4  # 2 workers × 2 prefetch = 4 batches queued (was 4)
 # had no positives and returned mAP=0. 0.02 is high enough to filter the random-init noise
 # floor (probe shows only 3107 anchors above 0.05 across 1.66M) but lets through the real
 # localizations that the probe confirms (151 preds at IoU>0.5 in batch 0 alone).
-DET_EVAL_SCORE_THRESH = 0.001  # [OPUS v5 AUDIT] Lowered from 0.02 → 0.001 for YOLOv8 comparability. YOLOv8 reports at ~0.001; 0.02 understates our mAP.
+DET_EVAL_SCORE_THRESH = 0.5  # [CALIB v2026-07-10] Raised from 0.001 → 0.5 after threshold calibration (Task #262). mAP@0.5 is invariant from 0.0003-0.5 (rank-based metric — AP doesn't depend on threshold). At 0.001: 74,597 preds/2000 images = 37 FP/img. At 0.5: 1,237 preds = 0.62/img (98% fewer), same mAP@0.5=0.5581.
 DET_EVAL_MAX_PER_IMAGE = 300
 DET_EVAL_NMS_IOU_THRESH = 0.5  # NMS IoU threshold for detection evaluation
 SAVE_VAL_CONFUSION_MATRIX = False
@@ -882,6 +882,9 @@ PRETRAIN_DET_FRAME_STRIDE = 10  # 1-in-10 frames → ~728K train frames; enough 
 PRETRAIN_MOSAIC_PROB = 0.3   # probability of mosaic (4-frame collage)
 PRETRAIN_MIXUP_PROB  = 0.2   # probability of mixup (2-frame alpha blend)
 PRETRAIN_HFLIP_PROB  = 0.5   # probability of random horizontal flip
+
+# Doc 207 §1: Detection augmentation (flip+color+jitter+crop) for data-limited det branch
+DET_AUG_ENABLED = True        # ON by default — zero-param lever with largest published upside for small det datasets
 
 # =========================================================================
 # Staged training (Doc 2 B.1)

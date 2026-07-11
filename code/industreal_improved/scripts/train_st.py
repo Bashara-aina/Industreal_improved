@@ -44,6 +44,11 @@ C.ACT_CLASS_GROUPING = "none"
 
 from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn_sequences
 from src.models.mvit_mtl_model import MTLMViTModel
+from src.models.head_pose_geo import (
+    rotation_6d_to_matrix as _rot_6d_to_mat,
+    geodesic_loss as _geo_loss,
+    cosine_rotation_loss as _cos_rot_loss,
+)
 from scripts.train_mtl_mvit import (
     detection_loss, activity_loss, psr_loss, pose_loss, evaluate
 )
@@ -125,6 +130,11 @@ def train_one_task(task: str, args):
             images = images.to(device, non_blocking=True)
             targets = to_device_targets(targets, device)
             images = normalize_images(images, device)
+            # [Doc 207 §1] Detection augmentation for data-limited det branch
+            if task == "det" and args.det_aug:
+                from src.data.det_augment import DetectionAugment
+                _det_aug = DetectionAugment(p_flip=0.5, p_color=0.5, p_crop=0.3)
+                images, targets = _det_aug(images, targets)
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
                 outputs = model(images)
                 # Single-task loss: only the selected head
@@ -140,7 +150,14 @@ def train_one_task(task: str, args):
                     if "head_pose" in targets:
                         hp = targets["head_pose"]
                         hp_6d = hp[:, hp.size(1) // 2, :6]
-                        loss = pose_loss(outputs["pose_6d"], hp_6d)
+                        if args.pose_geodesic:
+                            # [Doc 207 §9.3] Proper 6D + geodesic rotation loss
+                            pred_6d = outputs["pose_6d"]
+                            pred_mat = _rot_6d_to_mat(pred_6d)
+                            gt_mat = _rot_6d_to_mat(hp_6d)
+                            loss = _geo_loss(pred_mat, gt_mat) + 0.5 * _cos_rot_loss(pred_mat, gt_mat)
+                        else:
+                            loss = pose_loss(outputs["pose_6d"], hp_6d)
                     else:
                         continue
                 else:
@@ -220,6 +237,13 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--eval-every", type=int, default=5)
     parser.add_argument("--max-batches-per-epoch", type=int, default=4000)
+    parser.add_argument("--det-aug", action="store_true", default=True,
+                        help="[Doc 207 §1] Enable detection-specific augmentation (flip+color+crop). "
+                             "ON by default — zero-param lever with largest published upside for small det datasets.")
+    parser.add_argument("--pose-geodesic", action="store_true", default=False,
+                        help="[Doc 207 §9.3] Use 6D + geodesic rotation loss for pose task "
+                             "(rotation_matrix -> geodesic angular + cosine). "
+                             "Off by default (falls back to fwd/up cosine loss).")
     parser.add_argument("--output-dir", type=str, required=True)
     args = parser.parse_args()
 

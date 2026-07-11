@@ -1,0 +1,15 @@
+{
+  "optimal_threshold": 0.5,
+  "config_current": 0.001,
+  "config_current_mAP50": 0.5581,
+  "mAP50_at_optimal": 0.5581,
+  "mAP75_at_optimal": 0.1508,
+  "n_images": 2000,
+  "n_total_gt_boxes": 138,
+  "n_preds_at_config": 74597,
+  "n_preds_at_optimal": 1237,
+  "fp_reduction_pct": 98.3,
+  "checkpoint": "src/runs/rf_stages/checkpoints/best.pth",
+  "note": "mAP@0.5 is invariant across all thresholds 0.0003-0.5 (AP is rank-based). Optimal threshold selected for maximum false-positive reduction while preserving mAP.",
+  "recommendation": "Set DET_EVAL_SCORE_THRESH = 0.5"
+}

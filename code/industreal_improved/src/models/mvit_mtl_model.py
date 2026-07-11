@@ -127,7 +127,10 @@ class MViTFeaturePyramid(nn.Module):
 # ===========================================================================
 
 class LightweightFPN(nn.Module):
-    """Minimal FPN: lateral 1×1 convs + top-down 2× upsample.
+    """BiFPN — top-down + bottom-up with EfficientDet-style weighted fusion.
+
+    [FIX 207 §2.5] P5 fusion now uses two inputs only (p5_td + max_pool(p4_out)),
+    eliminating the duplicate p5_lat term.
 
     Input: dict {P2: 96ch, P3: 192ch, P4: 384ch, P5: 768ch} each [B, C, T, H, W]
     Output: dict {P2, P3, P4, P5} each [B, 256, T, H, W] with H,W halving per level.
@@ -136,33 +139,83 @@ class LightweightFPN(nn.Module):
     def __init__(self, in_channels: Dict[str, int], out_channels: int = 256):
         super().__init__()
         self.out_channels = out_channels
+        self.eps = 1e-4
+
+        # 1x1 lateral projections to out_channels
         self.lateral = nn.ModuleDict({
             name: nn.Conv3d(ch, out_channels, kernel_size=1)
             for name, ch in in_channels.items()
         })
-        self.smooth = nn.ModuleDict({
+
+        # Smooth convs for top-down path
+        self.td_conv = nn.ModuleDict({
             name: nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
             for name in in_channels
         })
 
-    def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        """Build FPN pyramid via top-down pathway."""
-        names = ["P5", "P4", "P3", "P2"]  # top-down order
+        # Smooth convs for bottom-up path
+        self.bu_conv = nn.ModuleDict({
+            name: nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
+            for name in in_channels
+        })
 
+        # Learnable fusion weights: top-down
+        # P5 has 1 input (lateral only); P4/P3/P2 have 2 (lateral + up from above)
+        names_td = ["P5", "P4", "P3", "P2"]
+        self.td_w = nn.ParameterDict({
+            name: nn.Parameter(torch.ones(1 if name == "P5" else 2))
+            for name in names_td
+        })
+
+        # Learnable fusion weights: bottom-up
+        # P2 has 1 input (td only); P3/P4/P5 have 2 (td + down from below)
+        names_bu = ["P2", "P3", "P4", "P5"]
+        self.bu_w = nn.ParameterDict({
+            name: nn.Parameter(torch.ones(1 if name == "P2" else 2))
+            for name in names_bu
+        })
+
+    @staticmethod
+    def _fast_weightsum(weights: torch.Tensor, terms: List[torch.Tensor]) -> torch.Tensor:
+        """Fast normalized weighted sum (ReLU + normalize, EfficientDet-style)."""
+        w = F.relu(weights)
+        return sum(w[i] * terms[i] for i in range(len(terms))) / (w.sum() + 1e-4)
+
+    def forward(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Build BiFPN pyramid: top-down followed by bottom-up with weighted fusion."""
+        names = ["P5", "P4", "P3", "P2"]
+
+        # 1x1 lateral projection
         lat = {n: self.lateral[n](features[n]) for n in names}
-        out = {}
+
+        # --- Top-down pathway (P5 -> P4 -> P3 -> P2) ---
+        td = {}
         for i, name in enumerate(names):
             if i == 0:
-                out[name] = self.smooth[name](lat[name])
+                td[name] = self.td_conv[name](lat[name])
             else:
-                # Upsample previous top level 2×
-                top = F.interpolate(
-                    out[names[i - 1]],
-                    size=lat[name].shape[-3:],
-                    mode="trilinear",
-                    align_corners=False,
+                prev = names[i - 1]
+                up = F.interpolate(
+                    td[prev], size=lat[name].shape[-3:],
+                    mode="trilinear", align_corners=False,
                 )
-                out[name] = self.smooth[name](lat[name] + top)
+                fused = self._fast_weightsum(self.td_w[name], [lat[name], up])
+                td[name] = self.td_conv[name](fused)
+
+        # --- Bottom-up pathway (P2 -> P3 -> P4 -> P5) ---
+        bu = ["P2", "P3", "P4", "P5"]
+        out = {}
+        for i, name in enumerate(bu):
+            if i == 0:
+                out[name] = self.bu_conv[name](td[name])
+            else:
+                prev = bu[i - 1]
+                down = F.interpolate(
+                    out[prev], size=td[name].shape[-3:],
+                    mode="trilinear", align_corners=False,
+                )
+                fused = self._fast_weightsum(self.bu_w[name], [td[name], down])
+                out[name] = self.bu_conv[name](fused)
 
         return out
 
@@ -185,13 +238,13 @@ class DetectionHead(nn.Module):
 
         self.cls_head = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, 3, padding=1),
-            nn.BatchNorm2d(in_channels),
+            nn.GroupNorm(num_groups=min(32, in_channels), num_channels=in_channels),
             nn.ReLU(inplace=True),
             nn.Conv2d(in_channels, num_classes, 1),
         )
         self.reg_head = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, 3, padding=1),
-            nn.BatchNorm2d(in_channels),
+            nn.GroupNorm(num_groups=min(32, in_channels), num_channels=in_channels),
             nn.ReLU(inplace=True),
             nn.Conv2d(in_channels, 4 * reg_max, 1),  # DFL: 4 coords x reg_max bins
         )
@@ -266,13 +319,17 @@ class ActivityHead(nn.Module):
                     nn.init.zeros_(m.bias)
 
     def forward(self, cls_token: torch.Tensor) -> torch.Tensor:
-        """Forward. Returns logit-adjusted logits if enabled.
+        """Forward. Returns raw logits (no logit adjustment — applied in loss).
+
+        [OPUS 207 §2.6] Logit adjustment moved to activity_loss() per Menon et al.
+        protocol: additive logit correction inside the training loss only, raw
+        logits for argmax at eval.
 
         Args:
             cls_token: [B, 768]
 
         Returns:
-            logits: [B, 75] (logit-adjusted if logit_adjust=True)
+            logits: [B, 75] raw logits
         """
         x = self.norm(cls_token)
         x = self.fc1(x)
@@ -281,15 +338,7 @@ class ActivityHead(nn.Module):
         x = self.fc2(x)
         x = self.act2(x)
         x = self.drop2(x)
-        logits = self.classifier(x)
-        if self.logit_adjust and hasattr(self, "class_freq") and self.training:
-            # [OPUS 207 §2.6 FIX] Logit-adjust only during training.
-            # At eval, predict from raw logits. This follows Menon et al. (2020)
-            # protocol: adjustment inside loss, raw logits for argmax prediction.
-            logits = logits + self.logit_adjust_tau * torch.log(
-                self.class_freq + 1e-9
-            ).unsqueeze(0)
-        return logits
+        return self.classifier(x)
 
     def enable_logit_adjust(self, class_counts: torch.Tensor):
         """[OPUS 201] Enable logit-adjustment with dataset class frequencies.
@@ -549,3 +598,41 @@ def renormalize_pose(raw_6d: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
     fwd = F.normalize(raw_6d[:, :3], dim=1)
     up = F.normalize(raw_6d[:, 3:], dim=1)
     return fwd, up
+
+
+def gram_schmidt_rotation(fwd: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
+    """Build a 3x3 rotation matrix from two 3D vectors via Gram-Schmidt.
+
+    Orthonormalises (fwd, up) to produce a valid SO(3) rotation matrix
+    with columns = orthonormal basis.
+
+    Args:
+        fwd: [B, 3] forward vectors
+        up: [B, 3] up vectors (need not be orthogonal to fwd)
+
+    Returns:
+        R: [B, 3, 3] rotation matrix
+    """
+    b1 = F.normalize(fwd, dim=1)  # [B, 3]
+    proj = (up * b1).sum(dim=1, keepdim=True) * b1  # [B, 3]
+    b2 = F.normalize(up - proj, dim=1)  # [B, 3]
+    b3 = torch.cross(b1, b2, dim=1)  # [B, 3]
+    return torch.stack([b1, b2, b3], dim=2)  # [B, 3, 3]
+
+
+def geodesic_angle(R_pred: torch.Tensor, R_gt: torch.Tensor) -> torch.Tensor:
+    """Geodesic angular error in degrees on SO(3).
+
+    ``angle = arccos((trace(R_pred^T @ R_gt) - 1) / 2)`` in degrees.
+
+    Args:
+        R_pred: [B, 3, 3] predicted rotation matrices
+        R_gt: [B, 3, 3] ground-truth rotation matrices
+
+    Returns:
+        angles: [B] angular error in degrees
+    """
+    R_rel = torch.bmm(R_pred.transpose(1, 2), R_gt)  # [B, 3, 3]
+    trace = torch.diagonal(R_rel, dim1=1, dim2=2).sum(dim=1)  # [B]
+    trace = trace.clamp(-1.0, 3.0)  # numerical stability for acos
+    return torch.rad2deg(torch.acos((trace - 1.0) / 2.0))

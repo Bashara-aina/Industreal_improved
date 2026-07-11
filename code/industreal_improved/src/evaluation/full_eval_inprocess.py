@@ -28,6 +28,7 @@ import sys
 import time
 from collections import defaultdict
 from pathlib import Path
+from scipy.ndimage import median_filter
 
 import numpy as np
 import torch
@@ -83,7 +84,7 @@ FULL_EVAL_OVERRIDES = {
     "TRAIN_ACT": True,
     "TRAIN_PSR": True,
     "TRAIN_HEAD_POSE": True,
-    "DET_EVAL_SCORE_THRESH": 0.5,
+    "DET_EVAL_SCORE_THRESH": 0.001,  # matches config.py canonical value
     "DET_EVAL_NMS_IOU_THRESH": 0.5,
     "DET_EVAL_MAX_PER_IMAGE": 300,
 }
@@ -528,15 +529,14 @@ def streaming_eval(
         _all_logits = np.concatenate(psr_preds_logits, axis=0)   # [N, 11]
         _all_labels = np.concatenate(psr_labels_list, axis=0)    # [N, 11]
 
-        # Sigmoid -> binary with per-component optimal thresholds
+        # Sigmoid -> probabilities (threshold+monotonicity applied per-recording)
         _all_sig = 1.0 / (1.0 + np.exp(-_all_logits))
-        _all_pred_bin = (_all_sig > _per_comp_thr[np.newaxis, :]).astype(np.int32)
 
         # Group by recording ID
         _rec_data: dict = defaultdict(lambda: {"pred": [], "label": [], "frame": []})
         for i in range(len(psr_rec_ids)):
             rid = psr_rec_ids[i]
-            _rec_data[rid]["pred"].append(_all_pred_bin[i])
+            _rec_data[rid]["pred"].append(_all_sig[i])
             _rec_data[rid]["label"].append(_all_labels[i])
             _rec_data[rid]["frame"].append(psr_frame_nums[i])
 
@@ -548,13 +548,18 @@ def streaming_eval(
         for rid, _arrs in _rec_data.items():
             _frames = np.array(_arrs["frame"], dtype=np.int64)
             _sort = np.argsort(_frames)
-            _vp = np.array(_arrs["pred"])[_sort]   # [T, 11]
-            _vl = np.array(_arrs["label"])[_sort]  # [T, 11]
+            _vp_prob = np.array(_arrs["pred"])[_sort]   # [T, 11] sigmoid probabilities
+            _vl = np.array(_arrs["label"])[_sort]       # [T, 11]
 
             # Keep only valid frames
             _valid = _vl.max(axis=1) >= 0
-            _vp = _vp[_valid]
+            _vp_prob = _vp_prob[_valid]
             _vl = _vl[_valid]
+
+            # Monotonicity constraint: smooth then running-max (once-on stays-on)
+            _vp_smooth = median_filter(_vp_prob, size=(5, 1), mode="nearest")
+            _vp_mono = np.maximum.accumulate(_vp_smooth, axis=0)
+            _vp = (_vp_mono > _per_comp_thr[np.newaxis, :]).astype(np.int32)
             if len(_vp) < 2:
                 continue
 
