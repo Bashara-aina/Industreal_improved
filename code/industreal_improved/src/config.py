@@ -1157,6 +1157,7 @@ PSR_SEQ_LOSS_SCALE = 1.5     # [TUNE 2026-06-15] Reduced from 3.0 — PSR seq lo
 # psr_transition.py already implements build_transition_targets + MonotonicDecoder.
 USE_PSR_TRANSITION = True     # [FIX E1] Enable transition targets — prevents constant-output collapse on ~95% static per-frame labels
 PSR_TRANSITION_SIGMA = 3.0   # Gaussian sigma for transition target smearing (frames)
+PSR_TRANSITION_BOOST = 3.0   # [OPUS 207] Weight multiplier on frames near 0→1 transitions
 PSR_LOSS_WEIGHT = 5.0        # [FIX E1] Gradient scaling multiplier for PSR loss (applied before Kendall weighting). PSR loss is ~0.01 vs activity ~1-5, so this prevents Kendall from suppressing PSR.
 
 # [OPUS v5 AUDIT #83] Procedure-order prior: penalize invalid assembly step transitions.

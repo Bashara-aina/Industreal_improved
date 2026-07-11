@@ -481,9 +481,9 @@ def pose_loss(pred_6d: torch.Tensor, target_6d: torch.Tensor) -> torch.Tensor:
     cos_up = (up_pred * up_gt).sum(dim=1).clamp(-1.0, 1.0)
     cosine_loss = (1.0 - cos_fwd).mean() + (1.0 - cos_up).mean()
 
-    # Geodesic loss on SO(3) — Doc 207 Tier-1 item #2
-    R_pred = gram_schmidt_rotation(fwd_pred, up_pred)
-    R_gt = gram_schmidt_rotation(fwd_gt, up_gt)
+    # Geodesic loss on SO(3) — Doc 207 Tier-1 item #2. Must cast to float32.
+    R_pred = gram_schmidt_rotation(fwd_pred.float(), up_pred.float())
+    R_gt = gram_schmidt_rotation(fwd_gt.float(), up_gt.float())
     geodesic_loss = geodesic_angle(R_pred, R_gt).mean()
 
     return cosine_loss + geodesic_loss
@@ -932,6 +932,10 @@ def train_step(
     db_mtl: bool = False,                # [Tier 1 Item 12] DB-MTL log-transform
     psr_asl: bool = False,               # [Tier 1 Item 8] Asymmetric Loss for PSR
     psr_asl_gamma_neg: float = 4.0,      # ASL gamma for negative examples
+    psr_gaussian_smear: bool = False,    # [Tier 2 Item 15] Gaussian-smeared PSR targets
+    act_balanced_softmax: nn.Module = None,  # [Tier 1 Item 3] Balanced Softmax for activity
+    act_ldam: nn.Module = None,          # [Tier 1 Item 6] LDAM-DRW for activity
+    act_ldam_epoch: int = 0,             # Current epoch for DRW schedule
 ) -> dict:
     """Single training step with Kendall uncertainty weighting and optional PCGrad gradient surgery.
 
@@ -974,12 +978,27 @@ def train_step(
         det_list = aug_targets.get("detection", [])
         l_det = detection_loss(outputs["detection"], det_list)
 
-        l_act = activity_loss(
-            outputs["activity"],
-            targets.get("activity", torch.zeros(B, dtype=torch.long, device=images.device)),
-            class_weights=act_class_weights,
-            logit_adjust_freq=act_logit_adjust_freq,  # [OPUS 207 §2.6] Menon logit-adjust in loss
-        ) if "activity" in targets else torch.tensor(0.0, device=images.device)
+        # Activity loss: Balanced Softmax or LDAM-DRW (Tier 1 Items 3,6)
+        _act_targets = targets.get("activity")
+        _has_activity = "activity" in targets and _act_targets is not None
+        if _has_activity and _act_targets.numel() > 0:
+            _act_trainable = _act_targets[_act_targets >= 0]  # Filter unlabeled (-1)
+            if len(_act_trainable) == 0:
+                l_act = torch.tensor(0.0, device=images.device)
+            elif act_balanced_softmax is not None:
+                l_act = act_balanced_softmax(outputs["activity"], _act_targets.to(images.device))
+            elif act_ldam is not None:
+                l_act = act_ldam(outputs["activity"], _act_targets.to(images.device), epoch=act_ldam_epoch)
+            else:
+                l_act = activity_loss(
+                    outputs["activity"],
+                    _act_targets.to(images.device) if _act_targets is not None and _act_targets.numel() > 0
+                    else torch.zeros(B, dtype=torch.long, device=images.device),
+                    class_weights=act_class_weights,
+                    logit_adjust_freq=act_logit_adjust_freq,
+                )
+        else:
+            l_act = torch.tensor(0.0, device=images.device)
 
         # PSR per-component inverse-prevalence weights (Doc 175 §4)
         _psr_comp_weights = None
@@ -997,10 +1016,26 @@ def train_step(
                 _inv_weights = 1.0 / (_prevalence + 1e-6)
                 _psr_comp_weights = (_inv_weights / _inv_weights[0].clamp(min=1e-6)).view(1, 1, -1)
 
+        # PSR: handle T=16→T=8 downsampling + optional Gaussian smear (Tier 2 Item 15)
+        _psr_labels = targets.get("psr_labels",
+                                  torch.zeros(B, 16, 11, device=images.device))
+        # Always downsample to match PSR head output (T=16 labels → T=8)
+        if "psr_labels" in targets and _psr_labels.size(1) != outputs["psr_logits"].size(1):
+            _psr_labels = F.adaptive_max_pool1d(
+                _psr_labels.float().transpose(1, 2),
+                output_size=outputs["psr_logits"].size(1),
+            ).transpose(1, 2)
+        # Gaussian smear: soft blur on downsampled targets (GPU-based, fast)
+        if psr_gaussian_smear and "psr_labels" in targets:
+            _psr_labels = _psr_labels.float()
+            _kernel = torch.tensor([0.1, 0.25, 0.3, 0.25, 0.1], device=images.device).view(1,1,-1)
+            _psr_labels = F.conv1d(_psr_labels.transpose(1,2), _kernel.expand(11,1,-1),
+                                   padding=2, groups=11).transpose(1,2).clamp(0, 1)
+
         if psr_asl and "psr_labels" in targets:
             from src.losses.asymmetric_loss import AsymmetricLoss
             _asl = AsymmetricLoss(gamma_neg=psr_asl_gamma_neg, gamma_pos=0.0)
-            l_psr = _asl(outputs["psr_logits"], targets["psr_labels"])
+            l_psr = _asl(outputs["psr_logits"].flatten(0, 1), _psr_labels.flatten(0, 1))
         else:
             l_psr = psr_loss(
                 outputs["psr_logits"],
@@ -1659,6 +1694,12 @@ def main():
     parser.add_argument("--pcgrad", action=argparse.BooleanOptionalAction, default=True, help="PCGrad gradient surgery (default: on; use --no-pcgrad to disable)")
     parser.add_argument("--psr-asl", action="store_true", default=False,
                         help="[Tier 1 Item 8] Use Asymmetric Loss for PSR (Ridnik 2021)")
+    parser.add_argument("--psr-gaussian-smear", action="store_true", default=False,
+                        help="[Tier 2 Item 15] Gaussian-smeared PSR targets (sigma=2)")
+    parser.add_argument("--act-balanced-softmax", action="store_true", default=False,
+                        help="[Tier 1 Item 3] Balanced Softmax for activity (Ren 2020)")
+    parser.add_argument("--act-ldam-drw", action="store_true", default=False,
+                        help="[Tier 1 Item 6] LDAM-DRW for activity (Cao 2019)")
     parser.add_argument("--psr-focal", action=argparse.BooleanOptionalAction, default=True,
                         help="[EP10] Use Focal-BCE (γ=2.0, α=0.25) for PSR (default: on; use --no-psr-focal to disable).")
     parser.add_argument("--det-aug", action="store_true", default=True,
@@ -2022,6 +2063,21 @@ def main():
     act_logit_adjust_freq = class_counts_tensor.float() / _total
     act_logit_adjust_freq = act_logit_adjust_freq.to(device)
 
+    # ── Balanced Softmax / LDAM-DRW init [Tier 1 Items 3, 6] ────────────
+    act_balanced_softmax = None
+    act_ldam = None
+    if args.act_balanced_softmax:
+        from src.losses.balanced_softmax import BalancedSoftmaxLoss
+        _priors = class_counts_tensor.float() / class_counts_tensor.sum().clamp(min=1)
+        act_balanced_softmax = BalancedSoftmaxLoss(_priors.to(device))
+        logger.info("Balanced Softmax initialized — 75-class priors, range [%.2e, %.2e]",
+                    _priors.min().item(), _priors.max().item())
+    elif args.act_ldam_drw:
+        from src.losses.ldam_drw import LDAMLoss
+        act_ldam = LDAMLoss(cls_num_list=train_ds.class_counts.tolist(),
+                           max_m=0.5, s=30, reweight_epoch=35)
+        logger.info("LDAM-DRW initialized — reweight at epoch 35")
+
     # ── Training loop ─────────────────────────────────────────────────────
     logger.info("Starting training (%d epochs)...", args.epochs)
     if args.act_decoupled:
@@ -2114,9 +2170,13 @@ def main():
                 distill_teachers=distill_teachers,
                 distill_alpha=args.distill_alpha,
                 distill_temperature=args.distill_temperature,
-                uw_so_temperature=args.uw_so_temperature,  # [Tier 1 Item 1]
-                db_mtl=args.db_mtl,                          # [Tier 1 Item 12]
-                psr_asl=args.psr_asl,                        # [Tier 1 Item 8]
+                uw_so_temperature=args.uw_so_temperature,
+                db_mtl=args.db_mtl,
+                psr_asl=args.psr_asl,
+                psr_gaussian_smear=args.psr_gaussian_smear,
+                act_balanced_softmax=act_balanced_softmax,
+                act_ldam=act_ldam,
+                act_ldam_epoch=epoch,
             )
 
             for k in epoch_metrics:
