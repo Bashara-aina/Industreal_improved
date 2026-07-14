@@ -52,7 +52,8 @@ TRAIN_PSR = True
 USE_ASL_PSR = (
     False  # [V1 IMPLEMENTATION_PLAN Item 8] Use Asymmetric Loss (Ben-Baruch et al. CVPR 2020)
 )
-# instead of Focal-BCE for PSR. When True, uses AsymmetricLoss(gamma_neg=4, gamma_pos=0, clip=0.05).
+# instead of Focal-BCE for PSR. Default gamma_neg=1.0 (measured PSR ~62% positive, not extreme
+# imbalance). Override via PSR_ASL_GAMMA_NEG, PSR_ASL_GAMMA_POS, PSR_ASL_CLIP env vars.
 # Default False for full backward compat.
 USE_KENDALL = True  # Kendall weighting active for 4 tasks (det, act, psr, head_pose).
 USE_FAMO = (
@@ -886,7 +887,15 @@ USE_VARIFOCAL = os.environ.get("USE_VARIFOCAL", "0") == "1"  # VFL (Zhang et al.
 USE_WIOU = os.environ.get("USE_WIOU", "0") == "1"  # WIoU v3 (Tong et al. 2023) - +1-2 AP detection
 USE_ASL_PSR = (
     os.environ.get("USE_ASL_PSR", "0") == "1"
-)  # Asymmetric Loss (Ben-Baruch CVPR 2020) - positive benefit for PSR's <0.5% positive rate
+)  # Asymmetric Loss (Ben-Baruch CVPR 2020) for PSR.
+# Actual PSR label distribution (measured across 36 recordings, 11 components):
+#   overall ~62% positive (range: comp4=23%, comp10=32%, comp0=100%, rest 50-85%)
+#   → gamma_neg=1.0 avoids the 87% negative-suppression of gamma_neg=4 at equilibrium prob=0.6.
+#   gamma_neg=1 means prob^1 natural per-component adaptation: imbalanced components (comp4=23%)
+#   get stronger negative suppression, balanced components get milder.
+PSR_ASL_GAMMA_NEG = float(os.environ.get("PSR_ASL_GAMMA_NEG", "1.0"))
+PSR_ASL_GAMMA_POS = float(os.environ.get("PSR_ASL_GAMMA_POS", "0.0"))
+PSR_ASL_CLIP = float(os.environ.get("PSR_ASL_CLIP", "0.05"))
 USE_METABALANCE = os.environ.get("USE_METABALANCE", "0") == "1"  # He et al. WWW 2022 - addresses 20,245x gradient ratio
 PSR_MS_TCN_WEIGHT = 0.15  # MS-TCN smoothing weight (default from paper)
 
@@ -1330,6 +1339,39 @@ PSR_TRANSITION_SIGMA = 3.0  # Gaussian sigma for transition target smearing (fra
 PSR_TRANSITION_BOOST = 3.0  # [OPUS 207] Weight multiplier on frames near 0→1 transitions
 PSR_LOSS_WEIGHT = 5.0  # [FIX E1] Gradient scaling multiplier for PSR loss (applied before Kendall weighting). PSR loss is ~0.01 vs activity ~1-5, so this prevents Kendall from suppressing PSR.
 
+# [2026-07-14] Authors' post-hoc PSR evaluation pipeline.
+# When enabled, adds paper-comparable F1/POS/delay metrics by converting our
+# per-frame binary state predictions into step completion events via the
+# authors' state-change detection logic, then scoring against PSR_labels.csv.
+# This is a pure eval-time post-processing step — no training impact.
+USE_AUTHORS_PSR_EVAL = True  # Enable only during paper-comparison runs
+
+# [2026-07-14] Authors' PSR evaluation method variant.
+# Controls how per-frame binary states are converted to step completion events.
+#   "naive" (B1 equivalent): only accept state changes when component sigmoid
+#     confidence exceeds PSR_AUTHORS_CONF_THRESHOLD.
+#   "accumulated" (B2/B3 equivalent): accumulate confidences per action with
+#     exponential decay; emit when cumulative confidence > PSR_AUTHORS_CUM_THRESHOLD.
+#   "none": raw frame-to-frame diff (original behavior, no debounce).
+PSR_AUTHORS_METHOD = "naive"
+
+# NaivePSR (B1) confidence threshold. Only accept a component state change
+# when |sigmoid - 0.5| > (threshold - 0.5). 0.5 = no filtering (same as
+# binarization threshold), 0.6 = mild, 0.8 = aggressive filtering.
+PSR_AUTHORS_CONF_THRESHOLD = 0.6
+
+# AccumulatedConfidencePSR (B2/B3) cumulative threshold and decay.
+# emit step event when accumulated confidence > PSR_AUTHORS_CUM_THRESHOLD.
+# Decay unobserved action confidences by PSR_AUTHORS_CUM_DECAY per frame.
+PSR_AUTHORS_CUM_THRESHOLD = 8.0
+PSR_AUTHORS_CUM_DECAY = 0.75
+
+# [2026-07-14] Per-frame state accuracy from PSR_labels_raw.csv.
+# When enabled alongside USE_AUTHORS_PSR_EVAL, compares our 11-D binary
+# predictions against the fill-forward per-frame ground truth states and
+# reports per-component accuracy, macro-F1, precision, recall.
+USE_AUTHORS_PSR_STATE_ACCURACY = True
+
 # [OPUS v5 AUDIT #83] Procedure-order prior: penalize invalid assembly step transitions.
 # B2 baseline (F1=0.731) beats STORM-PSR largely because of order constraints.
 # Each component must be monotonic (0→1 only) in assembly — no disassembly.
@@ -1442,7 +1484,11 @@ MONITOR_LOG_INTERVAL = 10
 LOG_EFFICIENCY_EVERY = 10  # log GFLOPs/FPS every N epochs (0=disable)
 # Detection metrics: compute_det_metrics_extended does 11×(24 classes × 35084 frames) nested
 # Python loops = ~87 min/epoch. Set to True to enable, False to skip (epoch快了~87min).
-SKIP_DET_METRICS_EVAL = False  # True = skip detection mAP (~87 min/epoch) — saves ~90 min per epoch
+SKIP_DET_METRICS_EVAL = True  # True = skip detection mAP (~87 min/epoch) — saves ~90 min per epoch
+
+# Segment metrics: runs model on each activity segment (CUDA inference can hang
+# with untrained models). Set to True to skip, False to run (with 240s SIGALRM).
+SKIP_SEGMENT_METRICS_EVAL = True  # True = skip segment metrics to avoid CUDA hangs
 
 # [OPUS v5] Eval cadence: compute full detection mAP every N epochs; fast gate-only eval
 # (EVAL_MAX_BATCHES capped) on other epochs. 0 = eval every epoch (no skip).
@@ -2274,6 +2320,22 @@ PRESETS = {
         "img_width": 320,
         "img_height": 240,
     },
+    "img_size_fast_tma": {
+        "description": (
+            "Fast image size (320x240) WITH TMA Cell + Temporal Bank + "
+            "Benchmark Mode enabled. This is like img_size_fast but also "
+            "sets use_tma_cell=True, use_temporal_bank=True, benchmark_mode=True "
+            "so PSR training actually gets gradient flow. "
+            "WARNING: ANCHOR_SIZES are absolute pixel values — the 512px anchor "
+            "exceeds the 320-wide image. Recalibrate anchors before production use."
+        ),
+        "img_width": 320,
+        "img_height": 240,
+        "benchmark_mode": True,
+        "use_tma_cell": True,
+        "use_temporal_bank": True,
+        # Keep existing batch/accum from module defaults (batch=6, accum=8)
+    },
     "img_size_balanced": {
         "description": (
             "Balanced image size: 480x360 (1.78x fewer pixels than 1280x720). "
@@ -2296,7 +2358,8 @@ def apply_preset(preset_name: str) -> None:
     global USE_MIXUP, USE_EMA
     global TRAIN_DET, TRAIN_ACT, TRAIN_PSR, TRAIN_HEAD_POSE
     # [OPUS v5 BLOCKER-C FIX] Winnable-task flags — must be in global list for preset to set them
-    global USE_PSR_TRANSITION, USE_GEO_HEAD_POSE, FEATURE_BANK_DETACH, FEATURE_BANK_SLOT_OVERWRITE
+    global USE_PSR_TRANSITION, USE_GEO_HEAD_POSE, FEATURE_BANK_DETACH, FEATURE_BANK_SLOT_OVERWRITE, USE_AUTHORS_PSR_EVAL
+    global PSR_AUTHORS_METHOD, PSR_AUTHORS_CONF_THRESHOLD, PSR_AUTHORS_CUM_THRESHOLD, PSR_AUTHORS_CUM_DECAY, USE_AUTHORS_PSR_STATE_ACCURACY
     global USE_LDAM_DRW, PSR_SENSITIVITY_WEIGHT, USE_PSR_ORDER_PRIOR
     global USE_VIDEOMAE
     global SUBSET_RATIO
@@ -2361,38 +2424,15 @@ def apply_preset(preset_name: str) -> None:
         f"(train_det={TRAIN_DET}, train_act={TRAIN_ACT}, train_psr={TRAIN_PSR})"
     )
 
-
-# ── Curriculum decay schedule for DET_GT_FRAME_FRACTION ──
-# [FIX 2026-07-13] Smooth interpolation between detection-dominant (0.90)
-# and detection+other-tasks (0.40) phases. Eliminates the abrupt jump that
-# destabilizes the warm-up → main training transition. Off by default.
-DET_GT_CURRICULUM_DECAY = int(os.environ.get("DET_GT_CURRICULUM_DECAY", "0"))
-DET_GT_CURRICULUM_START = float(os.environ.get("DET_GT_CURRICULUM_START", "0.90"))
-DET_GT_CURRICULUM_END = float(os.environ.get("DET_GT_CURRICULUM_END", "0.40"))
-DET_GT_CURRICULUM_EPOCHS = int(os.environ.get("DET_GT_CURRICULUM_EPOCHS", "5"))
-
-
-def apply_curriculum_decay(epoch: int) -> float:
-    """Linearly interpolate DET_GT_FRAME_FRACTION over epochs 0..N-1.
-
-    Returns the GT-frame fraction for `epoch`. No-op when
-    DET_GT_CURRICULUM_DECAY=0 (returns existing DET_GT_FRAME_FRACTION).
-    """
-    global DET_GT_FRAME_FRACTION
-    if not DET_GT_CURRICULUM_DECAY:
-        return DET_GT_FRAME_FRACTION
-    if epoch >= DET_GT_CURRICULUM_EPOCHS:
-        new_frac = DET_GT_CURRICULUM_END
-    else:
-        progress = epoch / max(DET_GT_CURRICULUM_EPOCHS - 1, 1)
-        new_frac = (
-            DET_GT_CURRICULUM_START + (DET_GT_CURRICULUM_END - DET_GT_CURRICULUM_START) * progress
-        )
-    DET_GT_FRAME_FRACTION = float(new_frac)
-    return float(new_frac)
-    # [OPUS v5 BLOCKER-C FIX] Winnable-task flags — actually set them from preset.
-    # These were declared but never assigned → paper_run was a no-op for its key flags.
+    # [OPUS v5 BLOCKER-C FIX] Winnable-task flags — set them from preset.
+    # These were declared global but never assigned → paper_run was a no-op.
     USE_PSR_TRANSITION = bool(preset.get("use_psr_transition", USE_PSR_TRANSITION))
+    USE_AUTHORS_PSR_EVAL = bool(preset.get("use_authors_psr_eval", USE_AUTHORS_PSR_EVAL))
+    PSR_AUTHORS_METHOD = str(preset.get("psr_authors_method", PSR_AUTHORS_METHOD))
+    PSR_AUTHORS_CONF_THRESHOLD = float(preset.get("psr_authors_conf_threshold", PSR_AUTHORS_CONF_THRESHOLD))
+    PSR_AUTHORS_CUM_THRESHOLD = float(preset.get("psr_authors_cum_threshold", PSR_AUTHORS_CUM_THRESHOLD))
+    PSR_AUTHORS_CUM_DECAY = float(preset.get("psr_authors_cum_decay", PSR_AUTHORS_CUM_DECAY))
+    USE_AUTHORS_PSR_STATE_ACCURACY = bool(preset.get("use_authors_psr_state_accuracy", USE_AUTHORS_PSR_STATE_ACCURACY))
     # [R3 FIX 2026-06-14] PSR transition objective requires sequence batches (dim==3,
     # i.e. TMA cell with batch_size >= 2 or USE_PSR_SEQUENCE_MODE=True). Without
     # sequential context every batch is per-frame → transition loss is always zeroed
@@ -2424,6 +2464,36 @@ def apply_curriculum_decay(epoch: int) -> float:
         _cfg_logger.info(f'[config] Applied preset "{preset_name}": {preset["description"]}')
     else:
         _cfg_logger.info(f'[config] Applied preset "{preset_name}"')
+
+
+# ── Curriculum decay schedule for DET_GT_FRAME_FRACTION ──
+# [FIX 2026-07-13] Smooth interpolation between detection-dominant (0.90)
+# and detection+other-tasks (0.40) phases. Eliminates the abrupt jump that
+# destabilizes the warm-up → main training transition. Off by default.
+DET_GT_CURRICULUM_DECAY = int(os.environ.get("DET_GT_CURRICULUM_DECAY", "0"))
+DET_GT_CURRICULUM_START = float(os.environ.get("DET_GT_CURRICULUM_START", "0.90"))
+DET_GT_CURRICULUM_END = float(os.environ.get("DET_GT_CURRICULUM_END", "0.40"))
+DET_GT_CURRICULUM_EPOCHS = int(os.environ.get("DET_GT_CURRICULUM_EPOCHS", "5"))
+
+
+def apply_curriculum_decay(epoch: int) -> float:
+    """Linearly interpolate DET_GT_FRAME_FRACTION over epochs 0..N-1.
+
+    Returns the GT-frame fraction for `epoch`. No-op when
+    DET_GT_CURRICULUM_DECAY=0 (returns existing DET_GT_FRAME_FRACTION).
+    """
+    global DET_GT_FRAME_FRACTION
+    if not DET_GT_CURRICULUM_DECAY:
+        return DET_GT_FRAME_FRACTION
+    if epoch >= DET_GT_CURRICULUM_EPOCHS:
+        new_frac = DET_GT_CURRICULUM_END
+    else:
+        progress = epoch / max(DET_GT_CURRICULUM_EPOCHS - 1, 1)
+        new_frac = (
+            DET_GT_CURRICULUM_START + (DET_GT_CURRICULUM_END - DET_GT_CURRICULUM_START) * progress
+        )
+    DET_GT_FRAME_FRACTION = float(new_frac)
+    return float(new_frac)
 
 
 def update_dynamic_paths(preset_name: str = ""):
