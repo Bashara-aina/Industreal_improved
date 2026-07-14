@@ -5,6 +5,7 @@ Covers:
   - MonotonicDecoder: once-on-stays-on state machine with hysteresis
   - binary_focal_loss: per-component alpha, comp_weights, ignore_mask handling
 """
+
 import torch
 import pytest
 
@@ -15,6 +16,7 @@ from src.training.losses import binary_focal_loss
 # ============================================================================
 # Gaussian Transition Targets (build_transition_targets)
 # ============================================================================
+
 
 class TestBuildTransitionTargets:
     """Gaussian-smeared target generation with sigma=3.0."""
@@ -73,7 +75,7 @@ class TestBuildTransitionTargets:
         """Different samples in batch should not interfere."""
         labels = torch.zeros(2, 15, 1)
         labels[0, 5:, 0] = 1.0  # sample 0 transitions at 5
-        labels[1, :, 0] = 0.0    # sample 1 never transitions
+        labels[1, :, 0] = 0.0  # sample 1 never transitions
         targets = build_transition_targets(labels, sigma=3.0)
         assert targets[0, 5, 0].item() > 0.5, "Sample 0 should have peak"
         assert (targets[1, :, 0] == 0).all(), "Sample 1 should be all zero"
@@ -98,6 +100,7 @@ class TestBuildTransitionTargets:
 # ============================================================================
 # Monotonic Decoder (once-on-stays-on, hysteresis)
 # ============================================================================
+
 
 class TestMonotonicDecoder:
     """Monotonic state machine with hysteresis thresholds."""
@@ -179,6 +182,7 @@ class TestMonotonicDecoder:
 # ============================================================================
 # Binary Focal Loss (per-component alpha, comp_weights, ignore_mask)
 # ============================================================================
+
 
 class TestBinaryFocalLoss:
     """Per-component alpha, comp_weights, ignore_mask for -1 error states."""

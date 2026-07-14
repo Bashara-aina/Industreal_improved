@@ -36,7 +36,7 @@ Email: bashara.aina@nihon-u.ac.jp}}
 \maketitle
 
 \begin{abstract}
-We present a multi-task system that shares a single ConvNeXt-Tiny backbone across four industrial assembly perception tasks---object detection (24-state ASD), activity recognition (75-way clip classification), procedure step recognition (11 binary PSR components), and head pose estimation (6D rotation)---on the IndustReal dataset. With a single 46.47M-parameter model, our system replaces four separate single-task models totalling 81M parameters. We characterize three multi-task learning pathologies observed during development: (1) PSR dead-ReLU collapse resolved by transition-target supervision (F1 0\,$\to$\,0.7018), (2) Kendall uncertainty-weighting log-var collapse mitigated by per-task clamping bounds, and (3) a 20,245$\times$ gradient-norm imbalance between pose and PSR heads traced to tensor-dimensionality artifacts. We provide per-task multi-task versus single-task accounting under a fixed budget across three seeds with bootstrap confidence intervals, and establish the first head-pose baseline on IndustReal with MediaPipe comparison.
+We present a multi-task system sharing a single ConvNeXt-Tiny backbone across four industrial assembly perception tasks on the IndustReal dataset: object detection (24-class ASD), activity recognition (75-way clip classification), procedure step recognition (11 binary PSR components), and head pose estimation (9-DoF). At 46.47M total parameters (ConvNeXt-Tiny backbone, FPN, four task heads, two FiLM modules), the model operates within consumer GPU memory (RTX 3060/5060~Ti). We characterize three multi-task learning pathologies: (1) PSR dead-ReLU collapse resolved by transition-target supervision (F1 0\,$\to$\,0.7018), (2) Kendall uncertainty-weighting log-var collapse mitigated by per-task clamping bounds including KENDALL\_HP\_PREC\_CAP (pose precision $\leq$ detection precision), and (3) a 20,245$\times$ gradient-norm imbalance between pose and PSR heads traced to tensor-dimensionality artifacts. The activity label distribution is severely long-tailed (75 classes; 16 with $<$10 frames). Per-task multi-task versus single-task accounting under a fixed budget across three seeds with bootstrap confidence intervals yields \resultplaceholder{activity top-1}, \resultplaceholder{detection mAP50-pc}, \resultplaceholder{PSR F1@$\pm$3}, and \resultplaceholder{head pose MAE}. We establish the first head-pose baseline on IndustReal with MediaPipe comparison.
 \end{abstract}
 
 \textbf{Keywords:} multi-task learning; industrial assembly; ConvNeXt; procedure step recognition; head pose estimation; IndustReal
@@ -96,7 +96,7 @@ Our architecture (measured total 46.47M parameters) comprises a ConvNeXt-Tiny ba
 
 \textbf{Head pose head (1.45M).} Regresses a 6D continuous rotation representation~\cite{zhou2019continuity} using real HoloLens~2 ground truth. Loss is huberised geodesic with threshold $\delta=30^\circ$ and dropout~0.1.
 
-\textbf{Body pose head (1.64M).} Predicts 17 COCO keypoints using pseudo-labels derived from detection bounding boxes (see~\cref{sec:limitations}). This head was included for completeness and is not part of our primary experimental comparison.
+\textbf{Body pose head (1.64M).} Predicts 17 COCO keypoints using pseudo-labels derived from MediaPipe hand landmarks (see~\cref{sec:limitations}). This head was included for completeness and is not part of our primary experimental comparison.
 
 \textbf{PoseFiLM (0.84M) and HeadPoseFiLM (0.40M).} Feature-wise Linear Modulation~\cite{perez2018film} layers operating on the C5 feature map. PoseFiLM modulates body-pose features; HeadPoseFiLM is isolated with stop-gradient to prevent pose-to-pose interference. Both FiLM modules must be included in efficiency accounting (\cref{sec:efficiency}).
 
@@ -141,14 +141,11 @@ The IndustReal label distribution is severely long-tailed: 46 of 74 activity cla
 \subsection{Curriculum and Training Details}
 \label{sec:curriculum}
 
-A three-stage progressive unlocking (RF1--RF3) controls which parameters are trained:
-\begin{description}
-    \item[RF1] Backbone frozen; only task heads train.
-    \item[RF2] Backbone fine-tuned at BACKBONE\_LR\_MULT=0.01.
-    \item[RF3] All parameters trainable.
-\end{description}
+Training proceeds through ten progressive stages (RF1--RF10)\footnote{Earlier versions of this document described a three-stage curriculum. The live codebase has always implemented the ten-stage schedule described here; the V1 claim was an error in paper drafting.} orchestrated by a stage manager that unlocks heads, scales the training subset, and tightens per-task metric gates. RF1 trains detection only (20\% data, 20 max epochs, gate: det mAP50 $\ge$ 0.15). RF2 adds both pose heads (50\% data, 30 ep, gate: det 0.22 / pose MAE $\le$ 70). RF3 adds activity (35\% data, 15 ep, gate: det 0.20 / act top1 $\ge$ 0.05 / pose 70). RF4 adds PSR---all four heads active from this point (50\% data, 20 ep, gate: det 0.20 / act 0.06 / PSR F1 $\ge$ 0.05 / pose 65). RF5--RF9 progressively scale data from 50\% to 90\% (10 ep each) with tightening gates culminating in RF10 (100\% data, 15 ep, gate: det 0.30 / act 0.18 / PSR 0.16 / pose 35). The non-monotonic data drop at RF3 (50\%~$\to$~35\%) compensates for adding the activity head.
 
-Training hyper-parameters: effective batch size 48 (batch 6 $\times$ gradient accumulation 8); bf16 precision only (FP16 is disallowed---PSR BCE overflows FP16); gradient clipping at 5.0; optimiser AdamW (Lion available per configuration).
+The LR schedule uses OneCycleLR with a two-epoch linear warmup (LinearLR, start\_factor=1e-5); cosine annealing is not used. The peak LR follows the Goyal linear scaling rule---effective batch 48 yields a 1.5$\times$ peak factor. Stochastic Weight Averaging (SWA) is disabled; only exponential moving average (EMA) is active. The config parameter STAGED\_TRAINING (legacy scheme with STAGE1\_EPOCHS=5, STAGE2\_EPOCHS=10, STAGE3\_EPOCHS=85) is inactive---the stage manager above is the active curriculum.
+
+Training hyper-parameters: effective batch size 48 (batch 6 $\times$ gradient accumulation 8); bf16 precision only (FP16 is disallowed---PSR BCE overflows FP16); gradient clipping at 5.0; optimiser AdamW.
 
 % ====================================================================
 \section{Experiments}
@@ -188,7 +185,7 @@ Head pose & MAE$\degree$ & 7--10\\\bottomrule
 \end{tabular}}
 \end{table}
 
-\resultplaceholder{WACV~2024 anchors (different protocol: resolution, modality, paradigm) will be cited as context only---not as head-to-head comparisons, per the forbidden-claims list.}
+For context, WACV~2024~\cite{schoonbeek2024industreal} published single-task baselines on \industreal{} using different protocols: MViTv2-S for activity (65.25\% top-1, RGB+optical flow), YOLOv8m for detection (0.838~mAP50 at 1280px), and EfficientNet-B3 for PSR (0.883~F1, clip-level transition paradigm). These are cited as contextual references only---differences in input resolution (1280px vs.\ 224px, a 32.7$\times$ pixel-count gap for detection), input modality (RGB+flow vs.\ RGB-only for activity), and learning paradigm (single-task vs.\ multi-task) preclude direct comparison. We make no head-to-head claim against any published work. STORM-PSR~\cite{schoonbeek2025storm} (0.506~F1) provides a spatio-temporal tube reference on the same dataset under yet another paradigm. Comparisons with these references are informative for calibration, not for ranking.
 
 \subsection{Head-Pose Baseline}
 \label{sec:pose_baseline}
@@ -228,7 +225,7 @@ Head pose & MAE$\degree$ & 7--10\\\bottomrule
 
 \begin{itemize}
     \item \textbf{Input resolution ceiling.} The 224$\times$224 input resolution limits detection performance for small objects; anchor-free detection at higher resolution is deferred to future work.
-    \item \textbf{Body pose provenance.} Body-pose keypoints are pseudo-labels derived from detection bounding boxes rather than ground-truth annotations, limiting this head's independent value.
+    \item \textbf{Body pose provenance.} The body pose head predicts 17 COCO-style keypoints, but IndustReal contains no ground-truth body keypoint annotations. Pseudo-labels are derived from MediaPipe left-hand landmarks (26 joints, down-sampled to 17, normalized to $[0,1]$ pixel coordinates) rather than from detection bounding boxes as previously stated. This head is trained with Wing Loss ($\omega=0.05$, $\varepsilon=0.005$) at weight 5.0, contributing to the Kendall total alongside body pose log-variance regularization. The pseudo-label quality and distribution mismatch (hand vs.\ full-body keypoints) limit the head's independent value; we include it for architectural completeness and leave genuine body pose annotation to future work.
     \item \textbf{Single dataset.} All experiments are on IndustReal; we make no generalisability claim to other assembly domains or datasets.
     \item \textbf{Three seeds.} Budget constraints limit main experiments to three seeds; we report bootstrap confidence intervals and acknowledge that five seeds would be preferable per statistical guidelines~\cite{decor2017}.
     \item \textbf{MediaPipe comparison scope.} The MediaPipe baseline is RGB-only; we do not compare against multi-modal or proprioceptive alternatives.

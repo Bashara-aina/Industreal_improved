@@ -3,15 +3,16 @@
 EMA class lives at src.models.model.EMA; the training loop (train.py:1515)
 guards ema.update() behind ``epoch >= C.EMA_START_EPOCH`` (default 5).
 """
+
 import torch
 import torch.nn as nn
-import pytest
 
 from src.training.ema import ModelEMA
 
 
 class _DummyNet(nn.Module):
     """Minimal network with one trainable parameter."""
+
     def __init__(self):
         super().__init__()
         self.fc = nn.Linear(4, 2)
@@ -23,6 +24,7 @@ class _DummyNet(nn.Module):
 # ============================================================================
 # EMA shadow initialization & warmup guard
 # ============================================================================
+
 
 class TestEMAWarmup:
     """Verify that EMA shadows exist from init but training-loop gating
@@ -65,7 +67,7 @@ class TestEMAWarmup:
         ema = ModelEMA(net, decay=0.999)
         initial = {k: v.clone() for k, v in ema.shadow.items()}
 
-        for epoch in range(1, 5):          # epochs before start
+        for epoch in range(1, 5):  # epochs before start
             with torch.no_grad():
                 for p in net.parameters():
                     p.add_(torch.randn_like(p) * 0.01)
@@ -88,7 +90,7 @@ class TestEMAWarmup:
             with torch.no_grad():
                 for p in net.parameters():
                     p.add_(torch.randn_like(p) * 0.01)
-            ema.update()                     # called because epoch >= 5
+            ema.update()  # called because epoch >= 5
 
         for name in initial:
             assert not torch.equal(ema.shadow[name], initial[name]), (
@@ -99,6 +101,7 @@ class TestEMAWarmup:
 # ============================================================================
 # EMA decay schedule (train.py _get_ema_decay)
 # ============================================================================
+
 
 class TestEMADecaySchedule:
     """The EMA decay schedule is set via ema.set_decay() each epoch
@@ -121,13 +124,13 @@ class TestEMADecaySchedule:
         net = _DummyNet()
         ema = ModelEMA(net, decay=0.999)
 
-        ema.set_decay(0.999)     # epoch 16
+        ema.set_decay(0.999)  # epoch 16
         self._run_and_measure(ema, net, expected_decay=0.999)
 
-        ema.set_decay(0.9995)    # epoch 17
+        ema.set_decay(0.9995)  # epoch 17
         self._run_and_measure(ema, net, expected_decay=0.9995)
 
-        ema.set_decay(0.9999)    # epoch 18+
+        ema.set_decay(0.9999)  # epoch 18+
         self._run_and_measure(ema, net, expected_decay=0.9999)
 
     @staticmethod
@@ -170,6 +173,7 @@ class TestEMADecaySchedule:
 # EMA get_ema / restore round-trip
 # ============================================================================
 
+
 class TestEMAApplyRestore:
     """Verify that get_ema() applies shadow weights and restore()
     recovers the original training weights."""
@@ -177,8 +181,7 @@ class TestEMAApplyRestore:
     def test_get_ema_swaps_weights(self):
         net = _DummyNet()
         ema = ModelEMA(net, decay=0.9)
-        original = {n: p.data.clone() for n, p in net.named_parameters()
-                    if p.requires_grad}
+        original = {n: p.data.clone() for n, p in net.named_parameters() if p.requires_grad}
 
         # Train a few steps so EMA diverges from model
         for _ in range(5):
@@ -206,11 +209,10 @@ class TestEMAApplyRestore:
             ema.update()
 
         # Save the training weights before get_ema() overwrites them
-        pre_ema = {n: p.data.clone() for n, p in net.named_parameters()
-                   if p.requires_grad}
+        pre_ema = {n: p.data.clone() for n, p in net.named_parameters() if p.requires_grad}
 
-        _ = ema.get_ema()      # apply EMA (saves pre_ema weights into backup)
-        ema.restore()          # restore from backup
+        _ = ema.get_ema()  # apply EMA (saves pre_ema weights into backup)
+        ema.restore()  # restore from backup
         for name, param in net.named_parameters():
             if name in pre_ema:
                 assert torch.equal(param.data, pre_ema[name]), (

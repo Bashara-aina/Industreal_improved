@@ -1410,7 +1410,9 @@ SWA_EPOCHS = 10
 # When enabled, DistillationLoss is added to the total loss.
 # Teacher predictions must be pre-generated (see distillation.py --generate).
 USE_DISTILLATION = False
-TEACHER_CACHE_DIR = "runs/teacher_preds"  # Pre-generated teacher logits (see distillation.py --generate)
+TEACHER_CACHE_DIR = (
+    "runs/teacher_preds"  # Pre-generated teacher logits (see distillation.py --generate)
+)
 
 # =========================================================================
 # TTA (Doc 2 F)

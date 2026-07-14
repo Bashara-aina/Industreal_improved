@@ -59,12 +59,8 @@ def parse_log(path: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Plot per-head gradient norm bar chart"
-    )
-    parser.add_argument(
-        "--log", type=str, required=True, help="Path to training log"
-    )
+    parser = argparse.ArgumentParser(description="Plot per-head gradient norm bar chart")
+    parser.add_argument("--log", type=str, required=True, help="Path to training log")
     parser.add_argument(
         "--tail",
         type=int,

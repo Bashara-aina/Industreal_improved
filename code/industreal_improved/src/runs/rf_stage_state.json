@@ -1,11 +1,11 @@
 {
-  "epoch": 38,
+  "epoch": 0,
   "status": "running",
-  "last_heartbeat": "2026-07-08T01:51:06.644408+00:00",
-  "training_pid": 758477,
+  "last_heartbeat": "2026-07-14T07:42:46.453885+00:00",
+  "training_pid": 2886409,
   "batch": {
-    "current": 13150,
-    "total": 13161
+    "current": 400,
+    "total": 4387
   },
   "best_metric": 0.4684010215948263,
   "best_metrics": {

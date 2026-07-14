@@ -3,8 +3,8 @@
 LDAMLoss computes per-class margins inversely proportional to
 sqrt(sqrt(cls_num_list)), then applies DRW after a configured epoch.
 """
+
 import torch
-import pytest
 
 from src.losses.ldam_drw import LDAMLoss
 
@@ -12,6 +12,7 @@ from src.losses.ldam_drw import LDAMLoss
 # ============================================================================
 # Margin computation
 # ============================================================================
+
 
 class TestLDAMMargin:
     """Verify the per-class margin formula.
@@ -33,9 +34,7 @@ class TestLDAMMargin:
         loss_fn = LDAMLoss(counts, max_m=0.5, s=30)
         m_rare = loss_fn.m_list[1].item()
         m_common = loss_fn.m_list[0].item()
-        assert m_rare > m_common, (
-            f"Rare class margin {m_rare} should exceed common {m_common}"
-        )
+        assert m_rare > m_common, f"Rare class margin {m_rare} should exceed common {m_common}"
 
     def test_very_rare_class_gets_max_margin(self):
         """The rarest class determines max_m normalization."""
@@ -63,7 +62,7 @@ class TestLDAMMargin:
         # m_raw = [1/2, 1/3] = [0.5, 0.333...]
         # normalized by max (0.5): m = [0.5/0.5*max_m, 0.333/0.5*max_m]
         # = [0.5, 0.333...]
-        raw = [1.0 / (16 ** 0.25), 1.0 / (81 ** 0.25)]
+        raw = [1.0 / (16**0.25), 1.0 / (81**0.25)]
         max_raw = max(raw)
         expected = [r / max_raw * 0.5 for r in raw]
 
@@ -76,6 +75,7 @@ class TestLDAMMargin:
 # ============================================================================
 # Deferred Re-Weighting (DRW) schedule
 # ============================================================================
+
 
 class TestDRWSchedule:
     """DRW activates when epoch >= reweight_epoch (default 35)."""
@@ -107,9 +107,7 @@ class TestDRWSchedule:
         loss_at = loss_fn(logits, targets, epoch=35).item()
 
         assert loss_fn.is_drw, "DRW should be True at epoch 35"
-        assert abs(loss_at - loss_before) > 1e-6, (
-            "DRW loss should differ from non-DRW loss"
-        )
+        assert abs(loss_at - loss_before) > 1e-6, "DRW loss should differ from non-DRW loss"
 
     def test_drw_stays_enabled_after_reweight_epoch(self):
         """Once activated, DRW persists for all later epochs."""
@@ -144,6 +142,7 @@ class TestDRWSchedule:
 # ============================================================================
 # set_class_counts() API
 # ============================================================================
+
 
 class TestSetClassCounts:
     """LDAMLoss accepts class counts at construction; users can also
@@ -210,6 +209,7 @@ class TestSetClassCounts:
 # ============================================================================
 # End-to-end loss computation
 # ============================================================================
+
 
 class TestLDAMLossForward:
     """Verify forward() produces finite, positive values."""

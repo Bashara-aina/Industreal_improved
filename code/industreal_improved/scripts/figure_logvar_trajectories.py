@@ -10,7 +10,6 @@ Usage:
 """
 
 import argparse
-import math
 import re
 import sys
 from pathlib import Path
@@ -75,12 +74,8 @@ def parse_log(path: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Plot Kendall log-var trajectories"
-    )
-    parser.add_argument(
-        "--log", type=str, required=True, help="Path to training log"
-    )
+    parser = argparse.ArgumentParser(description="Plot Kendall log-var trajectories")
+    parser.add_argument("--log", type=str, required=True, help="Path to training log")
     parser.add_argument(
         "--output",
         type=str,

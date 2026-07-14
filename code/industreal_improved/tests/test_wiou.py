@@ -6,8 +6,8 @@ Covers:
   - Dynamic non-monotonic focusing (v3) with beta/anchor_iou
   - Edge cases: degenerate boxes, zero-area, far apart
 """
+
 import torch
-import pytest
 
 from src.losses.wiou_loss import wiou_v3_loss
 
@@ -15,6 +15,7 @@ from src.losses.wiou_loss import wiou_v3_loss
 # ============================================================================
 # IoU Computation
 # ============================================================================
+
 
 class TestWIoUv3IoU:
     """Verify the IoU component of WIoU v3."""
@@ -64,6 +65,7 @@ class TestWIoUv3IoU:
 # Distance-aware weighting (WIoU v1)
 # ============================================================================
 
+
 class TestWIoUv1Distance:
     """WIoU v1 = IoU * exp(-dw) penalizes distant predictions."""
 
@@ -78,9 +80,7 @@ class TestWIoUv1Distance:
         target_far = torch.tensor([[0.0, 0.0, 2.0, 2.0]])
         loss_close = wiou_v3_loss(pred_close, target_close, anchor)
         loss_far = wiou_v3_loss(pred_far, target_far, anchor)
-        assert loss_far > loss_close, (
-            "Far apart boxes should have higher loss than close ones"
-        )
+        assert loss_far > loss_close, "Far apart boxes should have higher loss than close ones"
 
     def test_dw_penalty_term(self):
         """The distance penalty term dw = (dcx/ew)^2 + (dcy/eh)^2 should be non-negative."""
@@ -102,6 +102,7 @@ class TestWIoUv1Distance:
 # ============================================================================
 # Dynamic non-monotonic focusing (v3)
 # ============================================================================
+
 
 class TestWIoUv3Focusing:
     """WIoU v3 dynamic focusing: r = delta / (alpha^(beta - delta))."""
@@ -150,6 +151,7 @@ class TestWIoUv3Focusing:
 # ============================================================================
 # Edge Cases
 # ============================================================================
+
 
 class TestWIoUv3EdgeCases:
     """Edge cases: degenerate boxes, zero area, extreme aspect ratios."""

@@ -70,15 +70,9 @@ def main() -> None:
         print(f"  WARN: {actual_total} unique subjects > expected {expected_total}")
 
     # Check 3: Verify expected split sizes
-    assert (
-        len(TRAIN_SUBJECTS) == 12
-    ), f"Expected 12 train subjects, got {len(TRAIN_SUBJECTS)}"
-    assert (
-        len(VAL_SUBJECTS) == 5
-    ), f"Expected 5 val subjects, got {len(VAL_SUBJECTS)}"
-    assert (
-        len(TEST_SUBJECTS) == 10
-    ), f"Expected 10 test subjects, got {len(TEST_SUBJECTS)}"
+    assert len(TRAIN_SUBJECTS) == 12, f"Expected 12 train subjects, got {len(TRAIN_SUBJECTS)}"
+    assert len(VAL_SUBJECTS) == 5, f"Expected 5 val subjects, got {len(VAL_SUBJECTS)}"
+    assert len(TEST_SUBJECTS) == 10, f"Expected 10 test subjects, got {len(TEST_SUBJECTS)}"
     print("  OK:   Split sizes correct (12/5/10)")
 
     # Check 4: No subject ID is empty or malformed
@@ -98,8 +92,10 @@ def main() -> None:
         sys.exit(1)
     else:
         print("RESULT: PASS -- all splits are disjoint and correctly sized")
-        print("  Note: This check is enforced at import time in split_config.py "
-              "(assertions at module level).")
+        print(
+            "  Note: This check is enforced at import time in split_config.py "
+            "(assertions at module level)."
+        )
 
 
 if __name__ == "__main__":

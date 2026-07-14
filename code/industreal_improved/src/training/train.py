@@ -937,7 +937,7 @@ def _save_crash_recovery(tag: str = "") -> None:
                 if _usage.free < 2 * 1024**3:
                     logger.warning(
                         f"  [CRASH_RECOVERY] Skipping save — free disk "
-                    f"{_usage.free / 1024**3:.1f}GB < 2GB"
+                        f"{_usage.free / 1024**3:.1f}GB < 2GB"
                     )
                     return
             except OSError:

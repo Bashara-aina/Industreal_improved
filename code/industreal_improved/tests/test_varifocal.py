@@ -4,6 +4,7 @@ Covers:
   - VarifocalLoss: IoU-aware classification, alpha/gamma params
   - AsymmetricLoss: gamma_neg=4.0, gamma_pos=0.0, clip=0.05
 """
+
 import torch
 import pytest
 
@@ -14,6 +15,7 @@ from src.losses.asymmetric_loss import AsymmetricLoss
 # ============================================================================
 # Varifocal Loss
 # ============================================================================
+
 
 class TestVarifocalLoss:
     """IoU-aware classification loss (Zhang et al. 2021 CVPR Oral)."""
@@ -51,9 +53,7 @@ class TestVarifocalLoss:
         pred = torch.randn(2, 2)
         loss1 = VarifocalLoss(alpha=0.25, gamma=2.0)(pred, target)
         loss2 = VarifocalLoss(alpha=0.75, gamma=2.0)(pred, target)
-        assert loss1 != pytest.approx(loss2.item(), rel=1e-3), (
-            "Alpha should affect loss value"
-        )
+        assert loss1 != pytest.approx(loss2.item(), rel=1e-3), "Alpha should affect loss value"
 
     def test_gamma_param_affects_loss(self):
         """Different gamma values should produce different losses."""
@@ -61,9 +61,7 @@ class TestVarifocalLoss:
         pred = torch.randn(2, 2)
         loss1 = VarifocalLoss(alpha=0.75, gamma=0.0)(pred, target)
         loss2 = VarifocalLoss(alpha=0.75, gamma=2.0)(pred, target)
-        assert loss1 != pytest.approx(loss2.item(), rel=1e-3), (
-            "Gamma should affect loss value"
-        )
+        assert loss1 != pytest.approx(loss2.item(), rel=1e-3), "Gamma should affect loss value"
 
     def test_all_negative_samples(self):
         """When all targets are zero (negative), loss should still be defined."""
@@ -87,6 +85,7 @@ class TestVarifocalLoss:
 # ============================================================================
 # Asymmetric Loss
 # ============================================================================
+
 
 class TestAsymmetricLoss:
     """Asymmetric loss for multi-label classification (Ridnik et al. 2021 ICCV)."""
@@ -156,6 +155,4 @@ class TestAsymmetricLoss:
         target = torch.tensor([[1.0, 0.0]])
         l0 = loss_fn_pos0(pred, target)
         l2 = loss_fn_pos2(pred, target)
-        assert l0 != pytest.approx(l2.item(), rel=1e-3), (
-            "gamma_pos should affect loss value"
-        )
+        assert l0 != pytest.approx(l2.item(), rel=1e-3), "gamma_pos should affect loss value"

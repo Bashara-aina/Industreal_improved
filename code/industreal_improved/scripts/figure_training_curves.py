@@ -63,9 +63,7 @@ def is_pathological(value, key):
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Plot per-task training curves"
-    )
+    parser = argparse.ArgumentParser(description="Plot per-task training curves")
     parser.add_argument(
         "--runs",
         type=str,
@@ -130,9 +128,7 @@ def main():
 
         for run_idx, records in enumerate(all_records):
             epochs = np.arange(1, len(records) + 1, dtype=float)
-            values = np.array(
-                [r.get(metric_key, float("nan")) for r in records], dtype=float
-            )
+            values = np.array([r.get(metric_key, float("nan")) for r in records], dtype=float)
 
             # Replace None with NaN
             values = np.array([float("nan") if v is None else v for v in values])
@@ -143,9 +139,7 @@ def main():
             # Moving average
             window = args.window
             if window > 1 and len(values) > window:
-                smoothed = np.convolve(
-                    plot_values, np.ones(window) / window, mode="valid"
-                )
+                smoothed = np.convolve(plot_values, np.ones(window) / window, mode="valid")
                 # Align x-axis: smoothed starts at index window-1
                 smooth_epochs = epochs[window - 1 :]
                 ax.plot(
@@ -214,17 +208,13 @@ def main():
         panel_fig, panel_ax = plt.subplots(figsize=(6, 4.5))
         for run_idx, records in enumerate(all_records):
             epochs = np.arange(1, len(records) + 1, dtype=float)
-            values = np.array(
-                [r.get(metric_key, float("nan")) for r in records], dtype=float
-            )
+            values = np.array([r.get(metric_key, float("nan")) for r in records], dtype=float)
             values = np.array([float("nan") if v is None else v for v in values])
             plot_values = -values if invert else values
 
             window = args.window
             if window > 1 and len(values) > window:
-                smoothed = np.convolve(
-                    plot_values, np.ones(window) / window, mode="valid"
-                )
+                smoothed = np.convolve(plot_values, np.ones(window) / window, mode="valid")
                 smooth_epochs = epochs[window - 1 :]
                 panel_ax.plot(
                     smooth_epochs,

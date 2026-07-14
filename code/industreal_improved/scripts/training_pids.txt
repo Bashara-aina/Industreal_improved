@@ -1,0 +1,6 @@
+# Training PIDs (for monitoring only)
+# MTL baseline (GPU 1): 2886409 — runs/aa_main_mtl/
+# ST pose baseline (GPU 0): 2886480 — runs/aa_st_pose/
+# Started: Tue Jul 14 04:43:04 PM JST 2026
+# Kill with: kill 2886409 2886480
+# Monitor with: bash scripts/monitor_training.sh
