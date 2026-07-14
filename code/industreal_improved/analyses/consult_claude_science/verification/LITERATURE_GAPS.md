@@ -8,15 +8,18 @@
 
 ## G1. Novelty re-verification vs Nardon and successors (→ Q46, Q52/Item 52)
 
+- **FIRST: resolve an internal contradiction in our own archive.** MASTER_VERIFICATION/R3/A19 describe Nardon arXiv:2506.15285 as "single-task detection + state tracking on different data, threat LOW"; V2_AGENT_STALENESS_REPORT finding A9 describes the same ID as a "hybrid CNN-attention **head pose estimator with 6 DoF**, threat MODERATE, June 2026, no code release." If A9 is right, Nardon touches our Contribution 3 (first head-pose baseline). **Read the actual paper — do not trust either summary.**
 - **Queries:**
+  - `arXiv:2506.15285` (fetch the abstract/paper itself — resolves the contradiction)
   - `"IndustReal" multi-task learning`
   - `"IndustReal" dataset benchmark 2026`
   - `industrial assembly multi-task detection "procedure step" OR "assembly state" 2025..2026`
-  - `arXiv:2506.15285 citing articles` (papers citing Nardon)
-- **What we know:** R3 found 0 papers doing 4-task MTL on IndustReal; Nardon (arXiv:2506.15285) is single-task detection + state tracking on different data, threat assessed LOW (A19). 11 adjacent 2025–2026 papers catalogued.
-- **Evidence needed:** any preprint after 2026-06 that trains ≥2 heads on IndustReal or claims a head-pose baseline on it.
-- **Decision impact:** if found → rewrite novelty claims (§1, §2) from "first" to "first to jointly…" differentiation; does NOT change the experimental plan.
-- **When:** Day 4 (initial) and **Day 80 (Oct 1) refresh — mandatory pre-submission**.
+  - `head pose estimation industrial assembly 2025..2026` (covers the A9 reading)
+  - `arXiv:2506.15285 citing articles`
+- **What we know:** R3 found 0 papers doing 4-task MTL on IndustReal; 11 adjacent 2025–2026 papers catalogued; Nardon's actual content is disputed within our own docs.
+- **Evidence needed:** (a) what Nardon actually does; (b) any preprint after 2026-06 that trains ≥2 heads on IndustReal or claims a head-pose baseline on it.
+- **Decision impact:** if head-pose reading is correct → tighten Contribution 3 wording ("first head-pose baseline *on IndustReal* / *within a 4-task industrial MTL system*" — whichever survives); if any ≥2-head IndustReal paper appears → "first to jointly…" differentiation. Does NOT change the experimental plan.
+- **When:** **Day 4 (mandatory, primary source)** and **Day 80 (Oct 1) refresh — mandatory pre-submission**.
 
 ## G2. UW-SO temperature and stability at extreme loss-scale ratios (→ Q5, Q17 gate)
 
@@ -83,14 +86,14 @@
 - **Decision impact:** whether a triggered Q39 replaces the final config (risky, late) or is reported as an ablation only (recommended).
 - **When:** by Day 12 (slot decision).
 
-## G8. AAIML 2027 formatting, page limit, review criteria (→ Phase 4)
+## G8. AAIML 2027 formatting, page limit, review criteria (→ Phase 4, X2)
 
 - **Queries (web, not paper-search):**
   - `AAIML 2027 IEEE call for papers page limit format`
   - `AAIML 2026 accepted papers proceedings` (calibrate typical rigor/length)
-- **What we know:** deadline Oct 10, 2026 verified (A8); template in `popw_aaiml2027.tex`.
-- **Evidence needed:** exact page limit incl./excl. references; supplementary policy; double-blind or not (affects repo/artifact anonymization).
-- **Decision impact:** Phase-4 writing budget and whether ablation tables move to supplementary.
+- **What we know:** deadline Oct 10, 2026 verified (A8); full name "IEEE International Conference on Advances in AI and Machine Learning," track "AI in Manufacturing" (A8); **page limit 8 pages + references already asserted by R4/V1 doc 224 (confidence MEDIUM — verify against the official CFP, don't re-derive)**; template in `popw_aaiml2027.tex`.
+- **Evidence needed:** confirm 8+refs from the CFP; supplementary policy; double-blind or not (**gates the X2 code-release timing** — anonymized repo if blind).
+- **Decision impact:** Phase-4 writing budget, whether ablation tables move to supplementary, and X2 release mechanics.
 - **When:** Week 6 (before draft v1 is size-committed).
 
 ## G9. Bootstrap CI protocol for 3-seed reporting (→ Q2, Q13)
@@ -104,6 +107,10 @@
 - **When:** Week 5.
 
 ---
+
+## Standing question bank
+
+`215_50_DEEP_QUESTIONS.md` (V1) remains the full literature-question bank (sections A–, architecture through strategy, written in the MViTv2-S era — mentally substitute ConvNeXt-Tiny). Its questions were re-verified by V2 R3/D3 and are superseded for decision-making by this file, but it is the right source to mine if a Claude Science session has spare capacity after G1–G9.
 
 ## Priority order for the next Claude Science session
 

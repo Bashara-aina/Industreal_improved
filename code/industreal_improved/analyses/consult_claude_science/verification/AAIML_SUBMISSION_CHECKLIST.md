@@ -17,7 +17,20 @@
 
 *Q16 is GO for wiring (1 h, flag off) but NO-GO for training. Q15 similarly split — see entries.
 
-**Headline change from prior plans:** ST baselines and multi-seed MTL run at **3 seeds [42, 123, 7], not 5**. The project's own evaluation protocol (`analyses/metrics_compilation_2026_07_03/QUICK_REFERENCE_METRICS.txt`, "Multi-seed: Seeds [42, 123, 7]") already specifies 3 seeds, and 5-seed ST alone (102.5 GPU-h) would consume 88% of GPU 0's entire remaining budget. 3 seeds keeps every CRITICAL item inside budget with reserve.
+**Headline change from prior plans:** ST baselines and multi-seed MTL start at **3 seeds [42, 123, 7], with a written escalation rule to 5**. The consultation's own protocol docs disagree — Doc 223 §1 demands N=5 for main experiments, Doc 222 §9 tiers full runs at 3 seeds / key ablations 2 / minor 1, and the metrics protocol (`metrics_compilation_2026_07_03`) specifies seeds [42, 123, 7] — while 5-seed ST alone (102.5 GPU-h) would consume 88% of GPU 0's entire remaining budget. Resolution: 3 seeds now; **escalate to 5 seeds iff (a) measured throughput permits (see runtime uncertainty below) or (b) cross-seed variance blurs the MTL-vs-ST deltas** (Doc 223's own escalation logic applied to main runs). Seed semantics per Doc 223: `SEED_DATA=42` frozen project-wide, `SEED_INIT` ∈ {42,123,7}, `SEED_TRAIN = SEED_INIT + 1000`.
+
+**Runtime uncertainty (must resolve Day 1):** the consultation docs price a 100-epoch MTL run anywhere from **~10 GPU-h** (Doc 226 §4.1) to **~50 GPU-h** (FINAL_PAPER_FRAMEWORK §4.5) to **~96 GPU-h** (Doc 222 §1 cost basis, 48 GPU-h per 50 epochs). This ledger uses the conservative 50 h. **Day 1 action: measure min/epoch at epoch 2–5 of the baseline run and rewrite the COMPUTE_SCHEDULE ledger; if a run costs ≤20 h, escalate main MTL to 5 seeds per Doc 223.**
+
+---
+
+## Day-1 pre-launch config review (NEW — blocks all funded runs)
+
+Re-verification against the live code found a launch-critical default the prior plans missed:
+
+1. **`FREEZE_BACKBONE = True` (config.py:199, set 2026-07-07) — linear-probe mode is the current default.** The frozen-ConvNeXt probe ceiling for activity is **0.2169 top-1** (Item 5) against a 0.35 paper target: a main baseline launched as-is is structurally capped below target on activity, and train.py:3808-3816 freezes all backbone params when the flag is True. The paper framework's training spec (§3.2.3: backbone ≈1e-5, heads ≈1e-3) describes *fine-tuning*. **Before launching the Day-1 baseline: decide the mode explicitly — default decision is `FREEZE_BACKBONE=False` (fine-tune at BACKBONE_LR_MULT=0.01) unless the RF1-stage logic is confirmed to unfreeze the backbone itself — and record the decision in the run config.**
+2. **Determinism flags** per Doc 223 §1: `torch.backends.cudnn.deterministic=True`, `benchmark=False`, `use_deterministic_algorithms(warn_only=True)`, `CUBLAS_WORKSPACE_CONFIG=:4096:8` in every launch script; bf16 only (fp16 is disallowed — PSR BCE overflows fp16, Doc 211 §1.4).
+3. **Fixed split file** referenced (never regenerated); val drives decisions, test evaluated exactly once (Doc 223 §2).
+4. Flag audit against the intended run: `USE_KENDALL=True`, `USE_LDAM_DRW=True`, `USE_PSR_TRANSITION=True`, `USE_GEO_HEAD_POSE=True`, `KENDALL_STAGED_TRAINING=False`, `USE_BIFPN/USE_UW_SO/USE_FAMO` per experiment.
 
 ---
 
@@ -33,7 +46,8 @@
 - **Effort:** 0.5 person-h + **61.5 GPU-h** (GPU 0)
 - **Impact:** Enables the paper's core quantitative table (MTL/ST ratio per task). Without it there is no paper.
 - **Risk:** 15% — a train_singletask_*.py script has an unexercised bug. Mitigation: 1-epoch smoke per head (`--dry-run` then 1-epoch run, ~2 GPU-h, Day 1 morning) before committing the full launch.
-- **Dependencies:** None. First thing to start.
+- **Seed note:** 3 seeds now; the two remaining seeds per head are the first claim on GPU 0's ~40 h reserve if Day-1 throughput measurement shows ST runs cheaper than the launcher's estimate (Doc 223 wants N=5; see escalation rule above). Doc 222 §2.2's control — same RNG data-ordering as the MTL run — applies.
+- **Dependencies:** Day-1 pre-launch config review (FREEZE_BACKBONE decision applies to ST runs identically — ST and MTL must use the same backbone mode or the comparison is invalid).
 
 ## [Q2] Have we run multi-seed main MTL?
 - **Current status:** ❌ NOT IMPLEMENTED (Item 67).
@@ -42,9 +56,9 @@
   1. Freeze final config after Phase 2 ablations (see 30_DAY_EXECUTION_PLAN Day 21 gate).
   2. Run `src/training/train.py` full 100-epoch × seeds 42/123/7 sequentially on GPU 1, ~50 GPU-h each.
   3. Bootstrap CIs via existing eval tooling; report mean ± std per the metrics protocol.
-- **Effort:** 2 person-h + **150 GPU-h** (GPU 1)
-- **Impact:** Statistical rigor for every headline number; reviewers will demand it.
-- **Risk:** 25% — seed variance large enough to blur claims (Item 64 / Q13). Mitigation: report CIs honestly; the MTL-vs-ST *per-task profile* (which tasks win/lose) is robust to variance even when absolute numbers wobble.
+- **Effort:** 2 person-h + **150 GPU-h** (GPU 1) at the conservative 50 h/run estimate — could be 30–45 h total if Doc 226's ~10 h/run figure holds (Day-1 measurement decides; escalate to 5 seeds if so).
+- **Impact:** Statistical rigor for every headline number; reviewers will demand it. Doc 223 §1 sets N=5 as the protocol minimum for main experiments — the 3-seed floor is a budget-forced deviation that must be (a) escalated away if throughput allows, or (b) defended in the paper via per-sample bootstrap CIs (G9).
+- **Risk:** 25% — seed variance large enough to blur claims (Item 64 / Q13). Mitigation: report CIs honestly; the MTL-vs-ST *per-task profile* (which tasks win/lose) is robust to variance even when absolute numbers wobble; variance-triggered escalation adds seeds 4–5 from reserve.
 - **Dependencies:** Phase 2 ablation results (Q5/Q41 gates); Q1 not required but desirable for same-protocol comparison.
 
 ## [Q3] What is the current detection mAP@0.5?
@@ -147,7 +161,8 @@
 
 ## [Q15] ASL for PSR
 - **Current status:** 🔵 `src/losses/asymmetric_loss.py` exists; zero references in training path (verified).
-- **Our decision:** **Split: GO for wiring (flag off, 1 h) · DEFER training — gate: PSR event-F1 < 0.50 (target floor) after Q10 measurement.**
+- **Our decision:** **Split: GO for wiring (flag off, 1 h) · DEFER training — gate: PSR event-F1 below the STORM anchor (0.506) after Q10 measurement.**
+- **Gate calibration warning:** the consultation's target tables disagree — the metrics protocol (Jul 3) targets F1@±3 = 0.50–0.62, while FINAL_PAPER_FRAMEWORK (Jul 14) targets 0.15 (stretch 0.25, fallback 0.05). Two thresholds therefore operate: **< 0.506 → queue ASL for an ablation slot** (this gate); **< 0.30 → RISK_REGISTER R2 fallback chain fires**. Recalibrate both against the Day-5 constant-prediction floor and ST PSR numbers before Day 8.
 - **Implementation:** config flag `USE_PSR_ASL`; branch in PSR loss construction in `src/training/losses.py` (~line 1485 region) replacing focal-BCE. If gate fires: 25 GPU-h ablation slot #3.
 - **Effort:** 1 person-h + (gated) 25 GPU-h · **Impact:** ASL is designed for exactly PSR's <0.5% positive-rate regime; R3 §3.2 confirmed no published solution at this rate — ASL is the best-evidenced candidate · **Risk:** 35% · **Dependencies:** Q10.
 
@@ -245,10 +260,10 @@
 - **Our decision:** **GO — Day 3, CPU-only.** Pandas pass over `PSR_labels_raw.csv` (11 components, NUM_PSR_COMPONENTS per config.py:528): positive rate per component per split. Feeds paper data section + justifies ASL gate (Q15) if some components are ~0%.
 - **Effort:** 1 person-h · **Dependencies:** dataset CSV on local machine.
 
-## [Q37] Activity class-0 semantics (CONFLICT)
-- **Current status:** ⚪ V1 says background/NA; V2 agent01 says `take_short_brace`. Direct contradiction.
-- **Our decision:** **GO — Day 3, must resolve before any activity number goes in the paper.** Check `action_labels` mapping in the dataset loader (`src/` data pipeline, NUM_ACT_RAW_IDS=74 comment at config.py:292 notes ID 37 absent — the loader clearly has an explicit ID map), then cross-check the IndustReal annotation README. If class 0 is a real action, confusion-matrix and class-balanced-loss interpretations change; if background, it must be excluded from clip top-1.
-- **Effort:** 1 person-h · **Risk if skipped:** an eval-protocol error a reviewer can falsify from the public dataset — severity high · **Dependencies:** none.
+## [Q37] Activity class-0 semantics (conflict RESOLVED by V2)
+- **Current status:** ✅ effectively answered — FINAL_VERIFIED_FINDINGS §1.2 verified **class 0 = `take_short_brace` (797 train frames), NOT NA/background** (`ACT_CLASS0_IS_NA = False` per the V1-vs-codebase discrepancy report §4.3); the finding SURVIVED the D1 adversarial challenge. UNANSWERED_QUESTIONS' "CONFLICT" label is stale — V1's background claim was the error.
+- **Our decision:** **GO — reduced to a 0.5 h confirmation + documentation task (Day 3).** Confirm `ACT_CLASS0_IS_NA=False` in the loader path actually used at eval time, and state class-0 semantics explicitly in the paper's data section so a reviewer can't misread the confusion matrix.
+- **Effort:** 0.5 person-h · **Dependencies:** none.
 
 ## [Q38] Body pose annotation source
 - **Current status:** ⚪ confirmed pseudo-keypoints from detection boxes (V2 R1 §2.5).
@@ -259,11 +274,10 @@
 # ARCHITECTURE
 
 ## [Q39] ConvNeXt-Tiny vs MViTv2-S backbone
-- **Current status:** ❌ no comparison run. **New finding this session: `scripts/train_mtl_mvit.py` is a complete MViTv2-S 4-head MTL pipeline (Kendall + PCGrad, plumbing mode, resume, test-only)** — the ablation is a *launch*, not an implementation.
-- **Our decision:** **DEFER — gate: activity clip top-1 < 0.35 on main baseline (Day 8) AND GPU-1 reserve ≥ 60 h at Day 21.** If triggered, this replaces the third ablation slot AND becomes a headline result (+10–15% activity per V1 doc 214 estimate).
-- **Implementation if triggered:** `python scripts/train_mtl_mvit.py --plumbing` smoke (0.5 GPU-h) → full run seed 42 (~50 GPU-h on GPU 1; video backbone is heavier).
-- **Effort:** 2 person-h + 50 GPU-h · **Risk:** 30% (16GB VRAM pressure at batch 6 with MViTv2-S — plumbing run verifies; drop to batch 4 + grad-accum if needed) · **Dependencies:** Q9 result, budget state.
-- **Paper note:** if run, report as an ablation, not a second flagship — avoid fragmenting the single-backbone story (title says single-backbone).
+- **Current status:** ❌ no comparison run. **Correction from the full-archive re-read:** `scripts/train_mtl_mvit.py` / `src/models/mvit_mtl_model.py` exist but are **deprecated MViTv2-S-era dead code** — the staleness report (V2_AGENT_STALENESS_REPORT) documents a deprecation banner at mvit_mtl_model.py:1-11, 13 legacy `scripts/` imports, and that `train.py` does not touch it; the legacy pipeline predates the ConvNeXt migration and every subsequent fix (PSR transition targets, LeakyReLU fix, Kendall clamps, LDAM-DRW). It is NOT a ready-to-launch ablation. V2 FINAL_RANKED_RECOMMENDATIONS explicitly **rejected the backbone swap (Rejected-R2: "committed to convnext_tiny; swap is too risky on timeline")**.
+- **Our decision:** **DEFER, now with a higher bar — gate: activity clip top-1 < 0.35 on main baseline (Day 8) AND GPU-1 reserve ≥ 60 h at Day 21 AND ~2–3 person-days available** to either revive the legacy pipeline to parity with current fixes or (cleaner) add an MViTv2-S option to `build_backbone()` in the active `POPWMultiTaskModel`.
+- **Effort if triggered:** 16–24 person-h + 50 GPU-h · **Risk:** 45% (legacy revival is regression-prone; 16GB VRAM pressure with MViTv2-S — plumbing smoke first; drop to batch 4 + grad-accum) · **Dependencies:** Q9 result, budget state.
+- **Paper note:** if run, report as an ablation, not a second flagship — avoid fragmenting the single-backbone story. If the gate fires but the effort bar isn't met, the cheaper activity remedies (Q8 cRT at 4 h + 5 GPU-h) run first.
 
 ## [Q40] 6D rotation correctness
 - **Current status:** ✅ column-swap bug at model.py:2177-2178 found and fixed by A11 (`to_legacy_9dof()`); `USE_GEO_HEAD_POSE=True` verified at config.py:1222.
@@ -279,9 +293,9 @@
 # TRAINING
 
 ## [Q42] Does distillation actually help?
-- **Current status:** 🔵 verified wired: train.py:1573 (loss hook), :3797-3800 (teacher cache, default `runs/teacher_preds`), `USE_DISTILLATION=False` (config.py:1297). Blocked on ST teachers existing.
-- **Our decision:** **DEFER — gate: after Q1+Q2, MTL < ST on ≥2 tasks.** Distillation is the gap-closing tool of last resort, not a default ingredient. If triggered: generate teacher caches from best ST checkpoints (~5 GPU-h), one distilled run (~50 GPU-h) — only fits if Phase-3 reserve allows; otherwise future work with the wiring documented.
-- **Effort if triggered:** 3 person-h + 55 GPU-h · **Risk:** 40% · **Dependencies:** Q1, Q2.
+- **Current status:** 🔵 hook wired: train.py:1573 (loss hook), :3797-3800 (teacher cache, default `runs/teacher_preds`), `USE_DISTILLATION=False` (config.py:1297). Blocked on ST teachers existing. **Caveat from staleness-report finding A4: the distillation call at train.py:1567+ was assessed as a stub needing ~50–100 lines to fully activate** — budget completion work, not just a flag flip.
+- **Our decision:** **DEFER — gate: after Q1+Q2, MTL < ST on ≥2 tasks.** Distillation is the gap-closing tool of last resort, not a default ingredient (V2 T1.2 ranked it Tier-1, but that ranking predates the budget ledger). If triggered: complete the stub, generate teacher caches from best ST checkpoints (~5 GPU-h), one distilled run (~50 GPU-h) — only fits if Phase-3 reserve allows; otherwise future work with the wiring documented.
+- **Effort if triggered:** 6–8 person-h + 55 GPU-h · **Risk:** 40% · **Dependencies:** Q1, Q2.
 
 ## [Q43] Does FAMO outperform Kendall?
 - **Current status:** 🔵 verified: `USE_FAMO` env flag (config.py:48), `famo_step` hook (train.py:2092), `src/losses/famo.py` exists.
@@ -302,9 +316,9 @@
 # PAPER
 
 ## [Q46] Is the contribution still novel (Nardon check)?
-- **Current status:** ⚪ Nardon arXiv:2506.15285 assessed LOW threat (A19) — single-task detection + state tracking, different data.
-- **Our decision:** **GO — Day 4 + refresh Day 80.** Two-part action: (1) re-read Nardon and write the explicit differentiation paragraph for related work now; (2) re-run the novelty search (queries in LITERATURE_GAPS.md §1) in the week before submission — 3 months is enough for a preprint to appear.
-- **Effort:** 2 person-h + 1 person-h refresh · **Risk:** 10% a new preprint appears → differentiate, don't panic; 4-task single-backbone on IndustReal remains specific · **Dependencies:** none.
+- **Current status:** ⚪ **INTERNAL CONTRADICTION found in the consultation archive** — MASTER_VERIFICATION Item 75 / R3 describe Nardon arXiv:2506.15285 as "single-task detection + state tracking, different data," threat **LOW** (A19); but V2_AGENT_STALENESS_REPORT finding **A9 describes the same arXiv ID as a "hybrid CNN-attention head pose estimator with 6 DoF," threat MODERATE, June 2026, no code release**. If A9's description is right, Nardon touches our head-pose novelty claim (Contribution 3), not just adjacent-dataset work. The two accounts cannot both be correct.
+- **Our decision:** **GO — escalated to Day 4 MANDATORY: read the actual paper (not the consultation summaries) and record what it is.** Then: (1) write the differentiation paragraph against what Nardon actually does; (2) if it is a head-pose method, soften "first head-pose baseline" to the precise claim (e.g., "first head-pose baseline *on IndustReal* / *within a multi-task industrial system*" — whichever survives); (3) refresh the full novelty search Day 80 (queries in LITERATURE_GAPS G1).
+- **Effort:** 3 person-h + 1 person-h refresh · **Risk:** raised to 20% that a claim needs rewording (was 10%) — rewording is cheap if done in July, expensive if discovered by a reviewer · **Dependencies:** none.
 
 ## [Q47] Final paper title
 - **Current status:** 🟡 draft exists.
@@ -335,8 +349,27 @@
 
 ---
 
+# Beyond the 50 questions — consultation items promoted into the plan
+
+The full archive re-read (all ~90 files) surfaced three V2 items that are not among UNANSWERED_QUESTIONS' Q1–Q50 but are load-bearing for the paper. They are adopted:
+
+## [X1] Uncapped-Kendall control ablation (V2 T1.6, Doc 222 §3.1)
+- **Why it was missed:** not phrased as a question in UNANSWERED_QUESTIONS; but the paper's Contribution 2 ("Kendall-cap configuration resolves collapse") is indefensible without the uncapped control, and FINAL_PAPER_FRAMEWORK requires it twice — ablation Table 5 row 1 AND Figure 2 (log-var trajectories with/without caps). Doc 222 lists it among the *key* ablations.
+- **Decision:** **GO — funded ablation slot (not gated).** `scripts/launch_uncapped_kendall.sh` exists; 50-epoch run, seed 42, ~25 GPU-h on GPU 1. Log log-var trajectories every 500 steps (already configured) for Figure 2.
+- **Effort:** 0.5 person-h + 25 GPU-h.
+
+## [X2] Code-release / reproducibility track (V2 FINAL_IMPLEMENTATION_PLAN Days 57–65)
+- **Decision:** **GO — Days 50–63:** public repo cleanup, README + `requirements_frozen.txt` + reproduce script, checkpoint archival (Zenodo DOI), weights upload. Zero GPU; ~8 person-h. Check AAIML's anonymity policy first (G8) — if double-blind, release is anonymized/post-decision.
+
+## [X3] Cloud-GPU fallback (V2 T3.4, Doc 226 §risk)
+- **Decision:** **GO — provision only, $0 until triggered.** Create the RunPod/Lambda account and test a 1-epoch cloud run early (Week 2, ~$5), so RISK_REGISTER R8's fallback is exercised before it's needed. Budget cap $200–500 per Doc 226 (~300 GPU-h on an RTX 4090 at ~$0.34–1.50/h).
+
+Also adopted from Doc 222's compute-saving playbook for all ablation slots: 25-epoch runs for loss-weighting sweeps where ranking stabilizes early, epoch-10 ranking checks for neck ablations, and checkpoint-reuse for on/off switches that diverge late — apply whenever a slot's question tolerates it, and bank the saved hours.
+
+---
+
 # Self-check against decision rules
 
-Every CRITICAL item → Phase 0–1 ✅ · Every GPU-requiring non-critical item → gated behind Phase 1/2 results with explicit trigger ✅ · Every <4 h zero-GPU item → Phase 1 wiring batch ✅ · Every >4 h, <5%-impact item → future work ✅ · Total funded GPU demand ≤ budget with ≥90 h reserve ✅
+Every CRITICAL item → Phase 0–1 ✅ · Every GPU-requiring non-critical item → gated behind Phase 1/2 results with explicit trigger ✅ · Every <4 h zero-GPU item → Phase 1 wiring batch ✅ · Every >4 h, <5%-impact item → future work ✅ · Total funded GPU demand ≤ budget with reserve on both GPUs (see COMPUTE_SCHEDULE ledger, incl. X1's +25 h) ✅ · Day-1 pre-launch config review added (FREEZE_BACKBONE, determinism, split file) ✅
 
 **End of AAIML_SUBMISSION_CHECKLIST.md**

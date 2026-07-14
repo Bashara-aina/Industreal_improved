@@ -10,17 +10,19 @@
 Everything CRITICAL starts now; all zero-GPU wiring lands while GPUs are busy.
 
 ### Day 1 — Mon Jul 14
+- **FIRST (before any launch, ~1 h): pre-launch config review** — see AAIML_SUBMISSION_CHECKLIST "Day-1 pre-launch config review". Decide **`FREEZE_BACKBONE`** explicitly (config.py:199 currently `True` = linear probe; frozen-probe activity ceiling is 0.2169 vs 0.35 target — default decision: `False`/fine-tune for both ST and MTL runs unless RF1-stage unfreezing is confirmed). Set determinism env per Doc 223 (`CUBLAS_WORKSPACE_CONFIG=:4096:8`, cudnn deterministic). Confirm fixed split file. Same backbone mode for ST and MTL or the comparison is invalid.
 - **GPU 0:** Smoke ST scripts: `bash scripts/launch_st_baselines.sh --dry-run`, then 1-epoch run per head (~2 GPU-h total). If clean → launch **ST pose × 3 seeds** (10.5 GPU-h, runs into Day 2). Edit seed list to `42 123 7` first if hardcoded to 5.
-- **GPU 1:** Launch **main MTL baseline** — current config, seed 42, 100 epochs (~50 GPU-h, runs through Day 5). This one run answers Q3 (det mAP), Q9 (activity top-1), Q10 (PSR F1) and its epoch-50 checkpoint becomes the ablation reference.
+- **GPU 1:** Launch **main MTL baseline** — reviewed config, seed 42, 100 epochs (~50 GPU-h at the conservative estimate, runs through Day 5). This one run answers Q3 (det mAP), Q9 (activity top-1), Q10 (PSR F1) and its epoch-50 checkpoint becomes the ablation reference.
+- **Evening: throughput measurement** — read min/epoch at epochs 2–5 and rewrite the COMPUTE_SCHEDULE ledger. The archive prices a 100-ep MTL run at 10 h (Doc 226) / 50 h (V2 framework) / 96 h (Doc 222) — the measured number governs the seed-escalation decision (≤20 h/run → 5 seeds per Doc 223) and every later slot.
 - **Code (while training runs):** Wire UW-SO (Q5, 1.5 h — config flag + branch in `src/training/losses.py`). Wire per-task LR (Q6, 1 h — `PSR_LR_MULTIPLIER=0.5`, `HEAD_POSE_LR_MULTIPLIER=0.3` in config + `train.py` param groups ~3879–3899, both Lion and AdamW branches).
 - **Local machine (5 min):** Q23 — `ls /media/newadmin/master/POPW/datasets/industreal/`, confirm authors' PSR scorer present; clone reference repo if not.
-- **Expect by EOD:** both GPUs saturated; UW-SO + per-task LR committed behind flags (off).
+- **Expect by EOD:** both GPUs saturated; UW-SO + per-task LR committed behind flags (off); ledger re-priced from measured throughput.
 
 ### Day 2 — Tue Jul 15
 - **GPU 0:** ST pose finishes (~noon). Run **MediaPipe pose baseline** (Q4, ~2 GPU-h) against ST-pose seed-42 checkpoint on identical val protocol. Then launch **ST activity × 3 seeds** (15 GPU-h, into Day 3).
 - **GPU 1:** Main baseline continues (monitor: LIVENESS logs, Kendall grad logs every 500 steps).
 - **Code:** EMA warmup (Q24, 0.5 h — `EMA_START_EPOCH=5`, guard train.py:1518 + ~2040). Wire Balanced Softmax flag (Q16, 1 h, off). Wire ASL flag (Q15, 1 h, off). 6D round-trip unit test (Q40 guard, 0.5 h).
-- **Expect:** MediaPipe MAE number in hand → first paper table row. If MediaPipe < our pose MAE, activate framing mitigation (coverage + occlusion breakdown, see RISK_REGISTER R6).
+- **Expect:** MediaPipe MAE number in hand → first paper table row. Gate (per V2 plan Day-0): if MediaPipe MAE < 4°, the pose contribution needs reframing now, not at writing time; if merely < ours, activate the coverage + occlusion breakdown framing (RISK_REGISTER R6).
 
 ### Day 3 — Wed Jul 16
 - **GPU 0:** ST activity continues.
@@ -31,8 +33,8 @@ Everything CRITICAL starts now; all zero-GPU wiring lands while GPUs are busy.
 ### Day 4 — Thu Jul 17
 - **GPU 0:** ST activity finishes (~evening). Launch **ST PSR × 3 seeds** (15 GPU-h, into Day 6).
 - **GPU 1:** Main baseline continues.
-- **Code:** Q46 Nardon differentiation paragraph for related work (2 h). Smoke-test the candidate config end-to-end: 1-epoch run with `USE_UW_SO=1` + per-task LR + EMA warmup on GPU 1's idle margin or CPU-debug (loss decreases on all 4 tasks, weights logged).
-- **Expect:** candidate config proven runnable before it's needed on Day 8.
+- **Code:** **Q46 MANDATORY: read Nardon arXiv:2506.15285 itself** — the archive contradicts itself on what this paper is (A19: LOW threat, detection+state tracking vs A9: MODERATE threat, 6-DoF head-pose estimator); resolve from the primary source, write the differentiation paragraph, and adjust the "first head-pose baseline" wording if needed (3 h). Smoke-test the candidate config end-to-end: 1-epoch run with `USE_UW_SO=1` + per-task LR + EMA warmup on GPU 1's idle margin or CPU-debug (loss decreases on all 4 tasks, weights logged).
+- **Expect:** candidate config proven runnable before it's needed on Day 8; Nardon identity settled.
 
 ### Day 5 — Fri Jul 18
 - **GPU 0:** ST PSR continues.
@@ -64,31 +66,32 @@ Everything CRITICAL starts now; all zero-GPU wiring lands while GPUs are busy.
   - PSR F1 < 0.50? → queue Q15 (ASL) for slot #3
   - UW-SO Δ vs Kendall: adopt / reject / (inconclusive → Q43 FAMO tiebreaker)
   - pose/psr grad ratio still >1000×? → queue Q44 (MetaBalance) for slot #3
-- **Decide slot #2 and #3 occupants tonight.** Default (no gates fire): #2 = BiFPN (Q41), #3 = OHEM-off (Q28) or none.
+- **Decide slot #3 and #4 occupants tonight.** Slot #2 is pre-committed to the **uncapped-Kendall control (X1)** — paper-critical (Table 5 row 1 + Figure 2), ungated. Default for the rest (no gates fire): #3 = BiFPN (Q41), #4 = OHEM-off (Q28) or none.
 
 ### Day 9 — Tue Jul 22
 - **GPU 0:** Q22 confusion matrix on best activity checkpoint (1 GPU-h). ST-baseline bootstrap CIs + `metrics.json` aggregation script.
-- **GPU 1:** Launch **Ablation slot #2** — default `USE_BIFPN=1`, 50 epochs, ~25 GPU-h (into Day 11). If a detection gate fired, TSBN build (6 person-h) happens today and slot #2 becomes TSBN instead.
+- **GPU 1:** Launch **Ablation slot #2: uncapped Kendall** — `bash scripts/launch_uncapped_kendall.sh` adapted to 50 epochs, seed 42, ~25 GPU-h (into Day 11). Log-var trajectories every 500 steps feed Figure 2 directly.
 - **Paper:** §4.2 ST baseline table with real numbers.
 
 ### Day 10 — Wed Jul 23
 - **GPU 0:** idle/eval margin (thermal recovery; budget preservation).
 - **GPU 1:** Slot #2 continues.
-- **Code:** if Q8 triggered: adapt `decoupled_act_retrain.py` (4 h) — it runs on GPU 0's remaining margin (5 GPU-h) Day 11.
+- **Code:** if Q8 triggered: adapt `decoupled_act_retrain.py` (4 h) — it runs on GPU 0's remaining margin (5 GPU-h) Day 11. If a detection gate fired: TSBN build (6 person-h) today so it can occupy slot #3.
+- **Cloud (X3):** provision RunPod/Lambda account + 1-epoch test run (~$5) so the R8 fallback is exercised.
 
 ### Day 11 — Thu Jul 24
 - **GPU 0:** (if triggered) cRT activity retrain, 5 GPU-h.
-- **GPU 1:** Slot #2 finishes → eval + compare.
-- **Decision:** BiFPN in or out of final config (adopt if det mAP50-pc +≥1.0 with no other task regressing >0.5).
+- **GPU 1:** Slot #2 finishes → **launch slot #3: BiFPN** (`USE_BIFPN=1`, 50 ep, ~25 GPU-h, into Day 13) — or TSBN if the detection gate fired.
+- **Analysis:** uncapped-vs-capped comparison written down (Figure 2 data secured).
 
 ### Day 12 — Fri Jul 25
-- **GPU 1:** Launch **Ablation slot #3** — occupant per Day-8 queue: ASL (PSR weak) / MetaBalance (grads unbalanced) / MViTv2-S plumbing+launch (activity weak AND reserve ≥60 h; note: MViT = 50 GPU-h, runs into Day 16) / OHEM-off (all healthy) / **none** (bank the reserve).
+- **GPU 1:** Slot #3 continues.
 - **Paper:** §2 Related Work full draft (Nardon paragraph from Day 4, FABRIC ATRE placeholder for Day 62).
 
 ### Day 13–14 — Sat–Sun Jul 26–27
-- **GPU 1:** Slot #3 runs/finishes (unless MViT, which extends).
+- **GPU 1:** Slot #3 finishes Day 13 → decision: BiFPN in/out of final config (adopt if det mAP50-pc +≥1.0 with no other task regressing >0.5). **Slot #4 (gated)** launches if queued: ASL (PSR weak) / MetaBalance (grads unbalanced) / OHEM-off (all healthy) / **none** (bank the reserve). MViTv2-S only per Q39's raised bar (legacy-code revival cost — see checklist).
 - **GPU 0:** figures pipeline: training curves (`plot_training_curves.py`), gradient-norm figure (Pathology 3 with 20,245× annotation), PSR transition-target illustration.
-- **Analysis:** full ablation table assembled; every number that will enter the final config now exists.
+- **Analysis:** full ablation table assembled; every number that will enter the final config now exists. Doc 222 compute-savers apply to slot #4 (25-epoch weighting sweeps; epoch-10 neck ranking).
 
 **Week-2 exit criteria:** all gates resolved; ablation table complete; final config candidates reduced to one.
 
@@ -106,7 +109,8 @@ Everything CRITICAL starts now; all zero-GPU wiring lands while GPUs are busy.
 
 ### Day 21 — Sun Aug 3 ⭐ **ARCHITECTURE FREEZE**
 - Final config locked in `src/config.py` + tag `git tag aaiml-freeze`. After today, config changes only via RISK_REGISTER triggers.
-- Phase-3 GPU ledger reviewed (see COMPUTE_SCHEDULE): GPU 1 must have ≥ 125 h remaining for seeds 123 + 7 + margin. If not, drop to 2 additional seeds is NOT allowed — instead cut slot-3-style extras; 3 seeds is the floor.
+- Phase-3 GPU ledger reviewed (see COMPUTE_SCHEDULE): GPU 1 must have ≥ 125 h remaining for seeds 123 + 7 + margin. If not, drop to 2 additional seeds is NOT allowed — instead cut slot-4-style extras; 3 seeds is the floor.
+- **Seed-escalation decision (Doc 223 compliance):** if the measured run cost is ≤20 h (Day-1 measurement), schedule seeds 4–5 (e.g., 1000, 2026) into Weeks 4–5 to meet the protocol's N=5 for main experiments; otherwise document the 3-seed deviation + per-sample bootstrap CIs (G9) in §4.1.
 
 ---
 
@@ -137,10 +141,10 @@ Everything CRITICAL starts now; all zero-GPU wiring lands while GPUs are busy.
 
 | Week | Dates | GPU work | Paper work |
 |------|-------|----------|-----------|
-| 5 | Aug 13–19 | Gated extras only (distill run / OHEM / re-runs) from reserve; else idle | Full Results §4 with CIs; ablation table final; all figures v1 |
+| 5 | Aug 13–19 | Gated extras from reserve (distill run / OHEM / seeds 4–5 if escalation fired); else idle | Full Results §4 with CIs; ablation table final; all figures v1 |
 | 6 | Aug 20–26 | Idle (reserve held for emergencies) | Complete draft v1 end-to-end; Q11 stale-number sweep (grep 312/140x) |
-| 7 | Aug 27–Sep 2 | — | Internal review pass 1; limitations §; reproducibility appendix (flags: FAMO/MetaBalance/RotoGrad/TAL implemented-not-ablated) |
-| 8 | Sep 3–9 | **Day 56–60: single test-split eval (Q14, 3 GPU-h)** on frozen 3-seed checkpoints — ONCE, never repeated | Test numbers into paper; val-vs-test gap discussion |
+| 7 | Aug 27–Sep 2 | — | Internal review pass 1; limitations §; reproducibility appendix (flags: FAMO/MetaBalance/RotoGrad/TAL implemented-not-ablated). **X2 code-release track starts: repo cleanup, README, `pip freeze > requirements_frozen.txt`, reproduce script** |
+| 8 | Sep 3–9 | **Day 56–60: single test-split eval (Q14, 3 GPU-h)** on frozen final-seed checkpoints — ONCE, never repeated | Test numbers into paper; val-vs-test gap discussion. **X2: checkpoint archival (Zenodo DOI) + weights upload** (respect AAIML anonymity policy per G8) |
 | 9 | Sep 10–16 | — | **Day 60 (Sep 11): title freeze (Q47).** Draft v2; polish figures |
 | 10 | Sep 17–23 | — | Day 62-equivalents done in wk 8–10: Q48 citation audit, Q49 FABRIC ATRE ¶; external/advisor read |
 | 11 | Sep 24–30 | Emergency re-runs only | Address advisor comments; camera-ready formatting vs AAIML template |

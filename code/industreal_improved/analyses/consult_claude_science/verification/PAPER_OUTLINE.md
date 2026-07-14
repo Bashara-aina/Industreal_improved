@@ -1,8 +1,9 @@
 # PAPER OUTLINE — Section-by-Section Readiness
 
-**Working title (freeze Day 60):** "Multi-Task Industrial Assembly Perception: A Single-Backbone System for Detection, Activity, Procedure State, and Head Pose on IndustReal"
+**Working title (freeze Day 60):** "Multi-Task Industrial Assembly Perception: A Single-Backbone System for Detection, Activity, Procedure State, and Head Pose on IndustReal" (FINAL_PAPER_FRAMEWORK's ranked #1; #2 "Kendall-Capped MTL on IndustReal: 4 Tasks, 1 Backbone, 1 GPU" is the fallback if the method framing strengthens)
 **Contingency title (if Q12 both-regimes framing wins):** "…: Pathologies and Remedies for Multi-Task Learning on IndustReal"
-**Venue:** AAIML 2027 (IEEE Intl Conf on Advances in AI and Machine Learning) — deadline Oct 10, 2026 · template `popw_aaiml2027.tex`
+**Venue:** AAIML 2027 (IEEE Intl Conf on Advances in AI and Machine Learning, track "AI in Manufacturing" per A8) — deadline Oct 10, 2026 · **8 pages + references** (R4/V1 224; confirm per G8) · template `popw_aaiml2027.tex`
+**Abstract:** a full draft exists in FINAL_PAPER_FRAMEWORK — reuse it, but fix its stale claims before lifting: the 312× gradient ratio (now 20,245× per A7/Q11) and the "Varifocal + WIoUv3" detection-loss description (flags are off in the live config).
 **Forbidden claims (Item 54, binding):** no SOTA claim · no "novel MTL algorithm" · no generalizability claim · no deployment-ready claim · no fabricated numbers
 
 **Status legend:** READY = writable today from verified facts · AWAITING = needs a scheduled run · PROGRESS = partially drafted
@@ -24,28 +25,31 @@
 - **Awaiting:** Nardon differentiation ¶ (Day 4, G1) · FABRIC ATRE ¶ (Q49, wk 8–10).
 - **Citations:** all 23 R3 citations verified real (Item 74); Q48 format audit wk 8.
 
-## §3 Method — **READY** (all facts code-verified 2026-07-14)
-- **3.1 Architecture:** ConvNeXt-Tiny backbone (28.59M) + FPN neck; 46.47M total (measured, Item 77). Four heads: RetinaNet-style detection (24 classes); activity (75-way clip); PSR (36 steps × 11 components, transition-target formulation σ=3.0); geometry-aware head pose (6D rotation + huberised geodesic δ=30°, dropout 0.1).
-- **3.2 MTL optimization:** Kendall uncertainty weighting with head-pose precision cap; per-task LR multipliers (det 1.0×, act 3.0×, psr 0.5×, pose 0.3× — pending ablation #1 adoption); UW-SO alternative (ablated); PCGrad available on shared params.
-- **3.3 Long-tail & imbalance:** LDAM-DRW with deferred re-weighting (epoch 50); PSR transition targets vs per-frame static labels (the Pathology-1 fix); OHEM for detection.
-- **3.4 Curriculum:** 3-stage RF1–RF3 progressive unlocking (stage_manager).
-- **Figures:** architecture diagram (draw wk 2); gradient-norm bar chart (pose 3278 / act 13.8 / det 1.86 / psr 0.16 — data in hand).
+## §3 Method — **READY** (all facts code-verified 2026-07-14; per-component numbers from R2's measured breakdown)
+- **3.1 Architecture:** ConvNeXt-Tiny backbone (28.59M, ImageNet-1K) + standard FPN P3–P7 (4.48M); **46.47M total** (measured, Item 77). Temporal context: **TMA cell + FeatureBank (embed_dim 512, T=16)** — no video backbone (USE_VIDEOMAE=False). Heads: RetinaNet-style detection 5.31M (9 anchors × 24 classes × 5 levels); activity FeatureBank+TCN+2×ViT 0.69M (75-way clip); PSR causal head hidden=128, 3.08M (11 components, T=8 sequence); **two pose heads** — body pose 1.64M (17 COCO keypoints, *pseudo-labels from boxes* — limitation §6) and head pose 1.45M (real HL2 data, 6D rotation + huberised geodesic δ=30°, dropout 0.1); **PoseFiLM 0.84M + HeadPoseFiLM 0.40M** C5 modulators (must appear in the efficiency table — per the discrepancy report, omitting them is a known error mode).
+- **3.2 MTL optimization:** Kendall uncertainty weighting with **per-task log-var clamps** (det (−4, 2), act (−0.5, 2), psr (−4, 0), pose (−4, 3), via `_clamp_kendall_log_vars`) + KENDALL_HP_PREC_CAP (pose precision ≤ det); KENDALL_STAGED_TRAINING=False (double-curriculum fix — worth one sentence); per-task LR multipliers (det 1.0×, act 3.0×, psr 0.5×, pose 0.3× — pending ablation #1 adoption); UW-SO alternative (ablated); PCGrad available on shared params; weight_decay=0 on log-vars.
+- **3.3 Long-tail & imbalance:** LDAM-DRW with deferred re-weighting (epoch 50); PSR transition targets vs per-frame static labels (the Pathology-1 fix), **focal-BCE γ=0.5 — a deliberate deviation from the reference's γ=2.0, with the gradient-signal rationale (config comment) stated explicitly**; OHEM + asymmetric focal (γ⁺=0, γ⁻=1.5) + per-class alphas for detection.
+- **3.4 Curriculum:** 3-stage RF1–RF3 progressive unlocking (stage_manager); backbone mode (frozen vs BACKBONE_LR_MULT=0.01 fine-tune) stated per the Day-1 decision.
+- **Training details:** batch 6 × grad-accum 8 = effective 48; bf16 only; grad clip 5.0; AdamW/Lion per config.
+- **⚠️ Consistency check before writing:** FINAL_PAPER_FRAMEWORK §3.1.3 describes the detection loss as "Asymmetric Focal + Varifocal + WIoUv3," but the live config has `USE_VARIFOCAL=False` and `USE_WIOU=False` — **the paper must describe the flags actually on in the frozen config**, not the framework's aspirational table.
+- **Figures:** architecture diagram (draw wk 2); gradient-norm bar chart (pose 3278 / act 13.8 / det 1.86 / psr 0.16 — data in hand); **Figure 2 Kendall log-var trajectories capped vs uncapped (data from ablation X1, Day 9–11)**.
 
 ## §4 Experiments — **AWAITING RESULTS** (all runs scheduled)
-- **4.1 Setup — READY:** splits, seeds [42,123,7], protocols per metrics doc: activity = 16-frame clip top-1 majority vote; detection = mAP50 present-class (report n_present of 24); PSR = F1@±3-frame (authors' scorer per Q23); pose = geodesic MAE deg + position MAE mm; efficiency on RTX 3060 batch-1.
-- **4.2 Main table (MTL vs ST, 3 seeds, mean±std + bootstrap CI):**
+- **4.1 Setup — READY:** dataset facts (84 recordings, 27 subject-disjoint participants, 36/16/32 split, 207,266 frames, train stride 3 → 26,322 samples, native 1280×720@10FPS → 224×224 input); seeds [42,123,7] (+ escalation per Day-21 decision, deviation from Doc 223's N=5 acknowledged with per-sample bootstrap CIs per G9); protocols per metrics doc: activity = 16-frame clip top-1 majority vote; detection = mAP50 present-class (report n_present of 24); PSR = F1@±3-frame (authors' scorer per Q23); pose = geodesic MAE deg + position MAE mm; efficiency on RTX 3060 batch-1.
+- **4.2 Main table (MTL vs ST, mean±std + bootstrap CI).** Two target sets exist in the archive — reconcile at Day 8 against real numbers:
 
-| Task | Metric | ST target | MTL target | Source |
-|------|--------|-----------|------------|--------|
-| Activity | clip top-1 | 0.35–0.45 | ≥0.35 | Day 8 / Day 30 |
-| Detection | mAP50-pc | 0.33–0.45 | ≥0.33 | Day 8 / Day 30 |
-| PSR | F1@±3 | 0.50–0.62 | ≥0.50 | Day 8 / Day 30 |
-| Head pose | MAE° | ≤15 (have ~9) | ≤15 | Day 2 / Day 30 |
+| Task | Metric | Metrics-doc target | Framework target/stretch/fallback | WACV 2024 anchor (different protocol) |
+|------|--------|-------------------|-----------------------------------|----------------------------------------|
+| Activity | clip top-1 | 0.35–0.45 | 0.30 / 0.40 / 0.20 | 0.6525 (MViTv2-S, multi-modal) |
+| Detection | mAP50-pc | 0.33–0.45 | 0.30 / 0.40 / 0.20 | 0.838 (YOLOv8m @1280px, ST) |
+| PSR | F1@±3 | 0.50–0.62 | 0.15 / 0.25 / 0.05 | 0.883 (B3, transition paradigm) · STORM 0.506 |
+| Head pose | MAE° | ≤15 (have ~9) | 7 / 5 / 10 | none (novel) |
 
+  The WACV anchors go in the paper as context with the protocol caveats (resolution/modality/paradigm), NOT as head-to-head comparisons (forbidden-claims list).
 - **4.3 Head-pose baseline table:** ours vs MediaPipe — MAE on covered frames + coverage % + occlusion breakdown (Day 2; framing per G3).
-- **4.4 Ablations (each 50-ep vs baseline epoch-50 reference):** loss weighting (Kendall vs UW-SO[+log1p]); BiFPN vs FPN; per-task LR on/off (implicit in ablation #1); gated extras as run (TSBN/ASL/MetaBalance/MViTv2-S/cRT/OHEM).
-- **4.5 Efficiency:** params / GFLOPs / FPS vs 4-model stack (81M, 8 fps) — Day 28.
-- **4.6 Error analysis:** activity confusion matrix (Day 9); PSR per-component positive rates + per-component F1 (Day 3 + Day 30); constant-prediction floor for PSR.
+- **4.4 Ablations (each 50-ep vs baseline epoch-50 reference):** **uncapped vs capped Kendall (X1 — Table 5 row 1)**; loss weighting (Kendall vs UW-SO[+log1p]); BiFPN vs FPN; per-task LR on/off (implicit in ablation #1); gated extras as run (TSBN/ASL/MetaBalance/MViTv2-S/cRT/OHEM).
+- **4.5 Efficiency:** params / GFLOPs / FPS vs 4-model stack (81M, 8 fps) — Day 28; include FiLM modules in the param accounting.
+- **4.6 Error analysis:** activity confusion matrix (Day 9); PSR per-component positive rates + per-component F1 (Day 3 + Day 30); constant-prediction floor for PSR; class-0 = `take_short_brace` semantics stated (Q37).
 
 ## §5 Discussion — **PROGRESS** (both framings pre-written by Day 20)
 - **Framing A (default):** MTL reaches parity-or-better on k of 4 tasks at 43% of stacked params; where it loses, the measured pathology explains why.
@@ -69,10 +73,12 @@
 | Asset | Type | Data source | Due |
 |-------|------|------------|-----|
 | F1 Architecture diagram | fig | §3 facts | wk 2 |
-| F2 Gradient-norm imbalance | fig | A7 measurements (in hand) | wk 2 |
-| F3 Training curves w/ pathology annotations | fig | baseline run logs | Day 9 |
-| F4 Activity confusion matrix | fig | Day 9 run | Day 10 |
-| F5 Qualitative: det boxes + pose arrows | fig | seed-42 checkpoint | Day 22–24 |
+| F2 Kendall log-var trajectories, capped vs uncapped | fig | X1 ablation (Day 9–11) | Day 12 |
+| F3 Gradient-norm imbalance | fig | A7 measurements (in hand) | wk 2 |
+| F4 Training curves w/ pathology annotations | fig | baseline run logs | Day 9 |
+| F5 Activity confusion matrix | fig | Day 9 run | Day 10 |
+| F6 Qualitative: det boxes + pose arrows | fig | seed-42 checkpoint | Day 22–24 |
+| (opt) F7 MTL/ST transfer map or efficiency radar | fig | framework Figure 3/4 designs, Day 30 data | wk 5, if page budget allows |
 | T1 Main MTL vs ST (3 seeds, CIs) | table | Day 30 aggregate | Day 31 |
 | T2 Pose vs MediaPipe | table | Day 2 | Day 9 |
 | T3 Ablations | table | Days 8–14 | Day 15 |
