@@ -86,6 +86,722 @@ except ImportError:
     njit = lambda *a, **k: lambda f: f  # no-op decorator when numba unavailable
 
 from src import config as C
+from data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn  # noqa: E402
+
+
+# =============================================================================
+# Authors' PSR Evaluation Pipeline (post-hoc, eval-only)
+# =============================================================================
+# Implements the authors' step-completion evaluation protocol from
+# industrireal_github/PSR/psr_utils.py as a pure eval-time post-processing
+# step with NO training impact. When USE_AUTHORS_PSR_EVAL=True, adds
+# paper-comparable F1/POS/delay metrics by converting our per-frame binary
+# state predictions into step completion events via state-change detection,
+# then scoring against PSR_labels.csv.
+#
+# Key difference: authors use ASD class IDs → categories → state strings;
+# we use 11-D binary vectors from PSRHead. State-change logic is identical.
+# =============================================================================
+
+# Embedded procedure_info.json (33 actions, IDs 0-32).
+# Copied from industreal_github/PSR/procedure_info.json — kept as Python
+# constant so we don't need to locate it in the filesystem at eval time.
+_PROCEDURE_INFO = [
+    {"id": 0, "description": "Install base", "install": True, "state_idx": 0, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 1, "description": "Incorrectly installed base", "install": True, "state_idx": 0, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 2, "description": "Remove base", "install": False, "state_idx": 0, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 3, "description": "Install front chassis", "install": True, "state_idx": 1, "expected_in_assy": True, "expected_in_main": False},
+    {"id": 4, "description": "Incorrectly installed front chassis", "install": True, "state_idx": 1, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 5, "description": "Remove front chassis", "install": False, "state_idx": 1, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 6, "description": "Install front chassis pin", "install": True, "state_idx": 2, "expected_in_assy": True, "expected_in_main": False},
+    {"id": 7, "description": "Incorrectly installed front chassis pin", "install": True, "state_idx": 2, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 8, "description": "Remove front chassis pin", "install": False, "state_idx": 2, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 9, "description": "Install rear chassis", "install": True, "state_idx": 3, "expected_in_assy": True, "expected_in_main": False},
+    {"id": 10, "description": "Incorrectly installed rear chassis", "install": True, "state_idx": 3, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 11, "description": "Remove rear chassis", "install": False, "state_idx": 3, "expected_in_assy": False, "expected_in_main": True},
+    {"id": 12, "description": "Install short rear chassis", "install": True, "state_idx": 4, "expected_in_assy": False, "expected_in_main": True},
+    {"id": 13, "description": "Incorrectly installed short rear chassis", "install": True, "state_idx": 4, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 14, "description": "Remove short rear chassis", "install": False, "state_idx": 4, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 15, "description": "Install front rear chassis pin", "install": True, "state_idx": 5, "expected_in_assy": True, "expected_in_main": True},
+    {"id": 16, "description": "Incorrectly installed front rear chassis pin", "install": True, "state_idx": 5, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 17, "description": "Remove front rear chassis pin", "install": False, "state_idx": 5, "expected_in_assy": False, "expected_in_main": True},
+    {"id": 18, "description": "Install rear rear chassis pin", "install": True, "state_idx": 6, "expected_in_assy": True, "expected_in_main": True},
+    {"id": 19, "description": "Incorrectly installed rear rear chassis pin", "install": True, "state_idx": 6, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 20, "description": "Remove rear rear chassis pin", "install": False, "state_idx": 6, "expected_in_assy": False, "expected_in_main": True},
+    {"id": 21, "description": "Install front bracket", "install": True, "state_idx": 7, "expected_in_assy": True, "expected_in_main": False},
+    {"id": 22, "description": "Incorrectly installed front bracket", "install": True, "state_idx": 7, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 23, "description": "Remove front bracket", "install": False, "state_idx": 7, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 24, "description": "Install front bracket screw", "install": True, "state_idx": 8, "expected_in_assy": True, "expected_in_main": False},
+    {"id": 25, "description": "Incorrectly installed front bracket screw", "install": True, "state_idx": 8, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 26, "description": "Remove front bracket screw", "install": False, "state_idx": 8, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 27, "description": "Install front wheel assy", "install": True, "state_idx": 9, "expected_in_assy": True, "expected_in_main": False},
+    {"id": 28, "description": "Incorrectly installed front wheel assy", "install": True, "state_idx": 9, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 29, "description": "Remove front wheel assy", "install": False, "state_idx": 9, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 30, "description": "Install rear wheel assy", "install": True, "state_idx": 10, "expected_in_assy": True, "expected_in_main": True},
+    {"id": 31, "description": "Incorrectly installed rear wheel assy", "install": True, "state_idx": 10, "expected_in_assy": False, "expected_in_main": False},
+    {"id": 32, "description": "Remove rear wheel assy", "install": False, "state_idx": 10, "expected_in_assy": False, "expected_in_main": True},
+]
+
+
+def _damerau_levenshtein_distance(s1: str, s2: str) -> int:
+    """Pure-Python Damerau-Levenshtein distance (optimal string alignment).
+
+    Restricted edit distance counting insertions, deletions, substitutions,
+    and adjacent transpositions. Drop-in for `weighted_levenshtein.dam_lev`
+    which is not in our dependencies.
+    """
+    n, m = len(s1), len(s2)
+    d = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n + 1):
+        d[i][0] = i
+    for j in range(m + 1):
+        d[0][j] = j
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            cost = 0 if s1[i - 1] == s2[j - 1] else 1
+            d[i][j] = min(
+                d[i - 1][j] + 1,        # deletion
+                d[i][j - 1] + 1,        # insertion
+                d[i - 1][j - 1] + cost,  # substitution
+            )
+            if i > 1 and j > 1 and s1[i - 1] == s2[j - 2] and s1[i - 2] == s2[j - 1]:
+                d[i][j] = min(d[i][j], d[i - 2][j - 2] + cost)  # transposition
+    return d[n][m]
+
+
+def _convert_ints_to_chars(ints: list) -> str:
+    """Convert unique ints to characters for DL distance (mirrors psr_utils.py).
+    Adds 33 to each int so that values 0-32 map to ASCII chars 33-65.
+    """
+    result = ""
+    for i in ints:
+        if i < 0 or i > (128 - 33):
+            continue
+        result += chr(i + 33)
+    return result
+
+
+def _procedure_order_similarity(gt_ids: list, pred_ids: list) -> tuple:
+    """POS as proposed in PSRT §3.2.1. Returns (score [0,1], distance)."""
+    gt_str = _convert_ints_to_chars(gt_ids)
+    pred_str = _convert_ints_to_chars(pred_ids)
+    distance = _damerau_levenshtein_distance(gt_str, pred_str)
+    score = 1.0 - min(distance / max(len(gt_ids), 1), 1.0)
+    return score, distance
+
+
+def _make_entry(frame: int, action_id: int, conf: int = 1) -> dict:
+    """Create event dict matching the authors' schema."""
+    return {
+        "frame": frame,
+        "id": action_id,
+        "description": _PROCEDURE_INFO[action_id]["description"],
+        "conf": conf,
+    }
+
+
+def _get_f1_score(FN: int, FP: int, TP: int) -> float:
+    """Standard F1 with 1e-6 epsilon (mirrors authors' implementation)."""
+    P = TP + FN
+    PP = TP + FP
+    precision = TP / PP if PP != 0 else 1e-6
+    recall = TP / P if P != 0 else 1e-6
+    return 2.0 * (precision * recall) / (precision + recall + 1e-6)
+
+
+def _get_FN_FP_single_entry(gt_frame_n: int, pred_frame_n: int, conf_pred: int):
+    """Single-entry FP/FN/delay logic (mirrors authors' psr_utils.py)."""
+    sys_FP, per_FN, per_FP = False, False, False
+    delay = None
+    if conf_pred == 0:
+        per_FN = True
+    delta_frames = pred_frame_n - gt_frame_n
+    if delta_frames < 0:
+        if conf_pred == 0:
+            per_FP = True
+        elif conf_pred == 1:
+            sys_FP = True
+    if delta_frames >= 0:
+        delay = pred_frame_n - gt_frame_n
+    return sys_FP, per_FN, per_FP, delay
+
+
+def _match_indices(idxes_a: list, all_times_a: np.ndarray, idxes_b: list, all_times_b: np.ndarray) -> list:
+    """Greedy temporal matching: for each b index, find the closest a index in time (forward)."""
+    times_a = np.ones(len(all_times_a)) * 1e9
+    for idx in idxes_a:
+        times_a[idx] = all_times_a[idx]
+    times_b = np.array([all_times_b[i] for i in idxes_b])
+    matching_idxes = []
+    for time_b in times_b:
+        t_diff = times_a - time_b
+        t_diff_pen = np.where(t_diff >= 0, t_diff, np.inf)
+        min_idx = int(np.argmin(t_diff_pen))
+        matching_idxes.append(min_idx)
+        times_a[min_idx] = 1e9  # consume to ensure 1-to-1 matching
+    return matching_idxes
+
+
+def _determine_performance(gt: list, pred: list) -> dict:
+    """Compute F1, POS, avg_delay from GT/pred event lists.
+
+    Adapted from authors' determine_performance() in psr_utils.py.
+    Uses embedded _PROCEDURE_INFO for per-action-id matching.
+
+    Args:
+        gt: list of dicts [{"frame": int, "id": int}, ...] from PSR_labels.csv
+        pred: list of dicts [{"frame": int, "id": int, "conf": 0|1}, ...] from
+              state-change detection on our predictions
+
+    Returns:
+        dict with f1, pos, avg_delay, system_TPs/FPs/FNs, perception_FPs/FNs
+    """
+    gt_obs_times = np.array([e["frame"] for e in gt], dtype=int)
+    gt_order = np.array([int(e["id"]) for e in gt], dtype=int)
+
+    pred_obs_times = np.array([e["frame"] for e in pred], dtype=int)
+    pred_order = np.array([int(e["id"]) for e in pred], dtype=int)
+    pred_confs = np.array([int(e.get("conf", 1)) for e in pred])
+
+    sys_FNs, sys_FPs, per_FNs, per_FPs = 0, 0, 0, 0
+    delays = np.empty(len(gt_obs_times))
+    delays[:] = np.nan
+
+    for step_info in _PROCEDURE_INFO:
+        idxes_gt = list(np.where(gt_order == step_info["id"])[0])
+        idxes_pred = list(np.where(pred_order == step_info["id"])[0])
+        calculate_FNs_FPs = True
+
+        if len(idxes_gt) == len(idxes_pred) and len(idxes_pred) > 1:
+            idxes_pred = _match_indices(idxes_pred, pred_obs_times, idxes_gt, gt_obs_times)
+        elif len(idxes_gt) == 0 and len(idxes_pred) > 0:
+            sys_FPs += len(idxes_pred)
+            per_FPs += len(idxes_pred)
+            calculate_FNs_FPs = False
+        elif len(idxes_gt) > 0 and len(idxes_pred) == 0:
+            sys_FNs += len(idxes_gt)
+            per_FNs += len(idxes_gt)
+            calculate_FNs_FPs = False
+        else:
+            if len(idxes_gt) > len(idxes_pred):
+                sys_FNs += len(idxes_gt) - len(idxes_pred)
+                per_FNs += len(idxes_gt) - len(idxes_pred)
+                idxes_gt = _match_indices(idxes_gt, gt_obs_times, idxes_pred, pred_obs_times)
+            else:
+                sys_FPs += len(idxes_pred) - len(idxes_gt)
+                per_FPs += len(idxes_pred) - len(idxes_gt)
+                idxes_pred = _match_indices(idxes_pred, pred_obs_times, idxes_gt, gt_obs_times)
+
+        if not calculate_FNs_FPs:
+            continue
+
+        for idx_gt, idx_pred in zip(idxes_gt, idxes_pred):
+            gt_fn = gt_obs_times[idx_gt]
+            pred_fn = pred_obs_times[idx_pred]
+            conf_pred = pred_confs[idx_pred]
+            sys_FP, per_FN, per_FP, delay = _get_FN_FP_single_entry(gt_fn, pred_fn, conf_pred)
+            if sys_FP:
+                sys_FPs += 1
+            if per_FN:
+                per_FNs += 1
+            if per_FP:
+                per_FPs += 1
+            if delay is not None:
+                delays[idx_gt] = delay
+
+    pos, _ = _procedure_order_similarity(gt_order.tolist(), pred_order.tolist())
+    sys_TPs = len(pred_order) - sys_FPs
+    f1 = _get_f1_score(FN=sys_FNs, FP=sys_FPs, TP=sys_TPs)
+    avg_delay = float(np.nanmean(delays)) if not np.all(np.isnan(delays)) else 100.0
+
+    return {
+        "perception_FPs": per_FPs,
+        "perception_FNs": per_FNs,
+        "system_FNs": sys_FNs,
+        "system_FPs": sys_FPs,
+        "system_TPs": sys_TPs,
+        "f1": f1,
+        "pos": pos,
+        "avg_delay": avg_delay,
+    }
+
+
+def _convert_states_to_steps(prev_state: list, curr_state: list, frame: int) -> list:
+    """Detect step completions from a pair of consecutive 11-D binary states.
+
+    Adapted from authors' convert_states_to_steps() for our binary (0/1 only,
+    no -1 error state) predictions. Detects:
+    - 0 -> 1: install (action_id = k * 3 + 0)
+    - 1 -> 0: remove (action_id = k * 3 + 2)
+
+    Returns list of event dicts (may be empty).
+    """
+    actions = []
+    for k, (p, c) in enumerate(zip(prev_state, curr_state)):
+        if p == c:
+            continue
+        if p == 0 and c == 1:
+            action_id = k * 3 + 0  # install
+        elif p == 1 and c == 0:
+            action_id = k * 3 + 2  # remove
+        else:
+            continue
+        actions.append(_make_entry(frame, action_id, conf=1))
+    return actions
+
+
+# =============================================================================
+# Option 2: Authors' PSR passes (NaivePSR B1 / AccumulatedConfidencePSR B2/B3)
+# =============================================================================
+
+
+def _apply_psr_naive_pass(
+    pred_bin: np.ndarray,
+    pred_logits: np.ndarray,
+    frame_nums: np.ndarray,
+    conf_threshold: float = 0.6,
+) -> list:
+    """NaivePSR (B1) equivalent: only emit step events when component
+    confidence exceeds threshold.
+
+    Args:
+        pred_bin: [T, 11] binary states (thresholded at 0.5).
+        pred_logits: [T, 11] raw sigmoid values in [0, 1].
+        frame_nums: [T] frame numbers.
+        conf_threshold: minimum sigmoid value to accept a 0→1 transition;
+            for 1→0, require sigmoid < (1 - conf_threshold).
+
+    Returns:
+        list of event dicts (same schema as _make_entry).
+    """
+    events: list = []
+    if pred_bin.shape[0] < 2:
+        return events
+
+    prev_state = pred_bin[0].tolist()
+    for t in range(1, len(pred_bin)):
+        curr_state = pred_bin[t].tolist()
+        fn = int(frame_nums[t])
+        for k, (p, c) in enumerate(zip(prev_state, curr_state)):
+            if p == c:
+                continue
+            sig = float(pred_logits[t, k])
+            if p == 0 and c == 1:
+                # 0→1: accept only if sigmoid > conf_threshold
+                if sig <= conf_threshold:
+                    continue
+                action_id = k * 3 + 0  # install
+            elif p == 1 and c == 0:
+                # 1→0: accept only if sigmoid < (1 - conf_threshold)
+                if sig >= (1.0 - conf_threshold):
+                    continue
+                action_id = k * 3 + 2  # remove
+            else:
+                continue
+            events.append(_make_entry(fn, action_id, conf=1))
+        prev_state = curr_state
+    return events
+
+
+def _apply_psr_accumulated_pass(
+    pred_bin: np.ndarray,
+    pred_logits: np.ndarray,
+    frame_nums: np.ndarray,
+    cum_threshold: float = 8.0,
+    decay: float = 0.75,
+) -> list:
+    """AccumulatedConfidencePSR (B2/B3) equivalent: accumulate confidence
+    per action across frames, decay unobserved actions.
+
+    Maintains cum_confs array of length 33 (one per action). Each frame,
+    for each component that changed state, add |sigmoid - 0.5| as confidence
+    to the corresponding action. Decay all non-updated confidences by `decay`.
+    Emit step action when cum_confs[action_id] > cum_threshold.
+
+    Args:
+        pred_bin: [T, 11] binary states (thresholded at 0.5).
+        pred_logits: [T, 11] raw sigmoid values in [0, 1].
+        frame_nums: [T] frame numbers.
+        cum_threshold: emit when accumulated confidence exceeds this.
+        decay: multiplicative decay per frame for unobserved actions.
+
+    Returns:
+        list of event dicts.
+    """
+    if pred_bin.shape[0] < 2:
+        return []
+
+    cum_confs = np.zeros(33, dtype=np.float64)
+    completed_action_ids: set = set()
+    events: list = []
+    current_state = pred_bin[0].copy().astype(np.int32)
+
+    for t in range(len(pred_bin)):
+        fn = int(frame_nums[t])
+        curr = pred_bin[t].astype(np.int32)
+        updated_idxes: list = []
+
+        # Determine which components changed state
+        for k in range(11):
+            p, c = int(current_state[k]), int(curr[k])
+            if p == c:
+                continue
+            sig = float(pred_logits[t, k])
+            # |sig - 0.5| = how far from decision boundary = "confidence"
+            conf = abs(sig - 0.5)
+            if p == 0 and c == 1:
+                action_id = k * 3 + 0  # install
+            elif p == 1 and c == 0:
+                action_id = k * 3 + 2  # remove
+            else:
+                continue
+            cum_confs[action_id] += conf
+            updated_idxes.append(action_id)
+
+        # Update current state for next iteration
+        current_state = curr.copy()
+
+        # Decay all non-updated actions
+        for a in range(33):
+            if a not in updated_idxes:
+                cum_confs[a] *= decay
+
+        # Check for completed actions
+        for a in updated_idxes:
+            if cum_confs[a] > cum_threshold and a not in completed_action_ids:
+                completed_action_ids.add(a)
+                events.append(_make_entry(fn, a, conf=1))
+
+    return events
+
+
+def _load_psr_labels(file_path: str) -> list:
+    """Load PSR_labels.csv into list of event dicts (mirrors authors' loader).
+
+    CSV format: frame,action_id,description  (frame is video frame number).
+    Frame numbers have ".jpg" suffix (e.g. "000367.jpg") — strip it.
+    """
+    import csv
+    from pathlib import Path as _Path
+    data_read = []
+    with open(file_path, newline="") as fp:
+        reader = csv.reader(fp, delimiter=",", quotechar='"')
+        for row in reader:
+            if len(row) < 2:
+                continue
+            frame = int(_Path(row[0]).stem)
+            action_id = int(row[1])
+            description = row[2] if len(row) > 2 else ""
+            data_read.append({
+                "frame": frame,
+                "id": action_id,
+                "description": description,
+            })
+    return data_read
+
+
+def compute_authors_psr_metrics(
+    psr_preds_logits: list,
+    psr_rec_ids: list,
+    psr_frame_nums: list,
+    recordings_root: str,
+    split: str,
+) -> dict:
+    """Apply authors' step-completion evaluation protocol to model predictions.
+
+    Converts per-frame binary state predictions into step completion events
+    via state-change detection, loads GT from PSR_labels.csv, then scores
+    using the authors' F1/POS/delay pipeline.
+
+    Args:
+        psr_preds_logits: list of per-batch logit arrays [B, 11]
+        psr_rec_ids: flat list of per-frame recording id strings
+        psr_frame_nums: flat list of per-frame video frame numbers (int)
+        recordings_root: root path for recordings (C.RECORDINGS_ROOT)
+        split: dataset split ('train', 'val', 'test')
+
+    Returns:
+        dict with authors_psr_f1, authors_psr_pos, authors_psr_delay
+    """
+    # --- Group per-recording, preserving frame numbers --------------------
+    by_rec_preds: dict = {}
+    by_rec_frames: dict = {}
+    flat_i = 0
+    for batch_logits in psr_preds_logits:
+        bl = np.asarray(batch_logits)
+        if bl.ndim == 1:
+            bl = bl[None, :]
+        for row in range(bl.shape[0]):
+            rec = psr_rec_ids[flat_i] if flat_i < len(psr_rec_ids) else f"rec_{flat_i}"
+            fn = (
+                psr_frame_nums[flat_i]
+                if psr_frame_nums is not None and flat_i < len(psr_frame_nums)
+                else flat_i
+            )
+            by_rec_preds.setdefault(rec, []).append(bl[row, :11])
+            by_rec_frames.setdefault(rec, []).append(fn)
+            flat_i += 1
+
+    all_f1, all_pos, all_delay = [], [], []
+    all_sys_TPs = all_sys_FPs = all_sys_FNs = 0
+    processed = 0
+
+    for rec_id, pred_rows in by_rec_preds.items():
+        # Sort by frame number (stable)
+        order = np.argsort(np.asarray(by_rec_frames[rec_id], dtype=np.int64), kind="stable")
+        pred_bin = (np.asarray(pred_rows)[order] > 0.5).astype(np.int32)  # [T, 11] binary
+        frame_nums = np.asarray(by_rec_frames[rec_id], dtype=np.int64)[order]
+
+        if pred_bin.shape[0] < 2:
+            continue
+
+        # Load GT from PSR_labels.csv
+        gt_path = Path(recordings_root) / split / rec_id / "PSR_labels.csv"
+        if not gt_path.exists():
+            logger.debug(f"  [AUTHORS PSR] No PSR_labels.csv for {rec_id}, skipping")
+            continue
+
+        gt_events = _load_psr_labels(str(gt_path))
+        if len(gt_events) == 0:
+            logger.debug(f"  [AUTHORS PSR] Empty GT for {rec_id}, skipping")
+            continue
+
+        # Convert per-frame binary states to step completion events
+        # using the user-configurable PSR method (naive/accumulated/none).
+        _psr_method = getattr(C, "PSR_AUTHORS_METHOD", "naive")
+        if _psr_method == "naive":
+            _conf_thresh = getattr(C, "PSR_AUTHORS_CONF_THRESHOLD", 0.6)
+            pred_events = _apply_psr_naive_pass(pred_bin, np.asarray(pred_rows)[order], frame_nums,
+                                                 conf_threshold=_conf_thresh)
+        elif _psr_method == "accumulated":
+            _cum_thresh = getattr(C, "PSR_AUTHORS_CUM_THRESHOLD", 8.0)
+            _decay = getattr(C, "PSR_AUTHORS_CUM_DECAY", 0.75)
+            pred_events = _apply_psr_accumulated_pass(pred_bin, np.asarray(pred_rows)[order], frame_nums,
+                                                       cum_threshold=_cum_thresh, decay=_decay)
+        else:
+            # "none": raw frame-to-frame diff (original behavior)
+            pred_events = []
+            prev_state = pred_bin[0].tolist()
+            for t in range(1, len(pred_bin)):
+                curr_state = pred_bin[t].tolist()
+                events = _convert_states_to_steps(prev_state, curr_state, int(frame_nums[t]))
+                pred_events.extend(events)
+                prev_state = curr_state
+
+        if len(pred_events) == 0:
+            logger.debug(f"  [AUTHORS PSR] No predicted events for {rec_id}, skipping")
+            continue
+
+        # Score
+        metrics = _determine_performance(gt_events, pred_events)
+        all_f1.append(metrics["f1"])
+        all_pos.append(metrics["pos"])
+        all_delay.append(metrics["avg_delay"])
+        all_sys_TPs += metrics["system_TPs"]
+        all_sys_FPs += metrics["system_FPs"]
+        all_sys_FNs += metrics["system_FNs"]
+        processed += 1
+
+    if processed == 0:
+        logger.warning("  [AUTHORS PSR] No recordings processed — returning zeros")
+        return {
+            "authors_psr_f1": 0.0,
+            "authors_psr_pos": 0.0,
+            "authors_psr_delay": 0.0,
+            "authors_psr_sys_tp": 0,
+            "authors_psr_sys_fp": 0,
+            "authors_psr_sys_fn": 0,
+            "authors_psr_recordings": 0,
+        }
+
+    mean_f1 = float(np.mean(all_f1))
+    mean_pos = float(np.mean(all_pos))
+    mean_delay = float(np.mean(all_delay))
+
+    logger.info(
+        f"  [AUTHORS PSR] Processed {processed} recordings — "
+        f"F1={mean_f1:.4f}  POS={mean_pos:.4f}  delay={mean_delay:.1f}f  "
+        f"TP={all_sys_TPs}  FP={all_sys_FPs}  FN={all_sys_FNs}"
+    )
+
+    return {
+        "authors_psr_f1": mean_f1,
+        "authors_psr_pos": mean_pos,
+        "authors_psr_delay": mean_delay,
+        "authors_psr_sys_tp": all_sys_TPs,
+        "authors_psr_sys_fp": all_sys_FPs,
+        "authors_psr_sys_fn": all_sys_FNs,
+        "authors_psr_recordings": processed,
+    }
+
+
+# =============================================================================
+# Option 3: Per-frame state accuracy from PSR_labels_raw.csv
+# =============================================================================
+
+
+def _load_psr_raw_states(psr_raw_path: str, num_frames: int) -> np.ndarray:
+    """Load PSR_labels_raw.csv with fill-forward (standalone version of
+    industreal_dataset._parse_psr_raw).
+
+    PSR_labels_raw.csv: sparse rows (frame_num, comp0..comp10) with values
+    in {-1, 0, 1}. Fill forward: once a component becomes 1, it stays 1.
+    -1 is an error transient — do NOT carry it forward (keep last valid).
+
+    Returns:
+        np.ndarray [num_frames, 11] of float32 (values 0.0 or 1.0).
+    """
+    import csv
+    from pathlib import Path as _RPath
+
+    rpath = _RPath(psr_raw_path)
+    if not rpath.exists():
+        return np.zeros((num_frames, 11), dtype=np.float32)
+
+    sparse: list = []
+    with open(rpath, encoding="utf-8") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if len(row) < 12:
+                continue
+            try:
+                frame_num = int(_RPath(row[0]).stem)
+                values = np.array([float(v) for v in row[1:12]], dtype=np.float32)
+                sparse.append((frame_num, values))
+            except (ValueError, IndexError):
+                continue
+
+    if not sparse:
+        return np.zeros((num_frames, 11), dtype=np.float32)
+
+    sparse.sort(key=lambda x: x[0])
+
+    dense = np.zeros((num_frames, 11), dtype=np.float32)
+    _last_valid = np.zeros(11, dtype=np.float32)
+    sparse_idx = 0
+    for frame in range(num_frames):
+        if sparse_idx < len(sparse) and frame == sparse[sparse_idx][0]:
+            _new = sparse[sparse_idx][1].copy()
+            sparse_idx += 1
+            _valid_mask = _new >= 0
+            _last_valid[_valid_mask] = _new[_valid_mask]
+        dense[frame] = _last_valid.copy()
+
+    return dense
+
+
+def compute_authors_psr_state_accuracy(
+    psr_preds_logits: list,
+    psr_rec_ids: list,
+    psr_frame_nums: list,
+    recordings_root: str,
+    split: str,
+) -> dict:
+    """Compare per-frame 11-D binary predictions against fill-forward GT
+    from PSR_labels_raw.csv.
+
+    This is a separate evaluation dimension from step-completion F1:
+    it measures how accurately the model predicts the instantaneous assembly
+    state per frame, regardless of whether step events are correctly timed.
+
+    Returns:
+        dict with state_acc_per_component (11 floats), state_macro_accuracy,
+        state_macro_f1, state_recordings.
+    """
+    # Group per-recording
+    by_rec_preds: dict = {}
+    by_rec_frames: dict = {}
+    flat_i = 0
+    for batch_logits in psr_preds_logits:
+        bl = np.asarray(batch_logits)
+        if bl.ndim == 1:
+            bl = bl[None, :]
+        for row in range(bl.shape[0]):
+            rec = psr_rec_ids[flat_i] if flat_i < len(psr_rec_ids) else f"rec_{flat_i}"
+            fn = (
+                psr_frame_nums[flat_i]
+                if psr_frame_nums is not None and flat_i < len(psr_frame_nums)
+                else flat_i
+            )
+            by_rec_preds.setdefault(rec, []).append(bl[row, :11])
+            by_rec_frames.setdefault(rec, []).append(fn)
+            flat_i += 1
+
+    per_component_tp = np.zeros(11, dtype=np.int64)
+    per_component_fp = np.zeros(11, dtype=np.int64)
+    per_component_fn = np.zeros(11, dtype=np.int64)
+    processed = 0
+
+    for rec_id, pred_rows in by_rec_preds.items():
+        order = np.argsort(np.asarray(by_rec_frames[rec_id], dtype=np.int64), kind="stable")
+        pred_bin = (np.asarray(pred_rows)[order] > 0.5).astype(np.int32)
+        num_frames = pred_bin.shape[0]
+        if num_frames < 1:
+            continue
+
+        raw_path = str(Path(recordings_root) / split / rec_id / "PSR_labels_raw.csv")
+        gt_dense = _load_psr_raw_states(raw_path, num_frames)
+        if gt_dense.shape != pred_bin.shape:
+            logger.debug(f"  [STATE ACC] Shape mismatch for {rec_id}: GT={gt_dense.shape} pred={pred_bin.shape}")
+            continue
+
+        # Only evaluate frames where GT is known (non-zero initial state is
+        # unreliable since PSR_labels_raw.csv only records changes from 0).
+        # Use all frames where GT is available.
+        for k in range(11):
+            gt_k = gt_dense[:, k]
+            pred_k = pred_bin[:, k]
+            per_component_tp[k] += int(np.sum((pred_k == 1) & (gt_k == 1)))
+            per_component_fp[k] += int(np.sum((pred_k == 1) & (gt_k == 0)))
+            per_component_fn[k] += int(np.sum((pred_k == 0) & (gt_k == 1)))
+        processed += 1
+
+    if processed == 0:
+        logger.warning("  [STATE ACC] No recordings processed — returning zeros")
+        return {
+            "state_acc_per_component": [0.0] * 11,
+            "state_macro_accuracy": 0.0,
+            "state_macro_f1": 0.0,
+            "state_macro_precision": 0.0,
+            "state_macro_recall": 0.0,
+            "state_recordings": 0,
+        }
+
+    per_comp_acc = np.zeros(11, dtype=np.float64)
+    per_comp_f1 = np.zeros(11, dtype=np.float64)
+    per_comp_prec = np.zeros(11, dtype=np.float64)
+    per_comp_rec = np.zeros(11, dtype=np.float64)
+    for k in range(11):
+        tp = per_component_tp[k]
+        fp = per_component_fp[k]
+        fn_val = per_component_fn[k]
+        total = tp + fp + fn_val
+        per_comp_acc[k] = tp / total if total > 0 else 0.0
+        prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        rec = tp / (tp + fn_val) if (tp + fn_val) > 0 else 0.0
+        per_comp_prec[k] = prec
+        per_comp_rec[k] = rec
+        per_comp_f1[k] = 2 * prec * rec / (prec + rec + 1e-10)
+
+    macro_accuracy = float(np.mean(per_comp_acc))
+    macro_f1 = float(np.mean(per_comp_f1))
+    macro_precision = float(np.mean(per_comp_prec))
+    macro_recall = float(np.mean(per_comp_rec))
+
+    logger.info(
+        f"  [STATE ACC] Processed {processed} recordings — "
+        f"macro_acc={macro_accuracy:.4f}  macro_F1={macro_f1:.4f}  "
+        f"P={macro_precision:.4f}  R={macro_recall:.4f}"
+    )
+
+    return {
+        "state_acc_per_component": [float(v) for v in per_comp_acc],
+        "state_macro_accuracy": macro_accuracy,
+        "state_macro_f1": macro_f1,
+        "state_macro_precision": macro_precision,
+        "state_macro_recall": macro_recall,
+        "state_recordings": processed,
+    }
 
 
 # =============================================================================
@@ -3743,8 +4459,8 @@ def evaluate_all(
             logger.warning("  [EVAL_CRASH] Save timed out after 5s — continuing without save")
 
     # --- GPU + CPU memory snapshot at eval start (Bashara 2026-05-09) ---
-    _gpu_alloc_gb = torch.cuda.memory_allocated(device) / 1024**3
-    _gpu_reserved_gb = torch.cuda.memory_reserved(device) / 1024**3
+    _gpu_alloc_gb = torch.cuda.memory_allocated(device) / 1024**3 if torch.cuda.is_available() else 0.0
+    _gpu_reserved_gb = torch.cuda.memory_reserved(device) / 1024**3 if torch.cuda.is_available() else 0.0
     logger.info(
         f"  [EVAL START] GPU alloc={_gpu_alloc_gb:.2f}GB  reserved={_gpu_reserved_gb:.2f}GB"
     )
@@ -3778,7 +4494,7 @@ def evaluate_all(
             break
 
         # --- GPU memory snapshot at each eval batch (Bashara 2026-05-09) ---
-        if bi % 10 == 0:
+        if bi % 10 == 0 and torch.cuda.is_available():
             _b_alloc = torch.cuda.memory_allocated(device) / 1024**3
             _b_res = torch.cuda.memory_reserved(device) / 1024**3
             logger.info(
@@ -3920,6 +4636,13 @@ def evaluate_all(
             act_valid = act_mask_batch
         else:
             act_valid = act_labels_batch >= 0
+        # [DEBUG] Check activity validity in first batch
+        if bi == 0 and act_pred_batch.size > 0:
+            logger.info(
+                f"  [DEBUG] batch0: act_labels={act_labels_batch.tolist()}, "
+                f"act_valid sum={act_valid.sum()}, act_valid any={act_valid.any()}, "
+                f"act_pred={act_pred_batch.tolist()}"
+            )
         act_preds.append(act_pred_batch[act_valid])
         act_labels.append(act_labels_batch[act_valid])
         # [FIX 2026-06-15] act_clip_ids / act_clip_frame_nums MUST be filtered by the
@@ -4068,16 +4791,17 @@ def evaluate_all(
         # --- CRASH CHECKPOINT every 5 eval batches (Bashara 2026-05-09) ---
         if (bi + 1) % 5 == 0:
             _save_eval_crash_recovery(save_dir, f"batch_{bi + 1}")
-            torch.cuda.synchronize()
-            _b_alloc = torch.cuda.memory_allocated(device) / 1024**3
-            _b_res = torch.cuda.memory_reserved(device) / 1024**3
-            logger.info(
-                f"  [EVAL batch {bi + 1}] GPU alloc={_b_alloc:.2f}GB  reserved={_b_res:.2f}GB"
-            )
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                _b_alloc = torch.cuda.memory_allocated(device) / 1024**3
+                _b_res = torch.cuda.memory_reserved(device) / 1024**3
+                logger.info(
+                    f"  [EVAL batch {bi + 1}] GPU alloc={_b_alloc:.2f}GB  reserved={_b_res:.2f}GB"
+                )
 
     # --- GPU + CPU memory snapshot at eval END (Bashara 2026-05-09) ---
-    _gpu_alloc_gb = torch.cuda.memory_allocated(device) / 1024**3
-    _gpu_reserved_gb = torch.cuda.memory_reserved(device) / 1024**3
+    _gpu_alloc_gb = torch.cuda.memory_allocated(device) / 1024**3 if torch.cuda.is_available() else 0.0
+    _gpu_reserved_gb = torch.cuda.memory_reserved(device) / 1024**3 if torch.cuda.is_available() else 0.0
     logger.info(f"  [EVAL END] GPU alloc={_gpu_alloc_gb:.2f}GB  reserved={_gpu_reserved_gb:.2f}GB")
     try:
         with open("/proc/meminfo", "r") as f:
@@ -4327,7 +5051,10 @@ def evaluate_all(
     # return to the Python eval loop — so this is a best-effort safety net.
     # The real fix is the config split-brain correction (from src import config).
     _run_seg_metrics = True
-    if not getattr(C, "TRAIN_ACT", False):
+    if getattr(C, "SKIP_SEGMENT_METRICS_EVAL", False):
+        logger.info("[GAP-B] SKIP_SEGMENT_METRICS_EVAL=True — skipping segment metrics")
+        _run_seg_metrics = False
+    elif not getattr(C, "TRAIN_ACT", False):
         logger.info("[GAP-B] TRAIN_ACT=False — skipping segment metrics (detection-only stage)")
         _run_seg_metrics = False
     elif getattr(C, "DET_GT_FRAME_FRACTION", 0.0) >= 0.9:
@@ -4396,6 +5123,7 @@ def evaluate_all(
     # -------------------------------------------------------------------------
     if torch.cuda.is_available():
         torch.cuda.empty_cache()  # Clear fragmentation before head pose metrics
+    logger.info("  [WAYPOINT] Starting head pose metrics...")
     # Head Pose Metrics
     # -------------------------------------------------------------------------
     all_hp_pred = np.concatenate(head_pose_preds) if head_pose_preds else np.array([])
@@ -4421,6 +5149,7 @@ def evaluate_all(
         f"Overall raw: {results.get('head_pose_MAE', 0.0):.4f}"
     )
 
+    logger.info(f"  [WAYPOINT] Head pose metrics done — starting PSR metrics...")
     # -------------------------------------------------------------------------
     if torch.cuda.is_available():
         torch.cuda.empty_cache()  # Clear fragmentation before PSR metrics
@@ -4586,6 +5315,69 @@ def evaluate_all(
             logger.info(f"  PSR — Component Binary Accuracy: {_psr_comp_acc:.4f}")
         except Exception:
             results["psr_comp_acc"] = 0.0
+
+    # -------------------------------------------------------------------------
+    # Authors' Post-hoc PSR Evaluation Pipeline (eval-only, when flag is ON)
+    # -------------------------------------------------------------------------
+    if getattr(C, "USE_AUTHORS_PSR_EVAL", False):
+        logger.info("  [WAYPOINT] Standard PSR metrics done — starting authors PSR metrics...")
+        try:
+            # Extract split from loader.dataset (handle both direct and wrapped)
+            _eval_split = getattr(loader.dataset, "split", None)
+            if _eval_split is None and hasattr(loader.dataset, "dataset"):
+                _eval_split = getattr(loader.dataset.dataset, "split", "val")
+            _eval_split = _eval_split or "val"
+            _rec_root = str(getattr(C, "RECORDINGS_ROOT", ""))
+            if _rec_root:
+                _authors_metrics = compute_authors_psr_metrics(
+                    psr_preds_logits=psr_preds_logits,
+                    psr_rec_ids=psr_rec_ids,
+                    psr_frame_nums=psr_frame_nums,
+                    recordings_root=_rec_root,
+                    split=_eval_split,
+                )
+                results.update(_authors_metrics)
+                logger.info(
+                    f"  [AUTHORS PSR EVAL] F1={_authors_metrics.get('authors_psr_f1', 0.0):.4f}  "
+                    f"POS={_authors_metrics.get('authors_psr_pos', 0.0):.4f}  "
+                    f"delay={_authors_metrics.get('authors_psr_delay', 0.0):.1f}f  "
+                    f"recs={_authors_metrics.get('authors_psr_recordings', 0)}"
+                )
+
+                # Option 3: Per-frame state accuracy from PSR_labels_raw.csv
+                if getattr(C, "USE_AUTHORS_PSR_STATE_ACCURACY", False):
+                    try:
+                        _state_metrics = compute_authors_psr_state_accuracy(
+                            psr_preds_logits=psr_preds_logits,
+                            psr_rec_ids=psr_rec_ids,
+                            psr_frame_nums=psr_frame_nums,
+                            recordings_root=_rec_root,
+                            split=_eval_split,
+                        )
+                        results.update(_state_metrics)
+                        logger.info(
+                            f"  [STATE ACC] macro_acc={_state_metrics.get('state_macro_accuracy', 0.0):.4f}  "
+                            f"macro_F1={_state_metrics.get('state_macro_f1', 0.0):.4f}  "
+                            f"recs={_state_metrics.get('state_recordings', 0)}"
+                        )
+                    except Exception as _state_acc_exc:
+                        logger.error(f"  [STATE ACC] Failed: {_state_acc_exc} — skipping")
+            else:
+                logger.warning("  [AUTHORS PSR EVAL] RECORDINGS_ROOT not set — skipping")
+                results.update({
+                    "authors_psr_f1": 0.0,
+                    "authors_psr_pos": 0.0,
+                    "authors_psr_delay": 0.0,
+                })
+        except Exception as _auth_psr_exc:
+            logger.error(f"  [AUTHORS PSR EVAL] Failed: {_auth_psr_exc} — using safe defaults")
+            results.update({
+                "authors_psr_f1": 0.0,
+                "authors_psr_pos": 0.0,
+                "authors_psr_delay": 0.0,
+            })
+
+    logger.info("  [WAYPOINT] Authors PSR done — starting assembly state metrics...")
 
     # -------------------------------------------------------------------------
     if torch.cuda.is_available():
@@ -5009,6 +5801,21 @@ def _save_results_csv(results: Dict[str, Any], save_dir: str) -> None:
         "psr_pos",
         "psr_num_samples",
         "psr_num_valid_components",
+        # Authors' PSR (post-hoc eval-only, USE_AUTHORS_PSR_EVAL flag)
+        "authors_psr_f1",
+        "authors_psr_pos",
+        "authors_psr_delay",
+        "authors_psr_sys_tp",
+        "authors_psr_sys_fp",
+        "authors_psr_sys_fn",
+        "authors_psr_recordings",
+        # Authors' PSR — per-frame state accuracy (PSR_labels_raw.csv)
+        "state_macro_accuracy",
+        "state_macro_f1",
+        "state_macro_precision",
+        "state_macro_recall",
+        "state_acc_per_component",
+        "state_recordings",
         # ASD
         "det_mAP50",
         "det_mAP_50_95",
@@ -5246,7 +6053,7 @@ def _print_single_run_results(results: Dict[str, Any], split: str) -> None:
     print(f"  Recall@±5             : {results['psr_recall_at_t5']:.4f}")
     print(f"  Edit Score            : {results['psr_edit_score']:.4f}")
     print(f"  PSR POS               : {results['psr_pos']:.4f}")
-    print(f"  Valid components      : {results['psr_num_valid_components']}/11")
+    print(f"  Valid components      : {results.get('psr_num_valid_components', 0)}/11")
     print(f"  N samples             : {results['psr_num_samples']}")
 
     psr_per_comp = cast(Dict[str, float], results.get("psr_per_component_f1", {}))
@@ -5403,16 +6210,13 @@ Examples:
                 sys.path.insert(0, _p)
         if str(_src.parent) not in sys.path:
             sys.path.insert(0, str(_src.parent))
-
         args = parser.parse_args()
 
         logging.basicConfig(level=logging.INFO)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         from model import POPWMultiTaskModel  # noqa: E402
-        from losses import MultiTaskLoss  # noqa: E402
-        from industreal_dataset import IndustRealMultiTaskDataset  # noqa: E402
-
+        from training.losses import MultiTaskLoss  # noqa: E402
         model = POPWMultiTaskModel(
             pretrained=False,
             backbone_type=str(getattr(C, "BACKBONE", "resnet50")),
@@ -5571,4 +6375,4 @@ Examples:
                             k=3,
                         )
 
-        main()
+    main()
