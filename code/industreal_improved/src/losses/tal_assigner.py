@@ -12,9 +12,9 @@ For each GT, pick top-k cells by alignment score.
 Conditional: only used if MVP Probe 1 shows eval-harness works AND Probe 4
 shows the assigner is the bottleneck.
 """
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
 class TaskAlignedAssigner(nn.Module):
@@ -37,13 +37,13 @@ class TaskAlignedAssigner(nn.Module):
     @torch.no_grad()
     def forward(
         self,
-        pred_cls: torch.Tensor,    # [B, H*W, nc] sigmoid scores (after sigmoid)
-        pred_box: torch.Tensor,    # [B, H*W, 4] decoded xyxy (in pixel coords)
-        anchors: torch.Tensor,      # [H*W, 2] cell centers (cx, cy)
-        gt_boxes: torch.Tensor,    # [B, max_n, 4] xyxy (zero-padded)
-        gt_labels: torch.Tensor,   # [B, max_n] class indices (zero-padded; 0 = ignore)
+        pred_cls: torch.Tensor,  # [B, H*W, nc] sigmoid scores (after sigmoid)
+        pred_box: torch.Tensor,  # [B, H*W, 4] decoded xyxy (in pixel coords)
+        anchors: torch.Tensor,  # [H*W, 2] cell centers (cx, cy)
+        gt_boxes: torch.Tensor,  # [B, max_n, 4] xyxy (zero-padded)
+        gt_labels: torch.Tensor,  # [B, max_n] class indices (zero-padded; 0 = ignore)
         anchor_points: torch.Tensor,  # [H*W, 2] (cx, cy) of each anchor cell
-        stride: torch.Tensor,       # [1] or scalar; stride of this FPN level
+        stride: torch.Tensor,  # [1] or scalar; stride of this FPN level
     ) -> tuple:
         """Assign GTs to top-k cells per FPN level.
 
@@ -85,12 +85,16 @@ class TaskAlignedAssigner(nn.Module):
         # Alignment metric
         # pred_cls: [B, H*W, nc] — gather class score for each GT
         # gt_labels: [B, max_n] — class index for each GT
-        gt_labels_for_gather = gt_labels_pos.unsqueeze(1).expand(-1, n_anchors, -1)  # [B, H*W, max_n]
-        pred_cls_for_gt = torch.gather(pred_cls, 2, gt_labels_for_gather.clamp(max=nc - 1))  # [B, H*W, max_n]
+        gt_labels_for_gather = gt_labels_pos.unsqueeze(1).expand(
+            -1, n_anchors, -1
+        )  # [B, H*W, max_n]
+        pred_cls_for_gt = torch.gather(
+            pred_cls, 2, gt_labels_for_gather.clamp(max=nc - 1)
+        )  # [B, H*W, max_n]
         # Set pred_cls for ignore (label 0) to 0
         pred_cls_for_gt = pred_cls_for_gt * (gt_labels_for_gather > 0).float()
 
-        align_metric = (pred_cls_for_gt ** self.alpha) * (iou ** self.beta)  # [B, H*W, max_n]
+        align_metric = (pred_cls_for_gt**self.alpha) * (iou**self.beta)  # [B, H*W, max_n]
         align_metric = align_metric * gt_mask.unsqueeze(1)  # mask out invalid GTs
 
         # === Top-k selection per GT ===
@@ -129,8 +133,18 @@ class TaskAlignedAssigner(nn.Module):
     def _box_iou(pred_boxes: torch.Tensor, gt_boxes: torch.Tensor) -> torch.Tensor:
         """Vectorized IoU: pred [B, N, 4], gt [B, M, 4] → iou [B, N, M]."""
         # Intersection
-        px1, py1, px2, py2 = pred_boxes[..., 0:1], pred_boxes[..., 1:2], pred_boxes[..., 2:3], pred_boxes[..., 3:4]
-        gx1, gy1, gx2, gy2 = gt_boxes[..., 0:1], gt_boxes[..., 1:2], gt_boxes[..., 2:3], gt_boxes[..., 3:4]
+        px1, py1, px2, py2 = (
+            pred_boxes[..., 0:1],
+            pred_boxes[..., 1:2],
+            pred_boxes[..., 2:3],
+            pred_boxes[..., 3:4],
+        )
+        gx1, gy1, gx2, gy2 = (
+            gt_boxes[..., 0:1],
+            gt_boxes[..., 1:2],
+            gt_boxes[..., 2:3],
+            gt_boxes[..., 3:4],
+        )
 
         inter_x1 = torch.maximum(px1, gx1.transpose(-1, -2))
         inter_y1 = torch.maximum(py1, gy1.transpose(-1, -2))

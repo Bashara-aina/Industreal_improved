@@ -21,7 +21,7 @@ export OMP_NUM_THREADS=4
 export MKL_NUM_THREADS=4
 export OPENBLAS_NUM_THREADS=4
 export PYTHONHASHSEED=42
-export CUBLAS_WORKSPACE_CONFIG=4096:8
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
 
 echo "============================================================"
 echo "50-IMAGE CLS-ONLY OVERFIT EXPERIMENT"

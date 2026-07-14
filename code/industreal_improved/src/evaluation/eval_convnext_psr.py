@@ -29,7 +29,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
 import torch
@@ -56,9 +56,9 @@ _IMAGENET_STD = [0.229, 0.224, 0.225]
 N_COMPONENTS = 11
 
 # - Default thresholds (Q48 defaults from config) -------------------------
-DEFAULT_HI = float(getattr(C, 'PSR_TRANSITION_THRESHOLD_HI', 0.5))
-DEFAULT_LO = float(getattr(C, 'PSR_TRANSITION_THRESHOLD_LO', 0.3))
-DEFAULT_MIN = int(getattr(C, 'PSR_TRANSITION_MIN_SUSTAINED', 3))
+DEFAULT_HI = float(getattr(C, "PSR_TRANSITION_THRESHOLD_HI", 0.5))
+DEFAULT_LO = float(getattr(C, "PSR_TRANSITION_THRESHOLD_LO", 0.3))
+DEFAULT_MIN = int(getattr(C, "PSR_TRANSITION_MIN_SUSTAINED", 3))
 
 # - Sweep ranges (from d4_threshold_retune.py) ----------------------------
 SUSTAIN_HI_VALUES = [0.3, 0.4, 0.5, 0.55, 0.6, 0.7]
@@ -79,21 +79,22 @@ def load_model(ckpt_path: str) -> torch.nn.Module:
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     logger.info(
         "Epoch: %s, best_metric: %s",
-        ckpt.get('epoch'), ckpt.get('best_metric', '?'),
+        ckpt.get("epoch"),
+        ckpt.get("best_metric", "?"),
     )
 
     from src.models.model import POPWMultiTaskModel
+
     model = POPWMultiTaskModel(
         pretrained=True,
-        backbone_type='convnext_tiny',
+        backbone_type="convnext_tiny",
         use_hand_film=True,
         use_headpose_film=True,
         use_videomae=False,
         train_pose=False,
     )
     state_dict = {
-        k: v for k, v in ckpt["model"].items()
-        if 'total_ops' not in k and 'total_params' not in k
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
     }
     missing, unexpected = model.load_state_dict(state_dict, strict=False)
     if missing:
@@ -160,11 +161,7 @@ def collect_convnext_psr_scores(
 
         # Recording IDs and frame numbers
         for i in range(images.shape[0]):
-            metadata_item = (
-                targets["metadata"][i]
-                if i < len(targets.get("metadata", []))
-                else {}
-            )
+            metadata_item = targets["metadata"][i] if i < len(targets.get("metadata", [])) else {}
             rec_id = metadata_item.get(
                 "recording_id",
                 metadata_item.get("rec_id", f"batch{bi}_i{i}"),
@@ -175,9 +172,7 @@ def collect_convnext_psr_scores(
                 rec_id = str(rec_id)
             all_rec_ids.append(rec_id)
 
-            frame_num = metadata_item.get(
-                "frame_num", metadata_item.get("frame_idx", 0)
-            )
+            frame_num = metadata_item.get("frame_num", metadata_item.get("frame_idx", 0))
             if isinstance(frame_num, torch.Tensor):
                 frame_num = frame_num.item()
             all_frame_nums.append(int(frame_num))
@@ -203,16 +198,8 @@ def collect_convnext_psr_scores(
         if lb.ndim == 1:
             lb = lb[None, :]
         for row in range(bl.shape[0]):
-            rec = (
-                all_rec_ids[flat_i]
-                if flat_i < len(all_rec_ids)
-                else f"rec_{flat_i}"
-            )
-            fn = (
-                all_frame_nums[flat_i]
-                if flat_i < len(all_frame_nums)
-                else flat_i
-            )
+            rec = all_rec_ids[flat_i] if flat_i < len(all_rec_ids) else f"rec_{flat_i}"
+            fn = all_frame_nums[flat_i] if flat_i < len(all_frame_nums) else flat_i
             by_rec_logits.setdefault(rec, []).append(bl[row, :N_COMPONENTS])
             by_rec_gt.setdefault(rec, []).append(
                 lb[row, :N_COMPONENTS] if row < lb.shape[0] else None
@@ -225,9 +212,7 @@ def collect_convnext_psr_scores(
         gts = by_rec_gt[rec]
         if any(g is None for g in gts) or len(rows) < 2:
             continue
-        order = np.argsort(
-            np.asarray(by_rec_fn[rec], dtype=np.int64), kind="stable"
-        )
+        order = np.argsort(np.asarray(by_rec_fn[rec], dtype=np.int64), kind="stable")
         logits = np.stack([rows[k] for k in order]).astype(np.float32)
         states = np.stack([gts[k] for k in order]).astype(np.float32)
         result[rec] = (logits, states)
@@ -273,12 +258,10 @@ def _ordered_pair_fraction(pred_states: np.ndarray, gt_states: np.ndarray) -> fl
 
 def _psr_edit_score(pred_states: np.ndarray, gt_states: np.ndarray) -> float:
     pred_events = "".join(
-        str(int(b))
-        for b in (pred_states[1:] != pred_states[:-1]).any(axis=1).astype(int)
+        str(int(b)) for b in (pred_states[1:] != pred_states[:-1]).any(axis=1).astype(int)
     )
     gt_events = "".join(
-        str(int(b))
-        for b in (gt_states[1:] != gt_states[:-1]).any(axis=1).astype(int)
+        str(int(b)) for b in (gt_states[1:] != gt_states[:-1]).any(axis=1).astype(int)
     )
     if not gt_events:
         return 1.0 if not pred_events else 0.0
@@ -379,9 +362,7 @@ def compute_transition_f1_for_video(
 
         gt_bin = gt_col.astype(np.int32)
         gt_trans = list(np.where(np.diff(gt_bin, prepend=0) == 1)[0])
-        pred_trans = list(
-            np.where(np.diff(decoded_states.numpy(), prepend=0) == 1)[0]
-        )
+        pred_trans = list(np.where(np.diff(decoded_states.numpy(), prepend=0) == 1)[0])
 
         n_gt = len(gt_trans)
         n_pred = len(pred_trans)
@@ -447,10 +428,7 @@ def compute_per_component_f1(
         all_f1s.append(mean_f1)
         per_video[video_id] = {"f1_at_t": mean_f1, "n_frames": scores.shape[0]}
 
-    per_comp = {
-        f"comp_{c}": round(s / max(n_videos, 1), 4)
-        for c, s in enumerate(comp_f1s_sum)
-    }
+    per_comp = {f"comp_{c}": round(s / max(n_videos, 1), 4) for c, s in enumerate(comp_f1s_sum)}
 
     return {
         "f1_at_t": float(np.mean(all_f1s)) if all_f1s else 0.0,
@@ -479,7 +457,8 @@ def sweep_thresholds(
     total_combos = len(hi_values) * len(lo_values) * len(min_values)
     logger.info(
         "Sweeping %d threshold combinations over %d recordings",
-        total_combos, len(collected_scores),
+        total_combos,
+        len(collected_scores),
     )
 
     # Precompute per-component score statistics
@@ -516,8 +495,13 @@ def sweep_thresholds(
         st = comp_stats[c]
         logger.info(
             "  Comp %d: mean=%.3f std=%.3f p50=%.3f p95=%.3f prevalence=%.3f n=%d",
-            c, st['mean'], st['std'], st['median'], st['p95'],
-            st['prevalence'], st['n_frames'],
+            c,
+            st["mean"],
+            st["std"],
+            st["median"],
+            st["p95"],
+            st["prevalence"],
+            st["n_frames"],
         )
 
     # Sweep all combos
@@ -533,9 +517,7 @@ def sweep_thresholds(
             for mi in min_values:
                 video_f1s = []
                 for scores, gt_states in collected_scores.values():
-                    vid_f1 = compute_transition_f1_for_video(
-                        scores, gt_states, hi, lo, mi
-                    )
+                    vid_f1 = compute_transition_f1_for_video(scores, gt_states, hi, lo, mi)
                     video_f1s.append(vid_f1)
 
                 mean_f1 = float(np.mean(video_f1s)) if video_f1s else 0.0
@@ -555,9 +537,12 @@ def sweep_thresholds(
     elapsed = time.time() - start_time
     logger.info(
         "Sweep complete (%d combos, %.0fs): best F1=%.4f at hi=%.2f lo=%.2f min=%d",
-        len(sweep_log), elapsed, best_f1,
-        best_config['sustain_hi'], best_config['sustain_lo'],
-        best_config['sustain_min'],
+        len(sweep_log),
+        elapsed,
+        best_f1,
+        best_config["sustain_hi"],
+        best_config["sustain_lo"],
+        best_config["sustain_min"],
     )
 
     comp_thresholds = _compute_per_component_thresholds(comp_stats, best_config)
@@ -640,19 +625,22 @@ def parse_args():
         description="ConvNeXt -> decoder PSR evaluation (Opus 141 Q38)"
     )
     parser.add_argument(
-        "--ckpt", type=str,
+        "--ckpt",
+        type=str,
         default="src/runs/rf_stages/checkpoints/best.pth",
         help="Path to multi-task ConvNeXt checkpoint (best.pth)",
     )
     parser.add_argument(
-        "--save-dir", type=str,
+        "--save-dir",
+        type=str,
         default="src/runs/rf_stages/checkpoints/convnext_psr_decoder",
         help="Output directory",
     )
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--max-batches", type=int, default=0)
     parser.add_argument(
-        "--fine-grid", action="store_true",
+        "--fine-grid",
+        action="store_true",
         help="Use finer grid around best region",
     )
     parser.add_argument("--debug", action="store_true")
@@ -696,7 +684,9 @@ def main():
     # -- Step 3: Collect ConvNeXt PSR scores -------------------------------
     logger.info("Step 3: Collecting ConvNeXt PSR scores on val set")
     collected_scores = collect_convnext_psr_scores(
-        model, val_loader, max_batches=args.max_batches,
+        model,
+        val_loader,
+        max_batches=args.max_batches,
     )
 
     if not collected_scores:
@@ -710,9 +700,9 @@ def main():
     default_metrics = score_with_monotonic_decoder(collected_scores, tol_frames=3)
     logger.info(
         "Default decoder - F1: %.4f, POS: %.4f, Edit: %.4f",
-        default_metrics.get('psr_f1', 0.0),
-        default_metrics.get('psr_pos', 0.0),
-        default_metrics.get('psr_edit', 0.0),
+        default_metrics.get("psr_f1", 0.0),
+        default_metrics.get("psr_pos", 0.0),
+        default_metrics.get("psr_edit", 0.0),
     )
 
     # Also score using the explicit compute function
@@ -723,7 +713,7 @@ def main():
         sustain_min=DEFAULT_MIN,
         tolerance=3,
     )
-    logger.info("Default explicit - F1: %.4f", default_explicit['f1_at_t'])
+    logger.info("Default explicit - F1: %.4f", default_explicit["f1_at_t"])
 
     # -- Step 4b: Per-component breakdown at default thresholds ------------
     logger.info("Step 4b: Scoring with per-component breakdown at default thresholds")
@@ -742,7 +732,10 @@ def main():
     min_values = SUSTAIN_MIN_FINE if args.fine_grid else SUSTAIN_MIN_VALUES
 
     sweep_results = sweep_thresholds(
-        collected_scores, hi_values, lo_values, min_values,
+        collected_scores,
+        hi_values,
+        lo_values,
+        min_values,
     )
 
     sweep_path = save_dir / "sweep_results.json"
@@ -770,7 +763,8 @@ def main():
         comp_f1s = []
         for c in range(N_COMPONENTS):
             vf1 = compute_transition_f1_for_video(
-                scores, gt_states,
+                scores,
+                gt_states,
                 float(comp_thresholds["sustain_hi"][c]),
                 float(comp_thresholds["sustain_lo"][c]),
                 int(comp_thresholds["sustain_min"][c]),
@@ -876,9 +870,7 @@ def main():
     d4_d1r_best_f1 = 0.347
     d4_d1r_retuned_f1 = 0.6364
 
-    d4_retuned_path = Path(
-        "src/runs/rf_stages/checkpoints/d4_retuned/metrics.json"
-    )
+    d4_retuned_path = Path("src/runs/rf_stages/checkpoints/d4_retuned/metrics.json")
     if d4_retuned_path.exists():
         try:
             with open(d4_retuned_path) as f:
@@ -890,20 +882,16 @@ def main():
         except Exception:
             pass
 
-    d4_d1r_metrics_path = Path(
-        "src/runs/rf_stages/checkpoints/d4_d1r/metrics.json"
-    )
+    d4_d1r_metrics_path = Path("src/runs/rf_stages/checkpoints/d4_d1r/metrics.json")
     if d4_d1r_metrics_path.exists():
         try:
             with open(d4_d1r_metrics_path) as f:
                 dd = json.load(f)
             d4_d1r_default_f1 = dd.get("default_decoder", {}).get("f1_at_t", 0.000)
-            d4_d1r_best_f1 = dd.get(
-                "best_global_sweep", {}
-            ).get("f1_at_t", d4_d1r_best_f1)
-            d4_d1r_retuned_f1 = dd.get(
-                "retuned_per_component", {}
-            ).get("f1_at_t", d4_d1r_retuned_f1)
+            d4_d1r_best_f1 = dd.get("best_global_sweep", {}).get("f1_at_t", d4_d1r_best_f1)
+            d4_d1r_retuned_f1 = dd.get("retuned_per_component", {}).get(
+                "f1_at_t", d4_d1r_retuned_f1
+            )
         except Exception:
             pass
 
@@ -918,8 +906,7 @@ def main():
 
     # Row 1: YOLOv8m + default
     table_lines.append(
-        "| YOLOv8m (D4) | Default (hi=0.5, lo=0.3, min=3) "
-        "| %.4f | Original D4 |\n" % d4_default_f1
+        "| YOLOv8m (D4) | Default (hi=0.5, lo=0.3, min=3) | %.4f | Original D4 |\n" % d4_default_f1
     )
 
     # Row 2: YOLOv8m + retuned
@@ -929,9 +916,7 @@ def main():
             "| %.4f | Threshold recalibration |\n" % d4_retuned_f1
         )
     else:
-        table_lines.append(
-            "| YOLOv8m (D4 retuned) | Per-component retuned | ? |\n"
-        )
+        table_lines.append("| YOLOv8m (D4 retuned) | Per-component retuned | ? |\n")
 
     # Row 3: ConvNeXt + default
     table_lines.append(
@@ -943,16 +928,18 @@ def main():
     table_lines.append(
         "| ConvNeXt-Tiny (this eval) | Best global "
         "(hi=%.2f, lo=%.2f, min=%d) "
-        "| %.4f | Decoder strictness effect |\n" % (
-            best_config['sustain_hi'], best_config['sustain_lo'],
-            best_config['sustain_min'], f1_best_global,
+        "| %.4f | Decoder strictness effect |\n"
+        % (
+            best_config["sustain_hi"],
+            best_config["sustain_lo"],
+            best_config["sustain_min"],
+            f1_best_global,
         )
     )
 
     # Row 5: ConvNeXt + per-component
     table_lines.append(
-        "| ConvNeXt-Tiny (this eval) | Per-component retuned "
-        "| %.4f | Combined |\n" % f1_retuned
+        "| ConvNeXt-Tiny (this eval) | Per-component retuned | %.4f | Combined |\n" % f1_retuned
     )
 
     # Rows for D1R (reference)
@@ -975,16 +962,10 @@ def main():
     table_lines.append("| | Default decoder | Re-tuned decoder |\n")
     table_lines.append("|---|---|---|\n")
     d4_retuned_str = "%.4f" % d4_retuned_f1 if d4_retuned_f1 is not None else "?"
+    table_lines.append("| YOLOv8m | %.4f | %s |\n" % (d4_default_f1, d4_retuned_str))
+    table_lines.append("| ConvNeXt-Tiny | %.4f | %.4f |\n" % (f1_default, f1_retuned))
     table_lines.append(
-        "| YOLOv8m | %.4f | %s |\n" % (d4_default_f1, d4_retuned_str)
-    )
-    table_lines.append(
-        "| ConvNeXt-Tiny | %.4f | %.4f |\n" % (f1_default, f1_retuned)
-    )
-    table_lines.append(
-        "| D1R (oracle det.) | %.4f | %.4f |\n" % (
-            d4_d1r_default_f1, d4_d1r_retuned_f1
-        )
+        "| D1R (oracle det.) | %.4f | %.4f |\n" % (d4_d1r_default_f1, d4_d1r_retuned_f1)
     )
 
     table_lines.append("\n")
@@ -1007,15 +988,10 @@ def main():
         "%+.4f\n" % gap_convnext_default_to_convnext_retuned
     )
     table_lines.append(
-        "- Total improvement (YOLOv8m default to ConvNeXt retuned): "
-        "%+.4f\n" % gap_total
+        "- Total improvement (YOLOv8m default to ConvNeXt retuned): %+.4f\n" % gap_total
     )
-    table_lines.append(
-        "- Backbone attribution: %.1f%%\n" % pct_backbone
-    )
-    table_lines.append(
-        "- Decoder-strictness attribution: %.1f%%\n" % pct_decoder
-    )
+    table_lines.append("- Backbone attribution: %.1f%%\n" % pct_backbone)
+    table_lines.append("- Decoder-strictness attribution: %.1f%%\n" % pct_decoder)
 
     table_lines.append("\n")
     table_lines.append("## Per-Component F1 (Default Decoder)\n")
@@ -1033,9 +1009,12 @@ def main():
     table_lines.append("|---|---|---|---|\n")
     for entry in sweep_results["sweep_log"][:15]:
         table_lines.append(
-            "| %.2f | %.2f | %d | %.4f |\n" % (
-                entry['sustain_hi'], entry['sustain_lo'],
-                entry['sustain_min'], entry['f1_at_t'],
+            "| %.2f | %.2f | %d | %.4f |\n"
+            % (
+                entry["sustain_hi"],
+                entry["sustain_lo"],
+                entry["sustain_min"],
+                entry["f1_at_t"],
             )
         )
 
@@ -1045,39 +1024,57 @@ def main():
     logger.info("2x2 table saved to %s", table_path)
 
     # -- Print summary -----------------------------------------------------
-    print("\n%s" % ('=' * 70))
+    print("\n%s" % ("=" * 70))
     print("  ConvNeXt -> decoder PSR Evaluation - Complete")
-    print("%s" % ('=' * 70))
+    print("%s" % ("=" * 70))
     print("  Recordings processed:  %d" % len(collected_scores))
     print("  Checkpoint:            %s" % args.ckpt)
     print()
-    print("  Default decoder (hi=%.1f, lo=%.1f, min=%d):" % (
-        DEFAULT_HI, DEFAULT_LO, DEFAULT_MIN,
-    ))
+    print(
+        "  Default decoder (hi=%.1f, lo=%.1f, min=%d):"
+        % (
+            DEFAULT_HI,
+            DEFAULT_LO,
+            DEFAULT_MIN,
+        )
+    )
     print("    F1@t=3:  %.4f" % f1_default)
-    print("    POS:     %.4f" % default_metrics.get('psr_pos', 0.0))
-    print("    Edit:    %.4f" % default_metrics.get('psr_edit', 0.0))
+    print("    POS:     %.4f" % default_metrics.get("psr_pos", 0.0))
+    print("    Edit:    %.4f" % default_metrics.get("psr_edit", 0.0))
     print()
     print("  Best global sweep:")
-    print("    hi=%.2f, lo=%.2f, min=%d" % (
-        best_config['sustain_hi'], best_config['sustain_lo'],
-        best_config['sustain_min'],
-    ))
+    print(
+        "    hi=%.2f, lo=%.2f, min=%d"
+        % (
+            best_config["sustain_hi"],
+            best_config["sustain_lo"],
+            best_config["sustain_min"],
+        )
+    )
     print("    F1@t=3:  %.4f" % f1_best_global)
     print()
     print("  Retuned per-component:")
     print("    F1@t=3:  %.4f" % f1_retuned)
     print()
-    print("  Sweep: %d combos in %.0fs" % (
-        sweep_results['n_combos_tested'], sweep_results['elapsed_seconds'],
-    ))
+    print(
+        "  Sweep: %d combos in %.0fs"
+        % (
+            sweep_results["n_combos_tested"],
+            sweep_results["elapsed_seconds"],
+        )
+    )
     print()
     print("  Per-component thresholds:")
     for c in range(N_COMPONENTS):
-        print("    Comp %2d: hi=%.3f lo=%.3f min=%d" % (
-            c, comp_thresholds['sustain_hi'][c], comp_thresholds['sustain_lo'][c],
-            comp_thresholds['sustain_min'][c],
-        ))
+        print(
+            "    Comp %2d: hi=%.3f lo=%.3f min=%d"
+            % (
+                c,
+                comp_thresholds["sustain_hi"][c],
+                comp_thresholds["sustain_lo"][c],
+                comp_thresholds["sustain_min"][c],
+            )
+        )
     print()
     print("  Per-component F1 (default decoder):")
     for c in range(N_COMPONENTS):
@@ -1087,12 +1084,18 @@ def main():
 
     print("  Top-10 sweep results:")
     for i, entry in enumerate(sweep_results["sweep_log"][:10]):
-        print("    %2d. hi=%.2f lo=%.2f min=%d  F1=%.4f" % (
-            i + 1, entry['sustain_hi'], entry['sustain_lo'],
-            entry['sustain_min'], entry['f1_at_t'],
-        ))
+        print(
+            "    %2d. hi=%.2f lo=%.2f min=%d  F1=%.4f"
+            % (
+                i + 1,
+                entry["sustain_hi"],
+                entry["sustain_lo"],
+                entry["sustain_min"],
+                entry["f1_at_t"],
+            )
+        )
     print()
-    print("%s" % ('=' * 70))
+    print("%s" % ("=" * 70))
 
 
 if __name__ == "__main__":

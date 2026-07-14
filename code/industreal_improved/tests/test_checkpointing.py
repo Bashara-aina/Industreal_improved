@@ -11,11 +11,12 @@ Tests:
 
 import sys, os
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 import torch
 import tempfile
-import shutil
+
 
 def test_checkpoint_roundtrip():
     """Test full checkpoint save/load round-trip."""
@@ -26,14 +27,14 @@ def test_checkpoint_roundtrip():
     print("\n=== Test 1: Full checkpoint round-trip ===")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        ckpt_dir = Path(tmpdir) / 'checkpoints'
+        ckpt_dir = Path(tmpdir) / "checkpoints"
         ckpt_dir.mkdir(parents=True)
 
         # Build minimal model
-        device = torch.device('cpu')
+        device = torch.device("cpu")
         model = POPWMultiTaskModel(
             pretrained=False,
-            backbone_type='convnext_tiny',
+            backbone_type="convnext_tiny",
             use_headpose_film=True,
             use_videomae=False,
             train_pose=True,
@@ -64,30 +65,30 @@ def test_checkpoint_roundtrip():
 
         # Save a best checkpoint (simulating train.py)
         save_dict = {
-            'epoch': 5,
-            'model': model.state_dict(),
-            'optimizer': {},  # fake
-            'scheduler': {},  # fake
-            'scaler': {},     # fake
-            'best_metric': 0.75,
-            'patience_counter': 0,
-            'val_metrics': {'det_mAP50': 0.6, 'act_macro_f1': 0.5},
+            "epoch": 5,
+            "model": model.state_dict(),
+            "optimizer": {},  # fake
+            "scheduler": {},  # fake
+            "scaler": {},  # fake
+            "best_metric": 0.75,
+            "patience_counter": 0,
+            "val_metrics": {"det_mAP50": 0.6, "act_macro_f1": 0.5},
         }
         if ema is not None:
             ema.get_ema()
-            save_dict['model'] = model.state_dict()
+            save_dict["model"] = model.state_dict()
             ema.restore()
-            save_dict['ema_shadow'] = {k: v.clone() for k, v in ema.shadow.items()}
+            save_dict["ema_shadow"] = {k: v.clone() for k, v in ema.shadow.items()}
 
         # Add criterion state
-        save_dict['criterion'] = {
-            'log_var_det': criterion.log_var_det.data.clone(),
-            'log_var_pose': criterion.log_var_pose.data.clone(),
-            'log_var_act': criterion.log_var_act.data.clone(),
-            'log_var_psr': criterion.log_var_psr.data.clone(),
+        save_dict["criterion"] = {
+            "log_var_det": criterion.log_var_det.data.clone(),
+            "log_var_pose": criterion.log_var_pose.data.clone(),
+            "log_var_act": criterion.log_var_act.data.clone(),
+            "log_var_psr": criterion.log_var_psr.data.clone(),
         }
 
-        ckpt_path = ckpt_dir / 'best.pth'
+        ckpt_path = ckpt_dir / "best.pth"
         torch.save(save_dict, ckpt_path)
         print(f"  Saved checkpoint to {ckpt_path}")
 
@@ -95,9 +96,18 @@ def test_checkpoint_roundtrip():
         loaded = torch.load(ckpt_path, map_location=device)
 
         # Verify all keys present
-        required_keys = ['epoch', 'model', 'optimizer', 'scheduler', 'scaler',
-                         'best_metric', 'patience_counter', 'val_metrics',
-                         'ema_shadow', 'criterion']
+        required_keys = [
+            "epoch",
+            "model",
+            "optimizer",
+            "scheduler",
+            "scaler",
+            "best_metric",
+            "patience_counter",
+            "val_metrics",
+            "ema_shadow",
+            "criterion",
+        ]
         missing = [k for k in required_keys if k not in loaded]
         if missing:
             print(f"  FAIL: Missing keys: {missing}")
@@ -105,24 +115,34 @@ def test_checkpoint_roundtrip():
         print(f"  PASS: All required keys present")
 
         # Verify Kendall log_vars
-        criterion_loaded = loaded['criterion']
+        criterion_loaded = loaded["criterion"]
         log_vars_match = (
-            torch.allclose(criterion_loaded['log_var_det'], criterion.log_var_det.data, atol=1e-4) and
-            torch.allclose(criterion_loaded['log_var_pose'], criterion.log_var_pose.data, atol=1e-4) and
-            torch.allclose(criterion_loaded['log_var_act'], criterion.log_var_act.data, atol=1e-4) and
-            torch.allclose(criterion_loaded['log_var_psr'], criterion.log_var_psr.data, atol=1e-4)
+            torch.allclose(criterion_loaded["log_var_det"], criterion.log_var_det.data, atol=1e-4)
+            and torch.allclose(
+                criterion_loaded["log_var_pose"], criterion.log_var_pose.data, atol=1e-4
+            )
+            and torch.allclose(
+                criterion_loaded["log_var_act"], criterion.log_var_act.data, atol=1e-4
+            )
+            and torch.allclose(
+                criterion_loaded["log_var_psr"], criterion.log_var_psr.data, atol=1e-4
+            )
         )
         if log_vars_match:
             print(f"  PASS: Kendall log_vars match after round-trip")
         else:
             print(f"  FAIL: Kendall log_vars mismatch:")
-            print(f"    saved: det={criterion_loaded['log_var_det'].item():.4f}, pose={criterion_loaded['log_var_pose'].item():.4f}, act={criterion_loaded['log_var_act'].item():.4f}, psr={criterion_loaded['log_var_psr'].item():.4f}")
-            print(f"    orig:  det={criterion.log_var_det.data.item():.4f}, pose={criterion.log_var_pose.data.item():.4f}, act={criterion.log_var_act.data.item():.4f}, psr={criterion.log_var_psr.data.item():.4f}")
+            print(
+                f"    saved: det={criterion_loaded['log_var_det'].item():.4f}, pose={criterion_loaded['log_var_pose'].item():.4f}, act={criterion_loaded['log_var_act'].item():.4f}, psr={criterion_loaded['log_var_psr'].item():.4f}"
+            )
+            print(
+                f"    orig:  det={criterion.log_var_det.data.item():.4f}, pose={criterion.log_var_pose.data.item():.4f}, act={criterion.log_var_act.data.item():.4f}, psr={criterion.log_var_psr.data.item():.4f}"
+            )
             return False
 
         # Verify EMA shadow
-        ema_shadow_keys = set(loaded['ema_shadow'].keys())
-        model_keys = set(loaded['model'].keys())
+        ema_shadow_keys = set(loaded["ema_shadow"].keys())
+        model_keys = set(loaded["model"].keys())
         if ema_shadow_keys == model_keys:
             print(f"  PASS: EMA shadow keys match model keys ({len(ema_shadow_keys)} keys)")
         else:
@@ -137,15 +157,17 @@ def test_checkpoint_roundtrip():
         # Verify model state_dict can be loaded into fresh model
         model2 = POPWMultiTaskModel(
             pretrained=False,
-            backbone_type='convnext_tiny',
+            backbone_type="convnext_tiny",
             use_headpose_film=True,
             use_videomae=False,
             train_pose=True,
         ).to(device)
 
-        result = model2.load_state_dict(loaded['model'], strict=False)
+        result = model2.load_state_dict(loaded["model"], strict=False)
         if result.missing_keys:
-            print(f"  WARN: Missing keys when loading into fresh model: {result.missing_keys[:5]}...")
+            print(
+                f"  WARN: Missing keys when loading into fresh model: {result.missing_keys[:5]}..."
+            )
         if result.unexpected_keys:
             print(f"  WARN: Unexpected keys: {result.unexpected_keys[:5]}...")
         print(f"  PASS: Model state_dict loaded into fresh model")
@@ -156,18 +178,17 @@ def test_checkpoint_roundtrip():
 def test_crash_recovery():
     """Test crash recovery checkpoint."""
     from models.model import POPWMultiTaskModel, EMA
-    import config as C
 
     print("\n=== Test 2: Crash recovery checkpoint ===")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        ckpt_dir = Path(tmpdir) / 'checkpoints'
+        ckpt_dir = Path(tmpdir) / "checkpoints"
         ckpt_dir.mkdir(parents=True)
 
-        device = torch.device('cpu')
+        device = torch.device("cpu")
         model = POPWMultiTaskModel(
             pretrained=False,
-            backbone_type='convnext_tiny',
+            backbone_type="convnext_tiny",
             use_headpose_film=True,
             use_videomae=False,
             train_pose=True,
@@ -178,39 +199,39 @@ def test_crash_recovery():
             ema.update()
 
         # Simulate crash_recovery save (from train.py _save_crash_recovery)
-        recovery_path = ckpt_dir / 'crash_recovery.pth'
+        recovery_path = ckpt_dir / "crash_recovery.pth"
         save_dict = {
-            'tag': 'batch_50',
-            'epoch': 3,
-            'step': 50,
-            'total_steps': 50,
-            'seq_steps': 0,
-            'model': model.state_dict(),
-            'optimizer': {},  # fake
-            'scaler': {},     # fake
-            'nan_skips': 2,
-            'running': {'total': 0.5, 'det': 0.1},
-            'num_batches': 50,
-            'timestamp': 1234567890.0,
+            "tag": "batch_50",
+            "epoch": 3,
+            "step": 50,
+            "total_steps": 50,
+            "seq_steps": 0,
+            "model": model.state_dict(),
+            "optimizer": {},  # fake
+            "scaler": {},  # fake
+            "nan_skips": 2,
+            "running": {"total": 0.5, "det": 0.1},
+            "num_batches": 50,
+            "timestamp": 1234567890.0,
         }
         if ema is not None:
-            save_dict['ema_shadow'] = {k: v.clone() for k, v in ema.shadow.items()}
+            save_dict["ema_shadow"] = {k: v.clone() for k, v in ema.shadow.items()}
         torch.save(save_dict, recovery_path)
 
         # Load and verify
         loaded = torch.load(recovery_path, map_location=device)
-        assert loaded['tag'] == 'batch_50'
-        assert loaded['epoch'] == 3
-        assert loaded['step'] == 50
-        assert 'ema_shadow' in loaded
-        assert set(loaded['ema_shadow'].keys()) == set(model.state_dict().keys())
+        assert loaded["tag"] == "batch_50"
+        assert loaded["epoch"] == 3
+        assert loaded["step"] == 50
+        assert "ema_shadow" in loaded
+        assert set(loaded["ema_shadow"].keys()) == set(model.state_dict().keys())
         print(f"  PASS: Crash recovery checkpoint round-trips correctly")
 
         # Verify it has all the keys needed for recovery
-        assert 'model' in loaded
-        assert 'optimizer' in loaded
-        assert 'scaler' in loaded
-        assert 'running' in loaded
+        assert "model" in loaded
+        assert "optimizer" in loaded
+        assert "scaler" in loaded
+        assert "running" in loaded
         print(f"  PASS: All recovery keys present")
 
         return True
@@ -223,12 +244,12 @@ def test_strict_false_behavior():
     print("\n=== Test 3: strict=False key mismatch behavior ===")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        device = torch.device('cpu')
+        device = torch.device("cpu")
 
         # Create model A
         model_a = POPWMultiTaskModel(
             pretrained=False,
-            backbone_type='convnext_tiny',
+            backbone_type="convnext_tiny",
             use_headpose_film=True,
             use_videomae=False,
             train_pose=True,
@@ -240,7 +261,7 @@ def test_strict_false_behavior():
         # Create model B (same architecture)
         model_b = POPWMultiTaskModel(
             pretrained=False,
-            backbone_type='convnext_tiny',
+            backbone_type="convnext_tiny",
             use_headpose_film=True,
             use_videomae=False,
             train_pose=True,
@@ -271,24 +292,24 @@ def test_load_model_compat():
     print("\n=== Test 4: _load_model_compat behavior ===")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        device = torch.device('cpu')
+        device = torch.device("cpu")
 
         # Create checkpoint from model
         model = POPWMultiTaskModel(
             pretrained=False,
-            backbone_type='convnext_tiny',
+            backbone_type="convnext_tiny",
             use_headpose_film=True,
             use_videomae=False,
             train_pose=True,
         ).to(device)
 
         ckpt_state = model.state_dict()
-        ckpt = {'model': ckpt_state, 'epoch': 0}
+        ckpt = {"model": ckpt_state, "epoch": 0}
 
         # Create slightly different model (same architecture)
         model2 = POPWMultiTaskModel(
             pretrained=False,
-            backbone_type='convnext_tiny',
+            backbone_type="convnext_tiny",
             use_headpose_film=True,
             use_videomae=False,
             train_pose=True,
@@ -302,15 +323,17 @@ def test_load_model_compat():
                 if k in model_state and model_state[k].shape == v.shape:
                     compatible[k] = v
                 else:
-                    skipped.append((
-                        k,
-                        v.shape if hasattr(v, 'shape') else '?',
-                        model_state[k].shape if k in model_state else 'NOT IN MODEL',
-                    ))
+                    skipped.append(
+                        (
+                            k,
+                            v.shape if hasattr(v, "shape") else "?",
+                            model_state[k].shape if k in model_state else "NOT IN MODEL",
+                        )
+                    )
             result = model.load_state_dict(compatible, strict=False)
             return result, skipped
 
-        load_result, skipped = _load_model_compat(model2, ckpt['model'])
+        load_result, skipped = _load_model_compat(model2, ckpt["model"])
 
         if skipped:
             print(f"  WARN: Skipped {len(skipped)} keys due to shape mismatch")
@@ -363,8 +386,8 @@ def test_current_trainpy_checkpointing():
     return len(issues) == 0
 
 
-if __name__ == '__main__':
-    os.chdir(Path(__file__).parent.parent / 'src')
+if __name__ == "__main__":
+    os.chdir(Path(__file__).parent.parent / "src")
 
     results = []
 
@@ -372,28 +395,36 @@ if __name__ == '__main__':
         results.append(("checkpoint_roundtrip", test_checkpoint_roundtrip()))
     except Exception as e:
         print(f"  EXCEPTION: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+
+        traceback.print_exc()
         results.append(("checkpoint_roundtrip", False))
 
     try:
         results.append(("crash_recovery", test_crash_recovery()))
     except Exception as e:
         print(f"  EXCEPTION: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+
+        traceback.print_exc()
         results.append(("crash_recovery", False))
 
     try:
         results.append(("strict_false", test_strict_false_behavior()))
     except Exception as e:
         print(f"  EXCEPTION: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+
+        traceback.print_exc()
         results.append(("strict_false", False))
 
     try:
         results.append(("load_model_compat", test_load_model_compat()))
     except Exception as e:
         print(f"  EXCEPTION: {e}")
-        import traceback; traceback.print_exc()
+        import traceback
+
+        traceback.print_exc()
         results.append(("load_model_compat", False))
 
     results.append(("trainpy_analysis", test_current_trainpy_checkpointing()))

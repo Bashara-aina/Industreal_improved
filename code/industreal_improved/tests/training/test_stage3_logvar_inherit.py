@@ -10,6 +10,7 @@ This test verifies:
   2. Log_var values are preserved (not reset) when transitioning to Stage 3
   3. Stage 3 warmup is still activated correctly
 """
+
 import torch
 import pytest
 from src.training.losses import MultiTaskLoss
@@ -23,9 +24,9 @@ def test_stage3_preserves_log_var_values():
 
     # Simulate learned values after Stage 2 (different from init)
     with torch.no_grad():
-        crit.log_var_act.data.fill_(-1.5)   # drifted from init 0.0
-        crit.log_var_psr.data.fill_(-2.0)   # drifted from init 0.0
-        crit.log_var_det.data.fill_(-0.5)   # should be unaffected
+        crit.log_var_act.data.fill_(-1.5)  # drifted from init 0.0
+        crit.log_var_psr.data.fill_(-2.0)  # drifted from init 0.0
+        crit.log_var_det.data.fill_(-0.5)  # should be unaffected
         crit.log_var_pose.data.fill_(-0.8)  # should be unaffected
 
     # Snapshot values before transition
@@ -39,35 +40,38 @@ def test_stage3_preserves_log_var_values():
     from src.training.train import _on_stage_transition
 
     warmup_state = {
-        'active': False,
-        'warmup_epochs': 3,
-        'start_epoch': 0,
-        'epochs_remaining': 0,
-        'param_group_idx': 2,
+        "active": False,
+        "warmup_epochs": 3,
+        "start_epoch": 0,
+        "epochs_remaining": 0,
+        "param_group_idx": 2,
     }
     _on_stage_transition(
         model=None,
         criterion=crit,
         current_stage=3,
         epoch=16,
-        backbone_type='convnext_tiny',
+        backbone_type="convnext_tiny",
         stage3_warmup_state=warmup_state,
     )
 
     # Assert ALL log_var values are preserved (not reset)
-    assert crit.log_var_act.item() == pytest.approx(expected_act), \
+    assert crit.log_var_act.item() == pytest.approx(expected_act), (
         f"log_var_act should preserve Stage 2 value {expected_act}, got {crit.log_var_act.item()}"
-    assert crit.log_var_psr.item() == pytest.approx(expected_psr), \
+    )
+    assert crit.log_var_psr.item() == pytest.approx(expected_psr), (
         f"log_var_psr should preserve Stage 2 value {expected_psr}, got {crit.log_var_psr.item()}"
-    assert crit.log_var_det.item() == pytest.approx(expected_det), \
+    )
+    assert crit.log_var_det.item() == pytest.approx(expected_det), (
         "log_var_det must not be affected by Stage 3 transition"
-    assert crit.log_var_pose.item() == pytest.approx(expected_pose), \
+    )
+    assert crit.log_var_pose.item() == pytest.approx(expected_pose), (
         "log_var_pose must not be affected by Stage 3 transition"
+    )
 
     # Verify warmup was activated
-    assert warmup_state['active'] is True, \
-        "Stage 3 warmup should be activated by transition helper"
-    assert warmup_state['start_epoch'] == 16, \
-        "warmup start_epoch should match transition epoch"
-    assert warmup_state['epochs_remaining'] == 3, \
+    assert warmup_state["active"] is True, "Stage 3 warmup should be activated by transition helper"
+    assert warmup_state["start_epoch"] == 16, "warmup start_epoch should match transition epoch"
+    assert warmup_state["epochs_remaining"] == 3, (
         "warmup epochs_remaining should equal warmup_epochs"
+    )

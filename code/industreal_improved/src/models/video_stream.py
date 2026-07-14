@@ -33,7 +33,7 @@ CLI (offline feature extraction):
 
 import logging
 import os
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import torch
 import torch.nn as nn
@@ -57,26 +57,37 @@ class _Fallback3DStream(nn.Module):
         self.hidden_dim = hidden_dim
 
         self.fb = nn.Sequential(
-            nn.Conv3d(in_channels, 64, kernel_size=(3, 7, 7), stride=(1, 2, 2),
-                      padding=(1, 3, 3), bias=False),
+            nn.Conv3d(
+                in_channels,
+                64,
+                kernel_size=(3, 7, 7),
+                stride=(1, 2, 2),
+                padding=(1, 3, 3),
+                bias=False,
+            ),
             nn.BatchNorm3d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool3d(kernel_size=(1, 3, 3), stride=(1, 2, 2), padding=(0, 1, 1)),
-
-            nn.Conv3d(64, 128, kernel_size=(3, 3, 3), stride=(2, 1, 1),
-                      padding=(1, 1, 1), bias=False),
+            nn.Conv3d(
+                64, 128, kernel_size=(3, 3, 3), stride=(2, 1, 1), padding=(1, 1, 1), bias=False
+            ),
             nn.BatchNorm3d(128),
             nn.ReLU(inplace=True),
             nn.MaxPool3d(kernel_size=(2, 3, 3), stride=(2, 2, 2), padding=(0, 1, 1)),
-
-            nn.Conv3d(128, 256, kernel_size=(3, 3, 3), stride=(2, 1, 1),
-                      padding=(1, 1, 1), bias=False),
+            nn.Conv3d(
+                128, 256, kernel_size=(3, 3, 3), stride=(2, 1, 1), padding=(1, 1, 1), bias=False
+            ),
             nn.BatchNorm3d(256),
             nn.ReLU(inplace=True),
             nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2), padding=(0, 1, 1)),
-
-            nn.Conv3d(256, hidden_dim, kernel_size=(3, 3, 3), stride=(2, 1, 1),
-                      padding=(1, 1, 1), bias=False),
+            nn.Conv3d(
+                256,
+                hidden_dim,
+                kernel_size=(3, 3, 3),
+                stride=(2, 1, 1),
+                padding=(1, 1, 1),
+                bias=False,
+            ),
             nn.BatchNorm3d(hidden_dim),
             nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool3d((1, 1, 1)),
@@ -111,15 +122,16 @@ class K400VideoStream(nn.Module):
         finetune_epochs: if >0, params are unfrozen and trainable; else frozen.
     """
 
-    SUPPORTED = ('mvitv2_s', 'videomae_v2_s', 'slowfast_r50', 'fallback_3d')
+    SUPPORTED = ("mvitv2_s", "videomae_v2_s", "slowfast_r50", "fallback_3d")
 
-    def __init__(self,
-                 model_name: str = 'mvitv2_s',
-                 clip_frames: int = 16,
-                 clip_stride: int = 2,
-                 pretrained: bool = True,
-                 finetune_epochs: int = 0,
-                 ):
+    def __init__(
+        self,
+        model_name: str = "mvitv2_s",
+        clip_frames: int = 16,
+        clip_stride: int = 2,
+        pretrained: bool = True,
+        finetune_epochs: int = 0,
+    ):
         super().__init__()
         self.model_name = model_name
         self.clip_frames = clip_frames
@@ -129,15 +141,16 @@ class K400VideoStream(nn.Module):
         self._use_fallback = False
 
         if model_name not in self.SUPPORTED:
-            raise ValueError(f'K400VideoStream: unknown model {model_name!r}; '
-                             f'choose from {self.SUPPORTED}')
+            raise ValueError(
+                f"K400VideoStream: unknown model {model_name!r}; choose from {self.SUPPORTED}"
+            )
 
         # Build the appropriate backbone
-        if model_name == 'mvitv2_s':
+        if model_name == "mvitv2_s":
             self.hidden_size, self.encoder = self._build_mvitv2(pretrained)
-        elif model_name == 'videomae_v2_s':
+        elif model_name == "videomae_v2_s":
             self.hidden_size, self.encoder = self._build_videomae_v2(pretrained)
-        elif model_name == 'slowfast_r50':
+        elif model_name == "slowfast_r50":
             self.hidden_size, self.encoder = self._build_slowfast(pretrained)
         else:  # fallback_3d
             self.hidden_size = 384
@@ -150,10 +163,15 @@ class K400VideoStream(nn.Module):
                 p.requires_grad = False
 
         logger.info(
-            'K400VideoStream: model=%s, hidden=%d, frames=%d, stride=%d, '
-            'pretrained=%s, finetune=%s, fallback=%s',
-            model_name, self.hidden_size, clip_frames, clip_stride,
-            pretrained, finetune_epochs > 0, self._use_fallback,
+            "K400VideoStream: model=%s, hidden=%d, frames=%d, stride=%d, "
+            "pretrained=%s, finetune=%s, fallback=%s",
+            model_name,
+            self.hidden_size,
+            clip_frames,
+            clip_stride,
+            pretrained,
+            finetune_epochs > 0,
+            self._use_fallback,
         )
 
     # ------------------------------------------------------------------
@@ -163,33 +181,44 @@ class K400VideoStream(nn.Module):
         """MViTv2 Small (K400-pretrained) — uses HF transformers if available."""
         try:
             from transformers import VideoMAEConfig, VideoMAEModel
+
             # MViTv2 architecture isn't in transformers directly, so we use
             # VideoMAE as the closest proxy with K400 pretraining. The HF
             # 'MCG-NJU/videomae-small-finetuned-kinetics' is K400 fine-tuned.
-            ckpt = 'MCG-NJU/videomae-small-finetuned-kinetics'
+            ckpt = "MCG-NJU/videomae-small-finetuned-kinetics"
             config = VideoMAEConfig(
-                hidden_size=384, num_hidden_layers=12, intermediate_size=1536,
-                num_attention_heads=16, decoder_hidden_size=192,
-                decoder_intermediate_size=768, decoder_num_attention_heads=3,
-                decoder_num_hidden_layers=12, image_size=224, patch_size=16,
-                num_frames=16, tubelet_size=2, qkv_bias=True, use_mean_pooling=True,
+                hidden_size=384,
+                num_hidden_layers=12,
+                intermediate_size=1536,
+                num_attention_heads=16,
+                decoder_hidden_size=192,
+                decoder_intermediate_size=768,
+                decoder_num_attention_heads=3,
+                decoder_num_hidden_layers=12,
+                image_size=224,
+                patch_size=16,
+                num_frames=16,
+                tubelet_size=2,
+                qkv_bias=True,
+                use_mean_pooling=True,
             )
             encoder = VideoMAEModel(config)
             if pretrained:
                 _cache = os.path.expanduser(
-                    '~/.cache/huggingface/hub/models--MCG-NJU--videomae-small-finetuned-kinetics'
-                    '/snapshots/240e9734611173accbbf74cbdf4b641e4c431264/model.safetensors'
+                    "~/.cache/huggingface/hub/models--MCG-NJU--videomae-small-finetuned-kinetics"
+                    "/snapshots/240e9734611173accbbf74cbdf4b641e4c431264/model.safetensors"
                 )
                 if os.path.exists(_cache):
                     from safetensors.torch import load_file as _load_sf
+
                     sd = _load_sf(_cache)
                     missing, _ = encoder.load_state_dict(sd, strict=False)
-                    logger.debug('MViTv2/VideoMAE-K400: loaded with %d missing keys', len(missing))
+                    logger.debug("MViTv2/VideoMAE-K400: loaded with %d missing keys", len(missing))
                 else:
-                    logger.warning('K400 MViTv2 cache not found at %s; using random init', _cache)
+                    logger.warning("K400 MViTv2 cache not found at %s; using random init", _cache)
             return 384, encoder
         except Exception as ex:
-            logger.warning('MViTv2 build failed (%s); using fallback 3D', ex)
+            logger.warning("MViTv2 build failed (%s); using fallback 3D", ex)
             self._use_fallback = True
             return 384, _Fallback3DStream(in_channels=3, hidden_dim=384)
 
@@ -202,17 +231,18 @@ class K400VideoStream(nn.Module):
         """SlowFast R50 — uses PyTorchVideo if available, else 3D fallback."""
         try:
             import torch.hub as _hub
+
             # SlowFast R50 is available from PyTorchVideo hub.
             slowfast = _hub.load(
-                'facebookresearch/pytorchvideo:main',
-                model='slowfast_r50',
+                "facebookresearch/pytorchvideo:main",
+                model="slowfast_r50",
                 pretrained=pretrained,
             )
             # Wrap so the forward returns a [B, hidden] embedding.
             hidden = 2304  # SlowFast R50's final fc input
             return hidden, _SlowFastWrapper(slowfast, hidden=hidden)
         except Exception as ex:
-            logger.warning('SlowFast build failed (%s); using fallback 3D', ex)
+            logger.warning("SlowFast build failed (%s); using fallback 3D", ex)
             self._use_fallback = True
             return 384, _Fallback3DStream(in_channels=3, hidden_dim=384)
 
@@ -233,40 +263,41 @@ class K400VideoStream(nn.Module):
         if self._use_fallback:
             return self.encoder(clip)
 
-        if self.model_name in ('mvitv2_s', 'videomae_v2_s'):
+        if self.model_name in ("mvitv2_s", "videomae_v2_s"):
             B, T, C, H, W = clip.shape
             cfg = self.encoder.config
-            tubelet_size = getattr(cfg, 'tubelet_size', 2)
+            tubelet_size = getattr(cfg, "tubelet_size", 2)
             patch_size = cfg.patch_size
             num_spatial_patches = (cfg.image_size // patch_size) ** 2
             actual_seq_len = (T // tubelet_size) * num_spatial_patches
             # Interpolate position embeddings if shape mismatch
-            if not hasattr(self, '_cached_seq_len') or self._cached_seq_len != actual_seq_len:
+            if not hasattr(self, "_cached_seq_len") or self._cached_seq_len != actual_seq_len:
                 pe = self.encoder.embeddings.position_embeddings
                 pe_interp = F.interpolate(
                     pe.permute(0, 2, 1),
                     size=actual_seq_len,
-                    mode='linear',
+                    mode="linear",
                     align_corners=False,
                 ).permute(0, 2, 1)
                 self.encoder.embeddings.position_embeddings = nn.Parameter(
-                    pe_interp, requires_grad=False,
+                    pe_interp,
+                    requires_grad=False,
                 )
                 self._cached_seq_len = actual_seq_len
             outputs = self.encoder(pixel_values=clip)
             return outputs.last_hidden_state.mean(dim=1)
-        elif self.model_name == 'slowfast_r50':
+        elif self.model_name == "slowfast_r50":
             return self.encoder(clip)
 
         # Shouldn't get here
-        raise RuntimeError(f'K400VideoStream: unknown model {self.model_name}')
+        raise RuntimeError(f"K400VideoStream: unknown model {self.model_name}")
 
     def unfreeze_for_finetune(self, lr: float = 1e-5) -> List[dict]:
         """Unfreeze all parameters for fine-tuning; returns param groups for the
         optimizer. Call when C.K400_FINETUNE_EPOCHS > 0."""
         for p in self.encoder.parameters():
             p.requires_grad = True
-        return [{'params': self.encoder.parameters(), 'lr': lr}]
+        return [{"params": self.encoder.parameters(), "lr": lr}]
 
 
 # ============================================================================
@@ -282,7 +313,7 @@ class _SlowFastWrapper(nn.Module):
         self.model = slowfast
         self.hidden = hidden
         # Disable classification head — we want features, not class logits.
-        if hasattr(self.model, 'blocks'):
+        if hasattr(self.model, "blocks"):
             # Some PyTorchVideo models have a `.blocks[-1].proj` head
             pass
 
@@ -305,7 +336,7 @@ class _SlowFastWrapper(nn.Module):
             out = self.model(x)
         # If output is a dict, take the logits; else squeeze
         if isinstance(out, dict):
-            feat = out.get('features', out.get('logits', None))
+            feat = out.get("features", out.get("logits", None))
             if feat is None:
                 feat = list(out.values())[0]
         else:
@@ -322,14 +353,20 @@ def main():
     """CLI: extract K400 features for a clip saved as .npy [T, 3, H, W]."""
     import argparse
     import numpy as np
-    p = argparse.ArgumentParser(description='K400VideoStream inference')
-    p.add_argument('--model', default='mvitv2_s', choices=K400VideoStream.SUPPORTED)
-    p.add_argument('--frames', type=int, default=16)
-    p.add_argument('--stride', type=int, default=2)
-    p.add_argument('--input', type=str, required=True,
-                   help='Path to .npy clip of shape [T, 3, H, W]')
-    p.add_argument('--output', type=str, default=None,
-                   help='Where to save [hidden_dim] embedding (default: stdout shape)')
+
+    p = argparse.ArgumentParser(description="K400VideoStream inference")
+    p.add_argument("--model", default="mvitv2_s", choices=K400VideoStream.SUPPORTED)
+    p.add_argument("--frames", type=int, default=16)
+    p.add_argument("--stride", type=int, default=2)
+    p.add_argument(
+        "--input", type=str, required=True, help="Path to .npy clip of shape [T, 3, H, W]"
+    )
+    p.add_argument(
+        "--output",
+        type=str,
+        default=None,
+        help="Where to save [hidden_dim] embedding (default: stdout shape)",
+    )
     args = p.parse_args()
 
     stream = K400VideoStream(
@@ -342,7 +379,7 @@ def main():
 
     arr = np.load(args.input)  # [T, 3, H, W]
     if arr.ndim != 4 or arr.shape[1] != 3:
-        raise ValueError(f'Expected [T, 3, H, W], got {arr.shape}')
+        raise ValueError(f"Expected [T, 3, H, W], got {arr.shape}")
     x = torch.from_numpy(arr).float().unsqueeze(0)  # [1, T, 3, H, W]
     # ImageNet normalization (matches VideoMAE)
     mean = torch.tensor([0.485, 0.456, 0.406]).view(1, 1, 3, 1, 1)
@@ -350,12 +387,14 @@ def main():
     x = (x - mean) / std
     with torch.no_grad():
         feat = stream(x)
-    print(f'K400VideoStream {args.model}: input {tuple(x.shape)} -> '
-          f'output {tuple(feat.shape)}, dtype={feat.dtype}')
+    print(
+        f"K400VideoStream {args.model}: input {tuple(x.shape)} -> "
+        f"output {tuple(feat.shape)}, dtype={feat.dtype}"
+    )
     if args.output:
         np.save(args.output, feat.numpy())
-        print(f'Saved embedding to {args.output}')
+        print(f"Saved embedding to {args.output}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

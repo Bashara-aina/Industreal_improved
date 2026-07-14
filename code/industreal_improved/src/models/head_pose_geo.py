@@ -40,43 +40,40 @@ def rotation_6d_to_matrix(d6: torch.Tensor) -> torch.Tensor:
     b2 = F.normalize(a2 - (b1 * a2).sum(dim=-1, keepdim=True) * b1, dim=-1)
     b3 = torch.cross(b1, b2, dim=-1)
     # Ensure det = +1 (flip b3 if needed)
-    b3 = torch.where(
-        torch.det(torch.stack([b1, b2, b3], dim=-1)).unsqueeze(-1) < 0,
-        -b3, b3
-    )
+    b3 = torch.where(torch.det(torch.stack([b1, b2, b3], dim=-1)).unsqueeze(-1) < 0, -b3, b3)
     return torch.stack([b1, b2, b3], dim=-1)  # [B, 3, 3]
 
 
-def rotation_matrix_to_6d(R: torch.Tensor) -> torch.Tensor:
+def rotation_matrix_to_6d(r: torch.Tensor) -> torch.Tensor:
     """Convert rotation matrix to 6D representation (inverse of above)."""
-    return torch.cat([R[..., :, 0], R[..., :, 1]], dim=-1)  # [B, 6]
+    return torch.cat([r[..., :, 0], r[..., :, 1]], dim=-1)  # [B, 6]
 
 
 # ============================================================================
 # Geodesic angular loss
 # ============================================================================
-def geodesic_loss(R_pred: torch.Tensor, R_true: torch.Tensor) -> torch.Tensor:
+def geodesic_loss(r_pred: torch.Tensor, r_true: torch.Tensor) -> torch.Tensor:
     """Geodesic (angular) distance between two rotation matrices.
 
-    d(R_pred, R_true) = acos((tr(R_pred^T R_true) - 1) / 2) in radians.
+    d(r_pred, r_true) = acos((tr(r_pred^T r_true) - 1) / 2) in radians.
 
     Args:
-        R_pred: [B, 3, 3] predicted rotation matrix
-        R_true: [B, 3, 3] ground-truth rotation matrix
+        r_pred: [B, 3, 3] predicted rotation matrix
+        r_true: [B, 3, 3] ground-truth rotation matrix
 
     Returns:
         loss: scalar — mean angular error in radians
     """
-    # R_pred^T @ R_true
-    R_rel = torch.bmm(R_pred.transpose(1, 2), R_true)  # [B, 3, 3]
-    trace = R_rel.diagonal(dim1=1, dim2=2).sum(dim=1)  # [B]
+    # r_pred^T @ r_true
+    r_rel = torch.bmm(r_pred.transpose(1, 2), r_true)  # [B, 3, 3]
+    trace = r_rel.diagonal(dim1=1, dim2=2).sum(dim=1)  # [B]
     # cos_theta = (trace - 1) / 2, clamp for numerical stability
     cos_theta = ((trace - 1) / 2).clamp(-1 + 1e-7, 1 - 1e-7)
     theta = torch.acos(cos_theta)  # angular error in radians
     return theta.mean()
 
 
-def cosine_rotation_loss(R_pred: torch.Tensor, R_true: torch.Tensor) -> torch.Tensor:
+def cosine_rotation_loss(r_pred: torch.Tensor, r_true: torch.Tensor) -> torch.Tensor:
     """Cosine-based rotation loss (simpler, differentiable at 0).
 
     L = 1 - (1/3) * sum_i |R_pred[:,i] · R_true[:,i]|
@@ -100,8 +97,13 @@ class GeometryAwareHeadPose(nn.Module):
     Training: geodesic/cosine loss on rotation, MSE on position.
     """
 
-    def __init__(self, in_channels_c4: int = 384, in_channels_c5: int = 768,
-                 hidden_dim: int = 512, dropout: float = 0.1):
+    def __init__(
+        self,
+        in_channels_c4: int = 384,
+        in_channels_c5: int = 768,
+        hidden_dim: int = 512,
+        dropout: float = 0.1,
+    ):
         super().__init__()
         self.in_dim = in_channels_c4 + in_channels_c5  # 1152
 
@@ -146,8 +148,9 @@ class GeometryAwareHeadPose(nn.Module):
         nn.init.constant_(self.rotation_net[-1].bias[3:], 0.0)  # a2 ≈ [0,1,0]
         self.rotation_net[-1].bias.data[4] = 1.0
 
-    def forward(self, c4: torch.Tensor, c5: torch.Tensor
-                ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(
+        self, c4: torch.Tensor, c5: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Predict head pose.
 
         Args:
@@ -174,11 +177,16 @@ class GeometryAwareHeadPose(nn.Module):
 
         return rotation_6d, rotation_matrix, position
 
-    def compute_loss(self, rotation_6d: torch.Tensor, rotation_matrix: torch.Tensor,
-                     position: torch.Tensor,
-                     gt_rotation_6d: torch.Tensor, gt_position: torch.Tensor,
-                     rotation_weight: float = 1.0, position_weight: float = 0.1
-                     ) -> Tuple[torch.Tensor, Dict[str, float]]:
+    def compute_loss(
+        self,
+        rotation_6d: torch.Tensor,
+        rotation_matrix: torch.Tensor,
+        position: torch.Tensor,
+        gt_rotation_6d: torch.Tensor,
+        gt_position: torch.Tensor,
+        rotation_weight: float = 1.0,
+        position_weight: float = 0.1,
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """Compute geometry-aware head pose loss.
 
         Args:
@@ -200,24 +208,23 @@ class GeometryAwareHeadPose(nn.Module):
         total = rotation_weight * (geo_loss + 0.5 * cos_loss) + position_weight * pos_loss
 
         metrics = {
-            'head_geo_loss_rad': geo_loss.item(),
-            'head_geo_loss_deg': geo_loss.item() * 180 / 3.14159,
-            'head_cos_loss': cos_loss.item(),
-            'head_pos_loss': pos_loss.item(),
-            'head_total_loss': total.item(),
+            "head_geo_loss_rad": geo_loss.item(),
+            "head_geo_loss_deg": geo_loss.item() * 180 / 3.14159,
+            "head_cos_loss": cos_loss.item(),
+            "head_pos_loss": pos_loss.item(),
+            "head_total_loss": total.item(),
         }
 
         return total, metrics
 
-    def to_legacy_9dof(self, rotation_6d: torch.Tensor, position: torch.Tensor
-                       ) -> torch.Tensor:
+    def to_legacy_9dof(self, rotation_6d: torch.Tensor, position: torch.Tensor) -> torch.Tensor:
         """Convert back to legacy 9-DoF format for backward compatibility.
 
         Output: forward[3] + position[3] + up[3] = [B, 9]
         """
         rot_mat = rotation_6d_to_matrix(rotation_6d)  # [B, 3, 3]
         forward = rot_mat[:, :, 2]  # third column → forward direction
-        up = rot_mat[:, :, 1]       # second column → up direction
+        up = rot_mat[:, :, 1]  # second column → up direction
         return torch.cat([forward, position, up], dim=1)  # [B, 9]
 
 

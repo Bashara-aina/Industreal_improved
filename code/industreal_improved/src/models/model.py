@@ -1,5 +1,6 @@
 import sys
 import os
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 """
@@ -93,8 +94,13 @@ class SoftArgmax(nn.Module):
       coords = sum_{x,y} (x,y) * softmax(heatmap / temperature)
     Temperature controls sharpness -- lower = more peaked.
     """
-    def __init__(self, temperature: float = 0.1, training_temperature: Optional[float] = None,
-                 eps: float = 1e-6):
+
+    def __init__(
+        self,
+        temperature: float = 0.1,
+        training_temperature: Optional[float] = None,
+        eps: float = 1e-6,
+    ):
         super().__init__()
         self.temperature = temperature
         self.training_temperature = training_temperature
@@ -118,12 +124,20 @@ class SoftArgmax(nn.Module):
         # Low temperature (0.07) produces one-hot softmax — gradient d(coords)/d(logits) ≈ 0
         # for all pixels. Higher temperature distributes weight, enabling Wing loss gradients
         # to reach heatmap_head conv layers.
-        temp = self.training_temperature if (self.training and self.training_temperature is not None) else self.temperature
+        temp = (
+            self.training_temperature
+            if (self.training and self.training_temperature is not None)
+            else self.temperature
+        )
         weights = F.softmax(flat / temp, dim=-1)  # [B, K, HW]
 
         # 2D coordinate grids [H, W]
-        grid_x_2d = torch.arange(W, device=heatmaps.device, dtype=torch.float32).unsqueeze(0).repeat(H, 1)   # [H, W]
-        grid_y_2d = torch.arange(H, device=heatmaps.device, dtype=torch.float32).unsqueeze(1).repeat(1, W)   # [H, W]
+        grid_x_2d = (
+            torch.arange(W, device=heatmaps.device, dtype=torch.float32).unsqueeze(0).repeat(H, 1)
+        )  # [H, W]
+        grid_y_2d = (
+            torch.arange(H, device=heatmaps.device, dtype=torch.float32).unsqueeze(1).repeat(1, W)
+        )  # [H, W]
         # Add head_dim=1 for broadcasting: [1, H, W]
         grid_x_2d = grid_x_2d.unsqueeze(0)  # [1, H, W]
         grid_y_2d = grid_y_2d.unsqueeze(0)  # [1, H, W]
@@ -150,14 +164,16 @@ class WingLoss(nn.Module):
        |x| - C              for |x| >= ω
     where C = ω - ω*ln(1+ω/ε)
     """
+
     def __init__(self, omega: float = 0.05, epsilon: float = 0.005):
         super().__init__()
         self.omega = omega
         self.epsilon = epsilon
         self.C = omega - omega * math.log(1 + omega / epsilon)
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor,
-                weight: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self, pred: torch.Tensor, target: torch.Tensor, weight: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
         diff = (pred - target).abs()
         loss = torch.where(
             diff < self.omega,
@@ -190,9 +206,11 @@ class ConvNeXtBackbone(nn.Module):
     Uses torch.utils.checkpoint.checkpoint_sequential to trade ~20% compute
     for ~50% activation memory reduction during backprop.
     """
+
     def __init__(self, pretrained: bool = True, use_checkpoint: bool = False):
         super().__init__()
         from torchvision.models import convnext_tiny, ConvNeXt_Tiny_Weights
+
         self.model = convnext_tiny(weights=ConvNeXt_Tiny_Weights.DEFAULT if pretrained else None)
         self.use_checkpoint = use_checkpoint
 
@@ -203,17 +221,21 @@ class ConvNeXtBackbone(nn.Module):
         # Stage 6:   downsample4 + stage4 -> C5 (stride 32, 768ch)
         # Stage 7:   3 CNBlocks (no spatial downsample, produces final C5 at stride 32)
         self.stage_groups = [
-            nn.ModuleList([self.model.features[0], self.model.features[1]]),   # C2
-            nn.ModuleList([self.model.features[2], self.model.features[3]]),   # C3
-            nn.ModuleList([self.model.features[4], self.model.features[5]]),   # C4
-            nn.ModuleList([self.model.features[6], self.model.features[7]]),   # C5 (downsample + CNBlocks)
+            nn.ModuleList([self.model.features[0], self.model.features[1]]),  # C2
+            nn.ModuleList([self.model.features[2], self.model.features[3]]),  # C3
+            nn.ModuleList([self.model.features[4], self.model.features[5]]),  # C4
+            nn.ModuleList(
+                [self.model.features[6], self.model.features[7]]
+            ),  # C5 (downsample + CNBlocks)
         ]
 
     def train(self, mode: bool = True):
         super().train(mode)
         return self
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
             x: [B, 3, H, W]
@@ -241,7 +263,9 @@ class ConvNeXtBackbone(nn.Module):
             return x
 
         def stage3(x):
-            for m in self.stage_groups[3]:  # features[6] + features[7] -> C5 (downsample + CNBlocks)
+            for m in self.stage_groups[
+                3
+            ]:  # features[6] + features[7] -> C5 (downsample + CNBlocks)
                 x = m(x)
             return x
 
@@ -281,14 +305,14 @@ def set_backbone_stage_requires_grad(
                stage=1 -> freeze/unfreeze stage 1
         requires_grad: True=trainable, False=frozen
     """
-    if backbone_type == 'resnet50':
+    if backbone_type == "resnet50":
         resnet: ResNet50Backbone = model.backbone
         layer_map = {1: resnet.layer1, 2: resnet.layer2, 3: resnet.layer3, 4: resnet.layer4}
         if stage in layer_map:
             for param in layer_map[stage].parameters():
                 param.requires_grad = requires_grad
 
-    elif backbone_type == 'convnext_tiny':
+    elif backbone_type == "convnext_tiny":
         convnext: ConvNeXtBackbone = model.backbone
         features = convnext.model.features
         # Map logical stage index to ConvNeXt feature indices
@@ -319,16 +343,18 @@ class ResNet50Backbone(nn.Module):
     BN layers are frozen during training EXCEPT layer4 (C5) which re-learns
     industrial scene statistics. (Doc 01 B.2)
     """
+
     def __init__(self, pretrained: bool = True):
         super().__init__()
         from torchvision.models import resnet50, ResNet50_Weights
+
         self.model = resnet50(weights=ResNet50_Weights.DEFAULT if pretrained else None)
         self._freeze_bn()
 
     def _freeze_bn(self):
         for name, module in self.model.named_modules():
             if isinstance(module, (nn.BatchNorm2d, nn.SyncBatchNorm)):
-                if name.startswith('layer4'):
+                if name.startswith("layer4"):
                     continue
                 module.eval()
                 for p in module.parameters():
@@ -340,7 +366,9 @@ class ResNet50Backbone(nn.Module):
             self._freeze_bn()
         return self
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Args:
             x: [B, 3, H, W]
@@ -370,18 +398,21 @@ class ResNet50Backbone(nn.Module):
         return c2, c3, c4, c5
 
 
-def build_backbone(backbone_type: str = 'resnet50', pretrained: bool = True,
-                   use_checkpoint: bool = False) -> nn.Module:
+def build_backbone(
+    backbone_type: str = "resnet50", pretrained: bool = True, use_checkpoint: bool = False
+) -> nn.Module:
     """
     Factory function to build backbone by type.
     Doc 01 D.1: Supports 'resnet50' and 'convnext_tiny'.
     """
-    if backbone_type == 'convnext_tiny':
+    if backbone_type == "convnext_tiny":
         return ConvNeXtBackbone(pretrained=pretrained, use_checkpoint=use_checkpoint)
-    elif backbone_type == 'resnet50':
+    elif backbone_type == "resnet50":
         return ResNet50Backbone(pretrained=pretrained)
     else:
-        raise ValueError(f"Unknown backbone type: {backbone_type}. Use 'resnet50' or 'convnext_tiny'.")
+        raise ValueError(
+            f"Unknown backbone type: {backbone_type}. Use 'resnet50' or 'convnext_tiny'."
+        )
 
 
 # ===========================================================================
@@ -394,6 +425,7 @@ class FPN(nn.Module):
     Uses lateral 1x1 convs and top-down upsampling with 3x3 smoothing convs.
     P6/P7 derived via stride-2 conv on C5.
     """
+
     def __init__(self, in_channels: List[int] = [512, 1024, 2048], out_channels: int = 256):
         super().__init__()
         # in_channels: [C3, C4, C5] -- C2 (stride 4) is not used in FPN
@@ -427,8 +459,8 @@ class FPN(nn.Module):
         # C5(2048ch) -> lateral -> P5(256ch) at stride 32
         # P6/P7 from stride-2 conv on C5
         p5 = self.lateral_c5(c5)
-        p4 = self.lateral_c4(c4) + F.interpolate(p5, size=c4.shape[2:], mode='nearest')
-        p3 = self.lateral_c3(c3) + F.interpolate(p4, size=c3.shape[2:], mode='nearest')
+        p4 = self.lateral_c4(c4) + F.interpolate(p5, size=c4.shape[2:], mode="nearest")
+        p3 = self.lateral_c3(c3) + F.interpolate(p4, size=c3.shape[2:], mode="nearest")
 
         p3 = self.smooth_p3(p3)
         p4 = self.smooth_p4(p4)
@@ -437,7 +469,7 @@ class FPN(nn.Module):
         p6 = self.p6_conv(c5)
         p7 = self.p7_conv(F.relu(p6))
 
-        return {'p3': p3, 'p4': p4, 'p5': p5, 'p6': p6, 'p7': p7}
+        return {"p3": p3, "p4": p4, "p5": p5, "p6": p6, "p7": p7}
 
 
 class BiFPN(nn.Module):
@@ -457,6 +489,7 @@ class BiFPN(nn.Module):
     Ported from the legacy LightweightFPN (mvit_mtl_model.py:139-230),
     adapted to 2D Conv2d for the POPWMultiTaskModel backbone features.
     """
+
     def __init__(self, in_channels: List[int] = [512, 1024, 2048], out_channels: int = 256):
         super().__init__()
         c3_ch, c4_ch, c5_ch = in_channels
@@ -521,11 +554,11 @@ class BiFPN(nn.Module):
         td5 = self.td_conv_c5(self._fast_weightsum(self.td_w_c5, [lat5]))
 
         # P4_td: lateral + upsample P5_td
-        up5 = F.interpolate(td5, size=c4.shape[2:], mode='bilinear', align_corners=False)
+        up5 = F.interpolate(td5, size=c4.shape[2:], mode="bilinear", align_corners=False)
         td4 = self.td_conv_c4(self._fast_weightsum(self.td_w_c4, [lat4, up5]))
 
         # P3_td: lateral + upsample P4_td
-        up4 = F.interpolate(td4, size=c3.shape[2:], mode='bilinear', align_corners=False)
+        up4 = F.interpolate(td4, size=c3.shape[2:], mode="bilinear", align_corners=False)
         td3 = self.td_conv_c3(self._fast_weightsum(self.td_w_c3, [lat3, up4]))
 
         # --- Bottom-up pathway (P3 -> P4 -> P5) ---
@@ -533,18 +566,18 @@ class BiFPN(nn.Module):
         p3 = self.bu_conv_c3(td3)
 
         # P4_out: td4 + downsample P3_out
-        down3 = F.interpolate(p3, size=c4.shape[2:], mode='bilinear', align_corners=False)
+        down3 = F.interpolate(p3, size=c4.shape[2:], mode="bilinear", align_corners=False)
         p4 = self.bu_conv_c4(self._fast_weightsum(self.bu_w_c4, [td4, down3]))
 
         # P5_out: td5 + downsample P4_out (p4 is now bottom-up refined)
-        down4 = F.interpolate(p4, size=c5.shape[2:], mode='bilinear', align_corners=False)
+        down4 = F.interpolate(p4, size=c5.shape[2:], mode="bilinear", align_corners=False)
         p5 = self.bu_conv_c5(self._fast_weightsum(self.bu_w_c5, [td5, down4]))
 
         # P6/P7 from bottom-up P5 via stride conv
         p6 = self.p6_conv(p5)
         p7 = self.p7_conv(F.relu(p6))
 
-        return {'p3': p3, 'p4': p4, 'p5': p5, 'p6': p6, 'p7': p7}
+        return {"p3": p3, "p4": p4, "p5": p5, "p6": p6, "p7": p7}
 
 
 # ===========================================================================
@@ -555,6 +588,7 @@ class AnchorGenerator(nn.Module):
     Generate anchors for RetinaNet. 3 ratios x 3 scales = 9 per location.
     Anchor sizes from C.ANCHOR_SIZES, calibrated via k-means on GT boxes (Doc 01 B.3).
     """
+
     def __init__(
         self,
         sizes: Tuple[int, ...] = C.ANCHOR_SIZES,
@@ -570,7 +604,7 @@ class AnchorGenerator(nn.Module):
     def forward(self, feature_maps: Dict[str, torch.Tensor]) -> torch.Tensor:
         device = next(iter(feature_maps.values())).device
         all_anchors = []
-        fpn_keys = ['p3', 'p4', 'p5', 'p6', 'p7']
+        fpn_keys = ["p3", "p4", "p5", "p6", "p7"]
         strides = [8, 16, 32, 64, 128]
 
         for level_idx, (key, stride) in enumerate(zip(fpn_keys, strides)):
@@ -589,11 +623,16 @@ class AnchorGenerator(nn.Module):
 
             shifts_x = (torch.arange(w, device=device) + 0.5) * stride
             shifts_y = (torch.arange(h, device=device) + 0.5) * stride
-            shift_y, shift_x = torch.meshgrid(shifts_y, shifts_x, indexing='ij')
-            shifts = torch.stack([
-                shift_x.flatten(), shift_y.flatten(),
-                shift_x.flatten(), shift_y.flatten(),
-            ], dim=1)
+            shift_y, shift_x = torch.meshgrid(shifts_y, shifts_x, indexing="ij")
+            shifts = torch.stack(
+                [
+                    shift_x.flatten(),
+                    shift_y.flatten(),
+                    shift_x.flatten(),
+                    shift_y.flatten(),
+                ],
+                dim=1,
+            )
 
             anchors = shifts.unsqueeze(1) + cell_anchors.unsqueeze(0)
             all_anchors.append(anchors.reshape(-1, 4))
@@ -610,8 +649,14 @@ class DetectionHead(nn.Module):
     - Cls subnet: 4x Conv3x3+ReLU -> Conv(9x24) for 24 ASD classes
     - Reg subnet: 4x Conv3x3+ReLU -> Conv(9x4)
     """
-    def __init__(self, in_channels: int = 256, num_classes: int = 24, num_anchors: int = 9,
-                 detach_reg_fpn: bool = False):
+
+    def __init__(
+        self,
+        in_channels: int = 256,
+        num_classes: int = 24,
+        num_anchors: int = 9,
+        detach_reg_fpn: bool = False,
+    ):
         super().__init__()
         self.num_classes = num_classes
         self.num_anchors = num_anchors
@@ -620,11 +665,13 @@ class DetectionHead(nn.Module):
         def make_subnet():
             layers = []
             for _ in range(4):
-                layers.extend([
-                    nn.Conv2d(in_channels, in_channels, 3, padding=1),
-                    nn.GroupNorm(8, in_channels),
-                    nn.ReLU(True),
-                ])
+                layers.extend(
+                    [
+                        nn.Conv2d(in_channels, in_channels, 3, padding=1),
+                        nn.GroupNorm(8, in_channels),
+                        nn.ReLU(True),
+                    ]
+                )
             return nn.Sequential(*layers)
 
         self.cls_subnet = make_subnet()
@@ -654,12 +701,14 @@ class DetectionHead(nn.Module):
 
     def forward(self, features: Dict[str, torch.Tensor]):
         cls_all, reg_all = [], []
-        for key in ('p3', 'p4', 'p5', 'p6', 'p7'):
+        for key in ("p3", "p4", "p5", "p6", "p7"):
             feat = features[key]
             B, _, H, W = feat.shape
 
             cls_out = self.cls_score(self.cls_subnet(feat))
-            cls_out = cls_out.permute(0, 2, 3, 1).reshape(B, H * W * self.num_anchors, self.num_classes)
+            cls_out = cls_out.permute(0, 2, 3, 1).reshape(
+                B, H * W * self.num_anchors, self.num_classes
+            )
             cls_all.append(cls_out)
 
             # [FIX 2026-06-16] Gradient isolation for regression path
@@ -692,8 +741,14 @@ class PoseHead(nn.Module):
       ConvTranspose2d on P3: 256 -> 256, k=4, s=2 -> [B, 256, H/4, W/4] = [B, 256, 180, 160]
       Then heatmap head: 256 -> 17
     """
-    def __init__(self, in_channels: int = 256, num_keypoints: int = 17,
-                 temperature: float = 0.1, training_temperature: Optional[float] = None):
+
+    def __init__(
+        self,
+        in_channels: int = 256,
+        num_keypoints: int = 17,
+        temperature: float = 0.1,
+        training_temperature: Optional[float] = None,
+    ):
         super().__init__()
         self.num_keypoints = num_keypoints
 
@@ -709,8 +764,9 @@ class PoseHead(nn.Module):
             nn.Conv2d(in_channels, num_keypoints, 1),
         )
 
-        self.soft_argmax = SoftArgmax(temperature=temperature,
-                                      training_temperature=training_temperature)
+        self.soft_argmax = SoftArgmax(
+            temperature=temperature, training_temperature=training_temperature
+        )
 
     def forward(self, p3_feature: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
@@ -745,11 +801,13 @@ class PoseFiLMModule(nn.Module):
     For ResNet-50 (C5=2048): C5 is reshaped to 768 via its channel dimension
     before modulation. See forward() for the reshape logic.
     """
+
     # Fixed output dimension -- paper specifies 768 per ?PoseFiLM
     FILM_DIM = 768
 
-    def __init__(self, num_keypoints: int = 17, c5_channels: int = 2048,
-                 hidden_channels: int = 512):
+    def __init__(
+        self, num_keypoints: int = 17, c5_channels: int = 2048, hidden_channels: int = 512
+    ):
         super().__init__()
         self.num_keypoints = num_keypoints
         self.c5_channels = c5_channels
@@ -780,9 +838,9 @@ class PoseFiLMModule(nn.Module):
                     nn.init.zeros_(m.bias)
         nn.init.ones_(self.gamma_net[-1].bias)
 
-    def forward(self, c5: torch.Tensor,
-                keypoints: torch.Tensor,
-                confidence: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, c5: torch.Tensor, keypoints: torch.Tensor, confidence: torch.Tensor
+    ) -> torch.Tensor:
         """
         Args:
             c5: [B, c5_channels, H/32, W/32] -- C5 from backbone (2048 for ResNet-50, 768 for ConvNeXt-Tiny)
@@ -794,8 +852,9 @@ class PoseFiLMModule(nn.Module):
         B = keypoints.shape[0]
 
         # Normalize keypoints to [0, 1] based on image size
-        scale = torch.tensor([C.IMG_WIDTH, C.IMG_HEIGHT],
-                             device=keypoints.device, dtype=keypoints.dtype)
+        scale = torch.tensor(
+            [C.IMG_WIDTH, C.IMG_HEIGHT], device=keypoints.device, dtype=keypoints.dtype
+        )
         keypoints_norm = keypoints / scale.view(1, 1, 2)  # [B, 17, 2]
 
         # Flatten keypoints: [B, 34]
@@ -850,6 +909,7 @@ class HeadPoseFiLMModule(nn.Module):
     regardless of backbone C5 channel count. The input c5_mod is already
     768 channels from PoseFiLM's projection.
     """
+
     FILM_DIM = 768  # shared with PoseFiLMModule
 
     def __init__(self, c5_channels: int = 2048, hidden_channels: int = 256):
@@ -925,7 +985,8 @@ class VideoMAEStream(nn.Module):
     lightweight three-D-convolution temporal stream that still captures temporal dependencies
     without requiring external checkpoint download.
     """
-    def __init__(self, ckpt: str = 'MCG-NJU/videomae-small-finetuned-kinetics'):
+
+    def __init__(self, ckpt: str = "MCG-NJU/videomae-small-finetuned-kinetics"):
         super().__init__()
         self._use_fallback = False
         self.hidden_size = 384
@@ -933,21 +994,21 @@ class VideoMAEStream(nn.Module):
 
         # Local cache path for the 384-D VideoMAE-Small checkpoint
         # (MCG-NJU/videomae-small-finetuned-kinetics -> hidden_size=384, num_hidden_layers=12)
-        _cache_root = os.path.expanduser('~/.cache/huggingface/hub')
+        _cache_root = os.path.expanduser("~/.cache/huggingface/hub")
         _model_cache = os.path.join(
             _cache_root,
-            'models--MCG-NJU--videomae-small-finetuned-kinetics',
-            'snapshots',
-            '240e9734611173accbbf74cbdf4b641e4c431264',
+            "models--MCG-NJU--videomae-small-finetuned-kinetics",
+            "snapshots",
+            "240e9734611173accbbf74cbdf4b641e4c431264",
         )
         _config_path = os.path.join(
             _cache_root,
-            'models--MCG-NJU--videomae-small-finetuned-kinetics',
-            'snapshots',
-            '1bf2b82c809609f5df1ea7648aee577e2e486b63',
-            'config.json',
+            "models--MCG-NJU--videomae-small-finetuned-kinetics",
+            "snapshots",
+            "1bf2b82c809609f5df1ea7648aee577e2e486b63",
+            "config.json",
         )
-        _ckpt_path = os.path.join(_model_cache, 'model.safetensors')
+        _ckpt_path = os.path.join(_model_cache, "model.safetensors")
 
         try:
             from transformers import VideoMAEModel, VideoMAEConfig
@@ -975,27 +1036,29 @@ class VideoMAEStream(nn.Module):
             # Load state dict from local cache with strict=False
             if os.path.exists(_ckpt_path):
                 from safetensors.torch import load_file as _load_safetensors
+
                 state_dict = _load_safetensors(_ckpt_path)
                 missing, unexpected = self.encoder.load_state_dict(state_dict, strict=False)
                 if missing:
-                    logger.debug(f'VideoMAE: missing keys (expected): {missing}')
+                    logger.debug(f"VideoMAE: missing keys (expected): {missing}")
                 if unexpected:
-                    logger.debug(f'VideoMAE: unexpected keys (ignored): {unexpected}')
-                logger.info('VideoMAE: loaded VideoMAE-Small (384-D) from local cache')
+                    logger.debug(f"VideoMAE: unexpected keys (ignored): {unexpected}")
+                logger.info("VideoMAE: loaded VideoMAE-Small (384-D) from local cache")
             elif os.path.exists(ckpt):
                 # Fallback: load from provided path
                 self.encoder = VideoMAEModel.from_pretrained(ckpt, local_files_only=True)
             else:
-                raise FileNotFoundError(f'VideoMAE checkpoint not found at {_ckpt_path}')
+                raise FileNotFoundError(f"VideoMAE checkpoint not found at {_ckpt_path}")
 
             for p in self.encoder.parameters():
                 p.requires_grad = False
             self._forward = self._forward_videomae
-            logger.info('VideoMAEStream: VideoMAE-Small (384-D) loaded successfully')
+            logger.info("VideoMAEStream: VideoMAE-Small (384-D) loaded successfully")
 
         except Exception as ex:
             import warnings
-            warnings.warn(f'VideoMAE checkpoint unavailable ({ex}), using 3D temporal fallback')
+
+            warnings.warn(f"VideoMAE checkpoint unavailable ({ex}), using 3D temporal fallback")
             self._use_fallback = True
             self.hidden_size = 384
             self._build_fallback_encoder()
@@ -1004,22 +1067,33 @@ class VideoMAEStream(nn.Module):
         """Three-D temporal convolution fallback stream -- captures temporal patterns without checkpoint."""
         # 3D conv stack: temporal mixing via 3D kernels, spatial via 2D after flattening
         self.fb = nn.Sequential(
-            nn.Conv3d(3, 64, kernel_size=(3, 7, 7), stride=(1, 2, 2), padding=(1, 3, 3), bias=False),
+            nn.Conv3d(
+                3, 64, kernel_size=(3, 7, 7), stride=(1, 2, 2), padding=(1, 3, 3), bias=False
+            ),
             nn.BatchNorm3d(64),
             nn.ReLU(inplace=True),
-            nn.MaxPool3d(kernel_size=(1, 3, 3), stride=(1, 2, 2), padding=(0, 1, 1)),  # [B,64,T/2,112,112]
-
-            nn.Conv3d(64, 128, kernel_size=(3, 3, 3), stride=(2, 1, 1), padding=(1, 1, 1), bias=False),
+            nn.MaxPool3d(
+                kernel_size=(1, 3, 3), stride=(1, 2, 2), padding=(0, 1, 1)
+            ),  # [B,64,T/2,112,112]
+            nn.Conv3d(
+                64, 128, kernel_size=(3, 3, 3), stride=(2, 1, 1), padding=(1, 1, 1), bias=False
+            ),
             nn.BatchNorm3d(128),
             nn.ReLU(inplace=True),
-            nn.MaxPool3d(kernel_size=(2, 3, 3), stride=(2, 2, 2), padding=(0, 1, 1)),  # [B,128,T/4,56,56]
-
-            nn.Conv3d(128, 256, kernel_size=(3, 3, 3), stride=(2, 1, 1), padding=(1, 1, 1), bias=False),
+            nn.MaxPool3d(
+                kernel_size=(2, 3, 3), stride=(2, 2, 2), padding=(0, 1, 1)
+            ),  # [B,128,T/4,56,56]
+            nn.Conv3d(
+                128, 256, kernel_size=(3, 3, 3), stride=(2, 1, 1), padding=(1, 1, 1), bias=False
+            ),
             nn.BatchNorm3d(256),
             nn.ReLU(inplace=True),
-            nn.MaxPool3d(kernel_size=(2, 2, 2), stride=(2, 2, 2), padding=(0, 1, 1)),  # [B,256,T/8,28,28]
-
-            nn.Conv3d(256, 384, kernel_size=(3, 3, 3), stride=(2, 1, 1), padding=(1, 1, 1), bias=False),
+            nn.MaxPool3d(
+                kernel_size=(2, 2, 2), stride=(2, 2, 2), padding=(0, 1, 1)
+            ),  # [B,256,T/8,28,28]
+            nn.Conv3d(
+                256, 384, kernel_size=(3, 3, 3), stride=(2, 1, 1), padding=(1, 1, 1), bias=False
+            ),
             nn.BatchNorm3d(384),
             nn.ReLU(inplace=True),
             nn.AdaptiveAvgPool3d((1, 1, 1)),  # [B,384,1,1,1]
@@ -1032,7 +1106,7 @@ class VideoMAEStream(nn.Module):
         clip = clip.reshape(B, T, C, H, W)
 
         cfg = self.encoder.config
-        tubelet_size = getattr(cfg, 'tubelet_size', 2)
+        tubelet_size = getattr(cfg, "tubelet_size", 2)
         patch_size = cfg.patch_size
         num_spatial_patches = (cfg.image_size // patch_size) ** 2
         actual_seq_len = (T // tubelet_size) * num_spatial_patches
@@ -1042,7 +1116,7 @@ class VideoMAEStream(nn.Module):
             pe_interp = F.interpolate(
                 pe.permute(0, 2, 1),  # [1, 384, 1568]
                 size=actual_seq_len,
-                mode='linear',
+                mode="linear",
                 align_corners=False,
             ).permute(0, 2, 1)  # [1, actual_seq_len, 384]
             self.encoder.embeddings.position_embeddings = nn.Parameter(
@@ -1074,10 +1148,10 @@ class VideoMAEStream(nn.Module):
         if self._use_fallback:
             for p in self.fb.parameters():
                 p.requires_grad = True
-            return [{'params': self.fb.parameters(), 'lr': lr}]
+            return [{"params": self.fb.parameters(), "lr": lr}]
         for p in self.encoder.parameters():
             p.requires_grad = True
-        return [{'params': self.encoder.parameters(), 'lr': lr}]
+        return [{"params": self.encoder.parameters(), "lr": lr}]
 
 
 # ===========================================================================
@@ -1085,7 +1159,7 @@ class VideoMAEStream(nn.Module):
 # ===========================================================================
 def _drop_path(x: torch.Tensor, drop_prob: float, training: bool) -> torch.Tensor:
     """Stochastic depth: randomly drop entire residual branches during training."""
-    if drop_prob == 0. or not training:
+    if drop_prob == 0.0 or not training:
         return x
     keep = 1 - drop_prob
     shape = (x.shape[0],) + (1,) * (x.ndim - 1)
@@ -1107,16 +1181,25 @@ class TemporalConvBlock(nn.Module):
 
     The TCN output feeds into the ViT for long-range temporal reasoning.
     """
-    def __init__(self, embed_dim: int = 512, kernel_size: int = 5,
-                 dropout: float = 0.1, drop_path: float = 0.1):
+
+    def __init__(
+        self,
+        embed_dim: int = 512,
+        kernel_size: int = 5,
+        dropout: float = 0.1,
+        drop_path: float = 0.1,
+    ):
         super().__init__()
         self.embed_dim = embed_dim
 
         self.norm = nn.LayerNorm(embed_dim)
         # [FIX #5 MEDIUM] True depthwise: groups=embed_dim, single conv per paper ?ActivityHead
         self.depthwise_conv = nn.Conv1d(
-            embed_dim, embed_dim, kernel_size=kernel_size,
-            padding=kernel_size // 2, groups=embed_dim
+            embed_dim,
+            embed_dim,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            groups=embed_dim,
         )
         # [FIX #TCN] Pointwise 1x1 conv after depthwise -- enables cross-channel
         # temporal modulation. Per TCN paper: "The pointwise (1x1) conv ... mixes
@@ -1159,9 +1242,16 @@ class ViTTemporalBlock(nn.Module):
     (embed_dim=512, dk=512/8=64). ViTTemporalBlock default (num_heads=4, dk=128)
     is for other uses (e.g., PSR temporal model).
     """
-    def __init__(self, embed_dim: int = 512, num_heads: int = 8,
-                 ff_dim: int = 2048, dropout: float = 0.1, drop_path: float = 0.1,
-                 max_seq_len: int = 1024):
+
+    def __init__(
+        self,
+        embed_dim: int = 512,
+        num_heads: int = 8,
+        ff_dim: int = 2048,
+        dropout: float = 0.1,
+        drop_path: float = 0.1,
+        max_seq_len: int = 1024,
+    ):
         super().__init__()
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -1220,7 +1310,7 @@ class ViTTemporalBlock(nn.Module):
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
-        scale = self.head_dim ** -0.5
+        scale = self.head_dim**-0.5
         # [AUDIT FIX 2026-06-11 / RC-16] was `/ scale`: dividing by d^-0.5
         # MULTIPLIES the attention logits by sqrt(d)=8 instead of dividing —
         # logits 64x larger than standard scaled dot-product attention →
@@ -1252,16 +1342,19 @@ class FeatureBank(nn.Module):
     Keyed by (video_id, camera_view) for multi-sequence handling.
     Memory: T x 512 x 2 bytes (FP16) = 8 KB per sequence
     """
+
     def __init__(self, embed_dim: int = 512, window_size: int = 8):
         super().__init__()
         self.embed_dim = embed_dim
         self.window_size = window_size
         self._bank: Dict[Tuple[str, str], List[torch.Tensor]] = {}
 
-    def forward(self,
-                projected_features: torch.Tensor,
-                video_ids: Optional[List[str]] = None,
-                camera_views: Optional[List[str]] = None) -> torch.Tensor:
+    def forward(
+        self,
+        projected_features: torch.Tensor,
+        video_ids: Optional[List[str]] = None,
+        camera_views: Optional[List[str]] = None,
+    ) -> torch.Tensor:
         """
         Args:
             projected_features: [B, 512] -- current frame's projected feature
@@ -1286,8 +1379,12 @@ class FeatureBank(nn.Module):
         # Per-frame mode: ring buffer keyed by (video_id, camera_view)
         outputs = []
         for i in range(B):
-            vid = str(video_ids[i]) if video_ids[i] is not None else 'default'
-            cam = str(camera_views[i]) if (camera_views is not None and camera_views[i] is not None) else 'default'
+            vid = str(video_ids[i]) if video_ids[i] is not None else "default"
+            cam = (
+                str(camera_views[i])
+                if (camera_views is not None and camera_views[i] is not None)
+                else "default"
+            )
             key = (vid, cam)
 
             feat_i = projected_features[i]  # [512]
@@ -1315,8 +1412,10 @@ class FeatureBank(nn.Module):
             else:
                 # [OPUS v5 AUDIT] FeatureBank gradient: when FEATURE_BANK_DETACH=False,
                 # gradient flows through bank entries enabling temporal learning (#14-16).
-                _bank_detach = bool(getattr(C, 'FEATURE_BANK_DETACH', True))
-                _bank_detach_grad_only = bool(getattr(C, 'FEATURE_BANK_DETACH_GRAD_ENTRIES_ONLY', False))
+                _bank_detach = bool(getattr(C, "FEATURE_BANK_DETACH", True))
+                _bank_detach_grad_only = bool(
+                    getattr(C, "FEATURE_BANK_DETACH_GRAD_ENTRIES_ONLY", False)
+                )
                 if _bank_detach_grad_only:
                     # [E2] Detach stored entries but keep current frame gradient
                     _stored = feat_i.detach().clone()
@@ -1330,8 +1429,10 @@ class FeatureBank(nn.Module):
             seq = self._bank[key]
             while len(seq) < self.window_size:
                 if feat_is_valid:
-                    _bank_detach = bool(getattr(C, 'FEATURE_BANK_DETACH', True))
-                    _bank_detach_grad_only = bool(getattr(C, 'FEATURE_BANK_DETACH_GRAD_ENTRIES_ONLY', False))
+                    _bank_detach = bool(getattr(C, "FEATURE_BANK_DETACH", True))
+                    _bank_detach_grad_only = bool(
+                        getattr(C, "FEATURE_BANK_DETACH_GRAD_ENTRIES_ONLY", False)
+                    )
                     if _bank_detach_grad_only:
                         pad_feat = feat_i.detach().clone()
                     else:
@@ -1339,7 +1440,7 @@ class FeatureBank(nn.Module):
                 else:
                     pad_feat = self._bank[key][0].clone()
                 seq = [pad_feat] + seq
-            seq = seq[-self.window_size:]
+            seq = seq[-self.window_size :]
 
             bank_i = torch.stack(seq)  # [T, 512], all detached
             if _bank_detach_grad_only:
@@ -1357,7 +1458,7 @@ class FeatureBank(nn.Module):
         """Clear all stored sequences."""
         self._bank.clear()
 
-    def reset_sequence(self, video_id: str, camera_view: str = 'default'):
+    def reset_sequence(self, video_id: str, camera_view: str = "default"):
         """Clear stored sequence for a specific video/camera."""
         key = (str(video_id), str(camera_view))
         self._bank.pop(key, None)
@@ -1404,12 +1505,21 @@ class ActivityHead(nn.Module):
     absent from the dataset (permanent cold channel). Frames without any AR
     annotation are marked with label=-1 and excluded from the activity loss.
     """
-    def __init__(self, c5_channels: int = 2048, p4_channels: int = 256,
-                 det_conf_size: int = 24, embed_dim: int = 512,
-                 num_classes: int = 74, dropout: float = 0.1,  # [FIX #3 HIGH] attn_dropout=0.1 per paper
-                 window_size: int = 16, use_vit: bool = True,
-                 vit_drop_path: float = 0.1,
-                 use_videomae: bool = False, videomae_hidden: int = 384):
+
+    def __init__(
+        self,
+        c5_channels: int = 2048,
+        p4_channels: int = 256,
+        det_conf_size: int = 24,
+        embed_dim: int = 512,
+        num_classes: int = 74,
+        dropout: float = 0.1,  # [FIX #3 HIGH] attn_dropout=0.1 per paper
+        window_size: int = 16,
+        use_vit: bool = True,
+        vit_drop_path: float = 0.1,
+        use_videomae: bool = False,
+        videomae_hidden: int = 384,
+    ):
         super().__init__()
         self.embed_dim = embed_dim
         self.use_vit = use_vit
@@ -1438,7 +1548,7 @@ class ActivityHead(nn.Module):
         # [FIX 2026-07-01 agent audit] TCN+ViT+cls_token unconditionally allocated 7.66M dead params
         # when ACTIVITY_HEAD_SIMPLE=True (85% of head params unused, ~92 MB GPU memory wasted).
         # Now conditionally created only when ACTIVITY_HEAD_SIMPLE=False.
-        self.simple = bool(getattr(C, 'ACTIVITY_HEAD_SIMPLE', False))
+        self.simple = bool(getattr(C, "ACTIVITY_HEAD_SIMPLE", False))
         if not self.simple:
             # A.1: TCN -- short-range motion (velocity/acceleration profiles)
             self.tcn = TemporalConvBlock(
@@ -1449,22 +1559,24 @@ class ActivityHead(nn.Module):
             )
 
             # A.3: 2x ViT blocks with CLS token (replaces last-timestep pooling)
-            self.vit = nn.ModuleList([
-                ViTTemporalBlock(
-                    embed_dim=embed_dim,
-                    num_heads=8,
-                    ff_dim=2048,
-                    dropout=dropout,
-                    drop_path=0.1,
-                ),
-                ViTTemporalBlock(
-                    embed_dim=embed_dim,
-                    num_heads=8,
-                    ff_dim=2048,
-                    dropout=dropout,
-                    drop_path=0.15,
-                ),
-            ])
+            self.vit = nn.ModuleList(
+                [
+                    ViTTemporalBlock(
+                        embed_dim=embed_dim,
+                        num_heads=8,
+                        ff_dim=2048,
+                        dropout=dropout,
+                        drop_path=0.1,
+                    ),
+                    ViTTemporalBlock(
+                        embed_dim=embed_dim,
+                        num_heads=8,
+                        ff_dim=2048,
+                        dropout=dropout,
+                        drop_path=0.15,
+                    ),
+                ]
+            )
 
             # CLS token for cross-attention pooling (TimeSformer / ViViT style)
             self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
@@ -1482,12 +1594,12 @@ class ActivityHead(nn.Module):
             self.cls_token = None
             self.activity_classifier = None
         if self.simple:
-            _hidden = int(getattr(C, 'ACTIVITY_HEAD_SIMPLE_HIDDEN', 256))
+            _hidden = int(getattr(C, "ACTIVITY_HEAD_SIMPLE_HIDDEN", 256))
             self.simple_classifier = nn.Sequential(
                 nn.LayerNorm(embed_dim),
                 nn.Linear(embed_dim, _hidden),
                 nn.GELU(),
-                nn.Dropout(float(getattr(C, 'ACTIVITY_HEAD_DROPOUT', max(dropout, 0.2)))),
+                nn.Dropout(float(getattr(C, "ACTIVITY_HEAD_DROPOUT", max(dropout, 0.2)))),
                 nn.Linear(_hidden, num_classes),
             )
             # Opus-recommended init: Xavier for hidden, small std + negative bias
@@ -1509,9 +1621,12 @@ class ActivityHead(nn.Module):
         else:
             self.simple_classifier = None
 
-    def forward(self, proj_feat: torch.Tensor,
-                temporal_bank: Optional[torch.Tensor] = None,
-                videomae_feat: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self,
+        proj_feat: torch.Tensor,
+        temporal_bank: Optional[torch.Tensor] = None,
+        videomae_feat: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """
         Args:
             proj_feat: [B, 512] -- pre-projected joint features
@@ -1525,7 +1640,7 @@ class ActivityHead(nn.Module):
         # [FIX 2026-06-30 Opus consult] Simple per-frame path — bypass TCN+ViT.
         # Classifies the projected feature directly; gives a strong, short gradient
         # path and avoids learning from the non-temporal (shuffled) feature bank.
-        if getattr(self, 'simple', False) and self.simple_classifier is not None:
+        if getattr(self, "simple", False) and self.simple_classifier is not None:
             return self.simple_classifier(proj_feat)
 
         if temporal_bank is not None:
@@ -1536,7 +1651,7 @@ class ActivityHead(nn.Module):
             # The correct approach: use torch.cat to build a new tensor where the last
             # position carries proj_feat's gradient, while earlier positions use the
             # bank's (detached) history.
-            _slot_overwrite = bool(getattr(C, 'FEATURE_BANK_SLOT_OVERWRITE', True))
+            _slot_overwrite = bool(getattr(C, "FEATURE_BANK_SLOT_OVERWRITE", True))
             if _slot_overwrite:
                 # Build bank: history from temporal_bank[:-1], last from proj_feat
                 _bank_history = temporal_bank[:, :-1, :]  # [B, T-1, 512], detached
@@ -1546,12 +1661,13 @@ class ActivityHead(nn.Module):
                 # Without slot overwrite, the entire bank output is detached.
                 # This means NO gradient flows through the bank path.
                 # Log this as a warning once per run.
-                if not hasattr(self, '_warned_no_slot_grad'):
+                if not hasattr(self, "_warned_no_slot_grad"):
                     self._warned_no_slot_grad = True
                     import logging
-                    logging.getLogger('model').warning(
-                        '[ACT-GRAD] FEATURE_BANK_SLOT_OVERWRITE=False — NO gradient flows '
-                        'through temporal bank. Activity gradient is entirely from bank history.'
+
+                    logging.getLogger("model").warning(
+                        "[ACT-GRAD] FEATURE_BANK_SLOT_OVERWRITE=False — NO gradient flows "
+                        "through temporal bank. Activity gradient is entirely from bank history."
                     )
         elif self.use_vit:
             bank_seq = proj_feat.unsqueeze(1).expand(-1, self.window_size, -1)
@@ -1598,8 +1714,8 @@ class HeadPoseHead(nn.Module):
     9-DoF = forward_vector(3) + position(3) + up_vector(3)
     Trained with MSE loss against raw GT from pose.csv.
     """
-    def __init__(self, c4_channels: int = 384, c5_channels: int = 768,
-                 hidden_dim: int = 128):
+
+    def __init__(self, c4_channels: int = 384, c5_channels: int = 768, hidden_dim: int = 128):
         super().__init__()
 
         self.gap_c4 = nn.AdaptiveAvgPool2d(1)
@@ -1662,9 +1778,16 @@ class PSRHead(nn.Module):
 
     Doc 2 C.3: Binary focal loss, not BCE. Heavy class imbalance per component.
     """
-    def __init__(self, in_channels: int = 256, hidden_dim: int = 128,
-                 num_components: int = 11, dropout: float = 0.2,
-                 num_scales: int = 3, gru_hidden: int = 256):  # [FIX #2 HIGH] d_model=256 per paper
+
+    def __init__(
+        self,
+        in_channels: int = 256,
+        hidden_dim: int = 128,
+        num_components: int = 11,
+        dropout: float = 0.2,
+        num_scales: int = 3,
+        gru_hidden: int = 256,
+    ):  # [FIX #2 HIGH] d_model=256 per paper
         super().__init__()
         self.num_components = num_components
         self.gru_hidden = gru_hidden
@@ -1689,7 +1812,7 @@ class PSRHead(nn.Module):
             nhead=4,
             dim_feedforward=gru_hidden * 4,  # 1024
             dropout=dropout,
-            activation='gelu',
+            activation="gelu",
             batch_first=True,
             norm_first=True,  # pre-norm as per paper ViT-style
         )
@@ -1708,14 +1831,17 @@ class PSRHead(nn.Module):
         # saturate for negative inputs (constant 0.01 gradient). Weight init:
         # normal(0, 0.01) instead of default — keeps pre-activations small at
         # init. Final bias: 0.0 instead of default — no default prediction.
-        self.output_heads = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(gru_hidden, 64),
-                nn.LeakyReLU(negative_slope=0.01),
-                nn.Dropout(dropout * 0.3),
-                nn.Linear(64, 1),
-            ) for _ in range(num_components)
-        ])
+        self.output_heads = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(gru_hidden, 64),
+                    nn.LeakyReLU(negative_slope=0.01),
+                    nn.Dropout(dropout * 0.3),
+                    nn.Linear(64, 1),
+                )
+                for _ in range(num_components)
+            ]
+        )
 
         # [AUDIT] Replaced previous +0.1 bias init (insufficient by 1300x).
         # New init: small-normal weights + zero bias. Warm-start safe since
@@ -1735,15 +1861,19 @@ class PSRHead(nn.Module):
         self._MAX_CACHE_LEN = 32
 
     def _get_frame_feat(self, pyramid: Dict[str, torch.Tensor]) -> torch.Tensor:
-        p3_gap = self.gap_p3(pyramid['p3']).flatten(1)
-        p4_gap = self.gap_p4(pyramid['p4']).flatten(1)
-        p5_gap = self.gap_p5(pyramid['p5']).flatten(1)
+        p3_gap = self.gap_p3(pyramid["p3"]).flatten(1)
+        p4_gap = self.gap_p4(pyramid["p4"]).flatten(1)
+        p5_gap = self.gap_p5(pyramid["p5"]).flatten(1)
         fused = torch.cat([p3_gap, p4_gap, p5_gap], dim=1)
         return self.per_frame_mlp(fused)  # [B, gru_hidden]
 
     def _get_causal_mask(self, seq_len: int, device: torch.device) -> torch.Tensor:
         """Generate causal mask (upper-triangular, prevents attending to future)."""
-        if not hasattr(self, '_cached_mask') or self._cached_mask is None or self._cached_mask.size(0) != seq_len:
+        if (
+            not hasattr(self, "_cached_mask")
+            or self._cached_mask is None
+            or self._cached_mask.size(0) != seq_len
+        ):
             # causal mask: position i can attend to positions 0..i (not i+1..T-1)
             ones = torch.ones(seq_len, seq_len, device=device)
             # torch.triu with diagonal=0 keeps main diagonal and above (past positions)
@@ -1765,23 +1895,33 @@ class PSRHead(nn.Module):
             h_drop = head0[2](h_gelu)
         else:
             h_drop = h_gelu
-        print(f'[PSR_DEBUG step={self._debug_step}] '
-              f'pre_linear:  mean={feat.mean():.4f} std={feat.std():.4f} '
-              f'min={feat.min():.4f} max={feat.max():.4f}')
-        print(f'[PSR_DEBUG step={self._debug_step}] '
-              f'post_linear64: mean={h.mean():.4f} std={h.std():.4f} '
-              f'min={h.min():.4f} max={h.max():.4f}')
-        print(f'[PSR_DEBUG step={self._debug_step}] '
-              f'post_gelu:   mean={h_gelu.mean():.4f} std={h_gelu.std():.4f} '
-              f'min={h_gelu.min():.4f} max={h_gelu.max():.4f}')
-        print(f'[PSR_DEBUG step={self._debug_step}] '
-              f'post_dropout: mean={h_drop.mean():.4f} std={h_drop.std():.4f} '
-              f'min={h_drop.min():.4f} max={h_drop.max():.4f}')
+        print(
+            f"[PSR_DEBUG step={self._debug_step}] "
+            f"pre_linear:  mean={feat.mean():.4f} std={feat.std():.4f} "
+            f"min={feat.min():.4f} max={feat.max():.4f}"
+        )
+        print(
+            f"[PSR_DEBUG step={self._debug_step}] "
+            f"post_linear64: mean={h.mean():.4f} std={h.std():.4f} "
+            f"min={h.min():.4f} max={h.max():.4f}"
+        )
+        print(
+            f"[PSR_DEBUG step={self._debug_step}] "
+            f"post_gelu:   mean={h_gelu.mean():.4f} std={h_gelu.std():.4f} "
+            f"min={h_gelu.min():.4f} max={h_gelu.max():.4f}"
+        )
+        print(
+            f"[PSR_DEBUG step={self._debug_step}] "
+            f"post_dropout: mean={h_drop.mean():.4f} std={h_drop.std():.4f} "
+            f"min={h_drop.min():.4f} max={h_drop.max():.4f}"
+        )
 
-    def forward(self, pyramid: Dict[str, torch.Tensor],
-                video_ids: Optional[List[str]] = None,
-                camera_views: Optional[List[str]] = None
-                ) -> torch.Tensor:
+    def forward(
+        self,
+        pyramid: Dict[str, torch.Tensor],
+        video_ids: Optional[List[str]] = None,
+        camera_views: Optional[List[str]] = None,
+    ) -> torch.Tensor:
         """
         Args:
             pyramid: FPN feature pyramid
@@ -1790,30 +1930,26 @@ class PSRHead(nn.Module):
         Returns:
             psr_logits: [B, 11] per-frame predictions
         """
-        B = pyramid['p3'].shape[0]
+        B = pyramid["p3"].shape[0]
         frame_feat = self._get_frame_feat(pyramid)  # [B, gru_hidden]
 
-        should_cache = (
-            video_ids is not None
-            and camera_views is not None
-            and not self.training
-        )
+        should_cache = video_ids is not None and camera_views is not None and not self.training
 
         if should_cache and len(video_ids) == B:
             outputs = []
             for i in range(B):
-                vid = str(video_ids[i]) if video_ids[i] is not None else 'default'
-                cam = str(camera_views[i]) if camera_views[i] is not None else 'default'
+                vid = str(video_ids[i]) if video_ids[i] is not None else "default"
+                cam = str(camera_views[i]) if camera_views[i] is not None else "default"
                 key = (vid, cam)
 
-                feat_i = frame_feat[i:i+1]  # [1, gru_hidden]
+                feat_i = frame_feat[i : i + 1]  # [1, gru_hidden]
 
                 if key not in self._cache:
                     self._cache[key] = []
                 self._cache[key].append(feat_i.detach().clone())
 
                 if len(self._cache[key]) > self._MAX_CACHE_LEN:
-                    self._cache[key] = self._cache[key][-self._MAX_CACHE_LEN:]
+                    self._cache[key] = self._cache[key][-self._MAX_CACHE_LEN :]
 
                 # Causal Transformer: process sequence with causal masking
                 seq = torch.stack(self._cache[key], dim=0).squeeze(1)  # [T, gru_hidden]
@@ -1825,9 +1961,9 @@ class PSRHead(nn.Module):
                 last_out = encoded[:, -1, :]  # [1, gru_hidden]
 
                 # Per-component heads
-                comp_logits = torch.cat([
-                    head(last_out) for head in self.output_heads
-                ], dim=-1)  # [1, 11]
+                comp_logits = torch.cat(
+                    [head(last_out) for head in self.output_heads], dim=-1
+                )  # [1, 11]
                 # psr_confidence: max sigmoid per component group (Item 32)
                 confidence = torch.sigmoid(comp_logits).max(dim=-1, keepdim=True)[0]  # [1, 1]
                 comp_out = torch.cat([comp_logits, confidence], dim=-1)  # [1, 12]
@@ -1848,14 +1984,12 @@ class PSRHead(nn.Module):
         self._debug_step += 1
 
         # Per-component heads
-        logits = torch.cat([
-            head(last_out) for head in self.output_heads
-        ], dim=-1)  # [B, 11]
+        logits = torch.cat([head(last_out) for head in self.output_heads], dim=-1)  # [B, 11]
         # psr_confidence: per-frame certainty = max sigmoid across 11 components (Item 32)
         confidence = torch.sigmoid(logits).max(dim=-1, keepdim=True)[0]  # [B, 1]
         return torch.cat([logits, confidence], dim=-1)  # [B, 12]
 
-    def reset_sequence(self, video_id: str, camera_view: str = 'default'):
+    def reset_sequence(self, video_id: str, camera_view: str = "default"):
         key = (str(video_id), str(camera_view))
         self._cache.pop(key, None)
 
@@ -1886,10 +2020,11 @@ class POPWMultiTaskModel(nn.Module):
       - Activity: det_conf(24) + GAP(C5_mod_2)(C5) + GAP(P4)(256) -> concat -> proj -> FeatureBank -> TCN -> 2xViT -> CLS -> FC(74)
                    + optional VideoMAE V2 stream fusion (Doc 2 A.1)
     """
+
     def __init__(
         self,
         pretrained: bool = True,
-        backbone_type: str = 'convnext_tiny',  # [FIX #8 LOW] Paper mandates ConvNeXt-Tiny, not ResNet-50
+        backbone_type: str = "convnext_tiny",  # [FIX #8 LOW] Paper mandates ConvNeXt-Tiny, not ResNet-50
         use_headpose_film: bool = True,
         use_hand_film: bool = True,  # [FIX] Hand-FiLM conditional — enables ablation (paper: always on)
         use_videomae: bool = False,
@@ -1904,11 +2039,12 @@ class POPWMultiTaskModel(nn.Module):
         self.train_pose = train_pose
 
         # === Backbone (Doc 01 D.1) ===
-        self.backbone = build_backbone(backbone_type, pretrained=pretrained,
-                                       use_checkpoint=use_backbone_checkpoint)
+        self.backbone = build_backbone(
+            backbone_type, pretrained=pretrained, use_checkpoint=use_backbone_checkpoint
+        )
 
         # Channel dimensions by backbone type
-        if backbone_type == 'convnext_tiny':
+        if backbone_type == "convnext_tiny":
             c2_ch, c3_ch, c4_ch, c5_ch = 96, 192, 384, 768
             fpn_in_channels = [c3_ch, c4_ch, c5_ch]
         else:  # resnet50
@@ -1923,32 +2059,34 @@ class POPWMultiTaskModel(nn.Module):
         # === FPN / BiFPN Neck ===
         # [V2 D2] BiFPN replaces standard FPN when USE_BIFPN=True.
         # Drop-in replacement: same init/forward interface, same output dict.
-        if getattr(C, 'USE_BIFPN', False):
+        if getattr(C, "USE_BIFPN", False):
             self.fpn = BiFPN(in_channels=fpn_in_channels, out_channels=256)
-            logger.info('  [MODEL] Using BiFPN neck (weighted bidirectional FPN)')
+            logger.info("  [MODEL] Using BiFPN neck (weighted bidirectional FPN)")
         else:
             self.fpn = FPN(in_channels=fpn_in_channels, out_channels=256)
 
         # === Detection Head ===
         self.detection_head = DetectionHead(
-            in_channels=256, num_classes=C.NUM_DET_CLASSES,
-            detach_reg_fpn=getattr(C, 'DETACH_REG_FPN', False),
+            in_channels=256,
+            num_classes=C.NUM_DET_CLASSES,
+            detach_reg_fpn=getattr(C, "DETACH_REG_FPN", False),
         )
         self.anchor_gen = AnchorGenerator()
 
         # Pose head -- paper tau=0.1, higher temperature during training for gradient flow
         # [FIX 2026-06-18] train temp = 1.0 to prevent soft-argmax gradient vanishing
         self.pose_head = PoseHead(
-            in_channels=256, num_keypoints=C.NUM_KEYPOINTS,
+            in_channels=256,
+            num_keypoints=C.NUM_KEYPOINTS,
             temperature=C.SOFT_ARGMAX_TEMPERATURE,
             training_temperature=C.SOFT_ARGMAX_TEMP_TRAIN,
         )
         # [FIX 2026-07-04 Opus 111 SS3.2] Freeze body-pose sub-head when
         # FREEZE_BODY_POSE_BRANCH=True (dead code, no real annotations).
-        if getattr(C, 'FREEZE_BODY_POSE_BRANCH', False):
+        if getattr(C, "FREEZE_BODY_POSE_BRANCH", False):
             for p in self.pose_head.parameters():
                 p.requires_grad = False
-            logger.info('  [MODEL] Body-pose branch FROZEN (FREEZE_BODY_POSE_BRANCH=True)')
+            logger.info("  [MODEL] Body-pose branch FROZEN (FREEZE_BODY_POSE_BRANCH=True)")
 
         # === PoseFiLM (keypoint-conditioned, hand-keypoint FiLM) ===
         # [FIX] USE_HAND_FILM now wired: conditional instantiation enables ablation.
@@ -1971,8 +2109,9 @@ class POPWMultiTaskModel(nn.Module):
         # [OPUS v5 AUDIT] Geometry-aware head pose: replace raw 9-number MSE MLP
         # with 6D continuous rotation (Zhou et al. CVPR 2019) + geodesic loss.
         # Expected: 10-25° MAE vs 60-70° from raw MSE. No baseline exists → free win.
-        if getattr(C, 'USE_GEO_HEAD_POSE', False):
+        if getattr(C, "USE_GEO_HEAD_POSE", False):
             from src.models.head_pose_geo import GeometryAwareHeadPose
+
             self.head_pose_head = GeometryAwareHeadPose(
                 in_channels_c4=c4_ch,
                 in_channels_c5=c5_ch,
@@ -1991,7 +2130,9 @@ class POPWMultiTaskModel(nn.Module):
             p4_channels=256,
             det_conf_size=C.NUM_DET_CLASSES,
             embed_dim=512,
-            num_classes=int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_CLASSES_ACT)),  # verb-grouping aware (file 75)
+            num_classes=int(
+                getattr(C, "NUM_ACT_OUTPUTS", C.NUM_CLASSES_ACT)
+            ),  # verb-grouping aware (file 75)
             dropout=0.1,  # [FIX #3 HIGH] attn_dropout=0.1 per paper
             window_size=16,
             use_vit=True,
@@ -2009,6 +2150,7 @@ class POPWMultiTaskModel(nn.Module):
         # === RotoGrad (opt-in feature rotation for gradient homogenization) ===
         if C.USE_ROTOGRAD:
             from src.models.rotograd import RotoGradRotation
+
             self.rotograd = RotoGradRotation(
                 feat_dim=768,
                 num_tasks=3,
@@ -2040,16 +2182,19 @@ class POPWMultiTaskModel(nn.Module):
         pred_cx = dx * a_w + a_cx
         pred_cy = dy * a_h + a_cy
 
-        return torch.stack([
-            pred_cx - pred_w / 2,
-            pred_cy - pred_h / 2,
-            pred_cx + pred_w / 2,
-            pred_cy + pred_h / 2,
-        ], dim=1)
+        return torch.stack(
+            [
+                pred_cx - pred_w / 2,
+                pred_cy - pred_h / 2,
+                pred_cx + pred_w / 2,
+                pred_cy + pred_h / 2,
+            ],
+            dim=1,
+        )
 
     def train(self, mode: bool = True):
         super().train(mode)
-        if hasattr(self.backbone, '_freeze_bn'):
+        if hasattr(self.backbone, "_freeze_bn"):
             if mode:
                 self.backbone._freeze_bn()
         return self
@@ -2074,7 +2219,7 @@ class POPWMultiTaskModel(nn.Module):
 
         # Handle [B, T, C, H, W] sequence input from PSR sequence mode
         # _prepare_images flattens it to [B*T, C, H, W]; detect via _seq_len attribute
-        seq_len = getattr(self, '_seq_len', 1)
+        seq_len = getattr(self, "_seq_len", 1)
         BT = B
         if images.dim() == 5:
             BT = images.shape[0] * images.shape[1]
@@ -2108,7 +2253,7 @@ class POPWMultiTaskModel(nn.Module):
         cls_preds, reg_preds = self.detection_head(pyramid)
         anchors = self.anchor_gen(pyramid)
 
-        heatmaps, keypoints, pose_confidence = self.pose_head(pyramid['p3'])
+        heatmaps, keypoints, pose_confidence = self.pose_head(pyramid["p3"])
 
         # Doc 2 ?C.3: IndustReal has no COCO keypoint annotations, but the detection
         # head outputs bounding boxes for assembly objects. Use these as pseudo-keypoints
@@ -2118,8 +2263,10 @@ class POPWMultiTaskModel(nn.Module):
             with torch.no_grad():
                 # cls_preds: [A, NUM_DET_CLASSES], anchors: [A, 4]
                 # Find dominant detection per sample (top-1 by confidence across all classes)
-                top_cls = cls_preds.argmax(dim=1)          # [A]  # noqa: F841 -- class index tracked but spatial max used for location
-                top_conf = cls_preds.max(dim=1)[0]         # [A]
+                top_cls = cls_preds.argmax(
+                    dim=1
+                )  # [A]  # noqa: F841 -- class index tracked but spatial max used for location
+                top_conf = cls_preds.max(dim=1)[0]  # [A]
                 # Group by sample (anchor assignment to batch is implicit via spatial location)
                 # For each image in the batch, pick the highest-confident detection
                 B_kp = c5.shape[0]
@@ -2133,46 +2280,74 @@ class POPWMultiTaskModel(nn.Module):
                     max_idx = top_conf.argmax().item()
                     cx_norm = (anchors[max_idx, 0] / C.IMG_WIDTH).clamp(0, 1)
                     cy_norm = (anchors[max_idx, 1] / C.IMG_HEIGHT).clamp(0, 1)
-                    w_norm = ((anchors[max_idx, 2] - anchors[max_idx, 0]) / C.IMG_WIDTH).clamp(0.05, 1)
-                    h_norm = ((anchors[max_idx, 3] - anchors[max_idx, 1]) / C.IMG_HEIGHT).clamp(0.05, 1)
+                    w_norm = ((anchors[max_idx, 2] - anchors[max_idx, 0]) / C.IMG_WIDTH).clamp(
+                        0.05, 1
+                    )
+                    h_norm = ((anchors[max_idx, 3] - anchors[max_idx, 1]) / C.IMG_HEIGHT).clamp(
+                        0.05, 1
+                    )
                     x0, y0 = cx_norm - w_norm / 2, cy_norm - h_norm / 2  # noqa: F841 -- bbox corners used for keypoint placement
                     x1, y1 = cx_norm + w_norm / 2, cy_norm + h_norm / 2
                     # 17 COCO keypoints: 4 corners, 4 mid-edges, 9 body points (approximated from bbox)
                     # COCO order: nose=0, eyes(1,2), ears(3,4), shoulders(5,6), elbows(7,8),
                     #            wrists(9,10), hips(11,12), knees(13,14), ankles(15,16)
-                    kps_b = torch.tensor([
-                        [cx_norm, cy_norm],          # 0: nose (bbox center)
-                        [cx_norm - w_norm*0.1, cy_norm - h_norm*0.15],  # 1: l_eye
-                        [cx_norm + w_norm*0.1, cy_norm - h_norm*0.15],  # 2: r_eye
-                        [cx_norm - w_norm*0.2, cy_norm - h_norm*0.1],   # 3: l_ear
-                        [cx_norm + w_norm*0.2, cy_norm - h_norm*0.1],   # 4: r_ear
-                        [cx_norm - w_norm*0.3, cy_norm + h_norm*0.1],   # 5: l_shoulder
-                        [cx_norm + w_norm*0.3, cy_norm + h_norm*0.1],   # 6: r_shoulder
-                        [cx_norm - w_norm*0.4, cy_norm + h_norm*0.35],  # 7: l_elbow
-                        [cx_norm + w_norm*0.4, cy_norm + h_norm*0.35],  # 8: r_elbow
-                        [cx_norm - w_norm*0.5, cy_norm + h_norm*0.55],   # 9: l_wrist
-                        [cx_norm + w_norm*0.5, cy_norm + h_norm*0.55],   # 10: r_wrist
-                        [cx_norm - w_norm*0.15, cy_norm + h_norm*0.5],  # 11: l_hip
-                        [cx_norm + w_norm*0.15, cy_norm + h_norm*0.5],  # 12: r_hip
-                        [cx_norm - w_norm*0.15, cy_norm + h_norm*0.75], # 13: l_knee
-                        [cx_norm + w_norm*0.15, cy_norm + h_norm*0.75], # 14: r_knee
-                        [cx_norm - w_norm*0.15, cy_norm + h_norm*0.95], # 15: l_ankle
-                        [cx_norm + w_norm*0.15, cy_norm + h_norm*0.95], # 16: r_ankle
-                    ], device=c5.device, dtype=c5.dtype)
+                    kps_b = torch.tensor(
+                        [
+                            [cx_norm, cy_norm],  # 0: nose (bbox center)
+                            [cx_norm - w_norm * 0.1, cy_norm - h_norm * 0.15],  # 1: l_eye
+                            [cx_norm + w_norm * 0.1, cy_norm - h_norm * 0.15],  # 2: r_eye
+                            [cx_norm - w_norm * 0.2, cy_norm - h_norm * 0.1],  # 3: l_ear
+                            [cx_norm + w_norm * 0.2, cy_norm - h_norm * 0.1],  # 4: r_ear
+                            [cx_norm - w_norm * 0.3, cy_norm + h_norm * 0.1],  # 5: l_shoulder
+                            [cx_norm + w_norm * 0.3, cy_norm + h_norm * 0.1],  # 6: r_shoulder
+                            [cx_norm - w_norm * 0.4, cy_norm + h_norm * 0.35],  # 7: l_elbow
+                            [cx_norm + w_norm * 0.4, cy_norm + h_norm * 0.35],  # 8: r_elbow
+                            [cx_norm - w_norm * 0.5, cy_norm + h_norm * 0.55],  # 9: l_wrist
+                            [cx_norm + w_norm * 0.5, cy_norm + h_norm * 0.55],  # 10: r_wrist
+                            [cx_norm - w_norm * 0.15, cy_norm + h_norm * 0.5],  # 11: l_hip
+                            [cx_norm + w_norm * 0.15, cy_norm + h_norm * 0.5],  # 12: r_hip
+                            [cx_norm - w_norm * 0.15, cy_norm + h_norm * 0.75],  # 13: l_knee
+                            [cx_norm + w_norm * 0.15, cy_norm + h_norm * 0.75],  # 14: r_knee
+                            [cx_norm - w_norm * 0.15, cy_norm + h_norm * 0.95],  # 15: l_ankle
+                            [cx_norm + w_norm * 0.15, cy_norm + h_norm * 0.95],  # 16: r_ankle
+                        ],
+                        device=c5.device,
+                        dtype=c5.dtype,
+                    )
                     pseudo_kps_b = kps_b.clone()
                     pseudo_kps_b[:, 0] = pseudo_kps_b[:, 0].clamp(0, 1)
                     pseudo_kps_b[:, 1] = pseudo_kps_b[:, 1].clamp(0, 1)
                     pseudo_kps[b] = pseudo_kps_b
                     # Confidence: high (0.8) for bbox-derived points, lower for extrapolated
-                    conf_vals = torch.tensor([0.9, 0.7, 0.7, 0.5, 0.5, 0.8, 0.8,
-                                              0.6, 0.6, 0.5, 0.5, 0.7, 0.7, 0.4, 0.4, 0.3, 0.3],
-                                             device=c5.device, dtype=c5.dtype)
+                    conf_vals = torch.tensor(
+                        [
+                            0.9,
+                            0.7,
+                            0.7,
+                            0.5,
+                            0.5,
+                            0.8,
+                            0.8,
+                            0.6,
+                            0.6,
+                            0.5,
+                            0.5,
+                            0.7,
+                            0.7,
+                            0.4,
+                            0.4,
+                            0.3,
+                            0.3,
+                        ],
+                        device=c5.device,
+                        dtype=c5.dtype,
+                    )
                     pseudo_conf[b] = conf_vals
                 keypoints = pseudo_kps
                 pose_confidence = pseudo_conf
 
         # [FIX] pose_film conditional on use_hand_film flag (ablation support)
-        if self.use_hand_film and hasattr(self, 'pose_film'):
+        if self.use_hand_film and hasattr(self, "pose_film"):
             # [FIX 2026-06-28 20-agent] Detach keypoints to prevent activity gradients
             # from flowing backward through PoseFiLM → keypoints → pose_head → P3 → FPN,
             # corrupting detection features. Confidence was already detached (line 696).
@@ -2191,7 +2366,9 @@ class POPWMultiTaskModel(nn.Module):
         # Pseudo-keypoints (train_pose=False path) are already [0, 1] normalized.
         if self.train_pose:
             _, _, grid_h, grid_w = heatmaps.shape
-            kp_scale = torch.tensor([grid_w, grid_h], device=keypoints.device, dtype=keypoints.dtype)
+            kp_scale = torch.tensor(
+                [grid_w, grid_h], device=keypoints.device, dtype=keypoints.dtype
+            )
             keypoints = keypoints / kp_scale.view(1, 1, 2)
 
         with torch.no_grad():
@@ -2216,14 +2393,14 @@ class POPWMultiTaskModel(nn.Module):
             # Build per-frame features [B, T, hidden] for PSR head
             frame_feats = []
             for t in range(T_main):
-                p3_t = pyramid_seq['p3'][:, t]  # [B, C, H, W]
-                p4_t = pyramid_seq['p4'][:, t]
-                p5_t = pyramid_seq['p5'][:, t]
+                p3_t = pyramid_seq["p3"][:, t]  # [B, C, H, W]
+                p4_t = pyramid_seq["p4"][:, t]
+                p5_t = pyramid_seq["p5"][:, t]
                 # [FIX 2026-06-16] Gradient isolation for PSR path
                 # detach_psr_fpn=True prevents PSR gradients from flowing into shared FPN
                 # features. PSR loss spikes (~23.9 at step ~850) corrupt detection features
                 # through the backbone even with OHEM and alpha fixes.
-                if getattr(C, 'DETACH_PSR_FPN', False):
+                if getattr(C, "DETACH_PSR_FPN", False):
                     p3_t = p3_t.detach()
                     p4_t = p4_t.detach()
                     p5_t = p5_t.detach()
@@ -2251,34 +2428,41 @@ class POPWMultiTaskModel(nn.Module):
             enc_flat = encoded.reshape(B_main * T_main, -1)  # [BT, hidden]
 
             # [AUDIT] Debug prints for output_heads[0] in sequence path
-            if self.training and hasattr(self.psr_head, '_debug_step'):
+            if self.training and hasattr(self.psr_head, "_debug_step"):
                 ds = self.psr_head._debug_step
                 if ds in (0, 1, 10, 100, 200, 500):
                     head0 = self.psr_head.output_heads[0]
                     h = head0[0](enc_flat)
                     h_gelu = head0[1](h)
-                    print(f'[PSR_DEBUG_seq step={ds}] '
-                          f'pre_linear:  mean={enc_flat.mean():.4f} std={enc_flat.std():.4f} '
-                          f'min={enc_flat.min():.4f} max={enc_flat.max():.4f}')
-                    print(f'[PSR_DEBUG_seq step={ds}] '
-                          f'post_linear64: mean={h.mean():.4f} std={h.std():.4f} '
-                          f'min={h.min():.4f} max={h.max():.4f}')
-                    print(f'[PSR_DEBUG_seq step={ds}] '
-                          f'post_gelu:   mean={h_gelu.mean():.4f} std={h_gelu.std():.4f} '
-                          f'min={h_gelu.min():.4f} max={h_gelu.max():.4f}')
+                    print(
+                        f"[PSR_DEBUG_seq step={ds}] "
+                        f"pre_linear:  mean={enc_flat.mean():.4f} std={enc_flat.std():.4f} "
+                        f"min={enc_flat.min():.4f} max={enc_flat.max():.4f}"
+                    )
+                    print(
+                        f"[PSR_DEBUG_seq step={ds}] "
+                        f"post_linear64: mean={h.mean():.4f} std={h.std():.4f} "
+                        f"min={h.min():.4f} max={h.max():.4f}"
+                    )
+                    print(
+                        f"[PSR_DEBUG_seq step={ds}] "
+                        f"post_gelu:   mean={h_gelu.mean():.4f} std={h_gelu.std():.4f} "
+                        f"min={h_gelu.min():.4f} max={h_gelu.max():.4f}"
+                    )
 
-            psr_full = torch.cat([
-                head(enc_flat) for head in self.psr_head.output_heads
-            ], dim=-1)  # [BT, 11]
+            psr_full = torch.cat(
+                [head(enc_flat) for head in self.psr_head.output_heads], dim=-1
+            )  # [BT, 11]
             self.psr_head._debug_step += 1
             confidence = torch.sigmoid(psr_full).max(dim=-1, keepdim=True)[0]  # [BT, 1]
             psr_logits = torch.cat([psr_full, confidence], dim=-1)  # [BT, 12]
             psr_confidence = psr_logits[..., 11:]  # [BT, 1]
         else:
             # [FIX 2026-06-16] Gradient isolation for PSR non-sequence path
-            if getattr(C, 'DETACH_PSR_FPN', False):
-                psr_pyramid = {k: (v.detach() if k in ('p3', 'p4', 'p5') else v)
-                               for k, v in pyramid.items()}
+            if getattr(C, "DETACH_PSR_FPN", False):
+                psr_pyramid = {
+                    k: (v.detach() if k in ("p3", "p4", "p5") else v) for k, v in pyramid.items()
+                }
             else:
                 psr_pyramid = pyramid
             psr_full = self.psr_head(psr_pyramid, video_ids=video_ids)  # [B, 12]
@@ -2297,25 +2481,30 @@ class POPWMultiTaskModel(nn.Module):
                 _rot6d, _rot_mat, _pos = head_pose
                 # Reconstruct [B,9] = forward(3) + position(3) + up(3)
                 head_pose = self.head_pose_head.to_legacy_9dof(_rot6d, _pos)  # [B, 9]
-            if self.use_headpose_film and hasattr(self, 'headpose_film'):
-                c5_mod = self.headpose_film(c5_mod, head_pose.detach())  # stop_grad per paper ?HeadPoseFiLM
+            if self.use_headpose_film and hasattr(self, "headpose_film"):
+                c5_mod = self.headpose_film(
+                    c5_mod, head_pose.detach()
+                )  # stop_grad per paper ?HeadPoseFiLM
         else:
             head_pose = None
 
         # RotoGrad: rotate shared features per task for gradient direction alignment
-        if getattr(C, 'USE_ROTOGRAD', False) and hasattr(self, 'rotograd'):
+        if getattr(C, "USE_ROTOGRAD", False) and hasattr(self, "rotograd"):
             c5_mod = self.rotograd.rotate(c5_mod, task_idx=0)  # task 0: activity
 
         # Per paper §5.4: "Gradient scaling: blend_ratio·C5_mod2 + (1-blend_ratio)·detach(C5_mod2)"
         # This lets a small gradient flow into C5_mod2 (and thus the FiLM/Pose heads)
         # while mostly protecting upstream features from activity gradient corruption.
-        _blend = float(getattr(C, 'ACTIVITY_GRAD_BLEND_RATIO', 0.05))
+        _blend = float(getattr(C, "ACTIVITY_GRAD_BLEND_RATIO", 0.05))
         c5_mod_blend = _blend * c5_mod + (1 - _blend) * c5_mod.detach()
-        activity_proj = torch.cat([
-            det_conf,
-            F.adaptive_avg_pool2d(c5_mod_blend, 1).flatten(1),
-            F.adaptive_avg_pool2d(pyramid['p4'].detach(), 1).flatten(1),
-        ], dim=1)
+        activity_proj = torch.cat(
+            [
+                det_conf,
+                F.adaptive_avg_pool2d(c5_mod_blend, 1).flatten(1),
+                F.adaptive_avg_pool2d(pyramid["p4"].detach(), 1).flatten(1),
+            ],
+            dim=1,
+        )
 
         proj_feat = self.activity_head.proj_features(activity_proj)
 
@@ -2335,7 +2524,7 @@ class POPWMultiTaskModel(nn.Module):
         # copies, ALL with gradient, giving the ViT+TCN a full gradient signal.
         #
         # When staging IS enabled, use the feature bank for real temporal accumulation.
-        _staging_enabled = bool(getattr(C, 'STAGED_TRAINING', False))
+        _staging_enabled = bool(getattr(C, "STAGED_TRAINING", False))
         if _staging_enabled:
             bank_output = self.feature_bank(proj_feat, video_ids, None)
         else:
@@ -2343,7 +2532,7 @@ class POPWMultiTaskModel(nn.Module):
             bank_output = None
 
         videomae_feat = None
-        if self.use_videomae and clip_rgb is not None and hasattr(self, 'videomae_stream'):
+        if self.use_videomae and clip_rgb is not None and hasattr(self, "videomae_stream"):
             videomae_feat = self.videomae_stream(clip_rgb)
 
         act_logits = self.activity_head(
@@ -2357,59 +2546,70 @@ class POPWMultiTaskModel(nn.Module):
         # _safe→constant replacement, eventually disconnects the autograd graph.
         # Check each tensor and replace NaN with zeros.
         for _out_name, _out_val in [
-            ('cls_preds', cls_preds), ('reg_preds', reg_preds),
-            ('heatmaps', heatmaps), ('keypoints', keypoints),
-            ('pose_confidence', pose_confidence),
-            ('head_pose', head_pose), ('act_logits', act_logits),
-            ('psr_logits', psr_logits),
+            ("cls_preds", cls_preds),
+            ("reg_preds", reg_preds),
+            ("heatmaps", heatmaps),
+            ("keypoints", keypoints),
+            ("pose_confidence", pose_confidence),
+            ("head_pose", head_pose),
+            ("act_logits", act_logits),
+            ("psr_logits", psr_logits),
         ]:
             if _out_val is not None and not torch.isfinite(_out_val).all():
                 if not self.training:
-                    logger.warning(f'[MODEL_NAN] {_out_name} has NaN (eval mode)')
+                    logger.warning(f"[MODEL_NAN] {_out_name} has NaN (eval mode)")
                 # Zero the output: preserves shape/dtype, disconnects NaN from loss
                 _out_val = torch.zeros_like(_out_val)
                 # Reassign to local variable
-                if _out_name == 'cls_preds': cls_preds = _out_val
-                elif _out_name == 'reg_preds': reg_preds = _out_val
-                elif _out_name == 'heatmaps': heatmaps = _out_val
-                elif _out_name == 'keypoints': keypoints = _out_val
-                elif _out_name == 'pose_confidence': pose_confidence = _out_val
-                elif _out_name == 'head_pose': head_pose = _out_val
-                elif _out_name == 'act_logits': act_logits = _out_val
-                elif _out_name == 'psr_logits': psr_logits = _out_val
+                if _out_name == "cls_preds":
+                    cls_preds = _out_val
+                elif _out_name == "reg_preds":
+                    reg_preds = _out_val
+                elif _out_name == "heatmaps":
+                    heatmaps = _out_val
+                elif _out_name == "keypoints":
+                    keypoints = _out_val
+                elif _out_name == "pose_confidence":
+                    pose_confidence = _out_val
+                elif _out_name == "head_pose":
+                    head_pose = _out_val
+                elif _out_name == "act_logits":
+                    act_logits = _out_val
+                elif _out_name == "psr_logits":
+                    psr_logits = _out_val
 
         return {
-            'cls_preds': cls_preds,
-            'reg_preds': reg_preds,
-            'anchors': anchors,
-            'heatmaps': heatmaps,
-            'keypoints': keypoints,
-            'pose_confidence': pose_confidence,
-            'head_pose': head_pose,
-            'c5_mod': c5_mod,
-            'det_conf': det_conf,
-            'act_logits': act_logits,
-            'psr_logits': psr_logits[..., :11],  # [BT, 11] for loss compatibility
-            'psr_confidence': psr_confidence if not self.training else None,  # Item 32
-            'temporal_features': bank_output,
-            'c5_raw': c5,
-            'proj_feat': proj_feat,
-            'p4': pyramid['p4'],
+            "cls_preds": cls_preds,
+            "reg_preds": reg_preds,
+            "anchors": anchors,
+            "heatmaps": heatmaps,
+            "keypoints": keypoints,
+            "pose_confidence": pose_confidence,
+            "head_pose": head_pose,
+            "c5_mod": c5_mod,
+            "det_conf": det_conf,
+            "act_logits": act_logits,
+            "psr_logits": psr_logits[..., :11],  # [BT, 11] for loss compatibility
+            "psr_confidence": psr_confidence if not self.training else None,  # Item 32
+            "temporal_features": bank_output,
+            "c5_raw": c5,
+            "proj_feat": proj_feat,
+            "p4": pyramid["p4"],
         }
 
 
 def count_parameters(model: POPWMultiTaskModel) -> Dict[str, int]:
     components = {
-        'backbone': [model.backbone],
-        'fpn': [model.fpn],
-        'detection': [model.detection_head],
-        'pose_head': [model.pose_head],
-        'pose_film': [model.pose_film],
-        'headpose_film': [model.headpose_film] if hasattr(model, 'headpose_film') else [],
-        'activity_head': [model.activity_head],
-        'psr_head': [model.psr_head],
-        'feature_bank': [model.feature_bank],
-        'videomae_stream': [model.videomae_stream] if hasattr(model, 'videomae_stream') else [],
+        "backbone": [model.backbone],
+        "fpn": [model.fpn],
+        "detection": [model.detection_head],
+        "pose_head": [model.pose_head],
+        "pose_film": [model.pose_film],
+        "headpose_film": [model.headpose_film] if hasattr(model, "headpose_film") else [],
+        "activity_head": [model.activity_head],
+        "psr_head": [model.psr_head],
+        "feature_bank": [model.feature_bank],
+        "videomae_stream": [model.videomae_stream] if hasattr(model, "videomae_stream") else [],
     }
     result = {}
     total = 0
@@ -2417,14 +2617,15 @@ def count_parameters(model: POPWMultiTaskModel) -> Dict[str, int]:
         count = sum(p.numel() for m in modules for p in m.parameters() if p.requires_grad)
         result[name] = count
         total += count
-    result['total_trainable'] = total
-    result['total_all'] = sum(p.numel() for p in model.parameters())
+    result["total_trainable"] = total
+    result["total_all"] = sum(p.numel() for p in model.parameters())
     return result
 
 
 # ===========================================================================
 # EMA -- Exponential Moving Average of model weights
 # ===========================================================================
+
 
 class EMA:
     """
@@ -2434,6 +2635,7 @@ class EMA:
 
     Standard decay = 0.999 for image models, 0.9999 for very large models.
     """
+
     def __init__(self, model: nn.Module, decay: float = 0.999, device=None):
         self.model = model
         self.decay = decay

@@ -4,6 +4,7 @@ Test anchor normalization fix in FocalLoss._match_anchors.
 Before the fix: GT boxes in pixels, anchors in pixels → max IoU = 0.0001 << 0.5 → zero positives.
 After the fix: Both normalized to [0,1] → proper IoU matching.
 """
+
 import sys
 from pathlib import Path
 
@@ -12,9 +13,9 @@ from pathlib import Path
 # Project root is: .../industreal_improved_to_archive/
 # Source dir is:   .../industreal_improved_to_archive/src/
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent  # = .../industreal_improved_to_archive/
-_SRC = _PROJECT_ROOT / 'src'
+_SRC = _PROJECT_ROOT / "src"
 sys.path.insert(0, str(_SRC))
-for _sub in ['models', 'training', 'evaluation', 'data']:
+for _sub in ["models", "training", "evaluation", "data"]:
     _p = str(_SRC / _sub)
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -32,10 +33,10 @@ print("=" * 60)
 sizes = C.ANCHOR_SIZES  # (24, 48, 96, 192, 384)
 ratios = (0.5, 1.0, 2.0)
 scales = (1.0, 2 ** (1 / 3), 2 ** (2 / 3))
-fpn_keys = ['p3', 'p4', 'p5', 'p6', 'p7']
+fpn_keys = ["p3", "p4", "p5", "p6", "p7"]
 strides = [8, 16, 32, 64, 128]
 
-device = 'cpu'
+device = "cpu"
 all_anchors_pixel = []
 
 for level_idx, (key, stride) in enumerate(zip(fpn_keys, strides)):
@@ -56,34 +57,46 @@ for level_idx, (key, stride) in enumerate(zip(fpn_keys, strides)):
 
     shifts_x = (torch.arange(feat_w, device=device) + 0.5) * stride
     shifts_y = (torch.arange(feat_h, device=device) + 0.5) * stride
-    shift_y, shift_x = torch.meshgrid(shifts_y, shifts_x, indexing='ij')
-    shifts = torch.stack([
-        shift_x.flatten(), shift_y.flatten(),
-        shift_x.flatten(), shift_y.flatten(),
-    ], dim=1)
+    shift_y, shift_x = torch.meshgrid(shifts_y, shifts_x, indexing="ij")
+    shifts = torch.stack(
+        [
+            shift_x.flatten(),
+            shift_y.flatten(),
+            shift_x.flatten(),
+            shift_y.flatten(),
+        ],
+        dim=1,
+    )
 
     anchors = shifts.unsqueeze(1) + cell_anchors.unsqueeze(0)
     all_anchors_pixel.append(anchors.reshape(-1, 4))
 
 anchors_pixel = torch.cat(all_anchors_pixel, dim=0)
 print(f"\nGenerated {anchors_pixel.shape[0]} anchors (pixel coords)")
-print(f"Anchor range X: [{anchors_pixel[:,0].min():.1f}, {anchors_pixel[:,0].max():.1f}]")
-print(f"Anchor range Y: [{anchors_pixel[:,1].min():.1f}, {anchors_pixel[:,1].max():.1f}]")
+print(f"Anchor range X: [{anchors_pixel[:, 0].min():.1f}, {anchors_pixel[:, 0].max():.1f}]")
+print(f"Anchor range Y: [{anchors_pixel[:, 1].min():.1f}, {anchors_pixel[:, 1].max():.1f}]")
 
 # Normalize anchors to [0,1]
 anchors_norm = anchors_pixel.clone()
 anchors_norm[:, [0, 2]] = anchors_pixel[:, [0, 2]] / C.IMG_WIDTH
 anchors_norm[:, [1, 3]] = anchors_pixel[:, [1, 3]] / C.IMG_HEIGHT
-print(f"\nNormalized anchors range X: [{anchors_norm[:,0].min():.4f}, {anchors_norm[:,0].max():.4f}]")
-print(f"Normalized anchors range Y: [{anchors_norm[:,1].min():.4f}, {anchors_norm[:,1].max():.4f}]")
+print(
+    f"\nNormalized anchors range X: [{anchors_norm[:, 0].min():.4f}, {anchors_norm[:, 0].max():.4f}]"
+)
+print(
+    f"Normalized anchors range Y: [{anchors_norm[:, 1].min():.4f}, {anchors_norm[:, 1].max():.4f}]"
+)
 
 # Simulate GT boxes (normalized COCO [0,1] → convert to pixel for testing)
 # These are small boxes typical of industrial parts
-gt_boxes_norm = torch.tensor([
-    [0.45, 0.40, 0.55, 0.60],   # box 1: center ~0.5, 0.5
-    [0.20, 0.30, 0.30, 0.45],   # box 2: left side
-    [0.60, 0.50, 0.80, 0.70],   # box 3: right side
-], device=device)
+gt_boxes_norm = torch.tensor(
+    [
+        [0.45, 0.40, 0.55, 0.60],  # box 1: center ~0.5, 0.5
+        [0.20, 0.30, 0.30, 0.45],  # box 2: left side
+        [0.60, 0.50, 0.80, 0.70],  # box 3: right side
+    ],
+    device=device,
+)
 
 gt_boxes_pixel = gt_boxes_norm.clone()
 gt_boxes_pixel[:, [0, 2]] = gt_boxes_norm[:, [0, 2]] * C.IMG_WIDTH

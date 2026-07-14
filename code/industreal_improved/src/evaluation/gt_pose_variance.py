@@ -7,6 +7,7 @@ testing whether the up-vector advantage is partially mechanical.
 Usage:
     python3 src/evaluation/gt_pose_variance.py
 """
+
 import json
 import sys
 from pathlib import Path
@@ -17,11 +18,11 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 # Match config RECORDINGS_ROOT
-RECORDINGS_ROOT = Path('/media/newadmin/master/POPW/datasets/industreal/recordings')
-VAL_ROOT = RECORDINGS_ROOT / 'val'
+RECORDINGS_ROOT = Path("/media/newadmin/master/POPW/datasets/industreal/recordings")
+VAL_ROOT = RECORDINGS_ROOT / "val"
 
 # head_pose columns: forward_x, forward_y, forward_z, pos_x, pos_y, pos_z, up_x, up_y, up_z
-POSE_COLS = ['fwd_x', 'fwd_y', 'fwd_z', 'pos_x', 'pos_y', 'pos_z', 'up_x', 'up_y', 'up_z']
+POSE_COLS = ["fwd_x", "fwd_y", "fwd_z", "pos_x", "pos_y", "pos_z", "up_x", "up_y", "up_z"]
 
 
 def angular_range_deg(vectors: np.ndarray, max_pairs: int = 5000) -> float:
@@ -54,14 +55,14 @@ def main():
 
     for rec_dir in rec_dirs:
         rec_id = rec_dir.name
-        pose_csv = rec_dir / 'pose.csv'
+        pose_csv = rec_dir / "pose.csv"
         if not pose_csv.exists():
             print(f"  {rec_id}: no pose.csv, skipping")
             continue
         df = pd.read_csv(pose_csv, header=None, names=POSE_COLS)
         n = len(df)
-        fwd = df[['fwd_x', 'fwd_y', 'fwd_z']].values.astype(np.float32)
-        up = df[['up_x', 'up_y', 'up_z']].values.astype(np.float32)
+        fwd = df[["fwd_x", "fwd_y", "fwd_z"]].values.astype(np.float32)
+        up = df[["up_x", "up_y", "up_z"]].values.astype(np.float32)
 
         # Normalize to unit vectors
         fwd_n = fwd / np.maximum(np.linalg.norm(fwd, axis=1, keepdims=True), 1e-6)
@@ -89,21 +90,17 @@ def main():
     print("Computing overall angular ranges...")
     fwd_range = angular_range_deg(all_fwd, max_pairs=20000)
     up_range = angular_range_deg(all_up, max_pairs=20000)
-    fwd_ratio = fwd_range / up_range if up_range > 0 else float('inf')
+    fwd_ratio = fwd_range / up_range if up_range > 0 else float("inf")
 
     # Mean direction and dispersion (angular std)
     fwd_mean = all_fwd.mean(axis=0)
     fwd_mean_unit = fwd_mean / np.linalg.norm(fwd_mean)
-    fwd_angles_to_mean = np.degrees(np.arccos(
-        (all_fwd @ fwd_mean_unit).clip(-1.0, 1.0)
-    ))
+    fwd_angles_to_mean = np.degrees(np.arccos((all_fwd @ fwd_mean_unit).clip(-1.0, 1.0)))
     fwd_dispersion = float(fwd_angles_to_mean.std())
 
     up_mean = all_up.mean(axis=0)
     up_mean_unit = up_mean / np.linalg.norm(up_mean)
-    up_angles_to_mean = np.degrees(np.arccos(
-        (all_up @ up_mean_unit).clip(-1.0, 1.0)
-    ))
+    up_angles_to_mean = np.degrees(np.arccos((all_up @ up_mean_unit).clip(-1.0, 1.0)))
     up_dispersion = float(up_angles_to_mean.std())
 
     results = {
@@ -124,7 +121,8 @@ def main():
             "range_ratio_fwd_over_up": float(fwd_ratio),
             "fwd_range_larger_by_factor": float(fwd_ratio),
             "interpretation": (
-                "forward range is larger than up range" if fwd_ratio > 1.2
+                "forward range is larger than up range"
+                if fwd_ratio > 1.2
                 else "forward and up ranges are comparable"
             ),
         },
@@ -160,4 +158,5 @@ def main():
 
 if __name__ == "__main__":
     import sys
+
     main()

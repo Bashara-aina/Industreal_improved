@@ -41,7 +41,6 @@ import argparse
 import gc
 import json
 import logging
-import os
 import sys
 import time
 from pathlib import Path
@@ -49,7 +48,6 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision.transforms import functional as TF
@@ -87,7 +85,9 @@ def _mvit_transform(img: Image.Image) -> torch.Tensor:
 # =========================================================================
 # Remap 75 -> 69 class groups
 # =========================================================================
-_REMAP_PATH = _PROJECT_ROOT / "src" / "runs" / "rf_stages" / "checkpoints" / "act_remap_75_to_69.json"
+_REMAP_PATH = (
+    _PROJECT_ROOT / "src" / "runs" / "rf_stages" / "checkpoints" / "act_remap_75_to_69.json"
+)
 
 
 def _load_remap() -> dict:
@@ -126,7 +126,10 @@ class MViTFinetuneDataset(Dataset):
 
         logger.info(
             "[MViTFinetuneDataset] split=%s, %d clips, clip_len=%d, stride=%d",
-            split, len(self.clips), clip_len, stride,
+            split,
+            len(self.clips),
+            clip_len,
+            stride,
         )
 
     def _build_index(self) -> None:
@@ -251,7 +254,9 @@ class MViTFinetuneModel(nn.Module):
         trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
         logger.info(
             "MViTFinetuneModel: total=%.1fM, trainable=%.1fM, num_classes=%d",
-            total_params / 1e6, trainable_params / 1e6, num_classes,
+            total_params / 1e6,
+            trainable_params / 1e6,
+            num_classes,
         )
 
     @staticmethod
@@ -278,6 +283,7 @@ class MViTFinetuneModel(nn.Module):
         # Backbone forward with optional gradient checkpointing
         if self.use_checkpoint and self.training:
             from torch.utils.checkpoint import checkpoint
+
             features = checkpoint(self.backbone, clip, use_reentrant=False)
         else:
             features = self.backbone(clip)  # [B, 768]
@@ -297,7 +303,9 @@ class MViTFinetuneModel(nn.Module):
         logger.info("Unfroze backbone blocks %d-%d (last %d blocks)", start, total - 1, num_blocks)
 
     def get_trainable_param_groups(
-        self, backbone_lr: float, head_lr: float,
+        self,
+        backbone_lr: float,
+        head_lr: float,
     ) -> list[dict]:
         """Return parameter groups with separate LRs for backbone and head."""
         backbone_params = []
@@ -424,40 +432,46 @@ def parse_args() -> argparse.Namespace:
         description="MViTv2-S Fine-Tuning for IndustReal Activity Recognition",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--backbone", type=str, default="mvit_v2_s",
-                        help="Video backbone name")
-    parser.add_argument("--batch-size", type=int, default=2,
-                        help="Batch size per GPU")
-    parser.add_argument("--epochs", type=int, default=20,
-                        help="Number of training epochs")
-    parser.add_argument("--lr", type=float, default=5e-5,
-                        help="Head learning rate")
-    parser.add_argument("--backbone-lr", type=float, default=1e-5,
-                        help="Backbone learning rate (stage 2)")
-    parser.add_argument("--warmup-epochs", type=int, default=3,
-                        help="Epochs with frozen backbone (stage 1)")
-    parser.add_argument("--clip-len", type=int, default=16,
-                        help="Frames per clip")
-    parser.add_argument("--stride", type=int, default=8,
-                        help="Clip stride (overlap)")
-    parser.add_argument("--weight-decay", type=float, default=1e-4,
-                        help="Weight decay")
-    parser.add_argument("--save-dir", type=str, default="src/runs/mvit_finetune",
-                        help="Output directory for checkpoints and logs")
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed")
-    parser.add_argument("--num-workers", type=int, default=4,
-                        help="DataLoader workers")
-    parser.add_argument("--gradient-checkpointing", action="store_true", default=True,
-                        help="Use gradient checkpointing")
-    parser.add_argument("--no-gradient-checkpointing", action="store_false",
-                        dest="gradient_checkpointing")
-    parser.add_argument("--mixed-precision", action="store_true", default=True,
-                        help="Use FP16 mixed precision")
-    parser.add_argument("--no-mixed-precision", action="store_false",
-                        dest="mixed_precision")
-    parser.add_argument("--unfreeze-blocks", type=int, default=4,
-                        help="Number of last blocks to unfreeze in stage 2")
+    parser.add_argument("--backbone", type=str, default="mvit_v2_s", help="Video backbone name")
+    parser.add_argument("--batch-size", type=int, default=2, help="Batch size per GPU")
+    parser.add_argument("--epochs", type=int, default=20, help="Number of training epochs")
+    parser.add_argument("--lr", type=float, default=5e-5, help="Head learning rate")
+    parser.add_argument(
+        "--backbone-lr", type=float, default=1e-5, help="Backbone learning rate (stage 2)"
+    )
+    parser.add_argument(
+        "--warmup-epochs", type=int, default=3, help="Epochs with frozen backbone (stage 1)"
+    )
+    parser.add_argument("--clip-len", type=int, default=16, help="Frames per clip")
+    parser.add_argument("--stride", type=int, default=8, help="Clip stride (overlap)")
+    parser.add_argument("--weight-decay", type=float, default=1e-4, help="Weight decay")
+    parser.add_argument(
+        "--save-dir",
+        type=str,
+        default="src/runs/mvit_finetune",
+        help="Output directory for checkpoints and logs",
+    )
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--num-workers", type=int, default=4, help="DataLoader workers")
+    parser.add_argument(
+        "--gradient-checkpointing",
+        action="store_true",
+        default=True,
+        help="Use gradient checkpointing",
+    )
+    parser.add_argument(
+        "--no-gradient-checkpointing", action="store_false", dest="gradient_checkpointing"
+    )
+    parser.add_argument(
+        "--mixed-precision", action="store_true", default=True, help="Use FP16 mixed precision"
+    )
+    parser.add_argument("--no-mixed-precision", action="store_false", dest="mixed_precision")
+    parser.add_argument(
+        "--unfreeze-blocks",
+        type=int,
+        default=4,
+        help="Number of last blocks to unfreeze in stage 2",
+    )
     return parser.parse_args()
 
 
@@ -529,7 +543,9 @@ def main():
 
     logger.info(
         "Dataset: train=%d clips, val=%d clips, classes=%d",
-        len(train_dataset), len(val_dataset), len(set(train_dataset.id_to_group)),
+        len(train_dataset),
+        len(val_dataset),
+        len(set(train_dataset.id_to_group)),
     )
 
     # ---- Model ----
@@ -565,8 +581,12 @@ def main():
 
     logger.info("=" * 60)
     logger.info("MViTv2-S Fine-Tuning")
-    logger.info("  Epochs: %d (stage 1: %d frozen, stage 2: unfreeze last %d blocks)",
-                args.epochs, args.warmup_epochs, args.unfreeze_blocks)
+    logger.info(
+        "  Epochs: %d (stage 1: %d frozen, stage 2: unfreeze last %d blocks)",
+        args.epochs,
+        args.warmup_epochs,
+        args.unfreeze_blocks,
+    )
     logger.info("  Head LR: %.1e, Backbone LR: %.1e", args.lr, args.backbone_lr)
     logger.info("  Batch size: %d, Clip len: %d", args.batch_size, args.clip_len)
     logger.info("  Classes: %d, Save dir: %s", num_classes, save_dir)
@@ -587,26 +607,43 @@ def main():
                 ),
                 weight_decay=args.weight_decay,
             )
-            logger.info("Stage 2: backbone unfrozen, optimizer rebuilt with backbone_lr=%.1e", args.backbone_lr)
+            logger.info(
+                "Stage 2: backbone unfrozen, optimizer rebuilt with backbone_lr=%.1e",
+                args.backbone_lr,
+            )
 
         # ---- Train ----
         train_metrics = train_one_epoch(
-            model, train_loader, optimizer, criterion, device, epoch, scaler=scaler,
+            model,
+            train_loader,
+            optimizer,
+            criterion,
+            device,
+            epoch,
+            scaler=scaler,
         )
         stage_label = "frozen" if epoch <= args.warmup_epochs else "finetune"
 
         # ---- Validate ----
         val_metrics = validate(
-            model, val_loader, criterion, device, num_classes=num_classes,
+            model,
+            val_loader,
+            criterion,
+            device,
+            num_classes=num_classes,
         )
         elapsed = time.time() - t0
 
         logger.info(
             "Epoch %2d/%d [%s] | Train Loss: %.4f Acc: %.4f | "
             "Val Loss: %.4f Acc: %.4f | Time: %.0fs",
-            epoch, args.epochs, stage_label,
-            train_metrics["loss"], train_metrics["accuracy"],
-            val_metrics["loss"], val_metrics["accuracy"],
+            epoch,
+            args.epochs,
+            stage_label,
+            train_metrics["loss"],
+            train_metrics["accuracy"],
+            val_metrics["loss"],
+            val_metrics["accuracy"],
             elapsed,
         )
 
@@ -627,13 +664,16 @@ def main():
 
         # Periodic checkpoint every 5 epochs
         if epoch % 5 == 0:
-            torch.save({
-                "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "best_val_acc": best_val_acc,
-                "args": vars(args),
-            }, ckpt_dir / f"epoch_{epoch}.pth")
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "best_val_acc": best_val_acc,
+                    "args": vars(args),
+                },
+                ckpt_dir / f"epoch_{epoch}.pth",
+            )
 
         # Force GC at epoch boundary
         gc.collect()

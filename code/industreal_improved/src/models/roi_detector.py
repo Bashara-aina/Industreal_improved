@@ -30,9 +30,7 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, List, Optional, Tuple
-
-from src import config as C
+from typing import Dict, List, Tuple
 
 
 # ============================================================================
@@ -50,7 +48,7 @@ class AnchorFreeLocalizer(nn.Module):
         super().__init__()
         self.in_channels = in_channels
         self.feat_channels = feat_channels
-        self.levels = ['p5', 'p6', 'p7']  # stride 32, 64, 128
+        self.levels = ["p5", "p6", "p7"]  # stride 32, 64, 128
 
         # Shared conv tower (per-level heads)
         self.cls_tower = nn.Sequential(
@@ -84,9 +82,7 @@ class AnchorFreeLocalizer(nn.Module):
         )
 
         # Per-level scales (FCOS learnable)
-        self.scales = nn.ParameterList([
-            nn.Parameter(torch.tensor(1.0)) for _ in self.levels
-        ])
+        self.scales = nn.ParameterList([nn.Parameter(torch.tensor(1.0)) for _ in self.levels])
 
         self.cls_head = nn.Conv2d(feat_channels, 1, 3, padding=1)
         self.reg_head = nn.Conv2d(feat_channels, 4, 3, padding=1)
@@ -138,7 +134,7 @@ class AnchorFreeLocalizer(nn.Module):
             stride = 2 ** (5 + i)  # 32, 64, 128
             ys = torch.arange(H, device=feat.device).float() * stride + stride / 2
             xs = torch.arange(W, device=feat.device).float() * stride + stride / 2
-            grid_y, grid_x = torch.meshgrid(ys, xs, indexing='ij')
+            grid_y, grid_x = torch.meshgrid(ys, xs, indexing="ij")
             grid = torch.stack([grid_x.reshape(-1), grid_y.reshape(-1)], dim=0)
             locations.append(grid.expand(B, 2, -1))
 
@@ -149,8 +145,7 @@ class AnchorFreeLocalizer(nn.Module):
 
         return cls_preds, reg_preds, centernesses, locations
 
-    def decode_boxes(self, reg_preds: torch.Tensor, locations: torch.Tensor
-                     ) -> torch.Tensor:
+    def decode_boxes(self, reg_preds: torch.Tensor, locations: torch.Tensor) -> torch.Tensor:
         """Decode FCOS (l,t,r,b) predictions to xyxy boxes."""
         # reg_preds: [B, 4, N] in (l, t, r, b) format
         # locations: [B, 2, N] in (cx, cy) format
@@ -179,8 +174,13 @@ class ROIStateClassifier(nn.Module):
     Uses ROI-Align (pool_size=14) for each box, then a small conv+fc classifier.
     """
 
-    def __init__(self, in_channels: int = 256, num_states: int = 24,
-                 pool_size: int = 14, hidden_dim: int = 512):
+    def __init__(
+        self,
+        in_channels: int = 256,
+        num_states: int = 24,
+        pool_size: int = 14,
+        hidden_dim: int = 512,
+    ):
         super().__init__()
         self.in_channels = in_channels
         self.num_states = num_states
@@ -221,8 +221,7 @@ class ROIStateClassifier(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
-    def forward(self, p3_features: torch.Tensor, boxes: List[torch.Tensor]
-                ) -> torch.Tensor:
+    def forward(self, p3_features: torch.Tensor, boxes: List[torch.Tensor]) -> torch.Tensor:
         """Forward with RoI-Align.
 
         Args:
@@ -240,8 +239,7 @@ class ROIStateClassifier(nn.Module):
         results = []
         for i in range(B):
             if boxes[i].shape[0] == 0:
-                results.append(torch.zeros(0, self.num_states,
-                                           device=p3_features.device))
+                results.append(torch.zeros(0, self.num_states, device=p3_features.device))
                 continue
 
             # Scale boxes from pixel coords to P3 feature coords [0,1]
@@ -251,7 +249,7 @@ class ROIStateClassifier(nn.Module):
 
             # ROI-Align
             roi_feats = torchvision.ops.roi_align(
-                p3_features[i:i+1],  # [1, 256, H, W]
+                p3_features[i : i + 1],  # [1, 256, H, W]
                 [boxes_norm],
                 output_size=(self.pool_size, self.pool_size),
                 spatial_scale=1.0,
@@ -268,8 +266,9 @@ class ROIStateClassifier(nn.Module):
         padded = []
         for r in results:
             if r.shape[0] < max_k:
-                pad = torch.full((max_k - r.shape[0], self.num_states),
-                                 float('-inf'), device=r.device)
+                pad = torch.full(
+                    (max_k - r.shape[0], self.num_states), float("-inf"), device=r.device
+                )
                 r = torch.cat([r, pad], dim=0)
             padded.append(r)
 
@@ -285,8 +284,13 @@ class ROIDetector(nn.Module):
     Replaces the dense RetinaNet DetectionHead. See module docstring for rationale.
     """
 
-    def __init__(self, num_states: int = 24, top_k: int = 10,
-                 score_thresh: float = 0.05, nms_thresh: float = 0.5):
+    def __init__(
+        self,
+        num_states: int = 24,
+        top_k: int = 10,
+        score_thresh: float = 0.05,
+        nms_thresh: float = 0.5,
+    ):
         super().__init__()
         self.num_states = num_states
         self.top_k = top_k
@@ -340,11 +344,11 @@ class ROIDetector(nn.Module):
                 scores_i,
                 self.nms_thresh,
             )
-            keep = keep[:self.top_k]
+            keep = keep[: self.top_k]
             top_boxes_per_img.append(boxes_i[:, keep].permute(1, 0))  # [k'', 4]
 
         # Step 3: ROI-Align and classify
-        p3 = pyramid['p3']
+        p3 = pyramid["p3"]
         state_logits = self.classifier(p3, top_boxes_per_img)  # [B, max_k, 24]
 
         # Padded boxes for uniform output
@@ -360,20 +364,21 @@ class ROIDetector(nn.Module):
         boxes_all = torch.stack(padded_boxes, dim=0)  # [B, max_k, 4]
 
         return {
-            'cls_preds': state_logits,  # [B, max_k, 24]
-            'reg_preds': reg_raw,  # [B, 4, N] — raw FCOS reg
-            'boxes': boxes_all,  # [B, max_k, 4]
-            'scores': scores,  # [B, N]
-            'locations': locations,  # [B, 2, N]
+            "cls_preds": state_logits,  # [B, max_k, 24]
+            "reg_preds": reg_raw,  # [B, 4, N] — raw FCOS reg
+            "boxes": boxes_all,  # [B, max_k, 4]
+            "scores": scores,  # [B, N]
+            "locations": locations,  # [B, 2, N]
         }
 
 
 # Late import to avoid circular dependency
 try:
     import torchvision
+
     _TV_AVAILABLE = True
 except ImportError:
     _TV_AVAILABLE = False
     # Fallback RoI-Align using grid_sample
-    logger = __import__('logging').getLogger(__name__)
+    logger = __import__("logging").getLogger(__name__)
     logger.warning("torchvision not available — ROIStateClassifier needs torchvision for roi_align")

@@ -28,7 +28,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import gc
 import json
 import logging
 import math
@@ -50,8 +49,7 @@ _SRC = _PROJECT_ROOT / "src"
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 # Add sub-packages for direct imports
-for _p in [_SRC, _SRC / "evaluation", _SRC / "models", _SRC / "data",
-           _SRC / "training"]:
+for _p in [_SRC, _SRC / "evaluation", _SRC / "models", _SRC / "data", _SRC / "training"]:
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -66,10 +64,13 @@ logger = logging.getLogger("eval_test_split")
 # Protocol enforcement (Section 7.1)
 # ---------------------------------------------------------------------------
 from src.split_config import TEST_SUBJECTS, VAL_SUBJECTS, require_split  # noqa: E402
+
 require_split("test", allow_test_only=True)
 
 logger.info("Test subjects: %s (N=%d)", TEST_SUBJECTS, len(TEST_SUBJECTS))
-logger.info("Val subjects:  %s (N=%d) — for reference, not used here", VAL_SUBJECTS, len(VAL_SUBJECTS))
+logger.info(
+    "Val subjects:  %s (N=%d) — for reference, not used here", VAL_SUBJECTS, len(VAL_SUBJECTS)
+)
 assert len(TEST_SUBJECTS) == 10, f"Expected 10 test subjects, got {len(TEST_SUBJECTS)}"
 assert not set(TEST_SUBJECTS) & set(VAL_SUBJECTS), "Test/val overlap detected"
 
@@ -84,6 +85,7 @@ _BOOTSTRAP_REF_PATH = _SRC / "runs" / "rf_stages" / "checkpoints" / "bootstrap_c
 # ===================================================================
 # Bootstrap CI helpers
 # ===================================================================
+
 
 def bootstrap_ci(
     values: list[float],
@@ -124,6 +126,7 @@ def bootstrap_ci(
 # PSR transition helpers (used by fallback path)
 # ===================================================================
 
+
 def _compute_tau(pred_tr: np.ndarray, gt_tr: np.ndarray, tol: int = 3) -> float:
     """Mean frame delay (pred - gt) for matched transition events."""
     n_comp = pred_tr.shape[1]
@@ -158,12 +161,15 @@ def _compute_pos(pred_tr: np.ndarray, gt_tr: np.ndarray) -> float:
 # Per-head evaluation functions
 # ===================================================================
 
+
 def _build_full_loader(split: str, batch_size: int = 1):
     """Build a full-frame DataLoader for the given split."""
     from src import config as C  # noqa: E811
     from src.data.industreal_dataset import (  # noqa: E811
-        IndustRealMultiTaskDataset, collate_fn,
+        IndustRealMultiTaskDataset,
+        collate_fn,
     )
+
     ds = IndustRealMultiTaskDataset(
         split=split,
         img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
@@ -197,8 +203,11 @@ def _run_inprocess_eval(
     After Agent 20, it may also return event_f1/PSI metrics.
     """
     from src.evaluation.full_eval_inprocess import (  # noqa: E811
-        streaming_eval, apply_overrides, FULL_EVAL_OVERRIDES,
+        streaming_eval,
+        apply_overrides,
+        FULL_EVAL_OVERRIDES,
     )
+
     apply_overrides(FULL_EVAL_OVERRIDES)
     return streaming_eval(model, loader, device, max_batches=max_batches)
 
@@ -259,14 +268,8 @@ def _eval_psr_event_f1(
         lbl = labels.cpu().numpy()
 
         for b in range(images.shape[0]):
-            meta = (
-                targets.get("metadata", [{}])[b]
-                if b < len(targets.get("metadata", []))
-                else {}
-            )
-            rec_id = str(
-                meta.get("recording_id", meta.get("rec_id", f"batch_{total_frames}"))
-            )
+            meta = targets.get("metadata", [{}])[b] if b < len(targets.get("metadata", [])) else {}
+            rec_id = str(meta.get("recording_id", meta.get("rec_id", f"batch_{total_frames}")))
             if isinstance(rec_id, torch.Tensor):
                 rec_id = str(rec_id.item())
 
@@ -339,9 +342,7 @@ def _eval_psr_event_f1(
         results["psr_event_f1"] = float(np.mean(event_f1s))
         results["psr_tau_frames"] = float(np.mean(taus)) if taus else None
         results["psr_tau_seconds"] = (
-            results["psr_tau_frames"] / 30.0
-            if results.get("psr_tau_frames") is not None
-            else None
+            results["psr_tau_frames"] / 30.0 if results.get("psr_tau_frames") is not None else None
         )
         results["psr_pos"] = float(np.mean(poss)) if poss else None
         results["psr_n_recordings"] = len(per_rec)
@@ -349,9 +350,11 @@ def _eval_psr_event_f1(
 
         logger.info("  event_f1@+-%d: %.4f", tolerance, results["psr_event_f1"])
         logger.info("  POS:           %.4f", results.get("psr_pos", float("nan")))
-        logger.info("  tau:           %.2f frames (%.1f s)",
-                     results.get("psr_tau_frames", float("nan")),
-                     results.get("psr_tau_seconds", float("nan")))
+        logger.info(
+            "  tau:           %.2f frames (%.1f s)",
+            results.get("psr_tau_frames", float("nan")),
+            results.get("psr_tau_seconds", float("nan")),
+        )
     else:
         results["psr_error"] = "No valid recordings with PSR labels"
 
@@ -390,13 +393,15 @@ def _eval_pose_bootstrap(
                     "up_mae": bd.get("head_pose_up", {}).get("headline_weighted_mean_deg"),
                     "up_ci": bd.get("head_pose_up", {}).get("bootstrap_95_ci_deg"),
                 }
-                logger.info("  Val-split reference: fwd=%.2f [%.2f, %.2f], up=%.2f [%.2f, %.2f]",
-                             results["val_split_reference"]["fwd_mae"],
-                             results["val_split_reference"]["fwd_ci"][0],
-                             results["val_split_reference"]["fwd_ci"][1],
-                             results["val_split_reference"]["up_mae"],
-                             results["val_split_reference"]["up_ci"][0],
-                             results["val_split_reference"]["up_ci"][1])
+                logger.info(
+                    "  Val-split reference: fwd=%.2f [%.2f, %.2f], up=%.2f [%.2f, %.2f]",
+                    results["val_split_reference"]["fwd_mae"],
+                    results["val_split_reference"]["fwd_ci"][0],
+                    results["val_split_reference"]["fwd_ci"][1],
+                    results["val_split_reference"]["up_mae"],
+                    results["val_split_reference"]["up_ci"][0],
+                    results["val_split_reference"]["up_ci"][1],
+                )
         except Exception:
             pass
 
@@ -410,6 +415,7 @@ def _eval_pose_bootstrap(
 # ===================================================================
 # Detection evaluation (dual protocol)
 # ===================================================================
+
 
 def _eval_detection_dual_mAP(
     model: torch.nn.Module,
@@ -435,8 +441,12 @@ def _eval_detection_dual_mAP(
         if det_pc is not None:
             results["det_n_present_classes"] = int(det_pc)
 
-        logger.info("  Annotated-frames mAP@0.5: %s", "N/A" if det_anno is None else f"{det_anno:.4f}")
-        logger.info("  Entire-video mAP@0.5:    %s", "N/A" if det_video is None else f"{det_video:.4f}")
+        logger.info(
+            "  Annotated-frames mAP@0.5: %s", "N/A" if det_anno is None else f"{det_anno:.4f}"
+        )
+        logger.info(
+            "  Entire-video mAP@0.5:    %s", "N/A" if det_video is None else f"{det_video:.4f}"
+        )
         logger.info("  Present classes:          %s", det_pc)
 
     except Exception as exc:
@@ -449,6 +459,7 @@ def _eval_detection_dual_mAP(
 # ===================================================================
 # Activity evaluation
 # ===================================================================
+
 
 def _eval_activity_top1(
     model: torch.nn.Module,
@@ -467,8 +478,10 @@ def _eval_activity_top1(
             results["act_top1"] = float(top1)
             results["act_top1_pct"] = float(top1) * 100.0
             logger.info("  Top-1:             %.4f (%.2f%%)", top1, top1 * 100.0)
-            logger.info("  Top-1 (valid, no NA): %.4f",
-                         stream.get("act_top1_valid_na_excluded", float("nan")))
+            logger.info(
+                "  Top-1 (valid, no NA): %.4f",
+                stream.get("act_top1_valid_na_excluded", float("nan")),
+            )
 
         n_total = stream.get("act_n_total")
         n_valid = stream.get("act_n_valid")
@@ -549,22 +562,38 @@ def print_table_a(agg: dict) -> None:
 
     sep = "=" * 78
     print(TABLE_A_HEADER.format(sep=sep))
-    print(TABLE_A_ROW.format(
-        head="Detection mAP@0.5 (annotated / video)",
-        ours=det_str, sota=det_sota, verdict=det_verdict,
-    ))
-    print(TABLE_A_ROW.format(
-        head="Activity top-1 (75-cls clip)",
-        ours=act_str, sota=act_sota, verdict=act_verdict,
-    ))
-    print(TABLE_A_ROW.format(
-        head="PSR event-F1@+/-3 / tau",
-        ours=psr_str, sota=psr_sota, verdict=psr_verdict,
-    ))
-    print(TABLE_A_ROW.format(
-        head="Pose fwd/up MAE (deg)",
-        ours=pose_str, sota=pose_sota, verdict=pose_verdict,
-    ))
+    print(
+        TABLE_A_ROW.format(
+            head="Detection mAP@0.5 (annotated / video)",
+            ours=det_str,
+            sota=det_sota,
+            verdict=det_verdict,
+        )
+    )
+    print(
+        TABLE_A_ROW.format(
+            head="Activity top-1 (75-cls clip)",
+            ours=act_str,
+            sota=act_sota,
+            verdict=act_verdict,
+        )
+    )
+    print(
+        TABLE_A_ROW.format(
+            head="PSR event-F1@+/-3 / tau",
+            ours=psr_str,
+            sota=psr_sota,
+            verdict=psr_verdict,
+        )
+    )
+    print(
+        TABLE_A_ROW.format(
+            head="Pose fwd/up MAE (deg)",
+            ours=pose_str,
+            sota=pose_sota,
+            verdict=pose_verdict,
+        )
+    )
     print(TABLE_A_FOOTER.format(sep=sep))
 
     # SOTA anchor reference line
@@ -577,33 +606,38 @@ def print_table_a(agg: dict) -> None:
 # Main orchestrator
 # ===================================================================
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Test-split evaluation orchestrator (175 Section 7.1 + Section 8)"
     )
     parser.add_argument(
-        "--checkpoint", type=str, default=str(_DEFAULT_CKPT),
+        "--checkpoint",
+        type=str,
+        default=str(_DEFAULT_CKPT),
         help="Path to model checkpoint (.pth)",
     )
     parser.add_argument(
-        "--save-dir", type=str, default=str(_DEFAULT_SAVE_DIR),
+        "--save-dir",
+        type=str,
+        default=str(_DEFAULT_SAVE_DIR),
         help="Output directory for metrics.json",
     )
     parser.add_argument(
-        "--device", type=str,
+        "--device",
+        type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
     )
     parser.add_argument("--batch-size", type=int, default=1)
-    parser.add_argument("--max-batches", type=int, default=0,
-                        help="0 = full test split")
-    parser.add_argument("--psr-tolerance", type=int, default=3,
-                        help="Frame tolerance for PSR event matching")
+    parser.add_argument("--max-batches", type=int, default=0, help="0 = full test split")
+    parser.add_argument(
+        "--psr-tolerance", type=int, default=3, help="Frame tolerance for PSR event matching"
+    )
     parser.add_argument("--skip-detection", action="store_true")
     parser.add_argument("--skip-activity", action="store_true")
     parser.add_argument("--skip-psr", action="store_true")
     parser.add_argument("--skip-pose", action="store_true")
-    parser.add_argument("--skip-table", action="store_true",
-                        help="Skip printing Table A")
+    parser.add_argument("--skip-table", action="store_true", help="Skip printing Table A")
     args = parser.parse_args()
 
     save_dir = Path(args.save_dir)
@@ -618,8 +652,13 @@ def main():
     logger.info("Device:        %s", device)
     logger.info("Save dir:      %s", save_dir)
     logger.info("Max batches:   %s", max_batches or "full")
-    logger.info("Skip flags:    det=%s act=%s psr=%s pose=%s",
-                 args.skip_detection, args.skip_activity, args.skip_psr, args.skip_pose)
+    logger.info(
+        "Skip flags:    det=%s act=%s psr=%s pose=%s",
+        args.skip_detection,
+        args.skip_activity,
+        args.skip_psr,
+        args.skip_pose,
+    )
 
     # ------------------------------------------------------------------
     # Load checkpoint
@@ -636,18 +675,25 @@ def main():
     from src import config as C  # noqa: E811
     from src.models.model import POPWMultiTaskModel  # noqa: E811
 
-    model = POPWMultiTaskModel(
-        pretrained=True,
-        backbone_type=getattr(C, "BACKBONE_TYPE", "convnext_tiny"),
-        use_hand_film=getattr(C, "USE_HAND_FILM", True),
-        use_headpose_film=getattr(C, "USE_HEADPOSE_FILM", False),
-        use_videomae=getattr(C, "USE_VIDEOMAE", False),
-        train_pose=getattr(C, "TRAIN_HEAD_POSE", True),
-    ).to(device).eval()
+    model = (
+        POPWMultiTaskModel(
+            pretrained=True,
+            backbone_type=getattr(C, "BACKBONE_TYPE", "convnext_tiny"),
+            use_hand_film=getattr(C, "USE_HAND_FILM", True),
+            use_headpose_film=getattr(C, "USE_HEADPOSE_FILM", False),
+            use_videomae=getattr(C, "USE_VIDEOMAE", False),
+            train_pose=getattr(C, "TRAIN_HEAD_POSE", True),
+        )
+        .to(device)
+        .eval()
+    )
 
     model.load_state_dict(
-        {k: v for k, v in state["model"].items()
-         if "total_ops" not in k and "total_params" not in k},
+        {
+            k: v
+            for k, v in state["model"].items()
+            if "total_ops" not in k and "total_params" not in k
+        },
         strict=False,
     )
     logger.info("Model loaded (epoch %s)", epoch)
@@ -685,7 +731,10 @@ def main():
         logger.info("--- Running in-process evaluation (detection + activity + pose) ---")
         try:
             stream_results = _run_inprocess_eval(
-                model, loader, device, max_batches,
+                model,
+                loader,
+                device,
+                max_batches,
             )
         except Exception as exc:
             logger.error("Streaming eval failed entirely: %s", exc)
@@ -696,10 +745,16 @@ def main():
         agg["detection"]["det_mAP50_annotated_frames"] = stream_results.get("det_mAP50")
         agg["detection"]["det_mAP50_all_frames"] = stream_results.get("det_mAP50_all_frames")
         agg["detection"]["det_n_present_classes"] = stream_results.get("det_n_present_classes")
-        logger.info("  Annotated-frames mAP@0.5: %s",
-                     f"{stream_results['det_mAP50']:.4f}" if stream_results.get("det_mAP50") else "N/A")
-        logger.info("  Entire-video mAP@0.5:    %s",
-                     f"{stream_results['det_mAP50_all_frames']:.4f}" if stream_results.get("det_mAP50_all_frames") else "N/A")
+        logger.info(
+            "  Annotated-frames mAP@0.5: %s",
+            f"{stream_results['det_mAP50']:.4f}" if stream_results.get("det_mAP50") else "N/A",
+        )
+        logger.info(
+            "  Entire-video mAP@0.5:    %s",
+            f"{stream_results['det_mAP50_all_frames']:.4f}"
+            if stream_results.get("det_mAP50_all_frames")
+            else "N/A",
+        )
     elif not args.skip_detection:
         logger.warning("Detection eval skipped (streaming_eval did not complete)")
 
@@ -709,7 +764,9 @@ def main():
         top1 = stream_results.get("act_top1")
         agg["activity"]["act_top1"] = top1
         agg["activity"]["act_top1_pct"] = top1 * 100.0 if top1 is not None else None
-        agg["activity"]["act_top1_valid_na_excluded"] = stream_results.get("act_top1_valid_na_excluded")
+        agg["activity"]["act_top1_valid_na_excluded"] = stream_results.get(
+            "act_top1_valid_na_excluded"
+        )
         agg["activity"]["act_n_total"] = stream_results.get("act_n_total")
         agg["activity"]["act_n_valid"] = stream_results.get("act_n_valid")
         if top1 is not None:
@@ -729,15 +786,20 @@ def main():
             agg["psr"]["psr_tau_seconds"] = stream_results.get("psr_tau_seconds")
             if stream_results.get("psr_per_recording"):
                 agg["psr"]["per_recording"] = stream_results["psr_per_recording"]
-            logger.info("  event_f1@+-%d: %.4f (from streaming_eval, post-Agent-20)",
-                         args.psr_tolerance, agg["psr"]["psr_event_f1"])
+            logger.info(
+                "  event_f1@+-%d: %.4f (from streaming_eval, post-Agent-20)",
+                args.psr_tolerance,
+                agg["psr"]["psr_event_f1"],
+            )
         else:
             # Fallback: dedicated per-recording PSR event evaluation
             logger.info("  streaming_eval did not return event_f1. Running per-recording pass...")
             # We need a fresh loader for PSR (streaming_eval consumed the first one)
             psr_loader, _ = _build_full_loader("test", batch_size=1)
             agg["psr"] = _eval_psr_event_f1(
-                model, psr_loader, device,
+                model,
+                psr_loader,
+                device,
                 tolerance=args.psr_tolerance,
             )
 
@@ -754,7 +816,9 @@ def main():
                 if bp_json.exists():
                     bd = json.loads(bp_json.read_text())
                     agg["pose"]["val_split_reference"] = {
-                        "fwd_mae": bd.get("head_pose_forward", {}).get("headline_weighted_mean_deg"),
+                        "fwd_mae": bd.get("head_pose_forward", {}).get(
+                            "headline_weighted_mean_deg"
+                        ),
                         "fwd_ci": bd.get("head_pose_forward", {}).get("bootstrap_95_ci_deg"),
                         "up_mae": bd.get("head_pose_up", {}).get("headline_weighted_mean_deg"),
                         "up_ci": bd.get("head_pose_up", {}).get("bootstrap_95_ci_deg"),
@@ -837,7 +901,9 @@ def main():
     # Summary line
     logger.info("")
     logger.info("Test-split eval complete. Headline metrics:")
-    _log_if("det_mAP50_all_frames", agg["detection"].get("det_mAP50_all_frames"), "Detection video mAP")
+    _log_if(
+        "det_mAP50_all_frames", agg["detection"].get("det_mAP50_all_frames"), "Detection video mAP"
+    )
     _log_if("act_top1_pct", agg["activity"].get("act_top1_pct"), "Activity top-1 (%)")
     _log_if("psr_event_f1", agg["psr"].get("psr_event_f1"), "PSR event-F1@+-3")
     _log_if("pose_fwd_mae", agg["pose"].get("pose_fwd_mae"), "Pose fwd MAE")

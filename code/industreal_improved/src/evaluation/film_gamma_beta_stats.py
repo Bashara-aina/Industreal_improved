@@ -7,6 +7,7 @@ or actually modulating.
 Usage:
     CUDA_VISIBLE_DEVICES=1 python3 src/evaluation/film_gamma_beta_stats.py
 """
+
 import json
 import sys
 from pathlib import Path
@@ -28,9 +29,11 @@ _orig_headposefilm_forward = None
 
 def _patched_posefilm_forward(self, c5, keypoints, confidence):
     from src import config as C
+
     B = keypoints.shape[0]
-    scale = torch.tensor([C.IMG_WIDTH, C.IMG_HEIGHT],
-                         device=keypoints.device, dtype=keypoints.dtype)
+    scale = torch.tensor(
+        [C.IMG_WIDTH, C.IMG_HEIGHT], device=keypoints.device, dtype=keypoints.dtype
+    )
     keypoints_norm = keypoints / scale.view(1, 1, 2)
     kp_flat = keypoints_norm.flatten(1)
     conf_flat = confidence.detach()
@@ -63,12 +66,11 @@ def _patched_headposefilm_forward(self, c5_mod, head_pose):
 @torch.no_grad()
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint",
-                        default="src/runs/rf_stages/checkpoints/best.pth")
+    parser.add_argument("--checkpoint", default="src/runs/rf_stages/checkpoints/best.pth")
     parser.add_argument("--max-batches", type=int, default=100)
-    parser.add_argument("--save-dir",
-                        default="src/runs/rf_stages/checkpoints")
+    parser.add_argument("--save-dir", default="src/runs/rf_stages/checkpoints")
     parser.add_argument("--batch-size", type=int, default=8)
     args = parser.parse_args()
 
@@ -91,13 +93,18 @@ def main():
 
     print("Building model...")
     from src.models.model import POPWMultiTaskModel
+
     model = POPWMultiTaskModel(
-        pretrained=True, backbone_type='convnext_tiny',
-        use_hand_film=True, use_headpose_film=True,
-        use_videomae=False, train_pose=True,
+        pretrained=True,
+        backbone_type="convnext_tiny",
+        use_hand_film=True,
+        use_headpose_film=True,
+        use_videomae=False,
+        train_pose=True,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = 1
     model = model.cuda().eval()
@@ -105,8 +112,11 @@ def main():
     print("Loading val dataset...")
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
     val_loader = DataLoader(
-        val_ds, batch_size=args.batch_size, num_workers=0,
-        collate_fn=collate_fn, shuffle=False,
+        val_ds,
+        batch_size=args.batch_size,
+        num_workers=0,
+        collate_fn=collate_fn,
+        shuffle=False,
     )
     print(f"Val dataset: {len(val_ds)} frames, {len(val_loader)} batches")
 
@@ -114,7 +124,7 @@ def main():
     film_module_names = []
     for mod_name, mod in model.named_modules():
         class_name = mod.__class__.__name__
-        if class_name in ('PoseFiLMModule', 'HeadPoseFiLMModule'):
+        if class_name in ("PoseFiLMModule", "HeadPoseFiLMModule"):
             film_module_names.append(mod_name)
 
     print(f"Found FiLM modules: {film_module_names}")
@@ -143,7 +153,7 @@ def main():
         for mod_name in film_module_names:
             mod = dict(model.named_modules())[mod_name]
             gamma = mod._last_gamma.squeeze(-1).squeeze(-1).cpu()  # [B, 768]
-            beta = mod._last_beta.squeeze(-1).squeeze(-1).cpu()    # [B, 768]
+            beta = mod._last_beta.squeeze(-1).squeeze(-1).cpu()  # [B, 768]
             film_gammas[mod_name].append(gamma)
             film_betas[mod_name].append(beta)
 
@@ -157,11 +167,11 @@ def main():
     results = {}
     for mod_name in film_module_names:
         gamma_all = torch.cat(film_gammas[mod_name], dim=0)  # [N, 768]
-        beta_all = torch.cat(film_betas[mod_name], dim=0)    # [N, 768]
+        beta_all = torch.cat(film_betas[mod_name], dim=0)  # [N, 768]
 
         gamma_deviation = gamma_all - 1.0  # deviation from identity
         gamma_l2_per_sample = torch.norm(gamma_deviation, dim=1)  # [N]
-        beta_l2_per_sample = torch.norm(beta_all, dim=1)          # [N]
+        beta_l2_per_sample = torch.norm(beta_all, dim=1)  # [N]
 
         results[mod_name] = {
             "gamma": {
@@ -194,14 +204,19 @@ def main():
         print(f"\n--- {mod_name} ---")
         g = stats["gamma"]
         b = stats["beta"]
-        print(f"  Gamma mean={g['mean']:.4f}  std={g['std']:.4f}  "
-              f"range=[{g['min']:.4f}, {g['max']:.4f}]")
-        print(f"  Gamma |dev-1| L2:  mean={g['deviation_from_1_L2_mean']:.4f}  "
-              f"median={g['deviation_from_1_L2_median']:.4f}")
-        print(f"  Beta   mean={b['mean']:.4f}  std={b['std']:.4f}  "
-              f"range=[{b['min']:.4f}, {b['max']:.4f}]")
-        print(f"  Beta L2 norm:     mean={b['L2_mean']:.4f}  "
-              f"median={b['L2_median']:.4f}")
+        print(
+            f"  Gamma mean={g['mean']:.4f}  std={g['std']:.4f}  "
+            f"range=[{g['min']:.4f}, {g['max']:.4f}]"
+        )
+        print(
+            f"  Gamma |dev-1| L2:  mean={g['deviation_from_1_L2_mean']:.4f}  "
+            f"median={g['deviation_from_1_L2_median']:.4f}"
+        )
+        print(
+            f"  Beta   mean={b['mean']:.4f}  std={b['std']:.4f}  "
+            f"range=[{b['min']:.4f}, {b['max']:.4f}]"
+        )
+        print(f"  Beta L2 norm:     mean={b['L2_mean']:.4f}  median={b['L2_median']:.4f}")
 
     # Overall verdict
     print("\n" + "-" * 60)
@@ -213,14 +228,14 @@ def main():
     print(f"  FILM_DIM = 768 channels")
     print(f"  At 768 channels, L2=27.7 would mean average deviation of ~1.0 per channel.")
     if all_gamma_dev_l2 < 10.0 and all_beta_l2 < 10.0:
-        verdict = ("PASS-THROUGH: gamma ~= 1, beta ~= 0. "
-                   "FiLM layers are effectively identity.")
+        verdict = "PASS-THROUGH: gamma ~= 1, beta ~= 0. FiLM layers are effectively identity."
     elif all_gamma_dev_l2 < 50.0 and all_beta_l2 < 50.0:
-        verdict = ("WEAK MODULATION: Non-trivial but small relative to "
-                   "768-dim feature scale.")
+        verdict = "WEAK MODULATION: Non-trivial but small relative to 768-dim feature scale."
     else:
-        verdict = ("ACTIVE MODULATION: Large gamma/beta values. "
-                   "FiLM layers significantly modulate features.")
+        verdict = (
+            "ACTIVE MODULATION: Large gamma/beta values. "
+            "FiLM layers significantly modulate features."
+        )
     print(f"  VERDICT: {verdict}")
     results["verdict"] = verdict
 

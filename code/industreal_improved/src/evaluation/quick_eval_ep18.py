@@ -3,7 +3,7 @@
 Bypasses the broken evaluate.py main() and runs inference directly.
 Reports per-task metrics.
 """
-import json
+
 import sys
 from pathlib import Path
 
@@ -24,37 +24,46 @@ def main():
     print(f"Epoch: {ckpt.get('epoch')}, best_metric: {ckpt.get('best_metric', '?')}")
 
     from src.models.model import POPWMultiTaskModel
+
     model = POPWMultiTaskModel(
         pretrained=True,
-        backbone_type='convnext_tiny',
+        backbone_type="convnext_tiny",
         use_hand_film=True,
         use_headpose_film=True,
         use_videomae=False,
         train_pose=False,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = 1
     model = model.cuda().eval()
 
     from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
     from torch.utils.data import DataLoader
+
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
-    val_loader = DataLoader(val_ds, batch_size=1, num_workers=0,
-                            collate_fn=collate_fn, shuffle=False)
+    val_loader = DataLoader(
+        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False
+    )
 
     # Load cached data if available, else collect
     cache = Path("src/runs/rf_stages/checkpoints/psr_data_cache.pt")
     if cache.exists():
         print(f"Loading cached data from {cache}...")
         data = torch.load(cache, weights_only=False)
-        all_logits = np.concatenate([data['rec_logits'][r].numpy() for r in data['rec_logits']], axis=0)
-        all_labels = np.concatenate([data['rec_labels'][r].numpy() for r in data['rec_labels']], axis=0)
+        all_logits = np.concatenate(
+            [data["rec_logits"][r].numpy() for r in data["rec_logits"]], axis=0
+        )
+        all_labels = np.concatenate(
+            [data["rec_labels"][r].numpy() for r in data["rec_labels"]], axis=0
+        )
         print(f"Loaded {len(all_logits)} cached frames")
     else:
         # Collect fresh
         from collections import defaultdict
+
         rec_logits = defaultdict(list)
         rec_labels = defaultdict(list)
 
@@ -73,8 +82,12 @@ def main():
             psr_labels = targets.get("psr_labels")
             if psr_logits is None or psr_labels is None:
                 continue
-            rec_logits[targets['metadata'][0].get('recording_id', 'unknown')].append(psr_logits.cpu())
-            rec_labels[targets['metadata'][0].get('recording_id', 'unknown')].append(psr_labels.cpu())
+            rec_logits[targets["metadata"][0].get("recording_id", "unknown")].append(
+                psr_logits.cpu()
+            )
+            rec_labels[targets["metadata"][0].get("recording_id", "unknown")].append(
+                psr_labels.cpu()
+            )
             n += 1
             if n % 1000 == 0:
                 print(f"  processed {n}/{len(val_ds)}")

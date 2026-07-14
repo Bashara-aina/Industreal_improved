@@ -49,8 +49,9 @@ def test_50_clips_loadable():
     # Load all 50
     for i in range(50):
         clip, label = ds[i]
-        assert clip.shape == (16, 3, 224, 224), \
+        assert clip.shape == (16, 3, 224, 224), (
             f"Clip {i} shape {clip.shape}, expected (16, 3, 224, 224)"
+        )
         assert clip.dtype == torch.float32, f"Clip {i} dtype {clip.dtype}"
         assert 0 <= label < 75, f"Label {i} out of range: {label}"
 
@@ -72,8 +73,7 @@ def test_75_class_head_shape():
     with torch.no_grad():
         logits = model(x)
 
-    assert logits.shape == (4, 75), \
-        f"Expected logits shape (4, 75), got {logits.shape}"
+    assert logits.shape == (4, 75), f"Expected logits shape (4, 75), got {logits.shape}"
     assert logits.dtype == torch.float32, f"Logits dtype {logits.dtype}"
     assert torch.isfinite(logits).all(), "Logits contain non-finite values"
 
@@ -91,8 +91,10 @@ def test_one_epoch_training():
     and verify top-1 is numeric and reasonable.
     """
     from scripts.train_st_act import (
-        MViTv2STAct, ClipDataset, compute_class_weights,
-        evaluate, train,
+        MViTv2STAct,
+        ClipDataset,
+        compute_class_weights,
+        train,
     )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -105,10 +107,16 @@ def test_one_epoch_training():
     assert len(val_ds) >= 5, f"Need >=5 val clips, got {len(val_ds)}"
 
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=4, shuffle=True, num_workers=0,
+        train_ds,
+        batch_size=4,
+        shuffle=True,
+        num_workers=0,
     )
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=4, shuffle=False, num_workers=0,
+        val_ds,
+        batch_size=4,
+        shuffle=False,
+        num_workers=0,
     )
 
     # Model (freeze backbone for speed — just testing plumbing)
@@ -122,19 +130,26 @@ def test_one_epoch_training():
 
     # Optimizer (only head params since backbone frozen)
     optimizer = torch.optim.AdamW(
-        model.classifier.parameters(), lr=1e-3, weight_decay=1e-4,
+        model.classifier.parameters(),
+        lr=1e-3,
+        weight_decay=1e-4,
     )
 
     # Scheduler
     cosine_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=1,
+        optimizer,
+        T_max=1,
     )
     warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
-        optimizer, start_factor=0.1, end_factor=1.0, total_iters=0,
+        optimizer,
+        start_factor=0.1,
+        end_factor=1.0,
+        total_iters=0,
     )
 
     # Train for 1 epoch
     import tempfile
+
     with tempfile.TemporaryDirectory() as tmpdir:
         metrics = train(
             model=model,
@@ -160,10 +175,8 @@ def test_one_epoch_training():
     top5 = metrics["top5"]
 
     # top-1 should be reasonable after 1 epoch (not 0, not perfect)
-    assert 0.0 <= top1 < 1.0, \
-        f"top1={top1} outside expected range [0, 1.0)"
-    assert 0.0 <= top5 <= 1.0, \
-        f"top5={top5} outside expected range [0, 1.0]"
+    assert 0.0 <= top1 < 1.0, f"top1={top1} outside expected range [0, 1.0)"
+    assert 0.0 <= top5 <= 1.0, f"top5={top5} outside expected range [0, 1.0]"
 
     # With frozen backbone + cosine LR T_max=1, LR decays to 0 after step 1,
     # so top-1 may be at chance (~0.013) or lower for small val sets.

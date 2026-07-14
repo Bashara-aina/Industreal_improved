@@ -10,10 +10,9 @@ Usage:
 Caches per-recording predictions to {save_dir}/cache/ as .npz files for
 subsequent parameter sweeps (skip_inference=True).
 """
+
 import json
-import pickle
 import sys
-import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -26,8 +25,9 @@ _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD = (0.229, 0.224, 0.225)
 
 
-def kalman_smooth(seq: np.ndarray, process_noise: float = 0.01,
-                  measurement_noise: float = 0.05) -> np.ndarray:
+def kalman_smooth(
+    seq: np.ndarray, process_noise: float = 0.01, measurement_noise: float = 0.05
+) -> np.ndarray:
     """Rauch-Tung-Striebel (RTS) Kalman smoother per channel.
 
     Proper implementation: saves filtered and predicted states/covariances
@@ -110,12 +110,16 @@ def run_inference(args):
 
     print("Building model...")
     model = POPWMultiTaskModel(
-        pretrained=True, backbone_type='convnext_tiny',
-        use_hand_film=True, use_headpose_film=True,
-        use_videomae=False, train_pose=True,
+        pretrained=True,
+        backbone_type="convnext_tiny",
+        use_hand_film=True,
+        use_headpose_film=True,
+        use_videomae=False,
+        train_pose=True,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = 1
     model = model.cuda().eval()
@@ -124,7 +128,11 @@ def run_inference(args):
     print("Loading val dataset...")
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False,
+        val_ds,
+        batch_size=1,
+        num_workers=0,
+        collate_fn=collate_fn,
+        shuffle=False,
     )
     print(f"Val dataset: {len(val_ds)} frames")
 
@@ -160,12 +168,14 @@ def run_inference(args):
         meta = targets.get("metadata", [])
         rec_id = meta[0].get("recording_id", "unknown")
 
-        recording_preds[rec_id].append({
-            "pred_fwd": pred_fwd,
-            "pred_up": pred_up,
-            "gt_fwd": gt_fwd,
-            "gt_up": gt_up,
-        })
+        recording_preds[rec_id].append(
+            {
+                "pred_fwd": pred_fwd,
+                "pred_up": pred_up,
+                "gt_fwd": gt_fwd,
+                "gt_up": gt_up,
+            }
+        )
         n += 1
         if n % 2000 == 0:
             print(f"  processed {n} frames across {len(recording_preds)} recordings...")
@@ -179,15 +189,21 @@ def load_cached_predictions(cache_dir: Path):
     recording_preds = defaultdict(list)
     for fpath in sorted(cache_dir.glob("*.npz")):
         data = np.load(fpath)
-        rec_id = data["recording_id"].item() if data["recording_id"].ndim == 0 else str(data["recording_id"])
+        rec_id = (
+            data["recording_id"].item()
+            if data["recording_id"].ndim == 0
+            else str(data["recording_id"])
+        )
         n_frames = data["pred_fwd"].shape[0]
         for t in range(n_frames):
-            recording_preds[rec_id].append({
-                "pred_fwd": data["pred_fwd"][t],
-                "pred_up": data["pred_up"][t],
-                "gt_fwd": data["gt_fwd"][t],
-                "gt_up": data["gt_up"][t],
-            })
+            recording_preds[rec_id].append(
+                {
+                    "pred_fwd": data["pred_fwd"][t],
+                    "pred_up": data["pred_up"][t],
+                    "gt_fwd": data["gt_fwd"][t],
+                    "gt_up": data["gt_up"][t],
+                }
+            )
     total = sum(len(v) for v in recording_preds.values())
     return recording_preds, total
 
@@ -205,8 +221,10 @@ def cache_predictions(recording_preds, cache_dir: Path):
         np.savez_compressed(
             cache_dir / f"{safe_id}.npz",
             recording_id=rec_id,
-            pred_fwd=pred_fwd, pred_up=pred_up,
-            gt_fwd=gt_fwd, gt_up=gt_up,
+            pred_fwd=pred_fwd,
+            pred_up=pred_up,
+            gt_fwd=gt_fwd,
+            gt_up=gt_up,
         )
     print(f"Cached {len(recording_preds)} recordings to {cache_dir}")
 
@@ -260,17 +278,25 @@ def eval_smoothing(recording_preds, n_total, args):
     sm_up_arr = np.array(all_smoothed_up_errors)
 
     total_frames_all = sum(r["n"] for r in per_recording_results.values()) or 1
-    weighted_sf_fwd = sum(r["single_frame_fwd_MAE_deg"] * r["n"]
-                          for r in per_recording_results.values()) / total_frames_all
-    weighted_sf_up = sum(r["single_frame_up_MAE_deg"] * r["n"]
-                         for r in per_recording_results.values()) / total_frames_all
-    weighted_sm_fwd = sum(r["smoothed_fwd_MAE_deg"] * r["n"]
-                          for r in per_recording_results.values()) / total_frames_all
-    weighted_sm_up = sum(r["smoothed_up_MAE_deg"] * r["n"]
-                         for r in per_recording_results.values()) / total_frames_all
+    weighted_sf_fwd = (
+        sum(r["single_frame_fwd_MAE_deg"] * r["n"] for r in per_recording_results.values())
+        / total_frames_all
+    )
+    weighted_sf_up = (
+        sum(r["single_frame_up_MAE_deg"] * r["n"] for r in per_recording_results.values())
+        / total_frames_all
+    )
+    weighted_sm_fwd = (
+        sum(r["smoothed_fwd_MAE_deg"] * r["n"] for r in per_recording_results.values())
+        / total_frames_all
+    )
+    weighted_sm_up = (
+        sum(r["smoothed_up_MAE_deg"] * r["n"] for r in per_recording_results.values())
+        / total_frames_all
+    )
 
     summary = {
-        "checkpoint": args.checkpoint if hasattr(args, 'checkpoint') else "cached",
+        "checkpoint": args.checkpoint if hasattr(args, "checkpoint") else "cached",
         "n_frames_total": n_total,
         "n_recordings": len(per_recording_results),
         "kalman_params": {
@@ -301,17 +327,18 @@ def eval_smoothing(recording_preds, n_total, args):
         "improvement": {
             "forward_deg": float(weighted_sf_fwd - weighted_sm_fwd),
             "forward_pct": float((weighted_sf_fwd - weighted_sm_fwd) / weighted_sf_fwd * 100)
-                          if weighted_sf_fwd > 0 else 0.0,
+            if weighted_sf_fwd > 0
+            else 0.0,
             "up_deg": float(weighted_sf_up - weighted_sm_up),
             "up_pct": float((weighted_sf_up - weighted_sm_up) / weighted_sf_up * 100)
-                      if weighted_sf_up > 0 else 0.0,
+            if weighted_sf_up > 0
+            else 0.0,
         },
     }
     return summary, per_recording_results
 
 
-def print_summary(summary, n_total, per_recording_results,
-                  process_noise, measurement_noise):
+def print_summary(summary, n_total, per_recording_results, process_noise, measurement_noise):
     """Print results summary."""
     sf = summary["single_frame"]
     sm = summary["smoothed"]
@@ -321,18 +348,26 @@ def print_summary(summary, n_total, per_recording_results,
     print("HEAD POSE KALMAN SMOOTHING RESULTS")
     print("=" * 60)
     print(f"\nSingle-frame (deployment-honest) — per-recording mean:")
-    print(f"  Forward MAE:  {sf['forward_MAE_deg']:.2f} deg  "
-          f"(weighted: {sf['forward_MAE_deg_weighted']:.2f} deg)")
-    print(f"  Up-vector MAE: {sf['up_MAE_deg']:.2f} deg  "
-          f"(weighted: {sf['up_MAE_deg_weighted']:.2f} deg)")
+    print(
+        f"  Forward MAE:  {sf['forward_MAE_deg']:.2f} deg  "
+        f"(weighted: {sf['forward_MAE_deg_weighted']:.2f} deg)"
+    )
+    print(
+        f"  Up-vector MAE: {sf['up_MAE_deg']:.2f} deg  "
+        f"(weighted: {sf['up_MAE_deg_weighted']:.2f} deg)"
+    )
     print(f"  Forward median: {sf['forward_MAE_deg_median']:.2f} deg")
     print(f"  Up-vector median: {sf['up_MAE_deg_median']:.2f} deg")
 
     print(f"\nKalman-smoothed — per-recording mean:")
-    print(f"  Forward MAE:  {sm['forward_MAE_deg']:.2f} deg  "
-          f"(weighted: {sm['forward_MAE_deg_weighted']:.2f} deg)")
-    print(f"  Up-vector MAE: {sm['up_MAE_deg']:.2f} deg  "
-          f"(weighted: {sm['up_MAE_deg_weighted']:.2f} deg)")
+    print(
+        f"  Forward MAE:  {sm['forward_MAE_deg']:.2f} deg  "
+        f"(weighted: {sm['forward_MAE_deg_weighted']:.2f} deg)"
+    )
+    print(
+        f"  Up-vector MAE: {sm['up_MAE_deg']:.2f} deg  "
+        f"(weighted: {sm['up_MAE_deg_weighted']:.2f} deg)"
+    )
     print(f"  Forward median: {sm['forward_MAE_deg_median']:.2f} deg")
     print(f"  Up-vector median: {sm['up_MAE_deg_median']:.2f} deg")
 
@@ -343,35 +378,41 @@ def print_summary(summary, n_total, per_recording_results,
     print(f"\nProcessed {n_total} frames across {len(per_recording_results)} recordings")
     print(f"Kalman params: Q={process_noise}, R={measurement_noise}")
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Per-recording breakdown:")
-    print(f"{'Recording':>20s}  {'N':>5s}  {'SF-fwd':>8s}  {'SM-fwd':>8s}  "
-          f"{'SF-up':>8s}  {'SM-up':>8s}")
-    print(f"{'-'*60}")
+    print(
+        f"{'Recording':>20s}  {'N':>5s}  {'SF-fwd':>8s}  {'SM-fwd':>8s}  "
+        f"{'SF-up':>8s}  {'SM-up':>8s}"
+    )
+    print(f"{'-' * 60}")
     for rid in sorted(per_recording_results.keys()):
         r = per_recording_results[rid]
-        print(f"{rid:>20s}  {r['n']:5d}  {r['single_frame_fwd_MAE_deg']:8.2f}  "
-              f"{r['smoothed_fwd_MAE_deg']:8.2f}  {r['single_frame_up_MAE_deg']:8.2f}  "
-              f"{r['smoothed_up_MAE_deg']:8.2f}")
+        print(
+            f"{rid:>20s}  {r['n']:5d}  {r['single_frame_fwd_MAE_deg']:8.2f}  "
+            f"{r['smoothed_fwd_MAE_deg']:8.2f}  {r['single_frame_up_MAE_deg']:8.2f}  "
+            f"{r['smoothed_up_MAE_deg']:8.2f}"
+        )
     print("=" * 60)
 
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--checkpoint",
-                        default="src/runs/rf_stages/checkpoints/best.pth")
+    parser.add_argument("--checkpoint", default="src/runs/rf_stages/checkpoints/best.pth")
     parser.add_argument("--max-batches", type=int, default=200000)
-    parser.add_argument("--save-dir",
-                        default="src/runs/rf_stages/checkpoints/pose_kalman_eval")
+    parser.add_argument("--save-dir", default="src/runs/rf_stages/checkpoints/pose_kalman_eval")
     parser.add_argument("--process-noise", type=float, default=0.01)
     parser.add_argument("--measurement-noise", type=float, default=0.05)
-    parser.add_argument("--cache-only", action="store_true",
-                        help="Only cache predictions, skip eval")
-    parser.add_argument("--skip-inference", action="store_true",
-                        help="Load cached predictions instead of running inference")
-    parser.add_argument("--cache-dir",
-                        default="")
+    parser.add_argument(
+        "--cache-only", action="store_true", help="Only cache predictions, skip eval"
+    )
+    parser.add_argument(
+        "--skip-inference",
+        action="store_true",
+        help="Load cached predictions instead of running inference",
+    )
+    parser.add_argument("--cache-dir", default="")
     args = parser.parse_args()
 
     save_dir = Path(args.save_dir)
@@ -409,8 +450,9 @@ def main():
         json.dump(summary, f, indent=2)
     print(f"\nResults saved to {out_path}")
 
-    print_summary(summary, n_total, per_recording_results,
-                  args.process_noise, args.measurement_noise)
+    print_summary(
+        summary, n_total, per_recording_results, args.process_noise, args.measurement_noise
+    )
 
     # Per-recording eval
     per_recording_results = {}
@@ -463,14 +505,22 @@ def main():
 
     # Aggregate: weighted by frame count per recording
     total_frames_all = sum(r["n"] for r in per_recording_results.values()) or 1
-    weighted_sf_fwd = sum(r["single_frame_fwd_MAE_deg"] * r["n"]
-                          for r in per_recording_results.values()) / total_frames_all
-    weighted_sf_up = sum(r["single_frame_up_MAE_deg"] * r["n"]
-                         for r in per_recording_results.values()) / total_frames_all
-    weighted_sm_fwd = sum(r["smoothed_fwd_MAE_deg"] * r["n"]
-                          for r in per_recording_results.values()) / total_frames_all
-    weighted_sm_up = sum(r["smoothed_up_MAE_deg"] * r["n"]
-                         for r in per_recording_results.values()) / total_frames_all
+    weighted_sf_fwd = (
+        sum(r["single_frame_fwd_MAE_deg"] * r["n"] for r in per_recording_results.values())
+        / total_frames_all
+    )
+    weighted_sf_up = (
+        sum(r["single_frame_up_MAE_deg"] * r["n"] for r in per_recording_results.values())
+        / total_frames_all
+    )
+    weighted_sm_fwd = (
+        sum(r["smoothed_fwd_MAE_deg"] * r["n"] for r in per_recording_results.values())
+        / total_frames_all
+    )
+    weighted_sm_up = (
+        sum(r["smoothed_up_MAE_deg"] * r["n"] for r in per_recording_results.values())
+        / total_frames_all
+    )
 
     summary = {
         "checkpoint": args.checkpoint,
@@ -504,10 +554,12 @@ def main():
         "improvement": {
             "forward_deg": float(weighted_sf_fwd - weighted_sm_fwd),
             "forward_pct": float((weighted_sf_fwd - weighted_sm_fwd) / weighted_sf_fwd * 100)
-                          if weighted_sf_fwd > 0 else 0.0,
+            if weighted_sf_fwd > 0
+            else 0.0,
             "up_deg": float(weighted_sf_up - weighted_sm_up),
             "up_pct": float((weighted_sf_up - weighted_sm_up) / weighted_sf_up * 100)
-                      if weighted_sf_up > 0 else 0.0,
+            if weighted_sf_up > 0
+            else 0.0,
         },
     }
 
@@ -546,15 +598,19 @@ def main():
     print(f"Kalman params: Q={args.process_noise}, R={args.measurement_noise}")
 
     # Print per-recording table
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Per-recording breakdown:")
-    print(f"{'Recording':>20s}  {'N':>5s}  {'SF-fwd':>8s}  {'SM-fwd':>8s}  {'SF-up':>8s}  {'SM-up':>8s}")
-    print(f"{'-'*60}")
+    print(
+        f"{'Recording':>20s}  {'N':>5s}  {'SF-fwd':>8s}  {'SM-fwd':>8s}  {'SF-up':>8s}  {'SM-up':>8s}"
+    )
+    print(f"{'-' * 60}")
     for rid in sorted(per_recording_results.keys()):
         r = per_recording_results[rid]
-        print(f"{rid:>20s}  {r['n']:5d}  {r['single_frame_fwd_MAE_deg']:8.2f}  "
-              f"{r['smoothed_fwd_MAE_deg']:8.2f}  {r['single_frame_up_MAE_deg']:8.2f}  "
-              f"{r['smoothed_up_MAE_deg']:8.2f}")
+        print(
+            f"{rid:>20s}  {r['n']:5d}  {r['single_frame_fwd_MAE_deg']:8.2f}  "
+            f"{r['smoothed_fwd_MAE_deg']:8.2f}  {r['single_frame_up_MAE_deg']:8.2f}  "
+            f"{r['smoothed_up_MAE_deg']:8.2f}"
+        )
     print("=" * 60)
 
 

@@ -66,9 +66,7 @@ def main() -> None:
             print(f"  WARNING: {split_dir} not found, skipping")
             continue
 
-        recordings = sorted(
-            d.name for d in split_dir.iterdir() if d.is_dir()
-        )
+        recordings = sorted(d.name for d in split_dir.iterdir() if d.is_dir())
         subject_ids = sorted(extract_subject_ids(recordings))
 
         splits_data[split_name] = {
@@ -87,8 +85,7 @@ def main() -> None:
     for split_name in ("train", "val", "test"):
         data = splits_data[split_name]
         print(f"[{split_name.upper()}]")
-        print(f"  Subjects ({data['n_subjects']}): "
-              f"{', '.join(data['subject_ids'])}")
+        print(f"  Subjects ({data['n_subjects']}): {', '.join(data['subject_ids'])}")
         print(f"  Recordings ({data['n_recordings']}):")
         for rec in data["recordings"]:
             print(f"    {rec}")
@@ -113,8 +110,7 @@ def main() -> None:
         ("No train/val overlap", train_ids.isdisjoint(val_ids)),
         ("No train/test overlap", train_ids.isdisjoint(test_ids)),
         ("No val/test overlap", val_ids.isdisjoint(test_ids)),
-        ("Val matches bootstrap_ci.json",
-         val_ids == _KNOWN_VAL),
+        ("Val matches bootstrap_ci.json", val_ids == _KNOWN_VAL),
     ]
 
     all_pass = True
@@ -129,32 +125,41 @@ def main() -> None:
     print("-" * 72)
     print("GENERATED CONFIG (copy into split_config.py)")
     print("-" * 72)
-    print(f"""
+    print(
+        f"""
 TRAIN_SUBJECTS = {json.dumps(sorted(train_ids))}
 VAL_SUBJECTS   = {json.dumps(sorted(val_ids))}
 TEST_SUBJECTS  = {json.dumps(sorted(test_ids))}
-""".strip())
+""".strip()
+    )
 
     # === Manifest snippet ===
     print("-" * 72)
     print("GENERATED MANIFEST (copy into config/splits/industreal_split.json)")
     print("-" * 72)
-    manifest = OrderedDict([
-        ("_version", "1.0"),
-        ("_date", "2026-07-08"),
-        ("train", sorted(train_ids)),
-        ("val", sorted(val_ids)),
-        ("test", sorted(test_ids)),
-        ("metadata", OrderedDict([
-            ("n_train_subjects", len(train_ids)),
-            ("n_val_subjects", len(val_ids)),
-            ("n_test_subjects", len(test_ids)),
-            ("n_train_recordings", splits_data["train"]["n_recordings"]),
-            ("n_val_recordings", splits_data["val"]["n_recordings"]),
-            ("n_test_recordings", splits_data["test"]["n_recordings"]),
-            ("total_subjects", len(all_ids)),
-        ])),
-    ])
+    manifest = OrderedDict(
+        [
+            ("_version", "1.0"),
+            ("_date", "2026-07-08"),
+            ("train", sorted(train_ids)),
+            ("val", sorted(val_ids)),
+            ("test", sorted(test_ids)),
+            (
+                "metadata",
+                OrderedDict(
+                    [
+                        ("n_train_subjects", len(train_ids)),
+                        ("n_val_subjects", len(val_ids)),
+                        ("n_test_subjects", len(test_ids)),
+                        ("n_train_recordings", splits_data["train"]["n_recordings"]),
+                        ("n_val_recordings", splits_data["val"]["n_recordings"]),
+                        ("n_test_recordings", splits_data["test"]["n_recordings"]),
+                        ("total_subjects", len(all_ids)),
+                    ]
+                ),
+            ),
+        ]
+    )
     print(json.dumps(manifest, indent=2))
 
     print()
@@ -168,4 +173,5 @@ TEST_SUBJECTS  = {json.dumps(sorted(test_ids))}
 
 if __name__ == "__main__":
     import json  # noqa: F811 — needed in the module scope for the snippet print
+
     main()

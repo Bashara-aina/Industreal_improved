@@ -42,13 +42,13 @@ from src.models.model import ConvNeXtBackbone
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
+    format="%(asctime)s [%(levelname)s] %(message)s",
 )
-logger = logging.getLogger('activity_linear_probe')
+logger = logging.getLogger("activity_linear_probe")
 logger.setLevel(logging.INFO)
 
 # Suppress noisy loggers from imports
-for _log_name in ['src.data.industreal_dataset', 'src']:
+for _log_name in ["src.data.industreal_dataset", "src"]:
     logging.getLogger(_log_name).setLevel(logging.WARNING)
 
 
@@ -59,8 +59,12 @@ def normalize_images(images: torch.Tensor) -> torch.Tensor:
     """
     if images.dtype == torch.uint8:
         images = images.float().div_(255.0)
-        mean = torch.tensor(C.IMAGENET_MEAN, device=images.device, dtype=images.dtype).view(1, 3, 1, 1)
-        std = torch.tensor(C.IMAGENET_STD, device=images.device, dtype=images.dtype).view(1, 3, 1, 1)
+        mean = torch.tensor(C.IMAGENET_MEAN, device=images.device, dtype=images.dtype).view(
+            1, 3, 1, 1
+        )
+        std = torch.tensor(C.IMAGENET_STD, device=images.device, dtype=images.dtype).view(
+            1, 3, 1, 1
+        )
         images = (images - mean) / std
     return images
 
@@ -134,8 +138,8 @@ def compute_clip_top1(
 
         # Split into non-overlapping T-frame clips
         for i in range(0, len(labels), clip_size):
-            clip_labels = labels[i:i + clip_size]
-            clip_preds = preds[i:i + clip_size]
+            clip_labels = labels[i : i + clip_size]
+            clip_preds = preds[i : i + clip_size]
 
             # Skip clips with no valid labels (-1 sentinel)
             valid_mask = [lbl >= 0 for lbl in clip_labels]
@@ -196,7 +200,7 @@ def extract_features_and_labels(
 
     for batch_idx, (images, targets) in enumerate(loader):
         images = images.to(device, non_blocking=True)
-        labels = targets['activity']  # [B] tensor with possible -1 sentinels
+        labels = targets["activity"]  # [B] tensor with possible -1 sentinels
 
         # [FIX] Skip samples with -1 labels to avoid CrossEntropyLoss divide-by-zero
         # when a batch has ALL -1 labels (15% of val batches).
@@ -228,34 +232,34 @@ def extract_features_and_labels(
 
 
 def main():
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    logger.info(f'Device: {device}')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Device: {device}")
 
     # Paths
     project_root = Path(__file__).resolve().parent.parent.parent
-    runs_root = project_root / 'src' / 'runs'
-    checkpoint_dir = runs_root / 'rf_stages' / 'checkpoints'
-    checkpoint_path = checkpoint_dir / 'best.pth'
-    output_json = checkpoint_dir / 'activity_linear_probe.json'
+    runs_root = project_root / "src" / "runs"
+    checkpoint_dir = runs_root / "rf_stages" / "checkpoints"
+    checkpoint_path = checkpoint_dir / "best.pth"
+    output_json = checkpoint_dir / "activity_linear_probe.json"
 
     if not checkpoint_path.exists():
-        logger.error(f'Checkpoint not found: {checkpoint_path}')
+        logger.error(f"Checkpoint not found: {checkpoint_path}")
         sys.exit(1)
 
     # --- Load model and extract backbone ---
-    logger.info(f'Loading checkpoint from {checkpoint_path}')
-    checkpoint = torch.load(checkpoint_path, map_location='cpu')
-    model_state = checkpoint['model']
+    logger.info(f"Loading checkpoint from {checkpoint_path}")
+    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    model_state = checkpoint["model"]
 
-    num_classes = int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_CLASSES_ACT))
+    num_classes = int(getattr(C, "NUM_ACT_OUTPUTS", C.NUM_CLASSES_ACT))
     backbone_dim = 768  # ConvNeXt-Tiny C5 channels
-    logger.info(f'Backbone dim: {backbone_dim}, Num classes: {num_classes}')
+    logger.info(f"Backbone dim: {backbone_dim}, Num classes: {num_classes}")
 
     # Extract backbone state dict from the full model state
     backbone_state = {}
     for k, v in model_state.items():
-        if k.startswith('backbone.'):
-            backbone_state[k[len('backbone.'):]] = v
+        if k.startswith("backbone."):
+            backbone_state[k[len("backbone.") :]] = v
 
     # Build backbone
     backbone = ConvNeXtBackbone(pretrained=False)
@@ -267,24 +271,26 @@ def main():
     for param in backbone.parameters():
         param.requires_grad = False
 
-    logger.info(f'Backbone loaded with {sum(p.numel() for p in backbone.parameters()):,} parameters (frozen)')
+    logger.info(
+        f"Backbone loaded with {sum(p.numel() for p in backbone.parameters()):,} parameters (frozen)"
+    )
 
     # --- Build datasets ---
-    logger.info('Loading datasets...')
+    logger.info("Loading datasets...")
     # Smaller RAM cache per worker to avoid OOM with multiprocessing
     C.RAM_CACHE_MAX_IMAGES = 200
     train_dataset = IndustRealMultiTaskDataset(
-        split='train',
+        split="train",
         augment=False,
         subset_ratio=1.0,
     )
     val_dataset = IndustRealMultiTaskDataset(
-        split='val',
+        split="val",
         augment=False,
         subset_ratio=1.0,
     )
 
-    logger.info(f'Train samples: {len(train_dataset)}, Val samples: {len(val_dataset)}')
+    logger.info(f"Train samples: {len(train_dataset)}, Val samples: {len(val_dataset)}")
 
     # Use class-balanced sampler for training (reduces -1 label probability)
     train_sampler = train_dataset.get_sampler()
@@ -311,34 +317,34 @@ def main():
 
     # --- Compute majority-class baseline ---
     majority_baseline, majority_class = compute_majority_class_baseline(
-        [lbl for _, t in val_loader for lbl in t['activity'].cpu().numpy().tolist() if lbl >= 0]
+        [lbl for _, t in val_loader for lbl in t["activity"].cpu().numpy().tolist() if lbl >= 0]
     )
-    logger.info(f'Majority-class baseline: {majority_baseline:.4f} (class {majority_class})')
+    logger.info(f"Majority-class baseline: {majority_baseline:.4f} (class {majority_class})")
 
     # --- [PERF] Pre-extract features (one pass) ---
-    logger.info('Pre-extracting training features (one-time pass)...')
+    logger.info("Pre-extracting training features (one-time pass)...")
     feat_start = time.time()
     train_features, train_labels, train_skipped = extract_features_and_labels(
         backbone, train_loader, device, desc="Train"
     )
     logger.info(
-        f'Train features: {train_features.shape} '
-        f'({train_skipped} samples with -1 labels skipped) '
-        f'in {time.time() - feat_start:.0f}s'
+        f"Train features: {train_features.shape} "
+        f"({train_skipped} samples with -1 labels skipped) "
+        f"in {time.time() - feat_start:.0f}s"
     )
 
-    logger.info('Pre-extracting validation features (one-time pass)...')
+    logger.info("Pre-extracting validation features (one-time pass)...")
     val_features, val_labels, val_skipped = extract_features_and_labels(
         backbone, val_loader, device, desc="Val"
     )
     logger.info(
-        f'Val features: {val_features.shape} '
-        f'({val_skipped} samples with -1 labels skipped) '
-        f'in {time.time() - feat_start:.0f}s'
+        f"Val features: {val_features.shape} "
+        f"({val_skipped} samples with -1 labels skipped) "
+        f"in {time.time() - feat_start:.0f}s"
     )
 
     if train_features.shape[0] == 0:
-        logger.error('No valid training samples — cannot train probe.')
+        logger.error("No valid training samples — cannot train probe.")
         sys.exit(1)
 
     # --- Build fast dataloaders from cached features ---
@@ -436,11 +442,11 @@ def main():
         top1_per_frame = val_correct / max(val_total, 1)
 
         logger.info(
-            f'Epoch {epoch:2d}/{num_epochs} | '
-            f'Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} | '
-            f'Val Loss: {val_loss:.4f} Acc: {val_acc:.4f} | '
-            f'Val Top-1: {top1_per_frame:.4f} | '
-            f'Time: {time.time() - epoch_start:.0f}s'
+            f"Epoch {epoch:2d}/{num_epochs} | "
+            f"Train Loss: {train_loss:.4f} Acc: {train_acc:.4f} | "
+            f"Val Loss: {val_loss:.4f} Acc: {val_acc:.4f} | "
+            f"Val Top-1: {top1_per_frame:.4f} | "
+            f"Time: {time.time() - epoch_start:.0f}s"
         )
 
         if val_acc > best_val_top1:
@@ -449,48 +455,48 @@ def main():
         scheduler.step()
 
     # --- Final results ---
-    logger.info('=' * 60)
-    logger.info('LINEAR PROBE RESULTS')
-    logger.info('=' * 60)
-    logger.info(f'Majority-class baseline:           {majority_baseline:.4f}')
-    logger.info(f'Best validation per-frame top-1:   {best_val_top1:.4f}')
+    logger.info("=" * 60)
+    logger.info("LINEAR PROBE RESULTS")
+    logger.info("=" * 60)
+    logger.info(f"Majority-class baseline:           {majority_baseline:.4f}")
+    logger.info(f"Best validation per-frame top-1:   {best_val_top1:.4f}")
 
-    verdict = 'BOTTLENECK' if best_val_top1 < 0.05 else 'BACKBONE HAS SIGNAL'
-    logger.info(f'Verdict: {verdict}')
+    verdict = "BOTTLENECK" if best_val_top1 < 0.05 else "BACKBONE HAS SIGNAL"
+    logger.info(f"Verdict: {verdict}")
 
     # Save results
     results = {
-        'model': 'ConvNeXt-Tiny linear probe',
-        'checkpoint': str(checkpoint_path),
-        'backbone_dim': backbone_dim,
-        'num_classes': num_classes,
-        'num_epochs': num_epochs,
-        'batch_size': 256,  # training on cached features
-        'optimizer': 'AdamW',
-        'lr': 1e-3,
-        'weight_decay': 1e-4,
-        'scheduler': 'CosineAnnealingLR',
-        'gradient_clipping': 'max_norm=1.0',
-        'majority_class_baseline': round(majority_baseline, 6),
-        'majority_class': majority_class,
-        'best_val_per_frame_top1': round(best_val_top1, 6),
-        'train_samples_valid': int(train_features.shape[0]),
-        'val_samples_valid': int(val_features.shape[0]),
-        'verdict': verdict,
-        'note': (
-            'Linear probe on frozen ConvNeXt-Tiny C5 (768-dim) GAP-pooled features. '
-            'If top-1 < 0.05, backbone is the bottleneck and P1.4/P5.1 dead on arrival. '
-            'Features pre-extracted in one pass; -1 labels filtered pre-training.'
+        "model": "ConvNeXt-Tiny linear probe",
+        "checkpoint": str(checkpoint_path),
+        "backbone_dim": backbone_dim,
+        "num_classes": num_classes,
+        "num_epochs": num_epochs,
+        "batch_size": 256,  # training on cached features
+        "optimizer": "AdamW",
+        "lr": 1e-3,
+        "weight_decay": 1e-4,
+        "scheduler": "CosineAnnealingLR",
+        "gradient_clipping": "max_norm=1.0",
+        "majority_class_baseline": round(majority_baseline, 6),
+        "majority_class": majority_class,
+        "best_val_per_frame_top1": round(best_val_top1, 6),
+        "train_samples_valid": int(train_features.shape[0]),
+        "val_samples_valid": int(val_features.shape[0]),
+        "verdict": verdict,
+        "note": (
+            "Linear probe on frozen ConvNeXt-Tiny C5 (768-dim) GAP-pooled features. "
+            "If top-1 < 0.05, backbone is the bottleneck and P1.4/P5.1 dead on arrival. "
+            "Features pre-extracted in one pass; -1 labels filtered pre-training."
         ),
     }
 
     output_json.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_json, 'w') as f:
+    with open(output_json, "w") as f:
         json.dump(results, f, indent=2)
-    logger.info(f'Results saved to {output_json}')
+    logger.info(f"Results saved to {output_json}")
 
     return best_val_top1
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

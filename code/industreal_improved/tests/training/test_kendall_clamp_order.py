@@ -9,6 +9,7 @@ This test verifies:
   1. The helper _clamp_kendall_log_vars exists and is importable from train.py
   2. Out-of-range log_var values get clamped to [-4.0, 2.0] when the helper runs
 """
+
 import torch
 from src.training.losses import MultiTaskLoss
 
@@ -29,6 +30,7 @@ def test_log_var_clamp_happens_before_forward_pass():
 
     # Call the helper we will add in step 3.
     from src.training.train import _clamp_kendall_log_vars
+
     _clamp_kendall_log_vars(crit)
 
     assert crit.log_var_det.item() <= 2.0

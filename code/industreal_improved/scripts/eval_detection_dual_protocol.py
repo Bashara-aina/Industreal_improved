@@ -75,17 +75,23 @@ def load_predictions(path: Path) -> dict:
         sum(len(b) for b in gt_boxes),
         sum(len(b) for b in boxes),
     )
-    return {"boxes": boxes, "scores": scores, "labels": labels,
-            "gt_boxes": gt_boxes, "gt_labels": gt_labels}
+    return {
+        "boxes": boxes,
+        "scores": scores,
+        "labels": labels,
+        "gt_boxes": gt_boxes,
+        "gt_labels": gt_labels,
+    }
 
 
-def filter_annotated_frames(pred_boxes, pred_scores, pred_labels,
-                            gt_boxes, gt_labels):
+def filter_annotated_frames(pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels):
     """Subset to frames where at least one GT box exists."""
     indices = [i for i, gb in enumerate(gt_boxes) if len(gb) > 0]
     logger.info(
         "Annotated-frames subset: %d / %d frames (%.1f%%)",
-        len(indices), len(gt_boxes), 100 * len(indices) / max(len(gt_boxes), 1),
+        len(indices),
+        len(gt_boxes),
+        100 * len(indices) / max(len(gt_boxes), 1),
     )
     return (
         [pred_boxes[i] for i in indices],
@@ -96,20 +102,28 @@ def filter_annotated_frames(pred_boxes, pred_scores, pred_labels,
     )
 
 
-def compute_annotated_frames_mAP(pred_boxes, pred_scores, pred_labels,
-                                 gt_boxes, gt_labels, num_classes):
+def compute_annotated_frames_mAP(
+    pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels, num_classes
+):
     """Compute mAP@0.5 on annotated frames only (WACV 0.838 protocol)."""
     pb_f, ps_f, pl_f, gb_f, gl_f = filter_annotated_frames(
-        pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels,
+        pred_boxes,
+        pred_scores,
+        pred_labels,
+        gt_boxes,
+        gt_labels,
     )
     gt_box_total = sum(len(b) for b in gb_f)
     if gt_box_total == 0:
         raise AssertionError(
-            "gt_box_total == 0 in annotated-frames subset — "
-            "no GT boxes found. Cannot compute mAP."
+            "gt_box_total == 0 in annotated-frames subset — no GT boxes found. Cannot compute mAP."
         )
     result = compute_ap_per_class(
-        pb_f, ps_f, pl_f, gb_f, gl_f,
+        pb_f,
+        ps_f,
+        pl_f,
+        gb_f,
+        gl_f,
         iou_thresh=0.5,
         num_classes=num_classes,
     )
@@ -126,18 +140,21 @@ def compute_annotated_frames_mAP(pred_boxes, pred_scores, pred_labels,
     }
 
 
-def compute_entire_video_mAP(pred_boxes, pred_scores, pred_labels,
-                             gt_boxes, gt_labels, num_classes):
+def compute_entire_video_mAP(
+    pred_boxes, pred_scores, pred_labels, gt_boxes, gt_labels, num_classes
+):
     """Compute mAP@0.5 on ALL frames (WACV 0.641 protocol)."""
     gt_box_total = sum(len(b) for b in gt_boxes)
     if gt_box_total == 0:
         raise AssertionError(
-            "gt_box_total == 0 in entire eval set — no GT boxes found. "
-            "Cannot compute mAP."
+            "gt_box_total == 0 in entire eval set — no GT boxes found. Cannot compute mAP."
         )
     result = compute_ap_per_class_all_frames(
-        pred_boxes, pred_scores, pred_labels,
-        gt_boxes, gt_labels,
+        pred_boxes,
+        pred_scores,
+        pred_labels,
+        gt_boxes,
+        gt_labels,
         iou_thresh=0.5,
         num_classes=num_classes,
     )
@@ -150,23 +167,28 @@ def compute_entire_video_mAP(pred_boxes, pred_scores, pred_labels,
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Dual-protocol detection mAP@0.5 evaluation"
-    )
+    parser = argparse.ArgumentParser(description="Dual-protocol detection mAP@0.5 evaluation")
     parser.add_argument(
-        "--predictions", type=str, default=str(_DEFAULT_PREDICTIONS),
+        "--predictions",
+        type=str,
+        default=str(_DEFAULT_PREDICTIONS),
         help="Path to per_frame_predictions.json",
     )
     parser.add_argument(
-        "--out", type=str, default=str(_DEFAULT_OUTPUT),
+        "--out",
+        type=str,
+        default=str(_DEFAULT_OUTPUT),
         help="Output JSON path",
     )
     parser.add_argument(
-        "--num_classes", type=int, default=C.NUM_DET_CLASSES,
+        "--num_classes",
+        type=int,
+        default=C.NUM_DET_CLASSES,
         help="Number of detection classes (default: %d)" % C.NUM_DET_CLASSES,
     )
     parser.add_argument(
-        "--quiet", action="store_true",
+        "--quiet",
+        action="store_true",
         help="Suppress INFO logging (errors still print)",
     )
     args = parser.parse_args()
@@ -206,39 +228,52 @@ def main():
     logger.info("Protocol 1: ANNOTATED-FRAMES (subset to frames with >= 1 GT)")
     t1 = time.time()
     af_result = compute_annotated_frames_mAP(
-        data["boxes"], data["scores"], data["labels"],
-        data["gt_boxes"], data["gt_labels"],
+        data["boxes"],
+        data["scores"],
+        data["labels"],
+        data["gt_boxes"],
+        data["gt_labels"],
         num_classes=num_classes,
     )
     t_af = time.time() - t1
     logger.info("  mAP@0.5 (COCO-24):          %.4f", af_result["det_mAP50"])
     logger.info("  mAP@0.5 (present-class avg): %.4f", af_result["det_mAP50_pc"])
-    logger.info("  Frames evaluated: %d  GT boxes: %d  Time: %.1fs",
-                af_result["n_frames"], af_result["gt_box_total"], t_af)
+    logger.info(
+        "  Frames evaluated: %d  GT boxes: %d  Time: %.1fs",
+        af_result["n_frames"],
+        af_result["gt_box_total"],
+        t_af,
+    )
 
     # ── Protocol 2: Entire video (WACV 0.641) ──────────────────────────────
     logger.info("=" * 60)
     logger.info("Protocol 2: ENTIRE-VIDEO (all %d frames, including empty)", len(data["gt_boxes"]))
     t2 = time.time()
     ev_result = compute_entire_video_mAP(
-        data["boxes"], data["scores"], data["labels"],
-        data["gt_boxes"], data["gt_labels"],
+        data["boxes"],
+        data["scores"],
+        data["labels"],
+        data["gt_boxes"],
+        data["gt_labels"],
         num_classes=num_classes,
     )
     t_ev = time.time() - t2
     logger.info("  mAP@0.5 (all frames):       %.4f", ev_result["det_mAP50_all_frames"])
-    logger.info("  Frames evaluated: %d  GT boxes: %d  Time: %.1fs",
-                ev_result["n_frames"], ev_result["gt_box_total"], t_ev)
+    logger.info(
+        "  Frames evaluated: %d  GT boxes: %d  Time: %.1fs",
+        ev_result["n_frames"],
+        ev_result["gt_box_total"],
+        t_ev,
+    )
 
     # ── Summary ─────────────────────────────────────────────────────────────
     logger.info("=" * 60)
     logger.info("DUAL-PROTOCOL DETECTION mAP@0.5 SUMMARY")
-    logger.info("  Annotated-frames mAP@0.5  (WACV 0.838)  →  %.4f",
-                af_result["det_mAP50"])
-    logger.info("  Annotated-frames PC mAP@0.5 (WACV 0.838) →  %.4f",
-                af_result["det_mAP50_pc"])
-    logger.info("  Entire-video mAP@0.5      (WACV 0.641)  →  %.4f",
-                ev_result["det_mAP50_all_frames"])
+    logger.info("  Annotated-frames mAP@0.5  (WACV 0.838)  →  %.4f", af_result["det_mAP50"])
+    logger.info("  Annotated-frames PC mAP@0.5 (WACV 0.838) →  %.4f", af_result["det_mAP50_pc"])
+    logger.info(
+        "  Entire-video mAP@0.5      (WACV 0.641)  →  %.4f", ev_result["det_mAP50_all_frames"]
+    )
     logger.info("  Total time: %.1fs", time.time() - t0)
 
     # ── Save ────────────────────────────────────────────────────────────────

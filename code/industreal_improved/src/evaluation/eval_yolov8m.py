@@ -42,14 +42,12 @@ if str(_SRC.parent) not in sys.path:
     sys.path.insert(0, str(_SRC.parent))
 
 from src import config as C
-from src.evaluation.evaluate import compute_det_metrics_extended, decode_boxes
+from src.evaluation.evaluate import compute_det_metrics_extended
 from src.data.industreal_dataset import IndustRealMultiTaskDataset as IndustRealDataset, collate_fn
 
 logger = logging.getLogger("eval_yolov8m")
 
-_OUTPUT_PATH = Path(
-    "src/runs/rf_stages/checkpoints/eval_yolov8m_results.json"
-)
+_OUTPUT_PATH = Path("src/runs/rf_stages/checkpoints/eval_yolov8m_results.json")
 
 # ── YOLOv8m weight URLs ─────────────────────────────────────────────────
 INDUSTREAL_WEIGHT_URL = (
@@ -79,9 +77,7 @@ def _download_weights(
         RuntimeError: If the download fails and no cached copy exists.
     """
     if save_path is None:
-        save_path = Path(
-            "src/runs/rf_stages/checkpoints/yolov8m_industreal.pt"
-        )
+        save_path = Path("src/runs/rf_stages/checkpoints/yolov8m_industreal.pt")
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -125,9 +121,7 @@ def _build_yolo_model(
     try:
         from ultralytics import YOLO
     except ImportError:
-        raise ImportError(
-            "ultralytics is required. Install: pip install ultralytics"
-        )
+        raise ImportError("ultralytics is required. Install: pip install ultralytics")
 
     if weight_path is not None and weight_path.exists():
         logger.info("Loading YOLOv8m from: %s", weight_path)
@@ -192,8 +186,7 @@ def _verify_class_mapping(
 
     unique_classes = set(all_det_classes)
     logger.info(
-        "Verification: %d detections across %d frames. "
-        "Unique class IDs detected: %s",
+        "Verification: %d detections across %d frames. Unique class IDs detected: %s",
         len(all_det_classes),
         num_verify_frames,
         sorted(unique_classes),
@@ -212,8 +205,7 @@ def _verify_class_mapping(
         return True
     else:
         logger.warning(
-            "Class mapping MISMATCH: detected classes in [%d, %d) "
-            "but expecting [0, %d)",
+            "Class mapping MISMATCH: detected classes in [%d, %d) but expecting [0, %d)",
             min_class,
             max_class + 1,
             C.NUM_DET_CLASSES,
@@ -306,9 +298,7 @@ def run_yolov8m_eval(
     )
 
     # ── Class mapping verification (step 3 per Opus) ─────────────────────
-    mapping_ok = _verify_class_mapping(
-        yolo, val_dataset, num_verify_frames=verify_frames
-    )
+    mapping_ok = _verify_class_mapping(yolo, val_dataset, num_verify_frames=verify_frames)
     if not mapping_ok:
         logger.warning(
             "Class mapping verification flagged potential issues. "
@@ -354,7 +344,9 @@ def run_yolov8m_eval(
 
         # Convert to evaluation format.
         boxes_list, scores_list, labels_list = _yolo_to_eval_format(
-            results, img_w=C.IMG_WIDTH, img_h=C.IMG_HEIGHT,
+            results,
+            img_w=C.IMG_WIDTH,
+            img_h=C.IMG_HEIGHT,
         )
         # Both YOLOv8 and the dataset's gt_classes are 0-indexed
         # (dataset converts COCO 1-indexed -> 0-indexed via -1).
@@ -367,18 +359,16 @@ def run_yolov8m_eval(
         # Ground truth.
         detection_list = targets["detection"]
         for i in range(B):
-            dg_boxes.append(
-                detection_list[i]["boxes"].cpu().numpy()
-            )
-            dg_labels.append(
-                detection_list[i]["labels"].cpu().numpy()
-            )
+            dg_boxes.append(detection_list[i]["boxes"].cpu().numpy())
+            dg_labels.append(detection_list[i]["labels"].cpu().numpy())
 
         if bi % 10 == 0:
             _dp_total = sum(len(b) for b in boxes_list)
             logger.info(
                 "Batch %d: %d images, %d total detections",
-                bi, B, _dp_total,
+                bi,
+                B,
+                _dp_total,
             )
 
         del images, targets, results
@@ -387,8 +377,11 @@ def run_yolov8m_eval(
     # ── Compute detection metrics ───────────────────────────────────────
     logger.info("Computing detection metrics...")
     det_metrics = compute_det_metrics_extended(
-        dp_boxes, dp_scores, dp_labels,
-        dg_boxes, dg_labels,
+        dp_boxes,
+        dp_scores,
+        dp_labels,
+        dg_boxes,
+        dg_labels,
         num_classes=C.NUM_DET_CLASSES,
     )
 
@@ -398,13 +391,11 @@ def run_yolov8m_eval(
 
     # Metadata.
     det_metrics["_model"] = "yolov8m"
-    det_metrics["_weight_source"] = (
-        str(weight_path) if weight_path else "ultralytics_coco"
-    )
+    det_metrics["_weight_source"] = str(weight_path) if weight_path else "ultralytics_coco"
     det_metrics["_num_images"] = len(dp_boxes)
     det_metrics["_class_mapping_verified"] = mapping_ok
-    det_metrics["_model_nc"] = yolo.model.nc if hasattr(yolo.model, 'nc') else -1
-    det_metrics["_model_names"] = str(yolo.names) if hasattr(yolo, 'names') else ""
+    det_metrics["_model_nc"] = yolo.model.nc if hasattr(yolo.model, "nc") else -1
+    det_metrics["_model_names"] = str(yolo.names) if hasattr(yolo, "names") else ""
 
     logger.info(
         "YOLOv8m results — mAP@0.5: %.4f  mAP@[0.5:0.95]: %.4f  mAP50_pc: %.4f",
@@ -417,9 +408,7 @@ def run_yolov8m_eval(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="YOLOv8m evaluation on IndustReal validation set"
-    )
+    parser = argparse.ArgumentParser(description="YOLOv8m evaluation on IndustReal validation set")
     parser.add_argument(
         "--batch_size",
         type=int,
@@ -443,7 +432,7 @@ def main() -> None:
         type=str,
         default=None,
         help="Explicit local path to IndustReal weights .pt file. "
-             "Overrides --weight_url and download.",
+        "Overrides --weight_url and download.",
     )
     parser.add_argument(
         "--verify_frames",
@@ -497,9 +486,7 @@ def main() -> None:
             json.dumps(v)
             clean[k] = v
         except (TypeError, OverflowError):
-            clean[k] = (
-                float(v) if isinstance(v, (int, float, np.floating)) else str(v)
-            )
+            clean[k] = float(v) if isinstance(v, (int, float, np.floating)) else str(v)
 
     with open(output_path, "w") as f:
         json.dump(clean, f, indent=2, default=str)

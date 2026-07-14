@@ -31,7 +31,7 @@ export OPENBLAS_NUM_THREADS=4
 export NUMEXPR_NUM_THREADS=4
 export MALLOC_ARENA_MAX=4
 export PYTHONHASHSEED=42
-export CUBLAS_WORKSPACE_CONFIG=4096:8
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export CUDA_LAUNCH_BLOCKING=0  # Disable sync for speed (debug off)
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # Limit steps for quick smoke — full run would do --max-epochs 36

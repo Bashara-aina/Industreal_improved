@@ -2,6 +2,7 @@
 
 Uses pre-computed per-component thresholds from the threshold sweep.
 """
+
 import json
 import sys
 from pathlib import Path
@@ -17,12 +18,14 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="src/runs/rf_stages/checkpoints/best.pth")
     parser.add_argument("--save-dir", default="src/runs/rf_stages/checkpoints/psr_per_comp_eval")
     parser.add_argument("--max-batches", type=int, default=999999)
-    parser.add_argument("--threshold-set", default="best",
-                        choices=["global_0.10", "best", "strict", "calibrated"])
+    parser.add_argument(
+        "--threshold-set", default="best", choices=["global_0.10", "best", "strict", "calibrated"]
+    )
     args = parser.parse_args()
 
     Path(args.save_dir).mkdir(parents=True, exist_ok=True)
@@ -32,25 +35,29 @@ def main():
     print(f"Epoch: {ckpt.get('epoch')}")
 
     from src.models.model import POPWMultiTaskModel
+
     model = POPWMultiTaskModel(
         pretrained=True,
-        backbone_type='convnext_tiny',
+        backbone_type="convnext_tiny",
         use_hand_film=True,
         use_headpose_film=True,
         use_videomae=False,
         train_pose=False,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = 1
     model = model.cuda().eval()
 
     from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
     from torch.utils.data import DataLoader
+
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
-    val_loader = DataLoader(val_ds, batch_size=1, num_workers=0,
-                            collate_fn=collate_fn, shuffle=False)
+    val_loader = DataLoader(
+        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False
+    )
 
     # Per-component thresholds
     if args.threshold_set == "global_0.10":
@@ -153,8 +160,9 @@ def main():
             # We want to apply: new_sigmoid = sigmoid(logit - bias) such that new_sigmoid ≈ target_p
             # bias = inverse_sigmoid(actual_p) - inverse_sigmoid(target_p)
             # Using log-odds:
-            bias = np.log(max(actual_p, 1e-6) / max(1 - actual_p, 1e-6)) - \
-                   np.log(max(target_p, 1e-6) / max(1 - target_p, 1e-6))
+            bias = np.log(max(actual_p, 1e-6) / max(1 - actual_p, 1e-6)) - np.log(
+                max(target_p, 1e-6) / max(1 - target_p, 1e-6)
+            )
             # Use this bias to shift logit; threshold at 0.5
             calibrated_thresholds.append(0.5)
             print(f"  comp{c}: pos_frac={mean_pos:.3f}, pred_pos={actual_p:.3f}, bias={bias:.3f}")
@@ -175,8 +183,9 @@ def main():
             # Use bias-corrected sigmoid
             actual_p = sigs.mean()
             target_p = lbls.mean()
-            bias = np.log(max(actual_p, 1e-6) / max(1 - actual_p, 1e-6)) - \
-                   np.log(max(target_p, 1e-6) / max(1 - target_p, 1e-6))
+            bias = np.log(max(actual_p, 1e-6) / max(1 - actual_p, 1e-6)) - np.log(
+                max(target_p, 1e-6) / max(1 - target_p, 1e-6)
+            )
             # Convert sigmoid to logit, subtract bias, then sigmoid again
             logits = np.log(np.clip(sigs, 1e-6, 1 - 1e-6) / np.clip(1 - sigs, 1e-6, 1))
             binary = (1 / (1 + np.exp(-(logits - bias))) > 0.5).astype(np.int32)
@@ -197,19 +206,25 @@ def main():
             "true_pos": int(lbls.sum()),
             "n_valid": int(len(lbls)),
         }
-        print(f"  comp{c}: F1={f1:.4f} (P={prec:.3f}, R={rec:.3f}, thresh={thresholds[c]:.2f}, true_pos={int(lbls.sum())}/{len(lbls)})")
+        print(
+            f"  comp{c}: F1={f1:.4f} (P={prec:.3f}, R={rec:.3f}, thresh={thresholds[c]:.2f}, true_pos={int(lbls.sum())}/{len(lbls)})"
+        )
     avg_f1 = total_f1 / 11
     print(f"\n  Macro-avg F1: {avg_f1:.4f}")
 
     out_path = Path(args.save_dir) / f"metrics_{args.threshold_set}.json"
     with open(out_path, "w") as f:
-        json.dump({
-            "checkpoint": args.checkpoint,
-            "n_frames": n,
-            "threshold_set": args.threshold_set,
-            "macro_f1": float(avg_f1),
-            "per_component": per_comp_results,
-        }, f, indent=2)
+        json.dump(
+            {
+                "checkpoint": args.checkpoint,
+                "n_frames": n,
+                "threshold_set": args.threshold_set,
+                "macro_f1": float(avg_f1),
+                "per_component": per_comp_results,
+            },
+            f,
+            indent=2,
+        )
     print(f"\nSaved to {out_path}")
 
 

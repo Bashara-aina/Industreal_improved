@@ -18,19 +18,16 @@ Usage:
     python scripts/train_st.py --task psr --epochs 30 --output_dir runs/st_psr
     python scripts/train_st.py --task pose --epochs 30 --output_dir runs/st_pose
 """
+
 # DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
-import gc
 import json
 import logging
 import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import torch.optim as optim
 
 # Path setup
@@ -40,6 +37,7 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
         sys.path.insert(0, _p)
 
 import src.config as C
+
 C.NUM_ACT_OUTPUTS = 75
 C.ACT_CLASS_GROUPING = "none"
 
@@ -50,13 +48,10 @@ from src.models.head_pose_geo import (
     geodesic_loss as _geo_loss,
     cosine_rotation_loss as _cos_rot_loss,
 )
-from scripts.train_mtl_mvit import (
-    detection_loss, activity_loss, psr_loss, pose_loss, evaluate
-)
+from scripts.train_mtl_mvit import detection_loss, activity_loss, psr_loss, pose_loss, evaluate
 
 logger = logging.getLogger("train_st")
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
 
 def to_device_targets(targets, device):
@@ -91,22 +86,36 @@ def train_one_task(task: str, args):
 
     _img_size = (args.img_size, args.img_size)
     train_ds = IndustRealMultiTaskDataset(
-        split="train", img_size=_img_size,
-        augment=False, sequence_mode=True, sequence_length=16,
+        split="train",
+        img_size=_img_size,
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
     )
     val_ds = IndustRealMultiTaskDataset(
-        split="val", img_size=_img_size,
-        augment=False, sequence_mode=True, sequence_length=16,
+        split="val",
+        img_size=_img_size,
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
     )
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True,
-        collate_fn=collate_fn_sequences, num_workers=args.num_workers,
-        pin_memory=True, drop_last=True,
+        train_ds,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=collate_fn_sequences,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        drop_last=True,
     )
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False,
-        collate_fn=collate_fn_sequences, num_workers=args.num_workers,
-        pin_memory=True, drop_last=False,
+        val_ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        collate_fn=collate_fn_sequences,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        drop_last=False,
     )
 
     # Build model
@@ -145,21 +154,29 @@ def train_one_task(task: str, args):
             # [Doc 207 §1] Detection augmentation for data-limited det branch
             if task == "det" and args.det_aug:
                 from src.data.det_augment import DetectionAugment
+
                 _det_aug = DetectionAugment(p_flip=0.5, p_color=0.5, p_crop=0.3)
                 images, targets = _det_aug(images, targets)
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
                 outputs = model(images)
                 # Single-task loss: only the selected head
                 if task == "det":
-                    loss = detection_loss(outputs["detection"], targets.get("detection", []),
-                                          use_varifocal=args.varifocal,
-                                          use_wiou_v3=args.wiou_v3)
+                    loss = detection_loss(
+                        outputs["detection"],
+                        targets.get("detection", []),
+                        use_varifocal=args.varifocal,
+                        use_wiou_v3=args.wiou_v3,
+                    )
                 elif task == "act":
                     loss = activity_loss(outputs["activity"], targets["activity"])
                 elif task == "psr":
-                    loss = psr_loss(outputs["psr_logits"], targets.get("psr_labels",
-                                          torch.zeros(images.size(0), 16, 11, device=device)),
-                                    use_focal=True)
+                    loss = psr_loss(
+                        outputs["psr_logits"],
+                        targets.get(
+                            "psr_labels", torch.zeros(images.size(0), 16, 11, device=device)
+                        ),
+                        use_focal=True,
+                    )
                 elif task == "pose":
                     if "head_pose" in targets:
                         hp = targets["head_pose"]
@@ -169,7 +186,9 @@ def train_one_task(task: str, args):
                             pred_6d = outputs["pose_6d"]
                             pred_mat = _rot_6d_to_mat(pred_6d)
                             gt_mat = _rot_6d_to_mat(hp_6d)
-                            loss = _geo_loss(pred_mat, gt_mat) + 0.5 * _cos_rot_loss(pred_mat, gt_mat)
+                            loss = _geo_loss(pred_mat, gt_mat) + 0.5 * _cos_rot_loss(
+                                pred_mat, gt_mat
+                            )
                         else:
                             loss = pose_loss(outputs["pose_6d"], hp_6d)
                     else:
@@ -215,27 +234,37 @@ def train_one_task(task: str, args):
             if is_better:
                 best_metric = val
                 best_epoch = epoch
-                torch.save({
-                    "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
-                    "task": task,
-                    "metric": val,
-                    "metric_key": key,
-                }, output_dir / "best.pt")
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "model_state_dict": model.state_dict(),
+                        "task": task,
+                        "metric": val,
+                        "metric_key": key,
+                    },
+                    output_dir / "best.pt",
+                )
                 logger.info(f"  New best {key}: {val:.4f} (epoch {epoch})")
 
         # Save latest
-        torch.save({
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "task": task,
-        }, output_dir / "latest.pt")
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "task": task,
+            },
+            output_dir / "latest.pt",
+        )
 
     # Final save
-    metric_key = "best_metric_key" if 'key' in dir() else "metric_key"
-    metrics_log = {"task": task, "best_metric": best_metric,
-                   metric_key: key,
-                   "best_epoch": best_epoch, "epochs": args.epochs}
+    metric_key = "best_metric_key" if "key" in dir() else "metric_key"
+    metrics_log = {
+        "task": task,
+        "best_metric": best_metric,
+        metric_key: key,
+        "best_epoch": best_epoch,
+        "epochs": args.epochs,
+    }
     with open(output_dir / "metrics.json", "w") as f:
         json.dump(metrics_log, f, indent=2, default=str)
     logger.info(f"Done. Best {key} = {best_metric:.4f} at epoch {best_epoch}")
@@ -243,27 +272,49 @@ def train_one_task(task: str, args):
 
 def main():
     parser = argparse.ArgumentParser(description="Single-task training for MTL baselines")
-    parser.add_argument("--task", choices=["det", "act", "psr", "pose"], required=True,
-                        help="Which task to train")
+    parser.add_argument(
+        "--task", choices=["det", "act", "psr", "pose"], required=True, help="Which task to train"
+    )
     parser.add_argument("--epochs", type=int, default=30)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--eval-every", type=int, default=5)
     parser.add_argument("--max-batches-per-epoch", type=int, default=4000)
-    parser.add_argument("--det-aug", action="store_true", default=True,
-                        help="[Doc 207 §1] Enable detection-specific augmentation (flip+color+crop). "
-                             "ON by default — zero-param lever with largest published upside for small det datasets.")
-    parser.add_argument("--pose-geodesic", action="store_true", default=False,
-                        help="[Doc 207 §9.3] Use 6D + geodesic rotation loss for pose task "
-                             "(rotation_matrix -> geodesic angular + cosine). "
-                             "Off by default (falls back to fwd/up cosine loss).")
-    parser.add_argument("--varifocal", action="store_true", default=False,
-                        help="Use Varifocal Loss (Zhang CVPR 2021) for detection classification")
-    parser.add_argument("--wiou-v3", action="store_true", default=False,
-                        help="Use WIoU v3 (Tong 2023) for detection box regression")
+    parser.add_argument(
+        "--det-aug",
+        action="store_true",
+        default=True,
+        help="[Doc 207 §1] Enable detection-specific augmentation (flip+color+crop). "
+        "ON by default — zero-param lever with largest published upside for small det datasets.",
+    )
+    parser.add_argument(
+        "--pose-geodesic",
+        action="store_true",
+        default=False,
+        help="[Doc 207 §9.3] Use 6D + geodesic rotation loss for pose task "
+        "(rotation_matrix -> geodesic angular + cosine). "
+        "Off by default (falls back to fwd/up cosine loss).",
+    )
+    parser.add_argument(
+        "--varifocal",
+        action="store_true",
+        default=False,
+        help="Use Varifocal Loss (Zhang CVPR 2021) for detection classification",
+    )
+    parser.add_argument(
+        "--wiou-v3",
+        action="store_true",
+        default=False,
+        help="Use WIoU v3 (Tong 2023) for detection box regression",
+    )
     parser.add_argument("--output-dir", type=str, required=True)
-    parser.add_argument("--img-size", type=int, default=224, help="Input H=W (default 224). 640 matches Schonbeek 2024 YOLOv8 baseline; trade-off: 8x slower, 10x+ mAP improvement expected.")
+    parser.add_argument(
+        "--img-size",
+        type=int,
+        default=224,
+        help="Input H=W (default 224). 640 matches Schonbeek 2024 YOLOv8 baseline; trade-off: 8x slower, 10x+ mAP improvement expected.",
+    )
     parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint .pt")
     args = parser.parse_args()
 

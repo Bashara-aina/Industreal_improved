@@ -15,6 +15,7 @@ Usage:
 [OPUS 201] This script was rewritten from the old ConvNeXt-based
 overfit_50img_cls.py to use the current MViTv2-S MTL architecture.
 """
+
 # DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import json
@@ -24,7 +25,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
@@ -34,10 +34,11 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
         sys.path.insert(0, _p)
 
 import src.config as C
+
 C.NUM_ACT_OUTPUTS = 75
 C.ACT_CLASS_GROUPING = "none"
 
-from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn_sequences
+from src.data.industreal_dataset import IndustRealMultiTaskDataset
 from src.models.mvit_mtl_model import MTLMViTModel, renormalize_pose
 from scripts.train_mtl_mvit import detection_loss, activity_loss, psr_loss, pose_loss
 
@@ -51,8 +52,7 @@ def parse_args():
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--log-every", type=int, default=50)
-    p.add_argument("--output", type=str, default=None,
-                   help="Path to save results JSON")
+    p.add_argument("--output", type=str, default=None, help="Path to save results JSON")
     return p.parse_args()
 
 
@@ -83,9 +83,9 @@ def run_overfit(args):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"OVERFIT PROBE: --head {args.head} (Opus 201 Step 1)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  device={device}  lr={args.lr}  steps={args.steps}  n_clips={args.n_clips}")
     print()
 
@@ -96,8 +96,11 @@ def run_overfit(args):
     C.RAM_CACHE_MAX_IMAGES = 0
     _split = "train" if args.head == "det" else "val"
     ds = IndustRealMultiTaskDataset(
-        split=_split, img_size=(224, 224), augment=False,
-        sequence_mode=True, sequence_length=16,
+        split=_split,
+        img_size=(224, 224),
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
     )
     # Cap search to avoid CPU OOM.
     MAX_SEARCH = min(len(ds), 5000 if args.head == "det" else 2000)
@@ -114,10 +117,12 @@ def run_overfit(args):
             if isinstance(gb, dict):
                 for v in gb.values():
                     if isinstance(v, torch.Tensor) and v.numel() > 0:
-                        has_gt = True; break
+                        has_gt = True
+                        break
                     elif isinstance(v, (list,)):
                         if any(isinstance(b, torch.Tensor) and b.numel() > 0 for b in v):
-                            has_gt = True; break
+                            has_gt = True
+                            break
             if has_gt:
                 valid_indices.append(idx)
         elif args.head == "act":
@@ -137,7 +142,7 @@ def run_overfit(args):
 
     if len(valid_indices) < args.n_clips:
         print(f"  WARNING: Only found {len(valid_indices)} valid clips, using all")
-    used = valid_indices[:args.n_clips]
+    used = valid_indices[: args.n_clips]
     print(f"  Using {len(used)} clips for {args.head} overfit")
     if len(used) == 0:
         print("  FATAL: No valid clips found for this head. Check GT labels.")
@@ -164,17 +169,18 @@ def run_overfit(args):
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
-    print(f"  Total: {total/1e6:.2f}M, Trainable: {trainable/1e6:.2f}M")
+    print(f"  Total: {total / 1e6:.2f}M, Trainable: {trainable / 1e6:.2f}M")
 
     optimizer = optim.AdamW(
         [p for p in model.parameters() if p.requires_grad],
-        lr=args.lr, weight_decay=1e-4,
+        lr=args.lr,
+        weight_decay=1e-4,
     )
 
     # ── Training loop ─────────────────────────────────────────────────
     print(f"\n[3] Overfitting for {args.steps} steps...")
     print(f"  {'Step':>6} | {'Loss':>10} | {'Time':>6}")
-    print(f"  {'-'*30}")
+    print(f"  {'-' * 30}")
 
     history = {"loss": [], "step": []}
     t0 = time.time()
@@ -198,7 +204,7 @@ def run_overfit(args):
         for k in ["head_pose", "psr_labels", "action_label"]:
             if k in sample:
                 v = sample[k]
-                if hasattr(v, 'clone'):
+                if hasattr(v, "clone"):
                     targets[k] = v.clone().to(device)
                 else:
                     targets[k] = v
@@ -212,17 +218,25 @@ def run_overfit(args):
                 boxes = gt_boxes[cam]  # Tensor(N,4) or [Tensor,...]
                 labels = gt_classes.get(cam, None) if isinstance(gt_classes, dict) else None
                 if isinstance(boxes, torch.Tensor) and boxes.numel() > 0:
-                    lbl = labels if isinstance(labels, torch.Tensor) and labels.numel() > 0 else None
+                    lbl = (
+                        labels if isinstance(labels, torch.Tensor) and labels.numel() > 0 else None
+                    )
                     if lbl is not None:
-                        det_list.append({"boxes": boxes.clone().to(device),
-                                         "labels": lbl.clone().to(device)})
+                        det_list.append(
+                            {"boxes": boxes.clone().to(device), "labels": lbl.clone().to(device)}
+                        )
                 elif isinstance(boxes, (list,)):
                     for bi, b in enumerate(boxes):
                         if isinstance(b, torch.Tensor) and b.numel() > 0:
-                            lb = labels[bi] if isinstance(labels, (list,)) and bi < len(labels) else None
+                            lb = (
+                                labels[bi]
+                                if isinstance(labels, (list,)) and bi < len(labels)
+                                else None
+                            )
                             if lb is not None and isinstance(lb, torch.Tensor) and lb.numel() > 0:
-                                det_list.append({"boxes": b.clone().to(device),
-                                                 "labels": lb.clone().to(device)})
+                                det_list.append(
+                                    {"boxes": b.clone().to(device), "labels": lb.clone().to(device)}
+                                )
 
         optimizer.zero_grad()
         outputs = model(images)
@@ -314,21 +328,19 @@ def run_overfit(args):
                 hp = sample.get("head_pose")
                 if hp is not None:
                     if hp.dim() == 2:
-                        hp_6d = hp[hp.size(0)//2, :6].unsqueeze(0).to(device)
+                        hp_6d = hp[hp.size(0) // 2, :6].unsqueeze(0).to(device)
                     else:
-                        hp_6d = hp[:, hp.size(1)//2, :6].to(device)
+                        hp_6d = hp[:, hp.size(1) // 2, :6].to(device)
                     fwd_p, up_p = renormalize_pose(outputs["pose_6d"])
                     fwd_g = F.normalize(hp_6d[:, :3], dim=1)
                     cos_f = (fwd_p * fwd_g).sum(dim=1).clamp(-1, 1)
                     head_metrics.setdefault("fwd_mae", [])
-                    head_metrics["fwd_mae"].append(
-                        torch.rad2deg(torch.acos(cos_f)).item()
-                    )
+                    head_metrics["fwd_mae"].append(torch.rad2deg(torch.acos(cos_f)).item())
 
     # ── Verdict ────────────────────────────────────────────────────────
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"RESULTS for --head {args.head}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     final_loss = history["loss"][-1]
     print(f"  Final train loss: {final_loss:.6f}")
 
@@ -338,7 +350,9 @@ def run_overfit(args):
         if final_loss < 0.1 and acc > 0.8:
             verdict = "PASS — Activity head CAN overfit + eval works."
         elif final_loss < 0.1:
-            verdict = "EVAL BUG — loss→0 but eval metric stays low. Check label space (75↔69 remap)."
+            verdict = (
+                "EVAL BUG — loss→0 but eval metric stays low. Check label space (75↔69 remap)."
+            )
         else:
             verdict = "FAIL — Activity head cannot overfit. Architecture or label-noise problem."
     elif args.head == "psr":
@@ -358,7 +372,9 @@ def run_overfit(args):
         if final_loss < 0.05 and fwd_mae < 15:
             verdict = "PASS — Pose head CAN overfit."
         else:
-            verdict = f"FAIL — Pose head cannot overfit (loss={final_loss:.4f}, MAE={fwd_mae:.1f}°)."
+            verdict = (
+                f"FAIL — Pose head cannot overfit (loss={final_loss:.4f}, MAE={fwd_mae:.1f}°)."
+            )
     elif args.head == "det":
         # For detection, the quick eval is harder — just check loss
         if final_loss < 0.05:
@@ -375,8 +391,10 @@ def run_overfit(args):
         "steps": len(history["loss"]),
         "final_loss": final_loss,
         "verdict": verdict,
-        "head_metrics": {k: (v if isinstance(v, (int, float)) else float(np.mean(v)))
-                         for k, v in head_metrics.items()},
+        "head_metrics": {
+            k: (v if isinstance(v, (int, float)) else float(np.mean(v)))
+            for k, v in head_metrics.items()
+        },
     }
     out_path = args.output or str(_CODE_ROOT / "src" / "runs" / f"overfit_{args.head}_results.json")
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)

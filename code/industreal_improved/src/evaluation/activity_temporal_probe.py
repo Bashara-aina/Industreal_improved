@@ -19,6 +19,7 @@ If not, backbone is truly the bottleneck.
 Usage:
     python -m src.evaluation.activity_temporal_probe
 """
+
 import json
 import logging
 import os
@@ -32,14 +33,13 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
-os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from src import config as C
-from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
+from src.data.industreal_dataset import IndustRealMultiTaskDataset
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-logger = logging.getLogger('activity_temporal_probe')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("activity_temporal_probe")
 
 
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -57,6 +57,7 @@ def normalize(images: torch.Tensor) -> torch.Tensor:
 
 class ClipDataset(Dataset):
     """Stride-based clip dataset for temporal probe."""
+
     def __init__(self, base_ds, clip_len=16, stride=8):
         self.base = base_ds
         self.clip_len = clip_len
@@ -71,19 +72,20 @@ class ClipDataset(Dataset):
         # Walk through base dataset, group frames by recording_id
         # Then form clips of clip_len from each recording
         from collections import defaultdict
+
         recs = defaultdict(list)
         for i in range(len(self.base)):
             sample = self.base[i]  # returns dict from IndustRealMultiTaskDataset.__getitem__
-            meta = sample.get('metadata', {})
-            rec_id = meta.get('recording_id', f'unknown_{i}')
-            frame_num = meta.get('frame_num', i)
+            meta = sample.get("metadata", {})
+            rec_id = meta.get("recording_id", f"unknown_{i}")
+            frame_num = meta.get("frame_num", i)
             recs[rec_id].append((i, frame_num))
 
         self.clips = []
         for rec_id, frames in recs.items():
             frames.sort(key=lambda x: x[1])
             for start in range(0, len(frames) - self.clip_len + 1, self.stride):
-                clip = frames[start:start + self.clip_len]
+                clip = frames[start : start + self.clip_len]
                 if len(clip) == self.clip_len:
                     self.clips.append([idx for idx, _ in clip])
         logger.info(f"Built {len(self.clips)} clips of length {self.clip_len}")
@@ -93,22 +95,29 @@ class ClipDataset(Dataset):
 
     def __getitem__(self, idx):
         frames = [self.base[i] for i in self.clips[idx]]
-        images = torch.stack([f['images']['rgb'] for f in frames])  # [T, 3, H, W]
-        labels = torch.tensor([f['activity'].item() if hasattr(f['activity'], 'item') else int(f['activity'])
-                                for f in frames])  # [T]
+        images = torch.stack([f["images"]["rgb"] for f in frames])  # [T, 3, H, W]
+        labels = torch.tensor(
+            [
+                f["activity"].item() if hasattr(f["activity"], "item") else int(f["activity"])
+                for f in frames
+            ]
+        )  # [T]
         return images, labels
 
 
 def main():
     from src.models.model import ConvNeXtBackbone
     import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument('--clip-len', type=int, default=16)
-    parser.add_argument('--stride', type=int, default=8)
-    parser.add_argument('--batch-size', type=int, default=8)
-    parser.add_argument('--epochs', type=int, default=5)
-    parser.add_argument('--pool', default='mean', choices=['mean', 'max'])
-    parser.add_argument('--save-dir', default='src/runs/rf_stages/checkpoints/activity_temporal_probe')
+    parser.add_argument("--clip-len", type=int, default=16)
+    parser.add_argument("--stride", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--epochs", type=int, default=5)
+    parser.add_argument("--pool", default="mean", choices=["mean", "max"])
+    parser.add_argument(
+        "--save-dir", default="src/runs/rf_stages/checkpoints/activity_temporal_probe"
+    )
     args = parser.parse_args()
 
     Path(args.save_dir).mkdir(parents=True, exist_ok=True)
@@ -116,9 +125,13 @@ def main():
     # Load backbone
     logger.info("Loading backbone...")
     backbone = ConvNeXtBackbone(pretrained=True)
-    ckpt = torch.load('src/runs/rf_stages/checkpoints/best.pth', map_location='cpu', weights_only=False)
+    ckpt = torch.load(
+        "src/runs/rf_stages/checkpoints/best.pth", map_location="cpu", weights_only=False
+    )
     # Extract backbone weights from the multi-task state dict
-    bb_state = {k.replace('backbone.', ''): v for k, v in ckpt['model'].items() if k.startswith('backbone.')}
+    bb_state = {
+        k.replace("backbone.", ""): v for k, v in ckpt["model"].items() if k.startswith("backbone.")
+    }
     backbone.load_state_dict(bb_state, strict=False)
     backbone = backbone.cuda().eval()
     for p in backbone.parameters():
@@ -126,8 +139,8 @@ def main():
     logger.info("Backbone frozen")
 
     # Load datasets
-    train_ds = IndustRealMultiTaskDataset(split='train', sequence_mode=False)
-    val_ds = IndustRealMultiTaskDataset(split='val', sequence_mode=False)
+    train_ds = IndustRealMultiTaskDataset(split="train", sequence_mode=False)
+    val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
 
     # Build clip datasets
     train_clips = ClipDataset(train_ds, clip_len=args.clip_len, stride=args.stride)
@@ -140,21 +153,21 @@ def main():
     logger.info("Pre-extracting train features...")
     t0 = time.time()
     train_feats, train_labels = extract_features(train_loader, backbone)
-    logger.info(f"Train features: {train_feats.shape}, {time.time()-t0:.0f}s")
+    logger.info(f"Train features: {train_feats.shape}, {time.time() - t0:.0f}s")
 
     logger.info("Pre-extracting val features...")
     t0 = time.time()
     val_feats, val_labels = extract_features(val_loader, backbone)
-    logger.info(f"Val features: {val_feats.shape}, {time.time()-t0:.0f}s")
+    logger.info(f"Val features: {val_feats.shape}, {time.time() - t0:.0f}s")
 
     feat_dim = train_feats.shape[-1]
     num_classes = 69
 
     # Aggregate features over clip dimension
-    if args.pool == 'mean':
+    if args.pool == "mean":
         train_pool = train_feats.mean(dim=1)  # [N, feat_dim]
         val_pool = val_feats.mean(dim=1)
-    elif args.pool == 'max':
+    elif args.pool == "max":
         train_pool = train_feats.max(dim=1).values
         val_pool = val_feats.max(dim=1).values
     # Get clip-level labels (majority vote within each clip)
@@ -190,7 +203,7 @@ def main():
         total_loss = 0
         correct = 0
         for i in range(0, len(train_pool), bs):
-            idx = perm[i:i+bs]
+            idx = perm[i : i + bs]
             x = train_pool[idx].cuda()
             y = train_clip_labels[idx].cuda()
             logits = classifier(x)
@@ -210,31 +223,37 @@ def main():
             val_loss = F.cross_entropy(val_logits, val_clip_labels.cuda()).item()
             val_acc = (val_logits.argmax(-1) == val_clip_labels.cuda()).float().mean().item()
 
-        logger.info(f"  Epoch {epoch}/{args.epochs}: train_loss={train_loss:.4f} train_acc={train_acc:.4f} | val_loss={val_loss:.4f} val_acc={val_acc:.4f}")
+        logger.info(
+            f"  Epoch {epoch}/{args.epochs}: train_loss={train_loss:.4f} train_acc={train_acc:.4f} | val_loss={val_loss:.4f} val_acc={val_acc:.4f}"
+        )
         best_val = max(best_val, val_acc)
 
-    logger.info(f"\n{'='*60}")
+    logger.info(f"\n{'=' * 60}")
     logger.info(f"TEMPORAL PROBE RESULTS (clip_len={args.clip_len}, pool={args.pool})")
     logger.info(f"  Majority baseline: {majority_acc:.4f}")
     logger.info(f"  Best val top-1:    {best_val:.4f}")
     logger.info(f"  Per-frame probe:   0.2169 (from previous run)")
     logger.info(f"  Improvement:       {best_val - 0.2169:+.4f}")
-    logger.info(f"  Verdict:           {'TEMPORAL HELPS — TCN+ViT justified' if best_val > 0.27 else 'Backbone is the bottleneck'}")
-    logger.info(f"{'='*60}")
+    logger.info(
+        f"  Verdict:           {'TEMPORAL HELPS — TCN+ViT justified' if best_val > 0.27 else 'Backbone is the bottleneck'}"
+    )
+    logger.info(f"{'=' * 60}")
 
     # Save results
     results = {
-        'clip_len': args.clip_len,
-        'stride': args.stride,
-        'pool': args.pool,
-        'majority_baseline': majority_acc,
-        'val_top1': best_val,
-        'per_frame_probe': 0.2169,
-        'improvement': best_val - 0.2169,
-        'verdict': 'TEMPORAL HELPS — TCN+ViT justified' if best_val > 0.27 else 'Backbone is the bottleneck',
+        "clip_len": args.clip_len,
+        "stride": args.stride,
+        "pool": args.pool,
+        "majority_baseline": majority_acc,
+        "val_top1": best_val,
+        "per_frame_probe": 0.2169,
+        "improvement": best_val - 0.2169,
+        "verdict": "TEMPORAL HELPS — TCN+ViT justified"
+        if best_val > 0.27
+        else "Backbone is the bottleneck",
     }
-    out = Path(args.save_dir) / f'temporal_probe_{args.pool}_T{args.clip_len}.json'
-    with open(out, 'w') as f:
+    out = Path(args.save_dir) / f"temporal_probe_{args.pool}_T{args.clip_len}.json"
+    with open(out, "w") as f:
         json.dump(results, f, indent=2)
     logger.info(f"Saved {out}")
 
@@ -258,15 +277,18 @@ def extract_features(loader, backbone):
             all_feats.append(features)
             all_labels.append(labels)
             if (i + 1) % 50 == 0:
-                logger.info(f"  processed {i+1}/{len(loader)} batches")
+                logger.info(f"  processed {i + 1}/{len(loader)} batches")
     return torch.cat(all_feats), torch.cat(all_labels)
 
 
 def majority_vote(labels):
     """For each clip, take majority class label. labels: [N, T]"""
     from scipy import stats
-    return torch.tensor([stats.mode(l.numpy(), keepdims=False).mode for l in labels], dtype=torch.long)
+
+    return torch.tensor(
+        [stats.mode(l.numpy(), keepdims=False).mode for l in labels], dtype=torch.long
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

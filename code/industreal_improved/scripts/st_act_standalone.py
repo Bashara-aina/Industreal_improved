@@ -4,8 +4,9 @@
 Bypasses the collate_fn_sequences DataLoader hang by iterating the dataset
 directly. Same logic as train_st.py --task act but without the hang.
 """
+
 # DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
-import argparse, gc, json, sys, time
+import argparse, json, sys, time
 from pathlib import Path
 import numpy as np
 import torch, torch.nn.functional as F
@@ -16,16 +17,21 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
         sys.path.insert(0, _p)
 
 import src.config as C
-C.NUM_ACT_OUTPUTS = 75; C.ACT_CLASS_GROUPING = "none"; C.RAM_CACHE_MAX_IMAGES = 0
+
+C.NUM_ACT_OUTPUTS = 75
+C.ACT_CLASS_GROUPING = "none"
+C.RAM_CACHE_MAX_IMAGES = 0
 
 from src.data.industreal_dataset import IndustRealMultiTaskDataset
 from src.models.mvit_mtl_model import MTLMViTModel
 
 _MEAN = torch.tensor([0.45, 0.45, 0.45])
-_STD  = torch.tensor([0.225, 0.225, 0.225])
+_STD = torch.tensor([0.225, 0.225, 0.225])
+
 
 def ensure_cuda(t):
     return t.cuda() if isinstance(t, torch.Tensor) else t
+
 
 def eval_act(model, ds, max_batches=2000):
     """Quick activity top-1 accuracy on val set."""
@@ -39,11 +45,13 @@ def eval_act(model, ds, max_batches=2000):
             if act is None or act.item() < 0:
                 continue
             img = s["images"]["rgb"].unsqueeze(0).cuda().float() / 255.0
-            img = ((img - _MEAN.cuda().view(1,1,3,1,1)) / _STD.cuda().view(1,1,3,1,1)).permute(0,2,1,3,4)
+            img = (
+                (img - _MEAN.cuda().view(1, 1, 3, 1, 1)) / _STD.cuda().view(1, 1, 3, 1, 1)
+            ).permute(0, 2, 1, 3, 4)
             with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
                 out = model(img)
                 pred = out["activity"].argmax(dim=-1)
-            correct += (pred.cpu() == act.item())
+            correct += pred.cpu() == act.item()
             total += 1
     model.train()
     return correct / max(total, 1)
@@ -56,8 +64,12 @@ def main():
     p.add_argument("--eval-every", type=int, default=5)
     p.add_argument("--output-dir", required=True)
     p.add_argument("--batches-per-epoch", type=int, default=8000)
-    p.add_argument("--subset-windows", type=int, default=10000,
-                   help="Number of dataset windows to cycle through (default 10k; 0 = all 78k)")
+    p.add_argument(
+        "--subset-windows",
+        type=int,
+        default=10000,
+        help="Number of dataset windows to cycle through (default 10k; 0 = all 78k)",
+    )
     args = p.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -67,12 +79,12 @@ def main():
     # ── Data ──────────────────────────────────────────────────────────
     print("Loading train dataset...")
     train_ds = IndustRealMultiTaskDataset(
-        split="train", img_size=(224, 224), augment=False,
-        sequence_mode=True, sequence_length=16)
+        split="train", img_size=(224, 224), augment=False, sequence_mode=True, sequence_length=16
+    )
     print("Loading val dataset...")
     val_ds = IndustRealMultiTaskDataset(
-        split="val", img_size=(224, 224), augment=False,
-        sequence_mode=True, sequence_length=16)
+        split="val", img_size=(224, 224), augment=False, sequence_mode=True, sequence_length=16
+    )
     n_train = min(args.subset_windows if args.subset_windows > 0 else len(train_ds), len(train_ds))
     print(f"Train: {len(train_ds)} total windows, cycling through {n_train}")
     print(f"Val: {len(val_ds)} windows")
@@ -121,12 +133,16 @@ def main():
             n_steps += 1
 
             if bi % 1000 == 0:
-                print(f"  epoch {epoch}/{args.epochs} batch {bi}/{args.batches_per_epoch}: loss={loss.item():.4f}")
+                print(
+                    f"  epoch {epoch}/{args.epochs} batch {bi}/{args.batches_per_epoch}: loss={loss.item():.4f}"
+                )
 
         avg_loss = epoch_loss / max(n_steps, 1)
         sched.step()
         dt = time.time() - t0
-        print(f"Epoch {epoch:3d}/{args.epochs}: loss={avg_loss:.4f}  lr={opt.param_groups[0]['lr']:.2e}  {dt:.0f}s")
+        print(
+            f"Epoch {epoch:3d}/{args.epochs}: loss={avg_loss:.4f}  lr={opt.param_groups[0]['lr']:.2e}  {dt:.0f}s"
+        )
 
         # Eval
         if epoch % args.eval_every == 0 or epoch == args.epochs:
@@ -134,19 +150,29 @@ def main():
             print(f"  Eval: act_top1={acc:.4f}")
             if acc > best_acc:
                 best_acc, best_epoch = acc, epoch
-                torch.save({"epoch": epoch, "model_state_dict": model.state_dict(),
-                             "task": "act", "metric": acc, "metric_key": "act_top1"},
-                            out_dir / "best.pt")
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "model_state_dict": model.state_dict(),
+                        "task": "act",
+                        "metric": acc,
+                        "metric_key": "act_top1",
+                    },
+                    out_dir / "best.pt",
+                )
                 print(f"  New best: {acc:.4f}")
 
         # Save latest
-        torch.save({"epoch": epoch, "model_state_dict": model.state_dict()},
-                    out_dir / "latest.pt")
+        torch.save({"epoch": epoch, "model_state_dict": model.state_dict()}, out_dir / "latest.pt")
 
     # ── Final ─────────────────────────────────────────────────────────
     print(f"\nTraining complete. Best acc: {best_acc:.4f} at epoch {best_epoch}")
     with open(out_dir / "metrics.json", "w") as f:
-        json.dump({"best_act_top1": best_acc, "best_epoch": best_epoch, "epochs": args.epochs}, f, indent=2)
+        json.dump(
+            {"best_act_top1": best_acc, "best_epoch": best_epoch, "epochs": args.epochs},
+            f,
+            indent=2,
+        )
 
     # Symlink for MTL warm-start
     st_dir = Path("src/runs/st_checkpoints")

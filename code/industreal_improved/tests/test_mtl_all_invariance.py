@@ -169,12 +169,14 @@ class TestKendallLogVars:
     def test_log_var_init_values(self, model, device):
         """Verify log_vars created in the training script init near 0."""
         # Simulate the init in train_mtl_all.py
-        log_vars = nn.ParameterDict({
-            "det": nn.Parameter(torch.zeros(1, device=device)),
-            "act": nn.Parameter(torch.zeros(1, device=device)),
-            "psr": nn.Parameter(torch.zeros(1, device=device)),
-            "pose": nn.Parameter(torch.tensor([-1.0], device=device)),
-        })
+        log_vars = nn.ParameterDict(
+            {
+                "det": nn.Parameter(torch.zeros(1, device=device)),
+                "act": nn.Parameter(torch.zeros(1, device=device)),
+                "psr": nn.Parameter(torch.zeros(1, device=device)),
+                "pose": nn.Parameter(torch.tensor([-1.0], device=device)),
+            }
+        )
 
         # det, act, psr should be ~0
         assert abs(log_vars["det"].item()) < 1e-6, (
@@ -199,12 +201,14 @@ class TestKendallLogVars:
         """In build_param_groups, log_vars get their own group with wd=0."""
         from scripts.train_mtl_all import build_param_groups
 
-        log_vars = nn.ParameterDict({
-            "det": nn.Parameter(torch.zeros(1, device=device)),
-            "act": nn.Parameter(torch.zeros(1, device=device)),
-            "psr": nn.Parameter(torch.zeros(1, device=device)),
-            "pose": nn.Parameter(torch.tensor([-1.0], device=device)),
-        })
+        log_vars = nn.ParameterDict(
+            {
+                "det": nn.Parameter(torch.zeros(1, device=device)),
+                "act": nn.Parameter(torch.zeros(1, device=device)),
+                "psr": nn.Parameter(torch.zeros(1, device=device)),
+                "pose": nn.Parameter(torch.tensor([-1.0], device=device)),
+            }
+        )
 
         groups = build_param_groups(model, log_vars)
 
@@ -228,10 +232,12 @@ class TestHPPrecCap:
 
     def test_hp_prec_cap_applied_correctly(self, device):
         """Verify that HP_PREC_CAP cap = max(lv_hp, lv_det.detach())."""
-        log_vars = nn.ParameterDict({
-            "det": nn.Parameter(torch.zeros(1, device=device)),
-            "pose": nn.Parameter(torch.tensor([0.0], device=device)),
-        })
+        log_vars = nn.ParameterDict(
+            {
+                "det": nn.Parameter(torch.zeros(1, device=device)),
+                "pose": nn.Parameter(torch.tensor([0.0], device=device)),
+            }
+        )
 
         # Scenario: pose has lower log_var (higher precision) than det
         log_vars["det"].data.fill_(-2.0)  # prec_det = exp(2) ≈ 7.4
@@ -268,10 +274,12 @@ class TestHPPrecCap:
 
     def test_hp_prec_cap_does_not_affect_det_log_var_grad(self, device):
         """The detach() on lv_det in HP_PREC_CAP prevents gradient flow to det's log_var."""
-        log_vars = nn.ParameterDict({
-            "det": nn.Parameter(torch.tensor([-1.0], device=device)),
-            "pose": nn.Parameter(torch.tensor([-2.0], device=device)),
-        })
+        log_vars = nn.ParameterDict(
+            {
+                "det": nn.Parameter(torch.tensor([-1.0], device=device)),
+                "pose": nn.Parameter(torch.tensor([-2.0], device=device)),
+            }
+        )
 
         lv_det = log_vars["det"].clamp(-4.0, 2.0)
         lv_hp = log_vars["pose"].clamp(-4.0, 2.0)
@@ -304,9 +312,7 @@ class TestPcgradWiring:
         shared_params = list(model.backbone.parameters())
         balancer = MTLBalancer(shared_params=shared_params, mode="pcgrad")
 
-        assert balancer.mode == "pcgrad", (
-            f"Expected mode='pcgrad', got mode='{balancer.mode}'"
-        )
+        assert balancer.mode == "pcgrad", f"Expected mode='pcgrad', got mode='{balancer.mode}'"
 
     def test_balancer_created_with_none_mode(self, model, device):
         """MTLBalancer created with mode='none' has the correct mode."""
@@ -315,9 +321,7 @@ class TestPcgradWiring:
         shared_params = list(model.backbone.parameters())
         balancer = MTLBalancer(shared_params=shared_params, mode="none")
 
-        assert balancer.mode == "none", (
-            f"Expected mode='none', got mode='{balancer.mode}'"
-        )
+        assert balancer.mode == "none", f"Expected mode='none', got mode='{balancer.mode}'"
 
     def test_pcgrad_backward_hooks_installed(self, model, small_batch, device):
         """PCGrad compute_step installs backward hooks on shared params."""
@@ -326,12 +330,14 @@ class TestPcgradWiring:
         shared_params = list(model.backbone.parameters())
         balancer = MTLBalancer(shared_params=shared_params, mode="pcgrad")
 
-        log_vars = nn.ParameterDict({
-            "det": nn.Parameter(torch.zeros(1, device=device)),
-            "act": nn.Parameter(torch.zeros(1, device=device)),
-            "psr": nn.Parameter(torch.zeros(1, device=device)),
-            "pose": nn.Parameter(torch.tensor([-1.0], device=device)),
-        })
+        log_vars = nn.ParameterDict(
+            {
+                "det": nn.Parameter(torch.zeros(1, device=device)),
+                "act": nn.Parameter(torch.zeros(1, device=device)),
+                "psr": nn.Parameter(torch.zeros(1, device=device)),
+                "pose": nn.Parameter(torch.tensor([-1.0], device=device)),
+            }
+        )
 
         batch = small_batch
 
@@ -340,7 +346,9 @@ class TestPcgradWiring:
         det_out = model(batch["detection_frame"], mode="detection")
 
         l_act = F.cross_entropy(temporal_out["act_logits"], batch["act_targets"])
-        l_psr_class = F.binary_cross_entropy_with_logits(temporal_out["psr_logits"], batch["psr_targets"])
+        l_psr_class = F.binary_cross_entropy_with_logits(
+            temporal_out["psr_logits"], batch["psr_targets"]
+        )
         l_pose_class = F.mse_loss(temporal_out["pose_6d"], batch["pose_targets"])
 
         # Simplified detection loss for test
@@ -378,10 +386,10 @@ class TestPcgradWiring:
 
     def test_pcgrad_cli_flag_maps_correctly(self):
         """CLI flag --pcgrad on|none maps to balancer mode."""
-        from scripts.train_mtl_all import main as train_main
 
         # Verify the mapping by checking the argparse setup
         import argparse
+
         parser = argparse.ArgumentParser()
         parser.add_argument("--pcgrad", type=str, choices=["on", "none"], default="on")
 
@@ -412,20 +420,26 @@ class TestOneEpochTraining:
         balancer = MTLBalancer(shared_params=shared_params, mode="pcgrad")
 
         # Kendall log_vars
-        log_vars = nn.ParameterDict({
-            "det": nn.Parameter(torch.zeros(1, device=device)),
-            "act": nn.Parameter(torch.zeros(1, device=device)),
-            "psr": nn.Parameter(torch.zeros(1, device=device)),
-            "pose": nn.Parameter(torch.tensor([-1.0], device=device)),
-        })
+        log_vars = nn.ParameterDict(
+            {
+                "det": nn.Parameter(torch.zeros(1, device=device)),
+                "act": nn.Parameter(torch.zeros(1, device=device)),
+                "psr": nn.Parameter(torch.zeros(1, device=device)),
+                "pose": nn.Parameter(torch.tensor([-1.0], device=device)),
+            }
+        )
 
         # Build optimizer following the training script pattern
         from scripts.train_mtl_all import build_param_groups
 
         param_groups = build_param_groups(
-            model=model, log_vars=log_vars,
-            backbone_lr=1e-4, head_lr=1e-3, log_var_lr=1e-3,
-            layer_decay=0.8, weight_decay=0.05,
+            model=model,
+            log_vars=log_vars,
+            backbone_lr=1e-4,
+            head_lr=1e-3,
+            log_var_lr=1e-3,
+            layer_decay=0.8,
+            weight_decay=0.05,
         )
         optimizer = torch.optim.AdamW(param_groups, betas=(0.9, 0.999))
 
@@ -446,7 +460,9 @@ class TestOneEpochTraining:
                 )
 
             l_act = F.cross_entropy(temporal_out["act_logits"], batch["act_targets"])
-            l_psr = F.binary_cross_entropy_with_logits(temporal_out["psr_logits"], batch["psr_targets"])
+            l_psr = F.binary_cross_entropy_with_logits(
+                temporal_out["psr_logits"], batch["psr_targets"]
+            )
             l_pose = F.mse_loss(temporal_out["pose_6d"], batch["pose_targets"])
 
             return {
@@ -475,7 +491,9 @@ class TestOneEpochTraining:
                 )
 
             l_act = F.cross_entropy(temporal_out["act_logits"], batch["act_targets"])
-            l_psr = F.binary_cross_entropy_with_logits(temporal_out["psr_logits"], batch["psr_targets"])
+            l_psr = F.binary_cross_entropy_with_logits(
+                temporal_out["psr_logits"], batch["psr_targets"]
+            )
             l_pose = F.mse_loss(temporal_out["pose_6d"], batch["pose_targets"])
 
             # Kendall weighting with HP_PREC_CAP
@@ -533,7 +551,7 @@ class TestNoStagingGuard:
         mod = importlib.util.module_from_spec(spec)
 
         # Don't actually execute, just verify file contains the guards
-        source = (str(_ROOT / "scripts" / "train_mtl_all.py"))
+        source = str(_ROOT / "scripts" / "train_mtl_all.py")
         with open(source) as f:
             content = f.read()
 
@@ -555,12 +573,14 @@ class TestNoStagingGuard:
         # Use small_batch (B=1) to avoid OOM
         batch = small_batch
 
-        log_vars = nn.ParameterDict({
-            "det": nn.Parameter(torch.zeros(1, device=device)),
-            "act": nn.Parameter(torch.zeros(1, device=device)),
-            "psr": nn.Parameter(torch.zeros(1, device=device)),
-            "pose": nn.Parameter(torch.tensor([-1.0], device=device)),
-        })
+        log_vars = nn.ParameterDict(
+            {
+                "det": nn.Parameter(torch.zeros(1, device=device)),
+                "act": nn.Parameter(torch.zeros(1, device=device)),
+                "psr": nn.Parameter(torch.zeros(1, device=device)),
+                "pose": nn.Parameter(torch.tensor([-1.0], device=device)),
+            }
+        )
         log_vars_params = list(log_vars.values())
 
         # Forward all 4 heads
@@ -605,14 +625,19 @@ class TestNoStagingGuard:
         # Head names: detection_head, activity_head, psr_head, pose_head
         head_params = []
         for name, param in model.named_parameters():
-            if any(name.startswith(prefix) for prefix in [
-                "detection_head", "activity_head", "psr_head", "pose_head"
-            ]):
+            if any(
+                name.startswith(prefix)
+                for prefix in ["detection_head", "activity_head", "psr_head", "pose_head"]
+            ):
                 head_params.append((name, param))
 
         # Group by head
-        heads_with_grad = {"detection_head": False, "activity_head": False,
-                           "psr_head": False, "pose_head": False}
+        heads_with_grad = {
+            "detection_head": False,
+            "activity_head": False,
+            "psr_head": False,
+            "pose_head": False,
+        }
         for name, param in head_params:
             if param.grad is not None and torch.isfinite(param.grad).any():
                 for head_name in heads_with_grad:
@@ -669,12 +694,16 @@ class TestLossFunctions:
         """detection_loss produces finite scalar (plumbing mode, no GT)."""
         from scripts.train_mtl_all import detection_loss
 
-        cls_list = [torch.randn(2, NUM_DET_CLASSES, 28, 28, device=device),
-                    torch.randn(2, NUM_DET_CLASSES, 14, 14, device=device),
-                    torch.randn(2, NUM_DET_CLASSES, 7, 7, device=device)]
-        box_list = [torch.randn(2, 64, 28, 28, device=device),
-                    torch.randn(2, 64, 14, 14, device=device),
-                    torch.randn(2, 64, 7, 7, device=device)]
+        cls_list = [
+            torch.randn(2, NUM_DET_CLASSES, 28, 28, device=device),
+            torch.randn(2, NUM_DET_CLASSES, 14, 14, device=device),
+            torch.randn(2, NUM_DET_CLASSES, 7, 7, device=device),
+        ]
+        box_list = [
+            torch.randn(2, 64, 28, 28, device=device),
+            torch.randn(2, 64, 14, 14, device=device),
+            torch.randn(2, 64, 7, 7, device=device),
+        ]
 
         loss = detection_loss(cls_list, box_list)
         assert torch.isfinite(loss)
@@ -684,12 +713,16 @@ class TestLossFunctions:
         """detection_loss with GT boxes/classes produces finite scalar."""
         from scripts.train_mtl_all import detection_loss
 
-        cls_list = [torch.randn(2, NUM_DET_CLASSES, 28, 28, device=device),
-                    torch.randn(2, NUM_DET_CLASSES, 14, 14, device=device),
-                    torch.randn(2, NUM_DET_CLASSES, 7, 7, device=device)]
-        box_list = [torch.randn(2, 64, 28, 28, device=device),
-                    torch.randn(2, 64, 14, 14, device=device),
-                    torch.randn(2, 64, 7, 7, device=device)]
+        cls_list = [
+            torch.randn(2, NUM_DET_CLASSES, 28, 28, device=device),
+            torch.randn(2, NUM_DET_CLASSES, 14, 14, device=device),
+            torch.randn(2, NUM_DET_CLASSES, 7, 7, device=device),
+        ]
+        box_list = [
+            torch.randn(2, 64, 28, 28, device=device),
+            torch.randn(2, 64, 14, 14, device=device),
+            torch.randn(2, 64, 7, 7, device=device),
+        ]
 
         gt_boxes = torch.tensor([[[50, 50, 180, 200]]], device=device).repeat(2, 1, 1)
         gt_classes = torch.zeros(2, 1, dtype=torch.long, device=device)

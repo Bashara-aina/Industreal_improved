@@ -16,7 +16,6 @@ Usage:
 """
 
 import sys
-import os
 from pathlib import Path
 
 _SRC = Path(__file__).resolve().parent.parent  # src/
@@ -25,26 +24,20 @@ _PROJECT_ROOT = _SRC.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 # Also add model/training/eval/data subdirs for direct imports
-for _sub in ['models', 'training', 'evaluation', 'data']:
+for _sub in ["models", "training", "evaluation", "data"]:
     _p = str(_SRC / _sub)
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
-import argparse
-import copy
-import json
 import logging
-import math
 import time
-from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
+
 
 # ---------------------------------------------------------------------------
 # Test (a): decode(encode(gt)) == gt — box roundtrip integrity
@@ -74,7 +67,7 @@ def test_box_roundtrip():
                 for s in [1.0, 1.5, 2.0]:
                     aw = stride * s
                     ah = stride * s
-                    stride_anchors.append([x - aw/2, y - ah/2, x + aw/2, y + ah/2])
+                    stride_anchors.append([x - aw / 2, y - ah / 2, x + aw / 2, y + ah / 2])
         anchors_by_stride[stride] = torch.tensor(stride_anchors, dtype=torch.float32)
 
     fl = FocalLoss()
@@ -87,7 +80,7 @@ def test_box_roundtrip():
         cy = np.random.uniform(50, H - 50)
         w = np.random.uniform(20, 600)
         h = np.random.uniform(20, 600)
-        gt = torch.tensor([[cx - w/2, cy - h/2, cx + w/2, cy + h/2]], dtype=torch.float32)
+        gt = torch.tensor([[cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2]], dtype=torch.float32)
 
         for stride, anchors in anchors_by_stride.items():
             # Encode relative to this stride's anchors
@@ -101,19 +94,23 @@ def test_box_roundtrip():
     # Stride>=16 anchors should be near-perfect (fp32 precision is fine at ratio <= 37.5)
     for stride in [16, 32, 64, 128]:
         err = max_errors[stride]
-        assert err < 1e-3, \
+        assert err < 1e-3, (
             f"stride={stride} roundtrip error {err:.6f} exceeds tolerance (expected < 1e-3)"
+        )
 
     # Stride=8 anchors have known fp32 precision issue: dh=log(500/8)≈4.14,
     # and fp32 ULP error × exp(4.14) × aw/2 produces ~30-80px error in y coords.
     # This is harmless in practice because stride=8 anchors at such extreme
     # offsets would have near-zero IoU and wouldn't be matched in training.
     err8 = max_errors[8]
-    assert err8 < 100.0, \
+    assert err8 < 100.0, (
         f"stride=8 roundtrip error {err8:.4f}px exceeds expanded tolerance (100px, fp32 limit)"
-    logger.info(f"[PASS] Box roundtrip: stride=8 max_err={err8:.4f}px "
-                f"(known fp32 limit, harmless — unmatched anchors), "
-                f"stride=16+ all < 1e-3px")
+    )
+    logger.info(
+        f"[PASS] Box roundtrip: stride=8 max_err={err8:.4f}px "
+        f"(known fp32 limit, harmless — unmatched anchors), "
+        f"stride=16+ all < 1e-3px"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -128,18 +125,17 @@ def test_collate_parity():
 
     # Inspect what collate_fn returns (check source for target dict keys)
     import inspect
-    import ast
 
     def _extract_target_keys(fn):
         """Extract keys assigned to 'targets' dict from function source."""
         src = inspect.getsource(fn)
         keys = set()
-        for line in src.split('\n'):
+        for line in src.split("\n"):
             if "targets[" in line or "targets'" in line:
                 # Extract key string
                 for delim in ["'", '"']:
-                    if 'targets[' + delim in line:
-                        start = line.index('targets[' + delim) + len('targets[' + delim)
+                    if "targets[" + delim in line:
+                        start = line.index("targets[" + delim) + len("targets[" + delim)
                         end = line.index(delim, start)
                         keys.add(line[start:end])
         return keys
@@ -149,14 +145,18 @@ def test_collate_parity():
 
     # Non-sequence collate must include 'clip_rgb' when USE_VIDEOMAE=True
     from src import config as C
+
     if C.USE_VIDEOMAE:
-        assert 'clip_rgb' in train_keys, \
+        assert "clip_rgb" in train_keys, (
             f"train collate_fn missing 'clip_rgb' key (USE_VIDEOMAE=True). Keys: {train_keys}"
+        )
 
     # Eval should use the same collate as training (not sequences)
     logger.info(f"[PASS] Collate parity: train keys={sorted(train_keys)}")
-    logger.info(f"[PASS] Collate parity: sequence keys={sorted(seq_keys)} "
-                f"(eval should use collate_fn, not collate_fn_sequences)")
+    logger.info(
+        f"[PASS] Collate parity: sequence keys={sorted(seq_keys)} "
+        f"(eval should use collate_fn, not collate_fn_sequences)"
+    )
     logger.info("[PASS] Collate parity verified via source analysis")
 
 
@@ -171,13 +171,14 @@ def test_checkpoint_integrity():
     state = model.state_dict()
 
     for name, tensor in state.items():
-        assert torch.isfinite(tensor).all(), \
+        assert torch.isfinite(tensor).all(), (
             f"Parameter '{name}' contains NaN/Inf — model init is broken"
+        )
 
     params = count_parameters(model)
-    total = params.get('total_all', params.get('total', 0))
+    total = params.get("total_all", params.get("total", 0))
     logger.info(f"[PASS] Checkpoint integrity: {len(state)} tensors, all finite")
-    logger.info(f"[PASS] Model params: {total/1e6:.1f}M")
+    logger.info(f"[PASS] Model params: {total / 1e6:.1f}M")
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +190,7 @@ def _per_head_overfit(head_name: str, num_steps: int = 200, batch_size: int = 8)
     from src.training.losses import MultiTaskLoss
     from src import config as C
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = POPWMultiTaskModel(pretrained=False).to(device)
     criterion = MultiTaskLoss(
         num_classes_act=C.NUM_CLASSES_ACT,
@@ -198,7 +199,7 @@ def _per_head_overfit(head_name: str, num_steps: int = 200, batch_size: int = 8)
 
     # Force train the specific head
     for n, p in model.named_parameters():
-        p.requires_grad = head_name in n or 'backbone' in n
+        p.requires_grad = head_name in n or "backbone" in n
 
     optim = torch.optim.AdamW(
         [p for n, p in model.named_parameters() if p.requires_grad],
@@ -212,11 +213,11 @@ def _per_head_overfit(head_name: str, num_steps: int = 200, batch_size: int = 8)
 
     # Also create clip_rgb for activity head
     clip_rgb = None
-    if head_name in ('activity', 'act'):
+    if head_name in ("activity", "act"):
         clip_rgb = torch.randn(batch_size, 16, 3, 224, 224, device=device)
 
     initial_loss = None
-    min_loss = float('inf')
+    min_loss = float("inf")
 
     t0 = time.time()
     for step in range(num_steps):
@@ -224,11 +225,11 @@ def _per_head_overfit(head_name: str, num_steps: int = 200, batch_size: int = 8)
         loss, loss_dict = criterion(outputs, targets)
 
         loss_key = {
-            'det': 'det',
-            'activity': 'act',
-            'psr': 'psr',
-            'head_pose': 'head_pose',
-            'pose': 'pose',
+            "det": "det",
+            "activity": "act",
+            "psr": "psr",
+            "head_pose": "head_pose",
+            "pose": "pose",
         }.get(head_name, head_name)
 
         head_loss = loss_dict.get(loss_key, loss)
@@ -249,11 +250,15 @@ def _per_head_overfit(head_name: str, num_steps: int = 200, batch_size: int = 8)
     success = min_loss < 5e-3 and step < num_steps
 
     if success:
-        logger.info(f"[PASS] {head_name} overfit: init_loss={initial_loss:.3f} → "
-                    f"min_loss={min_loss:.6f} in {step+1} steps ({elapsed:.1f}s)")
+        logger.info(
+            f"[PASS] {head_name} overfit: init_loss={initial_loss:.3f} → "
+            f"min_loss={min_loss:.6f} in {step + 1} steps ({elapsed:.1f}s)"
+        )
     else:
-        logger.error(f"[FAIL] {head_name} overfit: init_loss={initial_loss:.3f} → "
-                     f"min_loss={min_loss:.6f} after {step+1} steps ({elapsed:.1f}s)")
+        logger.error(
+            f"[FAIL] {head_name} overfit: init_loss={initial_loss:.3f} → "
+            f"min_loss={min_loss:.6f} after {step + 1} steps ({elapsed:.1f}s)"
+        )
 
     return success
 
@@ -263,38 +268,47 @@ def _generate_synthetic_targets(head_name: str, batch_size: int, device) -> dict
     from src import config as C
 
     targets = {
-        'detection': [{'boxes': torch.tensor([[100., 100., 200., 200.]], device=device),
-                       'labels': torch.tensor([1], device=device, dtype=torch.long)}
-                      for _ in range(batch_size)],
-        'head_pose': torch.randn(batch_size, 9, device=device),
-        'keypoints': torch.randn(batch_size, 34, device=device),
-        'pose_confidence': torch.ones(batch_size, 17, device=device),
-        'activity': torch.randint(0, C.NUM_CLASSES_ACT, (batch_size,), device=device),
-        'psr_labels': torch.randint(0, 2, (batch_size, C.NUM_PSR_COMPONENTS), device=device).float(),
-        'psr_labels_seq': torch.randint(0, 2, (batch_size, 4, C.NUM_PSR_COMPONENTS), device=device).float(),
-        'sequence_lengths': torch.full((batch_size,), 4, device=device, dtype=torch.long),
-        'hand_joints': torch.zeros(batch_size, 52, device=device),
-        'metadata': [{'recording_id': f'test_{i}', 'camera_view': 'c1'} for i in range(batch_size)],
+        "detection": [
+            {
+                "boxes": torch.tensor([[100.0, 100.0, 200.0, 200.0]], device=device),
+                "labels": torch.tensor([1], device=device, dtype=torch.long),
+            }
+            for _ in range(batch_size)
+        ],
+        "head_pose": torch.randn(batch_size, 9, device=device),
+        "keypoints": torch.randn(batch_size, 34, device=device),
+        "pose_confidence": torch.ones(batch_size, 17, device=device),
+        "activity": torch.randint(0, C.NUM_CLASSES_ACT, (batch_size,), device=device),
+        "psr_labels": torch.randint(
+            0, 2, (batch_size, C.NUM_PSR_COMPONENTS), device=device
+        ).float(),
+        "psr_labels_seq": torch.randint(
+            0, 2, (batch_size, 4, C.NUM_PSR_COMPONENTS), device=device
+        ).float(),
+        "sequence_lengths": torch.full((batch_size,), 4, device=device, dtype=torch.long),
+        "hand_joints": torch.zeros(batch_size, 52, device=device),
+        "metadata": [{"recording_id": f"test_{i}", "camera_view": "c1"} for i in range(batch_size)],
     }
     # Ensure targets match what criterion expects
-    targets['detection'] = targets['detection']
+    targets["detection"] = targets["detection"]
     return targets
 
 
 def test_per_head_overfit_all():
     """Run per-head overfit tests for all heads."""
     results = {}
-    for head in ['det', 'activity', 'psr', 'head_pose']:
+    for head in ["det", "activity", "psr", "head_pose"]:
         try:
-            results[head] = _per_head_overfit(head, num_steps=200 if head == 'det' else 100)
+            results[head] = _per_head_overfit(head, num_steps=200 if head == "det" else 100)
         except Exception as e:
             logger.error(f"[FAIL] {head} overfit crashed: {e}")
             results[head] = False
 
     failed = [h for h, ok in results.items() if not ok]
     if failed:
-        logger.warning(f"[WARN] Overfit failures: {failed} — "
-                       f"check gradient flow and head initialization")
+        logger.warning(
+            f"[WARN] Overfit failures: {failed} — check gradient flow and head initialization"
+        )
         # Don't assert-fail here — overfit may need tuning; warn instead
     else:
         logger.info("[PASS] All heads overfit successfully")
@@ -315,20 +329,20 @@ def test_anchor_coverage():
 
     # Generate anchors for the full image
     pyramid = {
-        'p3': torch.randn(1, 256, H//8, W//8),
-        'p4': torch.randn(1, 256, H//16, W//16),
-        'p5': torch.randn(1, 256, H//32, W//32),
-        'p6': torch.randn(1, 256, H//64, W//64),
-        'p7': torch.randn(1, 256, H//128, W//128),
+        "p3": torch.randn(1, 256, H // 8, W // 8),
+        "p4": torch.randn(1, 256, H // 16, W // 16),
+        "p5": torch.randn(1, 256, H // 32, W // 32),
+        "p6": torch.randn(1, 256, H // 64, W // 64),
+        "p7": torch.randn(1, 256, H // 128, W // 128),
     }
     anchors = ag(pyramid)  # [N, 4] xyxy
 
     # Test GT boxes from IndustReal statistics (config.py:243-247)
     # w ranges from 146 to 594 px, centers 164-404 px
     test_gt_boxes = [
-        [100, 100, 100+146, 100+164],   # smallest
-        [400, 200, 400+300, 200+404],   # avg center
-        [50, 50, 50+594, 50+400],       # largest
+        [100, 100, 100 + 146, 100 + 164],  # smallest
+        [400, 200, 400 + 300, 200 + 404],  # avg center
+        [50, 50, 50 + 594, 50 + 400],  # largest
     ]
 
     for gt in test_gt_boxes:
@@ -361,18 +375,22 @@ def test_assert_and_crash():
     """Verify that the assert-and-crash config flag gates NaN handling."""
     from src import config as C
 
-    crash_mode = getattr(C, 'ASSERT_AND_CRASH', False)
-    logger.info(f"[DIAG] ASSERT_AND_CRASH={'ON' if crash_mode else 'OFF'} "
-                f"— {'models CRASH on NaN' if crash_mode else 'guard-and-continue'}")
+    crash_mode = getattr(C, "ASSERT_AND_CRASH", False)
+    logger.info(
+        f"[DIAG] ASSERT_AND_CRASH={'ON' if crash_mode else 'OFF'} "
+        f"— {'models CRASH on NaN' if crash_mode else 'guard-and-continue'}"
+    )
 
     if crash_mode:
         # Verify simplified loss config is also enabled
-        simple = getattr(C, 'USE_SIMPLIFIED_LOSS', False)
+        simple = getattr(C, "USE_SIMPLIFIED_LOSS", False)
         logger.info(f"[DIAG] USE_SIMPLIFIED_LOSS={'ON' if simple else 'OFF'}")
         if not simple:
-            logger.warning("[WARN] ASSERT_AND_CRASH=True but USE_SIMPLIFIED_LOSS=False — "
-                           "NaN guards are still active. Set USE_SIMPLIFIED_LOSS=True to "
-                           "remove defensive machinery.")
+            logger.warning(
+                "[WARN] ASSERT_AND_CRASH=True but USE_SIMPLIFIED_LOSS=False — "
+                "NaN guards are still active. Set USE_SIMPLIFIED_LOSS=True to "
+                "remove defensive machinery."
+            )
     logger.info("[PASS] NaN crash gating config verified")
 
 
@@ -407,13 +425,16 @@ def run_smoke_tests():
 
     # Per-head overfit (separate: expensive, needs GPU)
     import argparse
+
     ap = argparse.ArgumentParser()
-    ap.add_argument('--overfit', action='store_true', help='Run per-head overfit tests (GPU required)')
-    ap.add_argument('--smoke', action='store_true', help='Quick smoke test (skip heavy tests)')
+    ap.add_argument(
+        "--overfit", action="store_true", help="Run per-head overfit tests (GPU required)"
+    )
+    ap.add_argument("--smoke", action="store_true", help="Quick smoke test (skip heavy tests)")
     args, _ = ap.parse_known_args()
 
     if args.overfit:
-        results['overfit'] = test_per_head_overfit_all()
+        results["overfit"] = test_per_head_overfit_all()
 
     passed = sum(results.values())
     total = len(results)
@@ -429,5 +450,5 @@ def run_smoke_tests():
         logger.info("[OK] All invariant tests passed. Safe to train.")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     run_smoke_tests()

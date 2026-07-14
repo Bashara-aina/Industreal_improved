@@ -94,7 +94,7 @@ _MODEL_POINTS = np.array(
 )
 
 
-def _rotation_matrix_to_vectors(R: np.ndarray):
+def _rotation_matrix_to_vectors(r: np.ndarray):
     """Extract forward and up vectors from a 3x3 rotation matrix.
 
     In OpenCV camera convention (z-forward, y-down), the columns of the
@@ -117,9 +117,7 @@ def _rotation_matrix_to_vectors(R: np.ndarray):
     return forward / (np.linalg.norm(forward) + 1e-12), up / (np.linalg.norm(up) + 1e-12)
 
 
-def estimate_head_pose_from_landmarks(
-    landmarks: np.ndarray, img_w: int, img_h: int
-):
+def estimate_head_pose_from_landmarks(landmarks: np.ndarray, img_w: int, img_h: int):
     """Estimate head rotation from 2D-3D landmark correspondences via solvePnP.
 
     Args:
@@ -136,9 +134,7 @@ def estimate_head_pose_from_landmarks(
     # Collect 2D-3D correspondences
     img_pts = []
     model_pts = []
-    for name, model_pt in zip(
-        FACE_LANDMARK_INDICES.keys(), _MODEL_POINTS, strict=True
-    ):
+    for name, model_pt in zip(FACE_LANDMARK_INDICES.keys(), _MODEL_POINTS, strict=True):
         idx = FACE_LANDMARK_INDICES[name]
         # Landmarks may be normalized [0, 1] — denormalize if needed
         lm = landmarks[idx]
@@ -167,7 +163,10 @@ def estimate_head_pose_from_landmarks(
 
     # solvePnP with iterative refinement
     success, rvec, tvec = cv2.solvePnP(
-        model_pts, img_pts, camera_matrix, dist_coeffs,
+        model_pts,
+        img_pts,
+        camera_matrix,
+        dist_coeffs,
         flags=cv2.SOLVEPNP_ITERATIVE,
     )
 
@@ -388,8 +387,7 @@ def main():
 
         n_rec_frames = len(frame_paths)
         logger.info(
-            f"  [{rec_id}] Processing {n_rec_frames} frames "
-            f"(pose has {pose.shape[0]} rows)..."
+            f"  [{rec_id}] Processing {n_rec_frames} frames (pose has {pose.shape[0]} rows)..."
         )
 
         rec_forward_mae = 0.0
@@ -426,9 +424,7 @@ def main():
 
             # Extract landmark coordinates (first face)
             lmks = results.multi_face_landmarks[0]
-            landmarks = np.array(
-                [(lm.x, lm.y) for lm in lmks.landmark], dtype=np.float32
-            )
+            landmarks = np.array([(lm.x, lm.y) for lm in lmks.landmark], dtype=np.float32)
 
             # Estimate head pose from landmarks
             forward_pred, up_pred, rvec, success = estimate_head_pose_from_landmarks(
@@ -515,9 +511,7 @@ def main():
             "forward_angular_mae_deg": round(overall_forward_mae, 2)
             if overall_forward_mae is not None
             else None,
-            "up_angular_mae_deg": round(overall_up_mae, 2)
-            if overall_up_mae is not None
-            else None,
+            "up_angular_mae_deg": round(overall_up_mae, 2) if overall_up_mae is not None else None,
             "n_frames_processed": total_processed,
             "n_frames_failed": total_failures,
             "n_recordings": len(rec_ids),

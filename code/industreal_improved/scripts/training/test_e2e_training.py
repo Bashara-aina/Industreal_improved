@@ -3,20 +3,22 @@
 End-to-end training smoke test — verifies dataloader→model→loss→backward→optimizer→EMA
 works for at least 2 training steps with gradient accumulation.
 """
+
 import sys
 import os
+
 # Add workdir so 'import src' works; also add subdirs for bare 'from models import model'
-WORK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')
-SRC_DIR = os.path.join(WORK_DIR, 'src')
+WORK_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+SRC_DIR = os.path.join(WORK_DIR, "src")
 sys.path.insert(0, WORK_DIR)
-sys.path.insert(1, os.path.join(SRC_DIR, 'models'))
-sys.path.insert(2, os.path.join(SRC_DIR, 'training'))
-sys.path.insert(3, os.path.join(SRC_DIR, 'evaluation'))
+sys.path.insert(1, os.path.join(SRC_DIR, "models"))
+sys.path.insert(2, os.path.join(SRC_DIR, "training"))
+sys.path.insert(3, os.path.join(SRC_DIR, "evaluation"))
 sys.path.insert(4, SRC_DIR)
 
 import torch
 import torch.optim as optim
-from torch.amp import autocast, GradScaler
+from torch.amp import autocast
 
 from models import model as model_module
 from training import losses as losses_module
@@ -30,29 +32,29 @@ def make_dummy_batch(B=2):  # Reduced from 4 to fit GPU
     # Detection targets — list of dicts, one per image
     detection = [
         {
-            'boxes': torch.tensor([[100.0, 100.0, 400.0, 400.0]], dtype=torch.float32),
-            'labels': torch.tensor([2], dtype=torch.long),
+            "boxes": torch.tensor([[100.0, 100.0, 400.0, 400.0]], dtype=torch.float32),
+            "labels": torch.tensor([2], dtype=torch.long),
         }
         for _ in range(B)
     ]
 
     targets = {
-        'detection': detection,
-        'keypoints': torch.randn(B, 17, 2),
-        'pose_confidence': torch.rand(B, 17),
-        'head_pose': torch.randn(B, 9),
-        'activity': torch.randint(0, C.NUM_CLASSES_ACT, (B,)),
-        'psr_labels': torch.randint(0, 2, (B, C.NUM_PSR_COMPONENTS)).float(),
+        "detection": detection,
+        "keypoints": torch.randn(B, 17, 2),
+        "pose_confidence": torch.rand(B, 17),
+        "head_pose": torch.randn(B, 9),
+        "activity": torch.randint(0, C.NUM_CLASSES_ACT, (B,)),
+        "psr_labels": torch.randint(0, 2, (B, C.NUM_PSR_COMPONENTS)).float(),
     }
     return images, targets
 
 
 def test_e2e_training():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("E2E TRAINING TEST: 2 steps + gradient accumulation")
-    print("="*60)
+    print("=" * 60)
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"  Device: {device}")
 
     # ---- Model ----
@@ -100,10 +102,12 @@ def test_e2e_training():
         # Move targets to device
         targets_device = {}
         for k, v in targets.items():
-            if k == 'detection':
+            if k == "detection":
                 targets_device[k] = [
-                    {k2: v2.to(device) if isinstance(v2, torch.Tensor) else v2
-                     for k2, v2 in det.items()}
+                    {
+                        k2: v2.to(device) if isinstance(v2, torch.Tensor) else v2
+                        for k2, v2 in det.items()
+                    }
                     for det in v
                 ]
             elif isinstance(v, torch.Tensor):
@@ -113,11 +117,19 @@ def test_e2e_training():
 
         # Forward
         # Disable autocast for cleaner error messages (mixed precision not needed for test)
-        with autocast('cuda', enabled=False):
+        with autocast("cuda", enabled=False):
             outputs = m(images)
             # Ensure float
-            for key in ['cls_preds', 'reg_preds', 'heatmaps', 'keypoints',
-                         'pose_confidence', 'head_pose', 'act_logits', 'psr_logits']:
+            for key in [
+                "cls_preds",
+                "reg_preds",
+                "heatmaps",
+                "keypoints",
+                "pose_confidence",
+                "head_pose",
+                "act_logits",
+                "psr_logits",
+            ]:
                 if key in outputs and isinstance(outputs[key], torch.Tensor):
                     outputs[key] = outputs[key].float()
 
@@ -145,7 +157,9 @@ def test_e2e_training():
             # EMA update
             ema.update()
 
-            print(f"    Step {step+1}: loss={total_loss.item():.4f}, epoch={epoch}, EMA updated ✅")
+            print(
+                f"    Step {step + 1}: loss={total_loss.item():.4f}, epoch={epoch}, EMA updated ✅"
+            )
 
     # ---- Final checks ----
     print(f"\n  Verifying final state...")
@@ -165,21 +179,26 @@ def test_e2e_training():
     print(f"    EMA shadow diverged from current weights: {any_shadow_changed} ✅")
 
     # 3. Optimizer state exists
-    has_opt_state = any(len(g) > 0 for g in optimizer.state_dict()['state'].values()) if len(optimizer.state_dict()['state']) > 0 else False
+    has_opt_state = (
+        any(len(g) > 0 for g in optimizer.state_dict()["state"].values())
+        if len(optimizer.state_dict()["state"]) > 0
+        else False
+    )
     print(f"    Optimizer has state: {has_opt_state} ✅")
 
     print(f"\n  ✅ E2E training test PASSED — model, loss, backward, optimizer, EMA all working")
     return True
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         test_e2e_training()
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print("ALL E2E TESTS PASSED")
-        print("="*60)
+        print("=" * 60)
     except Exception as e:
         print(f"\n❌ E2E test FAILED: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

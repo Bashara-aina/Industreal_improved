@@ -11,6 +11,7 @@ Run on GPU 0 (training uses GPU 1). Total ~5-10 minutes for 100 batches.
 Usage:
     python scripts/e8_gradient_diagnostic_lite.py --max-batches 100
 """
+
 # DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import gc
@@ -21,7 +22,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 # Path setup
 _CODE_ROOT = Path(__file__).resolve().parent.parent
@@ -30,6 +30,7 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
         sys.path.insert(0, _p)
 
 import src.config as C
+
 C.NUM_ACT_OUTPUTS = 75
 C.ACT_CLASS_GROUPING = "none"
 
@@ -42,8 +43,8 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def normalize_images(images, device):
     images = images.float() / 255.0
-    mean = torch.tensor([0.45]*3, device=device).view(1, 1, 3, 1, 1)
-    std = torch.tensor([0.225]*3, device=device).view(1, 1, 3, 1, 1)
+    mean = torch.tensor([0.45] * 3, device=device).view(1, 1, 3, 1, 1)
+    std = torch.tensor([0.225] * 3, device=device).view(1, 1, 3, 1, 1)
     images = (images - mean) / std
     images = images.permute(0, 2, 1, 3, 4).contiguous()
     return images
@@ -107,12 +108,18 @@ def main():
 
     # Build dataset
     train_ds = IndustRealMultiTaskDataset(
-        split="train", img_size=(224, 224),
-        augment=False, sequence_mode=True, sequence_length=16,
+        split="train",
+        img_size=(224, 224),
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
     )
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True,
-        collate_fn=collate_fn_sequences, num_workers=0,
+        train_ds,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=collate_fn_sequences,
+        num_workers=0,
     )
 
     shared_params = [p for p in model.feature_pyramid.backbone.parameters() if p.requires_grad]
@@ -143,12 +150,14 @@ def main():
 
         if (batch_idx + 1) % 10 == 0:
             elapsed = time.time() - t0
-            print(f"  Batch {batch_idx+1}/{args.max_batches}: "
-                  f"det_norm={grad_norms['det'][-1]:.2e}, "
-                  f"act_norm={grad_norms['act'][-1]:.2e}, "
-                  f"psr_norm={grad_norms['psr'][-1]:.2e}, "
-                  f"pose_norm={grad_norms['pose'][-1]:.2e} "
-                  f"({elapsed:.0f}s)")
+            print(
+                f"  Batch {batch_idx + 1}/{args.max_batches}: "
+                f"det_norm={grad_norms['det'][-1]:.2e}, "
+                f"act_norm={grad_norms['act'][-1]:.2e}, "
+                f"psr_norm={grad_norms['psr'][-1]:.2e}, "
+                f"pose_norm={grad_norms['pose'][-1]:.2e} "
+                f"({elapsed:.0f}s)"
+            )
 
     print(f"  Processed {n_processed} batches in {time.time() - t0:.1f}s")
 
@@ -193,8 +202,9 @@ def main():
                 "rate": n_conflict / max(n_total, 1),
             }
 
-    mean_grad_norms = {t: float(np.mean(grad_norms[t])) if grad_norms[t] else 0.0
-                       for t in task_names}
+    mean_grad_norms = {
+        t: float(np.mean(grad_norms[t])) if grad_norms[t] else 0.0 for t in task_names
+    }
 
     # Print heatmap
     print("\n" + "=" * 60)

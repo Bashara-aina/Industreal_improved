@@ -34,7 +34,9 @@ import numpy as np
 # ---------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHECKPOINT_PATH = REPO_ROOT / "src" / "runs" / "rf_stages" / "checkpoints" / "best.pth"
-OUTPUT_PATH = REPO_ROOT / "src" / "runs" / "rf_stages" / "checkpoints" / "up_vector_per_recording.json"
+OUTPUT_PATH = (
+    REPO_ROOT / "src" / "runs" / "rf_stages" / "checkpoints" / "up_vector_per_recording.json"
+)
 
 # Add industreal source to path
 INDUSTREAL_SRC = REPO_ROOT / ".wiki" / "archive-research" / "industreal_improved"
@@ -45,6 +47,7 @@ if INDUSTREAL_SRC.exists():
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def extract_recording_id(video_id: str) -> str:
     """Extract recording ID from a video_id string.
@@ -102,7 +105,7 @@ def compute_up_vector_mae_per_recording(
             idx = 0
             for b in range(B):
                 rec_id = extract_recording_id(video_ids[b])
-                recording_errors[rec_id].extend(up_mae[idx:idx + T].tolist())
+                recording_errors[rec_id].extend(up_mae[idx : idx + T].tolist())
                 idx += T
 
             if (batch_idx + 1) % 50 == 0:
@@ -164,9 +167,11 @@ def print_report(stats: dict) -> None:
     print("=" * 60)
     for rid in sorted(stats["per_recording"].keys()):
         r = stats["per_recording"][rid]
-        print(f"  {rid:>12s}:  median={r['median']:6.2f}  "
-              f"IQR=[{r['q25']:5.2f}, {r['q75']:5.2f}]  "
-              f"mean={r['mean']:6.2f}  n={r['count']:4d}")
+        print(
+            f"  {rid:>12s}:  median={r['median']:6.2f}  "
+            f"IQR=[{r['q25']:5.2f}, {r['q75']:5.2f}]  "
+            f"mean={r['mean']:6.2f}  n={r['count']:4d}"
+        )
 
     fe = stats["full_eval"]
     full_med = fe["median_of_medians"]
@@ -181,8 +186,10 @@ def print_report(stats: dict) -> None:
     print(f"  Median MAE: {out['median_mae']:.2f} deg")
 
     print(f"\n=== VERDICT ===")
-    print(f"  Full-eval median with IQR: {full_med:.2f} deg "
-          f"([{full_med - iqr_half:.2f}, {full_med + iqr_half:.2f}])")
+    print(
+        f"  Full-eval median with IQR: {full_med:.2f} deg "
+        f"([{full_med - iqr_half:.2f}, {full_med + iqr_half:.2f}])"
+    )
     print(f"  Outlier: {out['recording_id']} @ {out['median_mae']:.2f} deg")
     print("=" * 60)
 
@@ -190,6 +197,7 @@ def print_report(stats: dict) -> None:
 # ---------------------------------------------------------------------------
 # Demo mode (no model needed)
 # ---------------------------------------------------------------------------
+
 
 def run_demo():
     """Run with demo data to verify logic without a trained model."""
@@ -220,15 +228,19 @@ def run_demo():
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(OUTPUT_PATH, "w") as f:
-        json.dump({
-            "metadata": {
-                "checkpoint": str(CHECKPOINT_PATH),
-                "status": "demo_mode",
-                "description": "Per-recording up-vector angular MAE breakdown (SYNTHETIC DEMO)",
-                "warning": "No checkpoint found at best.pth. These are synthetic placeholder results.",
+        json.dump(
+            {
+                "metadata": {
+                    "checkpoint": str(CHECKPOINT_PATH),
+                    "status": "demo_mode",
+                    "description": "Per-recording up-vector angular MAE breakdown (SYNTHETIC DEMO)",
+                    "warning": "No checkpoint found at best.pth. These are synthetic placeholder results.",
+                },
+                **stats,
             },
-            **stats,
-        }, f, indent=2)
+            f,
+            indent=2,
+        )
     print(f"\n[OK] Demo results saved to: {OUTPUT_PATH}")
 
 
@@ -236,16 +248,14 @@ def run_demo():
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="Per-recording up-vector angular MAE breakdown"
+    parser = argparse.ArgumentParser(description="Per-recording up-vector angular MAE breakdown")
+    parser.add_argument(
+        "--demo", action="store_true", help="Run with synthetic data (no model/checkpoint needed)"
     )
-    parser.add_argument("--demo", action="store_true",
-                        help="Run with synthetic data (no model/checkpoint needed)")
-    parser.add_argument("--batch-size", type=int, default=2,
-                        help="Batch size (default: 2)")
-    parser.add_argument("--device", type=str, default=None,
-                        help="Device override (cuda, cpu)")
+    parser.add_argument("--batch-size", type=int, default=2, help="Batch size (default: 2)")
+    parser.add_argument("--device", type=str, default=None, help="Device override (cuda, cpu)")
     args = parser.parse_args()
 
     if args.demo:
@@ -273,7 +283,7 @@ def main():
         sys.exit(1)
 
     try:
-        import config as C
+        import config as C  # noqa: F401
     except ImportError as e:
         print(f"[FATAL] Cannot import config: {e}")
         sys.exit(1)
@@ -281,6 +291,7 @@ def main():
     # Build validation DataLoader
     try:
         from industreal_dataset import IndustRealDataset
+
         dataset = IndustRealDataset(
             split="val",
             data_root=str(REPO_ROOT / "data" / "industreal"),
@@ -288,8 +299,12 @@ def main():
             stride=2,
         )
         val_loader = DataLoader(
-            dataset, batch_size=args.batch_size, shuffle=False,
-            num_workers=0, pin_memory=False, drop_last=False,
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=False,
+            drop_last=False,
         )
         print(f"Validation dataset: {len(dataset)} samples, {len(val_loader)} batches")
     except (ImportError, FileNotFoundError, RuntimeError) as e:
@@ -316,16 +331,20 @@ def main():
     # Save
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(OUTPUT_PATH, "w") as f:
-        json.dump({
-            "metadata": {
-                "checkpoint": str(CHECKPOINT_PATH),
-                "status": "completed",
-                "batch_size": args.batch_size,
-                "device": device,
-                "description": "Per-recording up-vector angular MAE breakdown",
+        json.dump(
+            {
+                "metadata": {
+                    "checkpoint": str(CHECKPOINT_PATH),
+                    "status": "completed",
+                    "batch_size": args.batch_size,
+                    "device": device,
+                    "description": "Per-recording up-vector angular MAE breakdown",
+                },
+                **stats,
             },
-            **stats,
-        }, f, indent=2)
+            f,
+            indent=2,
+        )
     print(f"\n[OK] Saved results to: {OUTPUT_PATH}")
 
 

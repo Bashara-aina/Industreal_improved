@@ -8,14 +8,13 @@ Usage:
     python scripts/verify_checkpoint.py --ckpt runs/mtl_mvit_run/best.pt
     python scripts/verify_checkpoint.py --ckpt runs/mtl_mvit_run/latest.pt
 """
+
 # DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
-import json
 import sys
 from pathlib import Path
 
 import torch
-import torch.nn as nn
 
 # Path setup
 _CODE_ROOT = Path(__file__).resolve().parent.parent
@@ -24,6 +23,7 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
         sys.path.insert(0, _p)
 
 import src.config as C
+
 C.NUM_ACT_OUTPUTS = 75
 C.ACT_CLASS_GROUPING = "none"
 
@@ -52,11 +52,14 @@ def main():
     state_dict = ckpt.get("model_state_dict", ckpt)
     # Pre-filter for shape mismatches (in case of head reshapes)
     model_sd = model.state_dict()
-    filtered = {k: v for k, v in state_dict.items()
-                if k in model_sd and model_sd[k].shape == v.shape}
+    filtered = {
+        k: v for k, v in state_dict.items() if k in model_sd and model_sd[k].shape == v.shape
+    }
     skipped = len(state_dict) - len(filtered)
     load_result = model.load_state_dict(filtered, strict=False)
-    print(f"  Loaded {len(filtered)}/{len(state_dict)} tensors (skipped {skipped} shape-mismatched)")
+    print(
+        f"  Loaded {len(filtered)}/{len(state_dict)} tensors (skipped {skipped} shape-mismatched)"
+    )
     if load_result.missing_keys:
         print(f"  {len(load_result.missing_keys)} missing keys (new layers, init fresh)")
 
@@ -72,10 +75,14 @@ def main():
         images = torch.randn(B, 3, T, 224, 224, device=DEVICE) * 0.5 + 0.5
         targets = {
             "detection": [
-                {"boxes": torch.tensor([[50., 50., 150., 150.]]).to(DEVICE),
-                 "labels": torch.tensor([5], dtype=torch.long, device=DEVICE)},
-                {"boxes": torch.tensor([[30., 30., 100., 100.]]).to(DEVICE),
-                 "labels": torch.tensor([3], dtype=torch.long, device=DEVICE)},
+                {
+                    "boxes": torch.tensor([[50.0, 50.0, 150.0, 150.0]]).to(DEVICE),
+                    "labels": torch.tensor([5], dtype=torch.long, device=DEVICE),
+                },
+                {
+                    "boxes": torch.tensor([[30.0, 30.0, 100.0, 100.0]]).to(DEVICE),
+                    "labels": torch.tensor([3], dtype=torch.long, device=DEVICE),
+                },
             ],
             "activity": torch.tensor([5, 10], dtype=torch.long, device=DEVICE),
             "psr_labels": torch.zeros(B, T, 11, device=DEVICE).scatter_(

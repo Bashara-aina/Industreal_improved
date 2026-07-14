@@ -28,10 +28,8 @@ Usage:
 import argparse
 import json
 import logging
-import os
-import pickle
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import torch
@@ -44,10 +42,12 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # Distillation Loss Functions
 # ============================================================================
-def detection_logit_distillation_loss(student_logits: torch.Tensor,
-                                       teacher_logits: torch.Tensor,
-                                       temperature: float = 3.0,
-                                       alpha: float = 0.5) -> torch.Tensor:
+def detection_logit_distillation_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    temperature: float = 3.0,
+    alpha: float = 0.5,
+) -> torch.Tensor:
     """KL divergence between student and teacher detection logits.
 
     Args:
@@ -71,13 +71,15 @@ def detection_logit_distillation_loss(student_logits: torch.Tensor,
     kl_neg = (1 - teacher_probs) * torch.log((1 - teacher_probs) / (1 - student_probs + 1e-8))
     kl = (kl_pos + kl_neg).mean()
 
-    return alpha * kl * (temperature ** 2)
+    return alpha * kl * (temperature**2)
 
 
-def activity_distillation_loss(student_logits: torch.Tensor,
-                                teacher_logits: torch.Tensor,
-                                temperature: float = 3.0,
-                                alpha: float = 0.3) -> torch.Tensor:
+def activity_distillation_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    temperature: float = 3.0,
+    alpha: float = 0.3,
+) -> torch.Tensor:
     """KL divergence between student and teacher activity logits.
 
     Args:
@@ -97,16 +99,16 @@ def activity_distillation_loss(student_logits: torch.Tensor,
     kl = F.kl_div(
         student_log_probs,
         teacher_probs.detach(),
-        reduction='batchmean',
+        reduction="batchmean",
         log_target=False,
     )
 
-    return alpha * kl * (temperature ** 2)
+    return alpha * kl * (temperature**2)
 
 
-def box_distillation_loss(student_boxes: torch.Tensor,
-                           teacher_boxes: torch.Tensor,
-                           alpha: float = 0.2) -> torch.Tensor:
+def box_distillation_loss(
+    student_boxes: torch.Tensor, teacher_boxes: torch.Tensor, alpha: float = 0.2
+) -> torch.Tensor:
     """MSE between student and teacher box predictions.
 
     Only applied where the teacher has confident detections.
@@ -145,42 +147,53 @@ class TeacherPredictionGenerator:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self._predictions: Dict[str, Dict] = {}
 
-    def add_sample(self, frame_id: str,
-                   teacher_det_logits: Optional[np.ndarray] = None,
-                   teacher_det_boxes: Optional[np.ndarray] = None,
-                   teacher_act_logits: Optional[np.ndarray] = None):
+    def add_sample(
+        self,
+        frame_id: str,
+        teacher_det_logits: Optional[np.ndarray] = None,
+        teacher_det_boxes: Optional[np.ndarray] = None,
+        teacher_act_logits: Optional[np.ndarray] = None,
+    ):
         """Adda teacher prediction for one frame."""
         self._predictions[frame_id] = {
-            'det_logits': teacher_det_logits,
-            'det_boxes': teacher_det_boxes,
-            'act_logits': teacher_act_logits,
+            "det_logits": teacher_det_logits,
+            "det_boxes": teacher_det_boxes,
+            "act_logits": teacher_act_logits,
         }
 
     def save(self):
         """Save all predictions to disk as .pkl files."""
         np.savez_compressed(
-            self.output_dir / 'teacher_predictions.npz',
-            **{k: {
-                kk: vv for kk, vv in v.items() if vv is not None
-            } for k, v in self._predictions.items()}
+            self.output_dir / "teacher_predictions.npz",
+            **{
+                k: {kk: vv for kk, vv in v.items() if vv is not None}
+                for k, v in self._predictions.items()
+            },
         )
         # Also save metadata
         meta = {
-            'num_frames': len(self._predictions),
-            'output_dims': {
-                'det_logits': self._predictions[list(self._predictions.keys())[0]]['det_logits'].shape
-                if self._predictions and list(self._predictions.values())[0].get('det_logits') is not None
+            "num_frames": len(self._predictions),
+            "output_dims": {
+                "det_logits": self._predictions[list(self._predictions.keys())[0]][
+                    "det_logits"
+                ].shape
+                if self._predictions
+                and list(self._predictions.values())[0].get("det_logits") is not None
                 else None,
-                'act_logits': self._predictions[list(self._predictions.keys())[0]]['act_logits'].shape
-                if self._predictions and list(self._predictions.values())[0].get('act_logits') is not None
+                "act_logits": self._predictions[list(self._predictions.keys())[0]][
+                    "act_logits"
+                ].shape
+                if self._predictions
+                and list(self._predictions.values())[0].get("act_logits") is not None
                 else None,
-            }
+            },
         }
-        with open(self.output_dir / 'teacher_meta.json', 'w') as f:
+        with open(self.output_dir / "teacher_meta.json", "w") as f:
             json.dump(meta, f, indent=2)
 
-        logger.info(f"[Distill] Saved {len(self._predictions)} teacher predictions "
-                    f"to {self.output_dir}")
+        logger.info(
+            f"[Distill] Saved {len(self._predictions)} teacher predictions to {self.output_dir}"
+        )
 
 
 class TeacherPredictionLoader:
@@ -193,9 +206,8 @@ class TeacherPredictionLoader:
 
     def load(self):
         """Load the prediction cache into memory."""
-        self._data = np.load(self.cache_dir / 'teacher_predictions.npz',
-                             allow_pickle=True)
-        with open(self.cache_dir / 'teacher_meta.json', 'r') as f:
+        self._data = np.load(self.cache_dir / "teacher_predictions.npz", allow_pickle=True)
+        with open(self.cache_dir / "teacher_meta.json", "r") as f:
             self._meta = json.load(f)
         logger.info(f"[Distill] Loaded {self._meta['num_frames']} teacher predictions")
 
@@ -218,8 +230,7 @@ class DistillationLoss(nn.Module):
     Used transparently: if USE_DISTILLATION=False, this module is a no-op.
     """
 
-    def __init__(self, temperature: float = 3.0,
-                 det_weight: float = 0.5, act_weight: float = 0.3):
+    def __init__(self, temperature: float = 3.0, det_weight: float = 0.5, act_weight: float = 0.3):
         super().__init__()
         self.temperature = temperature
         self.det_weight = det_weight
@@ -230,8 +241,9 @@ class DistillationLoss(nn.Module):
         self.teacher_loader = TeacherPredictionLoader(cache_dir)
         self.teacher_loader.load()
 
-    def forward(self, student_outputs: Dict[str, torch.Tensor],
-                teacher_outputs: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, Dict[str, float]]:
+    def forward(
+        self, student_outputs: Dict[str, torch.Tensor], teacher_outputs: Dict[str, torch.Tensor]
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """Compute distillation loss components.
 
         Args:
@@ -245,54 +257,62 @@ class DistillationLoss(nn.Module):
         metrics = {}
 
         # Detection distillation
-        if 'det_logits' in teacher_outputs and 'cls_preds' in student_outputs:
+        if "det_logits" in teacher_outputs and "cls_preds" in student_outputs:
             det_loss = detection_logit_distillation_loss(
-                student_outputs['cls_preds'],
-                teacher_outputs['det_logits'],
-                self.temperature, self.det_weight,
+                student_outputs["cls_preds"],
+                teacher_outputs["det_logits"],
+                self.temperature,
+                self.det_weight,
             )
             total = total + det_loss
-            metrics['distill_det'] = det_loss.item()
+            metrics["distill_det"] = det_loss.item()
 
-        if 'det_boxes' in teacher_outputs and 'reg_preds' in student_outputs:
+        if "det_boxes" in teacher_outputs and "reg_preds" in student_outputs:
             box_loss = box_distillation_loss(
-                student_outputs['reg_preds'],
-                teacher_outputs['det_boxes'],
+                student_outputs["reg_preds"],
+                teacher_outputs["det_boxes"],
                 self.det_weight * 0.5,
             )
             total = total + box_loss
-            metrics['distill_box'] = box_loss.item()
+            metrics["distill_box"] = box_loss.item()
 
         # Activity distillation
-        if 'act_logits' in teacher_outputs and 'act_logits' in student_outputs:
+        if "act_logits" in teacher_outputs and "act_logits" in student_outputs:
             act_loss = activity_distillation_loss(
-                student_outputs['act_logits'],
-                teacher_outputs['act_logits'],
-                self.temperature, self.act_weight,
+                student_outputs["act_logits"],
+                teacher_outputs["act_logits"],
+                self.temperature,
+                self.act_weight,
             )
             total = total + act_loss
-            metrics['distill_act'] = act_loss.item()
+            metrics["distill_act"] = act_loss.item()
 
-        metrics['distill_total'] = total.item()
+        metrics["distill_total"] = total.item()
         return total, metrics
 
 
 # ============================================================================
 # CLI — Generate teacher predictions
 # ============================================================================
-if __name__ == '__main__':
-    ap = argparse.ArgumentParser(description='Tier 3.9: Knowledge Distillation')
-    ap.add_argument('--generate', action='store_true', help='Generate teacher predictions')
-    ap.add_argument('--output', type=str, default='runs/teacher_preds',
-                    help='Output directory for teacher predictions')
-    ap.add_argument('--data-path', type=str, help='Path to dataset')
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="Tier 3.9: Knowledge Distillation")
+    ap.add_argument("--generate", action="store_true", help="Generate teacher predictions")
+    ap.add_argument(
+        "--output",
+        type=str,
+        default="runs/teacher_preds",
+        help="Output directory for teacher predictions",
+    )
+    ap.add_argument("--data-path", type=str, help="Path to dataset")
 
     args = ap.parse_args()
 
     if args.generate:
         gen = TeacherPredictionGenerator(args.output)
-        logger.info("[Distill] Teacher prediction generation — run your teacher model "
-                    "over the dataset and call gen.add_sample() per frame")
+        logger.info(
+            "[Distill] Teacher prediction generation — run your teacher model "
+            "over the dataset and call gen.add_sample() per frame"
+        )
         logger.info("[Distill] See module docstring for integration instructions")
     else:
         ap.print_help()

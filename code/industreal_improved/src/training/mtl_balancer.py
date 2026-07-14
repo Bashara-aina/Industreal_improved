@@ -32,7 +32,7 @@ References:
 """
 
 import random
-from typing import Callable, List, Optional, Tuple, Union
+from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -88,13 +88,9 @@ class MTLBalancer:
         # ---- MetaBalance-specific state ----
         if mode == "metabalance":
             if task_names is None or len(task_names) < 2:
-                raise ValueError(
-                    "MetaBalance requires task_names with at least 2 tasks"
-                )
+                raise ValueError("MetaBalance requires task_names with at least 2 tasks")
             if target_task not in task_names:
-                raise ValueError(
-                    f"target_task '{target_task}' not in task_names {task_names}"
-                )
+                raise ValueError(f"target_task '{target_task}' not in task_names {task_names}")
             self._mb_task_names: List[str] = list(task_names)
             self._mb_target_task: str = target_task
             self._mb_alpha: float = 0.9
@@ -167,8 +163,7 @@ class MTLBalancer:
             )
             # Replace None (param unreachable from this task's loss) with zero
             g = tuple(
-                torch.zeros_like(p) if gi is None else gi
-                for gi, p in zip(g, self.shared_params)
+                torch.zeros_like(p) if gi is None else gi for gi, p in zip(g, self.shared_params)
             )
             task_grads.append(g)
 
@@ -198,9 +193,7 @@ class MTLBalancer:
         """Update the shared parameter list (e.g., after model surgery)."""
         self.shared_params = list(params)
         if self.mode == "metabalance":
-            self._mb_norms = [
-                [0.0] * len(self._mb_task_names) for _ in self.shared_params
-            ]
+            self._mb_norms = [[0.0] * len(self._mb_task_names) for _ in self.shared_params]
 
     @property
     def has_hooks(self) -> bool:
@@ -315,18 +308,10 @@ class MTLBalancer:
         result: List[torch.Tensor] = []
         for i, param in enumerate(self.shared_params):
             target_norm = max(self._mb_norms[i][target_idx], eps)
-            if target_norm <= 0 or not torch.isfinite(
-                torch.tensor(target_norm)
-            ):
+            if target_norm <= 0 or not torch.isfinite(torch.tensor(target_norm)):
                 # Fallback: plain sum (before EMA warms up).
-                pieces = [
-                    task_grads[k][i]
-                    for k in range(n_tasks)
-                    if task_grads[k][i] is not None
-                ]
-                result.append(
-                    sum(pieces) if pieces else torch.zeros_like(param.data)
-                )
+                pieces = [task_grads[k][i] for k in range(n_tasks) if task_grads[k][i] is not None]
+                result.append(sum(pieces) if pieces else torch.zeros_like(param.data))
                 continue
 
             accumulator = torch.zeros_like(param.data)
@@ -382,9 +367,7 @@ class MTLBalancer:
         for param in all_params:
             in_all = True
             for loss in task_losses:
-                g = torch.autograd.grad(
-                    loss, param, retain_graph=True, allow_unused=True
-                )
+                g = torch.autograd.grad(loss, param, retain_graph=True, allow_unused=True)
                 if g[0] is None:
                     in_all = False
                     break

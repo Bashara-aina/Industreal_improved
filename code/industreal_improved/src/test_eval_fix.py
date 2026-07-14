@@ -3,13 +3,14 @@
 Minimal eval test — runs evaluate_all() with a small subset
 to verify the defensive fixes work before launching full training.
 """
-import sys, os, torch, logging, gc
+
+import sys, os, torch, logging
 from pathlib import Path
 
 # Match the same path setup that train.py uses
 _SRC = Path("/home/newadmin/swarm-bot/project/popw/working/code/industreal_improved_to_archive/src")
 _PARENT = _SRC.parent  # .../industreal_improved_to_archive/
-for _sub in ['models', 'training', 'evaluation', 'data', str(_SRC)]:
+for _sub in ["models", "training", "evaluation", "data", str(_SRC)]:
     _p = _SRC / _sub if _sub != str(_SRC) else _SRC
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
@@ -39,11 +40,11 @@ from models.model import POPWMultiTaskModel
 
 model = POPWMultiTaskModel(
     pretrained=False,  # checkpoint has trained weights
-    backbone_type=str(getattr(C, 'BACKBONE', 'convnext_tiny')),
-    use_hand_film=bool(getattr(C, 'USE_HAND_FILM', True)),
-    use_headpose_film=bool(getattr(C, 'USE_HEADPOSE_FILM', False)),
-    use_videomae=bool(getattr(C, 'USE_VIDEOMAE', False)),
-    train_pose=bool(getattr(C, 'TRAIN_HEAD_POSE', False)),
+    backbone_type=str(getattr(C, "BACKBONE", "convnext_tiny")),
+    use_hand_film=bool(getattr(C, "USE_HAND_FILM", True)),
+    use_headpose_film=bool(getattr(C, "USE_HEADPOSE_FILM", False)),
+    use_videomae=bool(getattr(C, "USE_VIDEOMAE", False)),
+    train_pose=bool(getattr(C, "TRAIN_HEAD_POSE", False)),
 )
 model.to(DEVICE)
 model.eval()
@@ -58,14 +59,15 @@ logger.info("  Model loaded OK")
 
 # --- Build criterion ---
 from training.losses import MultiTaskLoss
+
 criterion = MultiTaskLoss(
     num_classes_act=C.NUM_CLASSES_ACT,
     num_psr_components=C.NUM_PSR_COMPONENTS,
     train_det=True,
-    train_pose=bool(getattr(C, 'TRAIN_HEAD_POSE', False)),
+    train_pose=bool(getattr(C, "TRAIN_HEAD_POSE", False)),
     train_act=True,
     train_psr=True,
-    use_kendall=bool(getattr(C, 'USE_KENDALL', True)),
+    use_kendall=bool(getattr(C, "USE_KENDALL", True)),
 )
 criterion.to(DEVICE)
 
@@ -75,7 +77,7 @@ from data.industreal_dataset import IndustRealMultiTaskDataset
 from torch.utils.data import DataLoader
 
 val_ds = IndustRealMultiTaskDataset(
-    split='val',
+    split="val",
     img_size=C.IMG_SIZE,
     augment=False,
     seed=C.SEED,
@@ -86,7 +88,9 @@ val_loader = DataLoader(
     num_workers=0,
     shuffle=False,
     pin_memory=False,
-    collate_fn=getattr(__import__('data.industreal_dataset', fromlist=['collate_fn']), 'collate_fn'),
+    collate_fn=getattr(
+        __import__("data.industreal_dataset", fromlist=["collate_fn"]), "collate_fn"
+    ),
 )
 logger.info(f"Val dataset: {len(val_ds)} samples, {len(val_loader)} batches")
 
@@ -103,7 +107,7 @@ try:
         criterion,
         val_loader,
         DEVICE,
-        max_batches=50,   # TEST: only 50 batches
+        max_batches=50,  # TEST: only 50 batches
     )
     logger.info("=" * 60)
     logger.info("EVAL TEST PASSED ✓")
@@ -118,6 +122,7 @@ except Exception as e:
     logger.error("=" * 60)
     logger.error(f"EVAL TEST FAILED: {type(e).__name__}: {e}")
     import traceback
+
     logger.error(traceback.format_exc())
     logger.error("=" * 60)
     sys.exit(1)

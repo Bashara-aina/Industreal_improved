@@ -15,6 +15,7 @@ Usage:
     python scripts/e8_gradient_diagnostic.py --max-batches 200 \
         --output /tmp/e8_results.json
 """
+
 # DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import json
@@ -24,7 +25,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn as nn
 
 # Path setup
 _CODE_ROOT = Path(__file__).resolve().parent.parent
@@ -33,6 +33,7 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
         sys.path.insert(0, _p)
 
 import src.config as C
+
 C.NUM_ACT_OUTPUTS = 75
 C.ACT_CLASS_GROUPING = "none"
 
@@ -45,8 +46,8 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def normalize_images(images, device):
     images = images.float() / 255.0
-    mean = torch.tensor([0.45]*3, device=device).view(1, 1, 3, 1, 1)
-    std = torch.tensor([0.225]*3, device=device).view(1, 1, 3, 1, 1)
+    mean = torch.tensor([0.45] * 3, device=device).view(1, 1, 3, 1, 1)
+    std = torch.tensor([0.225] * 3, device=device).view(1, 1, 3, 1, 1)
     images = (images - mean) / std
     images = images.permute(0, 2, 1, 3, 4).contiguous()
     return images
@@ -67,8 +68,12 @@ def to_device_targets(targets, device):
 
 def main():
     parser = argparse.ArgumentParser(description="E8 gradient-flow diagnostic for MTL")
-    parser.add_argument("--max-batches", type=int, default=100,
-                        help="Number of batches to accumulate gradients over")
+    parser.add_argument(
+        "--max-batches",
+        type=int,
+        default=100,
+        help="Number of batches to accumulate gradients over",
+    )
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--output", type=str, default="/tmp/e8_results.json")
     args = parser.parse_args()
@@ -78,12 +83,18 @@ def main():
     model.eval()  # disable dropout for cleaner gradients
 
     train_ds = IndustRealMultiTaskDataset(
-        split="train", img_size=(224, 224),
-        augment=False, sequence_mode=True, sequence_length=16,
+        split="train",
+        img_size=(224, 224),
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
     )
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True,
-        collate_fn=collate_fn_sequences, num_workers=0,
+        train_ds,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=collate_fn_sequences,
+        num_workers=0,
     )
 
     shared_params = [p for p in model.feature_pyramid.backbone.parameters() if p.requires_grad]
@@ -109,12 +120,17 @@ def main():
                 "det": detection_loss(outputs["detection"], targets.get("detection", [])),
                 "act": activity_loss(outputs["activity"], targets["activity"]),
                 "psr": psr_loss(outputs["psr_logits"], targets["psr_labels"]),
-                "pose": pose_loss(outputs["pose_6d"], targets["head_pose"][:, targets["head_pose"].size(1) // 2, :6]),
+                "pose": pose_loss(
+                    outputs["pose_6d"],
+                    targets["head_pose"][:, targets["head_pose"].size(1) // 2, :6],
+                ),
             }
 
         for task_name, loss in task_losses.items():
             try:
-                grads = torch.autograd.grad(loss, shared_params, retain_graph=True, allow_unused=True)
+                grads = torch.autograd.grad(
+                    loss, shared_params, retain_graph=True, allow_unused=True
+                )
                 # Filter to non-None gradients
                 flat = []
                 for g, p in zip(grads, shared_params):
@@ -176,8 +192,9 @@ def main():
             }
 
     # Mean gradient norm per task
-    mean_grad_norms = {t: float(np.mean(grad_norms[t])) if grad_norms[t] else 0.0
-                       for t in task_names}
+    mean_grad_norms = {
+        t: float(np.mean(grad_norms[t])) if grad_norms[t] else 0.0 for t in task_names
+    }
 
     # Print heatmap
     print("\n" + "=" * 60)
@@ -205,11 +222,17 @@ def main():
     print("\nVERDICTS:")
     avg_conflict = np.mean([info["rate"] for info in conflict_rate.values()])
     if avg_conflict < 0.05:
-        print(f"  Conflict rate {avg_conflict:.1%} very low → PCGrad mostly no-op. Consider disabling for ~30% speedup.")
+        print(
+            f"  Conflict rate {avg_conflict:.1%} very low → PCGrad mostly no-op. Consider disabling for ~30% speedup."
+        )
     elif avg_conflict > 0.30:
-        print(f"  Conflict rate {avg_conflict:.1%} high → PCGrad is essential; document this in the paper.")
+        print(
+            f"  Conflict rate {avg_conflict:.1%} high → PCGrad is essential; document this in the paper."
+        )
     else:
-        print(f"  Conflict rate {avg_conflict:.1%} moderate → PCGrad is doing useful work; keep it on.")
+        print(
+            f"  Conflict rate {avg_conflict:.1%} moderate → PCGrad is doing useful work; keep it on."
+        )
 
     # Save
     results = {

@@ -9,6 +9,7 @@ Verified against Algorithm 1 in the NeurIPS 2023 paper. The key insight:
 weights are updated based on loss decrease rates (log l_t - log l_{t+1}),
 not on per-task gradients — so only ONE backward pass is needed.
 """
+
 import torch
 import torch.nn.functional as F
 from typing import Dict, Optional

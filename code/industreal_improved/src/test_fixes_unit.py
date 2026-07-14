@@ -15,13 +15,13 @@ Run:
     cd /media/newadmin/master/POPW/working/code/industreal_improved_to_archive/src
     python3 -m pytest test_fixes_unit.py -v 2>&1 | tail -40
 """
+
 from __future__ import annotations
 
 import math
 import os
 import re
 import sys
-import threading
 from pathlib import Path
 
 import pytest
@@ -37,6 +37,7 @@ for p in (str(PROJECT_ROOT), str(SRC_DIR)):
     if p not in sys.path:
         sys.path.insert(0, p)
 os.chdir(PROJECT_ROOT)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -99,8 +100,7 @@ class TestPsrTemporalSmooth:
             source_losses,
         )
         assert buggy is None, (
-            "losses.py still applies .abs() to diff_p before tanh — "
-            "the signed-tanh fix is missing"
+            "losses.py still applies .abs() to diff_p before tanh — the signed-tanh fix is missing"
         )
 
     def test_source_uses_signed_diff_p(self, source_losses):
@@ -175,8 +175,7 @@ class TestPsrTemporalSmooth:
             f"Both must be finite, got signed={smooth_signed.item()} abs={smooth_abs.item()}"
         )
         assert not torch.isclose(smooth_signed, smooth_abs), (
-            "Signed and abs diffs collapsed to the same value — "
-            "the fix has no observable effect"
+            "Signed and abs diffs collapsed to the same value — the fix has no observable effect"
         )
         # The bug version saturates higher, fix version is well below.
         assert float(smooth_abs) > float(smooth_signed), (
@@ -207,9 +206,7 @@ class TestCombinedMetricNaNGuard:
             r"\s*if\s*\(.*?isfinite.*?\)",
             source_metrics,
         )
-        assert pattern is not None, (
-            "mae_component assignment must be gated by an isfinite check"
-        )
+        assert pattern is not None, "mae_component assignment must be gated by an isfinite check"
 
     def test_combined_metric_finite_when_f1_psr_is_inf(self, monkeypatch):
         """compute_metrics must return a finite 'combined' when F1_psr is +inf."""
@@ -230,7 +227,8 @@ class TestCombinedMetricNaNGuard:
         }
         original = ev_mod.compute_psr_metrics
         monkeypatch.setattr(
-            ev_mod, "compute_psr_metrics",
+            ev_mod,
+            "compute_psr_metrics",
             lambda *a, **k: {"psr_overall_f1": float("inf")},
         )
         try:
@@ -264,7 +262,8 @@ class TestCombinedMetricNaNGuard:
         }
         original = ev_mod.compute_psr_metrics
         monkeypatch.setattr(
-            ev_mod, "compute_psr_metrics",
+            ev_mod,
+            "compute_psr_metrics",
             lambda *a, **k: {"psr_overall_f1": float("nan")},
         )
         try:
@@ -296,7 +295,8 @@ class TestCombinedMetricNaNGuard:
         }
         original = ev_mod.compute_head_pose_metrics
         monkeypatch.setattr(
-            ev_mod, "compute_head_pose_metrics",
+            ev_mod,
+            "compute_head_pose_metrics",
             lambda *a, **k: {"head_pose_MAE": float("nan")},
         )
         try:
@@ -305,9 +305,7 @@ class TestCombinedMetricNaNGuard:
             monkeypatch.setattr(ev_mod, "compute_head_pose_metrics", original)
 
         combined = res.get("combined", 0.0)
-        assert math.isfinite(float(combined)), (
-            f"combined={combined!r} is not finite when MAE=NaN"
-        )
+        assert math.isfinite(float(combined)), f"combined={combined!r} is not finite when MAE=NaN"
 
     def test_combined_metric_finite_when_mae_is_inf(self, monkeypatch):
         """compute_metrics must return finite 'combined' when MAE is +inf."""
@@ -328,7 +326,8 @@ class TestCombinedMetricNaNGuard:
         }
         original = ev_mod.compute_head_pose_metrics
         monkeypatch.setattr(
-            ev_mod, "compute_head_pose_metrics",
+            ev_mod,
+            "compute_head_pose_metrics",
             lambda *a, **k: {"head_pose_MAE": float("inf")},
         )
         try:
@@ -337,9 +336,7 @@ class TestCombinedMetricNaNGuard:
             monkeypatch.setattr(ev_mod, "compute_head_pose_metrics", original)
 
         combined = res.get("combined", 0.0)
-        assert math.isfinite(float(combined)), (
-            f"combined={combined!r} is not finite when MAE=+inf"
-        )
+        assert math.isfinite(float(combined)), f"combined={combined!r} is not finite when MAE=+inf"
 
 
 # ===========================================================================
@@ -350,9 +347,9 @@ class TestVideomaeProjInOptimizer:
 
     def test_source_train_calls_videomae_unfreeze(self, source_train):
         """train.py must call model.videomae_stream.unfreeze() and toggle lr in-place on the pre-registered videomae param group (Edit 3b: no add_param_group)."""
-        assert re.search(
-            r"model\.videomae_stream\.unfreeze", source_train
-        ), "train.py does not call model.videomae_stream.unfreeze()"
+        assert re.search(r"model\.videomae_stream\.unfreeze", source_train), (
+            "train.py does not call model.videomae_stream.unfreeze()"
+        )
         # [OPUS FIX #3] The unfreeze wiring now toggles lr in-place on the
         # pre-registered videomae param group (VIDEOMAE_PARAM_GROUP_IDX) instead
         # of calling add_param_group. This keeps OneCycleLR's zip(strict=True)
@@ -378,6 +375,7 @@ class TestVideomaeProjInOptimizer:
 
     def test_stub_unfreeze_returns_param_group(self):
         """A stub mimicking VideoMAEStream.unfreeze must return a param-group dict."""
+
         class _StubStream(nn.Module):
             def __init__(self):
                 super().__init__()
@@ -414,6 +412,7 @@ class TestVideomaeProjInOptimizer:
 
     def test_videomae_proj_added_to_optimizer(self):
         """The videomae_proj on ActivityHead must register params in optimizer."""
+
         # Build a tiny model mimicking the relevant structure
         class _Head(nn.Module):
             def __init__(self):
@@ -459,18 +458,12 @@ class TestFrameCacheBounded:
             source_dataset,
             flags=re.MULTILINE,
         )
-        assert decl is not None, (
-            "No `FRAME_CACHE: Dict[...] = {}` module-level declaration"
-        )
+        assert decl is not None, "No `FRAME_CACHE: Dict[...] = {}` module-level declaration"
 
     def test_source_has_one_time_preload_guard(self, source_dataset):
         """preload_all_frames must short-circuit on _FRAME_CACHE_LOADED."""
-        flag_set = re.search(
-            r"_FRAME_CACHE_LOADED\s*=\s*True", source_dataset
-        )
-        short_circuit = re.search(
-            r"if\s+_FRAME_CACHE_LOADED\s*:", source_dataset
-        )
+        flag_set = re.search(r"_FRAME_CACHE_LOADED\s*=\s*True", source_dataset)
+        short_circuit = re.search(r"if\s+_FRAME_CACHE_LOADED\s*:", source_dataset)
         assert flag_set, "_FRAME_CACHE_LOADED is never set to True"
         assert short_circuit, "Missing `if _FRAME_CACHE_LOADED:` short-circuit"
 
@@ -507,8 +500,9 @@ class TestFrameCacheBounded:
             # Find next top-level def or end of file
             next_def = re.search(r"\ndef\s+[A-Za-z_]", source_dataset[body_start:])
             body = (
-                source_dataset[body_start:body_start + next_def.start()]
-                if next_def else source_dataset[body_start:]
+                source_dataset[body_start : body_start + next_def.start()]
+                if next_def
+                else source_dataset[body_start:]
             )
             writes_in_preload = len(re.findall(r"FRAME_CACHE\s*\[[^\]]+\]\s*=", body))
             assert writes_in_preload >= 1, (
@@ -539,9 +533,9 @@ class TestEmaShadowLoad:
 
     def test_source_train_loads_ema_shadow(self, source_train):
         """train.py must reference ema_shadow or ema_state key."""
-        assert re.search(
-            r"['\"]ema_shadow['\"]|['\"]ema_state['\"]", source_train
-        ), "train.py does not reference ema_shadow or ema_state"
+        assert re.search(r"['\"]ema_shadow['\"]|['\"]ema_state['\"]", source_train), (
+            "train.py does not reference ema_shadow or ema_state"
+        )
 
     def test_source_train_uses_shadow_update(self, source_train):
         """train.py must use ema.shadow.update() (not replacement)."""
@@ -558,6 +552,7 @@ class TestEmaShadowLoad:
     def test_model_ema_class_importable(self):
         """The canonical ModelEMA class must be importable from training.ema."""
         from training.ema import ModelEMA
+
         assert callable(ModelEMA), "ModelEMA is not callable"
 
     def test_model_ema_shadow_init(self):
@@ -607,11 +602,13 @@ class TestEmaShadowLoad:
         # 5) Run the load logic (mimics train.py:2173-2179)
         ckpt = save_dict
         ema_key = "ema_state" if "ema_state" in ckpt else "ema_shadow"
-        ema_after.shadow.update({
-            k: v.to(ema_after.device) if ema_after.device else v
-            for k, v in ckpt[ema_key].items()
-            if k in ema_after.shadow
-        })
+        ema_after.shadow.update(
+            {
+                k: v.to(ema_after.device) if ema_after.device else v
+                for k, v in ckpt[ema_key].items()
+                if k in ema_after.shadow
+            }
+        )
 
         # 6) All saved keys must now match
         all_match = all(
@@ -637,11 +634,13 @@ class TestEmaShadowLoad:
 
         ckpt = save_dict
         ema_key = "ema_state" if "ema_state" in ckpt else "ema_shadow"
-        ema_after.shadow.update({
-            k: v.to(ema_after.device) if ema_after.device else v
-            for k, v in ckpt[ema_key].items()
-            if k in ema_after.shadow
-        })
+        ema_after.shadow.update(
+            {
+                k: v.to(ema_after.device) if ema_after.device else v
+                for k, v in ckpt[ema_key].items()
+                if k in ema_after.shadow
+            }
+        )
         for k, v in save_dict["ema_state"].items():
             assert torch.equal(ema_after.shadow[k], v), f"ema_state restore failed for {k}"
 
@@ -661,11 +660,13 @@ class TestEmaShadowLoad:
         ema_after = ModelEMA(model, decay=0.999, device=None)
         ckpt = save_dict
         ema_key = "ema_state" if "ema_state" in ckpt else "ema_shadow"
-        ema_after.shadow.update({
-            k: v.to(ema_after.device) if ema_after.device else v
-            for k, v in ckpt[ema_key].items()
-            if k in ema_after.shadow
-        })
+        ema_after.shadow.update(
+            {
+                k: v.to(ema_after.device) if ema_after.device else v
+                for k, v in ckpt[ema_key].items()
+                if k in ema_after.shadow
+            }
+        )
         assert "stale_key_does_not_exist" not in ema_after.shadow, (
             "stale key leaked into ema_after.shadow"
         )
@@ -683,9 +684,7 @@ class TestStage3WarmupRamp:
             r"['\"]STAGE3_WARMUP_EPOCHS['\"]|getattr\(C\s*,\s*['\"]STAGE3_WARMUP_EPOCHS['\"]",
             source_train,
         )
-        assert pattern is not None, (
-            "train.py does not reference STAGE3_WARMUP_EPOCHS"
-        )
+        assert pattern is not None, "train.py does not reference STAGE3_WARMUP_EPOCHS"
 
     def test_source_train_has_warmup_state(self, source_train):
         """train.py must declare stage3_warmup_state dict."""
@@ -732,13 +731,9 @@ class TestStage3WarmupRamp:
             scales.append(s)
         # Monotonically non-decreasing
         for i in range(1, len(scales)):
-            assert scales[i] >= scales[i - 1], (
-                f"scales not monotonic: {scales}"
-            )
+            assert scales[i] >= scales[i - 1], f"scales not monotonic: {scales}"
         # Final scale must be 1.0 (full LR)
-        assert scales[-1] == pytest.approx(1.0), (
-            f"final scale = {scales[-1]} (expected 1.0)"
-        )
+        assert scales[-1] == pytest.approx(1.0), f"final scale = {scales[-1]} (expected 1.0)"
 
     def test_warmup_ramp_factor_does_not_exceed_one(self):
         """At no point during the ramp should the scale exceed 1.0."""
@@ -754,11 +749,13 @@ class TestStage3WarmupRamp:
         warmup_epochs = 3
         stage3_start = 16
         # Build a real optimizer with 3 param groups
-        opt = torch.optim.AdamW([
-            {"params": [torch.zeros(1, requires_grad=True)], "lr": base_lr},
-            {"params": [torch.zeros(1, requires_grad=True)], "lr": base_lr},
-            {"params": [torch.zeros(1, requires_grad=True)], "lr": base_lr},
-        ])
+        opt = torch.optim.AdamW(
+            [
+                {"params": [torch.zeros(1, requires_grad=True)], "lr": base_lr},
+                {"params": [torch.zeros(1, requires_grad=True)], "lr": base_lr},
+                {"params": [torch.zeros(1, requires_grad=True)], "lr": base_lr},
+            ]
+        )
         param_group_idx = 2
 
         # Simulate the per-epoch warmup scaling

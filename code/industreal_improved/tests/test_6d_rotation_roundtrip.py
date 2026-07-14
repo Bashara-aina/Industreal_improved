@@ -26,6 +26,7 @@ from src.losses.geodesic_loss import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _random_rotation_matrix(batch_size: int = 1, seed: int = 0) -> torch.Tensor:
     """Generate a random SO(3) rotation matrix via QR decomposition."""
     torch.manual_seed(seed)
@@ -40,14 +41,13 @@ def _random_rotation_matrix(batch_size: int = 1, seed: int = 0) -> torch.Tensor:
 def _rotation_about_z(theta_rad: float) -> torch.Tensor:
     """Rotation matrix about Z axis by theta radians."""
     c, s = torch.cos(torch.tensor(theta_rad)), torch.sin(torch.tensor(theta_rad))
-    return torch.tensor([[c, -s, 0],
-                         [s,  c, 0],
-                         [0,  0, 1]]).unsqueeze(0)  # [1, 3, 3]
+    return torch.tensor([[c, -s, 0], [s, c, 0], [0, 0, 1]]).unsqueeze(0)  # [1, 3, 3]
 
 
 # ---------------------------------------------------------------------------
 # Round-trip: rotation matrix → 6D → rotation matrix
 # ---------------------------------------------------------------------------
+
 
 class TestRotationRoundTrip:
     """Verify that matrix↔6D conversions are inverses within numerical tolerance."""
@@ -86,8 +86,9 @@ class TestRotationRoundTrip:
         d6 = rotation_matrix_to_6d(R)
         R_recovered = rotation_6d_to_matrix(d6)
         det = torch.det(R_recovered)
-        assert (det - 1.0).abs().max().item() < self.REconstruction_tol, \
+        assert (det - 1.0).abs().max().item() < self.REconstruction_tol, (
             f"Determinant deviates from +1"
+        )
 
     def test_batch_independence(self):
         """Each item in a batch round-trips independently (no cross-talk)."""
@@ -96,13 +97,15 @@ class TestRotationRoundTrip:
         R_recovered = rotation_6d_to_matrix(d6)
         # Verify per-sample error is small
         per_sample_err = (R - R_recovered).reshape(16, 9).abs().max(dim=1).values
-        assert (per_sample_err < self.REconstruction_tol).all(), \
+        assert (per_sample_err < self.REconstruction_tol).all(), (
             f"Max per-sample error: {per_sample_err.max().item():.2e}"
+        )
 
 
 # ---------------------------------------------------------------------------
 # Special-angle rotations (90°, 180°)
 # ---------------------------------------------------------------------------
+
 
 class TestSpecialAngles:
     """6D round-trip at known hard angles."""
@@ -124,6 +127,7 @@ class TestSpecialAngles:
 # Geodesic loss invariants
 # ---------------------------------------------------------------------------
 
+
 class TestGeodesicLossInvariants:
     """Verify geodesic loss satisfies key mathematical properties.
 
@@ -132,8 +136,8 @@ class TestGeodesicLossInvariants:
     floating-point drift, introducing a ~5e-4 rad systematic error.
     """
 
-    selftol = 1e-3   # self-loss tolerance (arccos clamp ~5e-4)
-    symmtol = 1e-5   # symmetry tolerance
+    selftol = 1e-3  # self-loss tolerance (arccos clamp ~5e-4)
+    symmtol = 1e-5  # symmetry tolerance
 
     def test_loss_self_zero(self):
         """geodesic_loss(R, R) ≈ 0 for various rotation matrices."""
@@ -161,8 +165,9 @@ class TestGeodesicLossInvariants:
         d_bc = geodesic_loss(Rb, Rc)
         d_ac = geodesic_loss(Ra, Rc)
         # Allow small numerical slack
-        assert d_ac.item() <= d_ab.item() + d_bc.item() + 1e-4, \
+        assert d_ac.item() <= d_ab.item() + d_bc.item() + 1e-4, (
             f"Triangle inequality violated: {d_ac.item():.4f} > {d_ab.item():.4f} + {d_bc.item():.4f}"
+        )
 
     def test_loss_range(self):
         """Geodesic loss is in [0, pi] radians."""
@@ -170,13 +175,13 @@ class TestGeodesicLossInvariants:
             Ra = _random_rotation_matrix(batch_size=16, seed=seed)
             Rb = _random_rotation_matrix(batch_size=16, seed=seed + 500)
             loss = geodesic_loss(Ra, Rb)
-            assert 0.0 <= loss.item() <= 3.1416, \
-                f"Loss {loss.item():.4f} outside [0, pi]"
+            assert 0.0 <= loss.item() <= 3.1416, f"Loss {loss.item():.4f} outside [0, pi]"
 
 
 # ---------------------------------------------------------------------------
 # Huberised geodesic loss invariants
 # ---------------------------------------------------------------------------
+
 
 class TestHuberisedGeodesicLoss:
     """Verify huberised_geodesic_loss basic properties.
@@ -194,8 +199,7 @@ class TestHuberisedGeodesicLoss:
         R = _random_rotation_matrix(batch_size=batch_size, seed=0)
         d6 = rotation_matrix_to_6d(R)
         loss = huberised_geodesic_loss(d6, d6)
-        assert loss.item() < self.selftol, \
-            f"Self-loss = {loss.item():.2e} (batch={batch_size})"
+        assert loss.item() < self.selftol, f"Self-loss = {loss.item():.2e} (batch={batch_size})"
 
     def test_non_negative(self):
         """Loss is always non-negative."""
@@ -210,6 +214,7 @@ class TestHuberisedGeodesicLoss:
 # ---------------------------------------------------------------------------
 # Gram-Schmidt consistency (cross-file)
 # ---------------------------------------------------------------------------
+
 
 class TestGramSchmidtConsistency:
     """Both head_pose_geo and geodesic_loss use the same Gram-Schmidt."""

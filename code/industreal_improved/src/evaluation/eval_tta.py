@@ -24,7 +24,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
@@ -32,7 +32,7 @@ import torch.nn.functional as F
 
 # ── Path setup (identical to evaluate.py) ────────────────────────────────
 _SRC = Path(__file__).resolve().parent.parent  # src/
-for _sub in ['models', 'training', 'evaluation', 'data', str(_SRC)]:
+for _sub in ["models", "training", "evaluation", "data", str(_SRC)]:
     _p = _SRC / _sub if _sub != str(_SRC) else _SRC
     _p = str(_p)
     if _p not in sys.path:
@@ -54,10 +54,8 @@ logger = logging.getLogger("eval_tta")
 
 # ── Constants ────────────────────────────────────────────────────────────
 _TTA_SCALES = [0.8, 1.0, 1.2]
-_TTA_FLIPS = [False, True]          # no flip, horizontal flip
-_OUTPUT_PATH = Path(
-    "src/runs/rf_stages/checkpoints/eval_tta_results.json"
-)
+_TTA_FLIPS = [False, True]  # no flip, horizontal flip
+_OUTPUT_PATH = Path("src/runs/rf_stages/checkpoints/eval_tta_results.json")
 
 
 def _build_model(
@@ -78,15 +76,19 @@ def _build_model(
     cfg = state.get("config", {})
 
     backbone_type = cfg.get("backbone_type", "convnext_tiny")
-    model = POPWMultiTaskModel(
-        pretrained=False,
-        backbone_type=str(backbone_type),
-        use_headpose_film=False,
-        use_hand_film=False,
-        use_videomae=False,
-        train_pose=False,
-        use_backbone_checkpoint=False,
-    ).to(device).eval()
+    model = (
+        POPWMultiTaskModel(
+            pretrained=False,
+            backbone_type=str(backbone_type),
+            use_headpose_film=False,
+            use_hand_film=False,
+            use_videomae=False,
+            train_pose=False,
+            use_backbone_checkpoint=False,
+        )
+        .to(device)
+        .eval()
+    )
 
     result = model.load_state_dict(state["model"], strict=False)
     if result.missing_keys:
@@ -295,18 +297,9 @@ def _merge_tta_predictions(
 
     for img_idx in range(num_images):
         # Concatenate all TTA predictions for this image.
-        non_empty_boxes = [
-            aug[img_idx] for aug in all_boxes
-            if aug[img_idx].shape[0] > 0
-        ]
-        non_empty_scores = [
-            aug[img_idx] for aug in all_scores
-            if aug[img_idx].shape[0] > 0
-        ]
-        non_empty_labels = [
-            aug[img_idx] for aug in all_labels
-            if aug[img_idx].shape[0] > 0
-        ]
+        non_empty_boxes = [aug[img_idx] for aug in all_boxes if aug[img_idx].shape[0] > 0]
+        non_empty_scores = [aug[img_idx] for aug in all_scores if aug[img_idx].shape[0] > 0]
+        non_empty_labels = [aug[img_idx] for aug in all_labels if aug[img_idx].shape[0] > 0]
 
         if not non_empty_boxes:
             merged_boxes.append(np.zeros((0, 4), dtype=np.float32))
@@ -325,7 +318,8 @@ def _merge_tta_predictions(
             if cm.sum() == 0:
                 continue
             keep = soft_nms(
-                cat_boxes[cm], cat_scores[cm],
+                cat_boxes[cm],
+                cat_scores[cm],
                 sigma=soft_nms_sigma,
                 score_thresh=final_score_thresh,
             )
@@ -389,7 +383,10 @@ def run_tta_eval(
 
     logger.info(
         "Starting TTA eval with scales=%s, flips=%s, batch_size=%d, device=%s",
-        _TTA_SCALES, _TTA_FLIPS, batch_size, device,
+        _TTA_SCALES,
+        _TTA_FLIPS,
+        batch_size,
+        device,
     )
 
     for bi, (images, targets) in enumerate(loader):
@@ -403,12 +400,8 @@ def run_tta_eval(
         # for all TTA variants).
         detection_list = targets["detection"]
         for img_idx in range(B):
-            gt_boxes_global.append(
-                detection_list[img_idx]["boxes"].cpu().numpy()
-            )
-            gt_labels_global.append(
-                detection_list[img_idx]["labels"].cpu().numpy()
-            )
+            gt_boxes_global.append(detection_list[img_idx]["boxes"].cpu().numpy())
+            gt_labels_global.append(detection_list[img_idx]["labels"].cpu().numpy())
 
         # ── Run all TTA variants ────────────────────────────────────────
         # all_preds[aug_idx] = (boxes_list, scores_list, labels_list)
@@ -460,12 +453,14 @@ def run_tta_eval(
                     gc.collect()
 
         # ── Merge TTA predictions for the batch ─────────────────────────
-        aug_boxes = [p[0] for p in all_preds]   # [num_augs, B] each
+        aug_boxes = [p[0] for p in all_preds]  # [num_augs, B] each
         aug_scores = [p[1] for p in all_preds]
         aug_labels = [p[2] for p in all_preds]
 
         merged_boxes, merged_scores, merged_labels = _merge_tta_predictions(
-            aug_boxes, aug_scores, aug_labels,
+            aug_boxes,
+            aug_scores,
+            aug_labels,
             num_images=B,
             num_classes=C.NUM_DET_CLASSES,
             soft_nms_sigma=0.5,
@@ -497,8 +492,11 @@ def run_tta_eval(
     # ── Compute detection metrics ───────────────────────────────────────
     logger.info("Computing detection metrics (mAP@0.5, mAP@[0.5:0.95])...")
     det_metrics = compute_det_metrics_extended(
-        global_dp_boxes, global_dp_scores, global_dp_labels,
-        gt_boxes_global, gt_labels_global,
+        global_dp_boxes,
+        global_dp_scores,
+        global_dp_labels,
+        gt_boxes_global,
+        gt_labels_global,
         num_classes=C.NUM_DET_CLASSES,
     )
 
@@ -525,9 +523,7 @@ def run_tta_eval(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="TTA eval: multi-scale + flip + Soft-NMS"
-    )
+    parser = argparse.ArgumentParser(description="TTA eval: multi-scale + flip + Soft-NMS")
     parser.add_argument(
         "--ckpt",
         type=str,
@@ -592,9 +588,7 @@ def main() -> None:
             json.dumps(v)
             clean[k] = v
         except (TypeError, OverflowError):
-            clean[k] = (
-                float(v) if isinstance(v, (int, float, np.floating)) else str(v)
-            )
+            clean[k] = float(v) if isinstance(v, (int, float, np.floating)) else str(v)
 
     with open(output_path, "w") as f:
         json.dump(clean, f, indent=2, default=str)

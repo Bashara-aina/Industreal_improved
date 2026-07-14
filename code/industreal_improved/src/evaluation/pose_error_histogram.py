@@ -6,13 +6,15 @@ errors from the Kalman eval cache), and computes Pearson correlation.
 Usage:
     CUDA_VISIBLE_DEVICES=1 python3 src/evaluation/pose_error_histogram.py
 """
+
 import json
 import sys
 from pathlib import Path
 
 import numpy as np
 import matplotlib
-matplotlib.use('Agg')
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -28,11 +30,12 @@ def angular_error_deg(pred: np.ndarray, gt: np.ndarray) -> np.ndarray:
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cache-dir",
-                        default="src/runs/rf_stages/checkpoints/pose_kalman_eval/cache")
-    parser.add_argument("--save-dir",
-                        default="src/runs/rf_stages/checkpoints/pose_kalman_eval")
+    parser.add_argument(
+        "--cache-dir", default="src/runs/rf_stages/checkpoints/pose_kalman_eval/cache"
+    )
+    parser.add_argument("--save-dir", default="src/runs/rf_stages/checkpoints/pose_kalman_eval")
     args = parser.parse_args()
 
     cache_dir = Path(args.cache_dir)
@@ -67,16 +70,21 @@ def main():
 
     # Pearson correlation between fwd and up errors per frame
     from scipy.stats import pearsonr, spearmanr
+
     corr, corr_p = pearsonr(all_fwd_errors, all_up_errors)
     sp_corr, sp_corr_p = spearmanr(all_fwd_errors, all_up_errors)
 
     print(f"\nFrame-level error statistics:")
-    print(f"  Forward: mean={all_fwd_errors.mean():.2f} deg, "
-          f"median={np.median(all_fwd_errors):.2f} deg, "
-          f"std={all_fwd_errors.std():.2f} deg")
-    print(f"  Up:      mean={all_up_errors.mean():.2f} deg, "
-          f"median={np.median(all_up_errors):.2f} deg, "
-          f"std={all_up_errors.std():.2f} deg")
+    print(
+        f"  Forward: mean={all_fwd_errors.mean():.2f} deg, "
+        f"median={np.median(all_fwd_errors):.2f} deg, "
+        f"std={all_fwd_errors.std():.2f} deg"
+    )
+    print(
+        f"  Up:      mean={all_up_errors.mean():.2f} deg, "
+        f"median={np.median(all_up_errors):.2f} deg, "
+        f"std={all_up_errors.std():.2f} deg"
+    )
     print(f"  Pearson r: {corr:.4f} (p={corr_p:.2e})")
     print(f"  Spearman rho: {sp_corr:.4f} (p={sp_corr_p:.2e})")
 
@@ -111,15 +119,20 @@ def main():
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
     for ax, data, color, label in [
-        (axes[0], all_fwd_errors, '#2196F3', 'Forward'),
-        (axes[1], all_up_errors, '#FF5722', 'Up-vector'),
+        (axes[0], all_fwd_errors, "#2196F3", "Forward"),
+        (axes[1], all_up_errors, "#FF5722", "Up-vector"),
     ]:
         ax.hist(data, bins=80, color=color, alpha=0.7, density=True)
-        ax.axvline(np.median(data), color='black', ls='--', lw=1.5,
-                   label=f"median={np.median(data):.1f} deg")
-        ax.set_xlabel('Angular Error (deg)')
-        ax.set_ylabel('Density')
-        ax.set_title(f'{label} Frame-Level MAE')
+        ax.axvline(
+            np.median(data),
+            color="black",
+            ls="--",
+            lw=1.5,
+            label=f"median={np.median(data):.1f} deg",
+        )
+        ax.set_xlabel("Angular Error (deg)")
+        ax.set_ylabel("Density")
+        ax.set_title(f"{label} Frame-Level MAE")
         ax.legend(fontsize=8)
         ax.set_xlim(0, min(data.max(), 60))
 
@@ -128,17 +141,16 @@ def main():
     scatter_n = min(50000, len(all_fwd_errors))
     rng = np.random.RandomState(42)
     idx = rng.choice(len(all_fwd_errors), scatter_n, replace=False)
-    axes[2].scatter(all_fwd_errors[idx], all_up_errors[idx],
-                    s=1, alpha=0.3, c='#4CAF50')
-    axes[2].set_xlabel('Forward Error (deg)')
-    axes[2].set_ylabel('Up-Vector Error (deg)')
-    axes[2].set_title(f'Fwd vs Up Error (r={corr:.2f})')
+    axes[2].scatter(all_fwd_errors[idx], all_up_errors[idx], s=1, alpha=0.3, c="#4CAF50")
+    axes[2].set_xlabel("Forward Error (deg)")
+    axes[2].set_ylabel("Up-Vector Error (deg)")
+    axes[2].set_title(f"Fwd vs Up Error (r={corr:.2f})")
     axes[2].set_xlim(0, 50)
     axes[2].set_ylim(0, 50)
 
     plt.tight_layout()
     plot_path = save_dir / "pose_error_histogram.png"
-    plt.savefig(str(plot_path), dpi=150, bbox_inches='tight')
+    plt.savefig(str(plot_path), dpi=150, bbox_inches="tight")
     print(f"\nHistogram saved to {plot_path}")
     plt.close()
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Debug: trace canonical POS computation on a tiny sample."""
+
 import csv
 import sys
 from pathlib import Path
@@ -13,13 +14,16 @@ from src.evaluation.evaluate import _compute_psr_pos_vectorized, _compute_psr_po
 # ---- Test 1: Toy 5-frame, 3-component case ----
 print("=" * 60)
 print("Test 1: Toy 5-frame, 3-component canonical")
-gt = np.array([
-    [0, 0, 0],  # K=0 -> canon_pred=[0,0,0]
-    [1, 0, 0],  # K=1 -> canon_pred=[1,0,0]
-    [1, 1, 0],  # K=2 -> canon_pred=[1,1,0]
-    [1, 1, 1],  # K=3 -> canon_pred=[1,1,1]
-    [1, 1, 1],  # K=3 -> canon_pred=[1,1,1]
-], dtype=np.int64)
+gt = np.array(
+    [
+        [0, 0, 0],  # K=0 -> canon_pred=[0,0,0]
+        [1, 0, 0],  # K=1 -> canon_pred=[1,0,0]
+        [1, 1, 0],  # K=2 -> canon_pred=[1,1,0]
+        [1, 1, 1],  # K=3 -> canon_pred=[1,1,1]
+        [1, 1, 1],  # K=3 -> canon_pred=[1,1,1]
+    ],
+    dtype=np.int64,
+)
 vm = np.ones_like(gt, dtype=bool)
 
 canon_pred = np.zeros_like(gt, dtype=np.int64)
@@ -40,13 +44,16 @@ print(f"POS (expected ~1.0): {pos:.6f}")
 # ---- Test 2: Non-canonical GT ----
 print()
 print("Test 2: Non-canonical GT (comp1 before comp0)")
-gt2 = np.array([
-    [0, 0, 0],
-    [0, 1, 0],  # comp1 done before comp0
-    [1, 1, 0],
-    [1, 1, 1],
-    [1, 1, 1],
-], dtype=np.int64)
+gt2 = np.array(
+    [
+        [0, 0, 0],
+        [0, 1, 0],  # comp1 done before comp0
+        [1, 1, 0],
+        [1, 1, 1],
+        [1, 1, 1],
+    ],
+    dtype=np.int64,
+)
 
 canon_pred2 = np.zeros_like(gt2, dtype=np.int64)
 for t in range(5):
@@ -67,12 +74,12 @@ print()
 print("=" * 60)
 print("Test 3: Real data first 20 frames from 05_assy_0_1")
 
-rec_dir = Path('/media/newadmin/master/POPW/datasets/industreal/recordings/val/05_assy_0_1')
-psr_file = rec_dir / 'PSR_labels_raw.csv'
+rec_dir = Path("/media/newadmin/master/POPW/datasets/industreal/recordings/val/05_assy_0_1")
+psr_file = rec_dir / "PSR_labels_raw.csv"
 num_comp = 11
 
 sparse = []
-with open(psr_file, encoding='utf-8') as f:
+with open(psr_file, encoding="utf-8") as f:
     reader = csv.reader(f)
     for row in reader:
         if len(row) < 12:
@@ -85,8 +92,8 @@ with open(psr_file, encoding='utf-8') as f:
             continue
 sparse.sort(key=lambda x: x[0])
 
-rgb_dir = rec_dir / 'rgb'
-num_frames = len(sorted(rgb_dir.glob('*.jpg')))
+rgb_dir = rec_dir / "rgb"
+num_frames = len(sorted(rgb_dir.glob("*.jpg")))
 
 labels = np.zeros((num_frames, 11), dtype=np.float64)
 _last_valid = np.zeros(11, dtype=np.float64)
@@ -162,7 +169,9 @@ for c in range(11):
         pos_b = np.where(pred_c == val_b)[0]
         if len(pos_a) > 0 and len(pos_b) > 0 and pos_a.max() < pos_b.min():
             correct_pairs += 1
-    print(f"  comp{c}: {correct_pairs}/{total_pairs} pairs correct = {correct_pairs/total_pairs:.4f} (runs: {run_vals})")
+    print(
+        f"  comp{c}: {correct_pairs}/{total_pairs} pairs correct = {correct_pairs / total_pairs:.4f} (runs: {run_vals})"
+    )
 
 # ---- Test 5: Use the canonical function directly ----
 print()

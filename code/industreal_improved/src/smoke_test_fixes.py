@@ -23,13 +23,12 @@ Run: cd /media/newadmin/master/POPW/working/code/industreal_improved_to_archive
 
 Exit 0 on all pass, exit 1 if any fail.
 """
+
 from __future__ import annotations
 
 import math
-import os
 import re
 import sys
-import tempfile
 import traceback
 from pathlib import Path
 
@@ -38,7 +37,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 SCRIPT_PATH = Path(__file__).resolve()
 PROJECT_ROOT = SCRIPT_PATH.parent.parent
-SRC_DIR = PROJECT_ROOT / 'src'
+SRC_DIR = PROJECT_ROOT / "src"
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -66,7 +65,7 @@ def section(title: str) -> None:
 # Helpers: re-read text files fresh (the repo edits are interleaved)
 # ---------------------------------------------------------------------------
 def read_text(p: Path) -> str:
-    with open(p, 'r', encoding='utf-8') as f:
+    with open(p, "r", encoding="utf-8") as f:
         return f.read()
 
 
@@ -77,13 +76,13 @@ def test_psr_temporal_smooth_signed_tanh() -> bool:
     """Check that the temporal smooth loss does not collapse to all-ones via abs(tanh)."""
     section("1. PSR temporal smooth -- signed tanh, finite on oscillating labels")
 
-    losses_path = SRC_DIR / 'training' / 'losses.py'
+    losses_path = SRC_DIR / "training" / "losses.py"
     src = read_text(losses_path)
 
     # The bug pattern: (p_i[1:] - p_i[:-1]).abs().mean()  -> tanh gets abs(diff)
     # The fix pattern: (p_i[1:] - p_i[:-1]).mean() (no abs before tanh)
     buggy_pattern = re.search(
-        r'diff_p\s*=\s*\(p_i\[1:\]\s*-\s*p_i\[:-1\]\)\.abs\(\)\.mean\(\)',
+        r"diff_p\s*=\s*\(p_i\[1:\]\s*-\s*p_i\[:-1\]\)\.abs\(\)\.mean\(\)",
         src,
     )
     if buggy_pattern:
@@ -96,7 +95,7 @@ def test_psr_temporal_smooth_signed_tanh() -> bool:
 
     # The fixed version should NOT apply .abs() to diff_p before tanh
     fixed_pattern = re.search(
-        r'diff_p\s*=\s*\(p_i\[1:\]\s*-\s*p_i\[:-1\]\)\.mean\(\)',
+        r"diff_p\s*=\s*\(p_i\[1:\]\s*-\s*p_i\[:-1\]\)\.mean\(\)",
         src,
     )
     if not fixed_pattern:
@@ -116,6 +115,7 @@ def test_psr_temporal_smooth_signed_tanh() -> bool:
     # Live numerical check: simulate the smooth loss sub-formula on oscillating labels
     try:
         import torch
+
         # Build a 3D PSR logits tensor (B=1, T=4, C=11) with oscillating predictions
         # so the temporal smooth path activates and the result must be finite.
         B, T, C = 1, 4, 11
@@ -177,7 +177,7 @@ def test_combined_metric_nan_guard() -> bool:
     """When any single component is inf/nan, combined must NOT propagate inf/nan."""
     section("2. NaN guard in combined_metric")
 
-    metrics_path = SRC_DIR / 'evaluation' / 'metrics.py'
+    metrics_path = SRC_DIR / "evaluation" / "metrics.py"
     src = read_text(metrics_path)
 
     # Live check: import compute_metrics and feed it an inf F1_psr.
@@ -187,27 +187,28 @@ def test_combined_metric_nan_guard() -> bool:
 
         # --- Test A: inf in a component should NOT produce inf combined ---
         pred = {
-            'act_logits': torch.zeros(1, 75),
-            'heatmaps': torch.zeros(1, 24, 64, 64),
-            'psr_logits': torch.zeros(1, 11),
-            'head_pose': torch.zeros(1, 9),
+            "act_logits": torch.zeros(1, 75),
+            "heatmaps": torch.zeros(1, 24, 64, 64),
+            "psr_logits": torch.zeros(1, 11),
+            "head_pose": torch.zeros(1, 9),
         }
         target = {
-            'activity': torch.zeros(1, dtype=torch.long),
-            'heatmap': None,
-            'psr_labels': torch.zeros(1, 11),
-            'head_pose': torch.zeros(1, 9),
+            "activity": torch.zeros(1, dtype=torch.long),
+            "heatmap": None,
+            "psr_labels": torch.zeros(1, 11),
+            "head_pose": torch.zeros(1, 9),
         }
         # Patch the inner call so F1_psr is inf
         import evaluation.evaluate as ev_mod  # type: ignore
+
         original_psr = ev_mod.compute_psr_metrics
-        ev_mod.compute_psr_metrics = lambda *a, **k: {'psr_overall_f1': float('inf')}
+        ev_mod.compute_psr_metrics = lambda *a, **k: {"psr_overall_f1": float("inf")}
         try:
             res = compute_metrics(pred, target)
         finally:
             ev_mod.compute_psr_metrics = original_psr
 
-        combined = res.get('combined', None)
+        combined = res.get("combined", None)
         if combined is None:
             record("combined_metric returns combined key", False, "No 'combined' in result")
             return False
@@ -226,12 +227,12 @@ def test_combined_metric_nan_guard() -> bool:
         )
 
         # --- Test B: nan in a component should NOT produce nan combined ---
-        ev_mod.compute_psr_metrics = lambda *a, **k: {'psr_overall_f1': float('nan')}
+        ev_mod.compute_psr_metrics = lambda *a, **k: {"psr_overall_f1": float("nan")}
         try:
             res2 = compute_metrics(pred, target)
         finally:
             ev_mod.compute_psr_metrics = original_psr
-        combined2 = res2.get('combined', 0.0)
+        combined2 = res2.get("combined", 0.0)
         is_finite2 = isinstance(combined2, (int, float)) and math.isfinite(float(combined2))
         if not is_finite2:
             record(
@@ -284,7 +285,7 @@ def test_videomae_proj_in_optimizer() -> bool:
     section("3. VideoMAE projection in optimizer (videomae_stream unfreeze)")
 
     # 3a. Source check: train.py calls optimizer.add_param_group with the unfreeze result
-    train_path = SRC_DIR / 'training' / 'train.py'
+    train_path = SRC_DIR / "training" / "train.py"
     train_src = read_text(train_path)
     if not re.search(
         r"model\.videomae_stream\.unfreeze|add_param_group\(opt_params\[0\]\)",
@@ -322,11 +323,11 @@ def test_videomae_proj_in_optimizer() -> bool:
             def unfreeze(self, lr: float = 1e-5):
                 for p in self.encoder.parameters():
                     p.requires_grad = True
-                return [{'params': self.encoder.parameters(), 'lr': lr}]
+                return [{"params": self.encoder.parameters(), "lr": lr}]
 
         stream = _StubStream()
         opt = torch.optim.AdamW(
-            [{'params': [torch.zeros(1, requires_grad=True)], 'lr': 1e-3}],
+            [{"params": [torch.zeros(1, requires_grad=True)], "lr": 1e-3}],
             lr=1e-3,
         )
 
@@ -336,7 +337,7 @@ def test_videomae_proj_in_optimizer() -> bool:
 
         in_optimizer = []
         for g in opt.param_groups:
-            for p in g['params']:
+            for p in g["params"]:
                 in_optimizer.append(p)
 
         encoder_params = list(stream.encoder.parameters())
@@ -381,8 +382,8 @@ def test_frame_cache_bounded() -> bool:
     """FRAME_CACHE has fixed size after preload; no per-batch additions."""
     section("4. Frame cache bounded (no unbounded growth)")
 
-    dataset_path = SRC_DIR / 'data' / 'industreal_dataset.py'
-    train_path = SRC_DIR / 'training' / 'train.py'
+    dataset_path = SRC_DIR / "data" / "industreal_dataset.py"
+    train_path = SRC_DIR / "training" / "train.py"
     src = read_text(dataset_path)
     train_src = read_text(train_path)
 
@@ -450,17 +451,16 @@ def test_frame_cache_bounded() -> bool:
     # 4d. Live test: simulate 10k "fetch" calls, verify cache size stays constant
     try:
         import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "industreal_dataset", str(dataset_path)
-        )
+
+        spec = importlib.util.spec_from_file_location("industreal_dataset", str(dataset_path))
         if spec is None or spec.loader is None:
             raise RuntimeError("could not load dataset module")
         mod = importlib.util.module_from_spec(spec)
         # We need a logger; module expects `logger` from utils
         # Patch sys.modules trick: add a fake logger
-        from types import SimpleNamespace
         # Create a minimal namespace the module expects
         import sys
+
         sys.modules.setdefault("data.industreal_dataset", mod)
         try:
             spec.loader.exec_module(mod)
@@ -511,7 +511,7 @@ def test_ema_shadow_weights_load() -> bool:
     """checkpoint with ema_shadow (or ema_state) restores into EMA.shadow dict."""
     section("5. EMA shadow weights load correctly from checkpoint")
 
-    train_path = SRC_DIR / 'training' / 'train.py'
+    train_path = SRC_DIR / "training" / "train.py"
     train_src = read_text(train_path)
 
     # 5a. Source check: train.py loads ema_shadow OR ema_state from checkpoint
@@ -575,10 +575,7 @@ def test_ema_shadow_weights_load() -> bool:
         # Stand-in EMA with a .shadow dict keyed by parameter name
         class _StubEMA:
             def __init__(self, model: nn.Module):
-                self.shadow = {
-                    name: p.detach().clone()
-                    for name, p in model.named_parameters()
-                }
+                self.shadow = {name: p.detach().clone() for name, p in model.named_parameters()}
                 self.device = None  # mimic CPU mode
 
         # 1) Build a tiny model and its EMA
@@ -592,7 +589,7 @@ def test_ema_shadow_weights_load() -> bool:
 
         # 3) Save the checkpoint (mimics train.py:728)
         save_dict = {
-            'ema_shadow': {
+            "ema_shadow": {
                 k: (v.detach().cpu() if isinstance(v, torch.Tensor) else v)
                 for k, v in ema_before.shadow.items()
             },
@@ -602,8 +599,8 @@ def test_ema_shadow_weights_load() -> bool:
         ema_after = _StubEMA(model)
         # Sanity: ema_after.shadow != ema_before.shadow (they were perturbed)
         differ_at_start = any(
-            not torch.equal(ema_after.shadow[k], save_dict['ema_shadow'][k])
-            for k in save_dict['ema_shadow']
+            not torch.equal(ema_after.shadow[k], save_dict["ema_shadow"][k])
+            for k in save_dict["ema_shadow"]
         )
         if not differ_at_start:
             record(
@@ -615,18 +612,20 @@ def test_ema_shadow_weights_load() -> bool:
 
         # 5) Run the load logic (mimics train.py:2147-2153)
         ckpt = save_dict
-        ema_key = 'ema_state' if 'ema_state' in ckpt else 'ema_shadow'
+        ema_key = "ema_state" if "ema_state" in ckpt else "ema_shadow"
         if ema_after is not None and ema_key in ckpt and ckpt[ema_key]:
-            ema_after.shadow.update({
-                k: v.to(ema_after.device) if ema_after.device else v
-                for k, v in ckpt[ema_key].items()
-                if k in ema_after.shadow
-            })
+            ema_after.shadow.update(
+                {
+                    k: v.to(ema_after.device) if ema_after.device else v
+                    for k, v in ckpt[ema_key].items()
+                    if k in ema_after.shadow
+                }
+            )
 
         # 6) Verify all keys now match the saved values
         all_match = all(
-            torch.equal(ema_after.shadow[k], save_dict['ema_shadow'][k])
-            for k in save_dict['ema_shadow']
+            torch.equal(ema_after.shadow[k], save_dict["ema_shadow"][k])
+            for k in save_dict["ema_shadow"]
         )
         if not all_match:
             record(
@@ -644,20 +643,22 @@ def test_ema_shadow_weights_load() -> bool:
 
         # 7) Verify a stale key in the checkpoint is filtered out
         save_dict_stale = {
-            'ema_shadow': {
-                **save_dict['ema_shadow'],
-                'stale_key_that_does_not_exist': torch.zeros(1),
+            "ema_shadow": {
+                **save_dict["ema_shadow"],
+                "stale_key_that_does_not_exist": torch.zeros(1),
             },
         }
         ema_after2 = _StubEMA(model)
         ckpt = save_dict_stale
-        ema_key = 'ema_state' if 'ema_state' in ckpt else 'ema_shadow'
-        ema_after2.shadow.update({
-            k: v.to(ema_after2.device) if ema_after2.device else v
-            for k, v in ckpt[ema_key].items()
-            if k in ema_after2.shadow
-        })
-        if 'stale_key_that_does_not_exist' in ema_after2.shadow:
+        ema_key = "ema_state" if "ema_state" in ckpt else "ema_shadow"
+        ema_after2.shadow.update(
+            {
+                k: v.to(ema_after2.device) if ema_after2.device else v
+                for k, v in ckpt[ema_key].items()
+                if k in ema_after2.shadow
+            }
+        )
+        if "stale_key_that_does_not_exist" in ema_after2.shadow:
             record(
                 "EMA shadow load: stale keys filtered",
                 False,
@@ -727,8 +728,8 @@ def test_stage3_warmup_ramp() -> bool:
     """
     section("6. STAGE3_WARMUP_EPOCHS ramp (param_group_idx with active guard)")
 
-    config_path = SRC_DIR / 'config.py'
-    train_path = SRC_DIR / 'training' / 'train.py'
+    config_path = SRC_DIR / "config.py"
+    train_path = SRC_DIR / "training" / "train.py"
     config_src = read_text(config_path)
     train_src = read_text(train_path)
 
@@ -759,8 +760,13 @@ def test_stage3_warmup_ramp() -> bool:
         # Looser: at minimum, all 5 fields must be mentioned near each other
         if not all(
             f in train_src
-            for f in ("'active'", "'start_epoch'", "'epochs_remaining'",
-                      "'param_group_idx'", "'warmup_epochs'")
+            for f in (
+                "'active'",
+                "'start_epoch'",
+                "'epochs_remaining'",
+                "'param_group_idx'",
+                "'warmup_epochs'",
+            )
         ):
             record(
                 "STAGE3_WARMUP: state dict has all required fields",

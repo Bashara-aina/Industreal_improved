@@ -6,6 +6,7 @@ Multiplies only the inference time by 2x.
 Multi-scale TTA cannot be applied here without model architectural changes
 because MViTv2-S uses fixed-size position encodings per scale.
 """
+
 import torch
 import numpy as np
 
@@ -62,7 +63,11 @@ def decode_det_tta(
     with torch.no_grad():
         # Original pass
         outputs_orig = model(images)
-        det_orig = outputs_orig.get("detection", {}) if isinstance(outputs_orig, dict) else outputs_orig["detection"]
+        det_orig = (
+            outputs_orig.get("detection", {})
+            if isinstance(outputs_orig, dict)
+            else outputs_orig["detection"]
+        )
         boxes_orig, scores_orig, labels_orig = _decode_dfl_to_xyxy(det_orig, img_size)
         boxes_orig = boxes_orig.cpu()
         scores_orig = scores_orig.cpu()
@@ -71,7 +76,11 @@ def decode_det_tta(
         # Flipped pass
         flipped = flip_horizontal(images)
         outputs_flip = model(flipped)
-        det_flip = outputs_flip.get("detection", {}) if isinstance(outputs_flip, dict) else outputs_flip["detection"]
+        det_flip = (
+            outputs_flip.get("detection", {})
+            if isinstance(outputs_flip, dict)
+            else outputs_flip["detection"]
+        )
         boxes_flip, scores_flip, labels_flip = _decode_dfl_to_xyxy(det_flip, img_size)
         # Flip boxes back to original orientation
         boxes_flip = flip_boxes_xyxy(boxes_flip.cpu(), W)
@@ -93,6 +102,7 @@ def decode_det_tta(
 
         # Per-class NMS using numpy implementation
         from src.evaluation.evaluate import nms_numpy
+
         all_b_np = all_b.numpy()
         all_s_np = all_s.numpy()
         all_l_np = all_l.numpy()
@@ -114,17 +124,21 @@ def decode_det_tta(
             final_labels.append(np.full(len(ck), c, dtype=np.int64))
 
         if final_boxes:
-            results.append({
-                "boxes": np.concatenate(final_boxes, axis=0),
-                "scores": np.concatenate(final_scores, axis=0),
-                "labels": np.concatenate(final_labels, axis=0),
-            })
+            results.append(
+                {
+                    "boxes": np.concatenate(final_boxes, axis=0),
+                    "scores": np.concatenate(final_scores, axis=0),
+                    "labels": np.concatenate(final_labels, axis=0),
+                }
+            )
         else:
-            results.append({
-                "boxes": np.zeros((0, 4), dtype=np.float32),
-                "scores": np.zeros(0, dtype=np.float32),
-                "labels": np.zeros(0, dtype=np.int64),
-            })
+            results.append(
+                {
+                    "boxes": np.zeros((0, 4), dtype=np.float32),
+                    "scores": np.zeros(0, dtype=np.float32),
+                    "labels": np.zeros(0, dtype=np.int64),
+                }
+            )
 
     return results
 
@@ -141,7 +155,6 @@ def _decode_dfl_to_xyxy(det_outputs: dict, img_size: int):
         all_scores: [B, N_total]
         all_labels: [B, N_total]
     """
-    import torch.nn.functional as F
     DFL_REG_MAX = 16
     strides = {"P2": 4, "P3": 8, "P4": 16, "P5": 32}
     level_boxes = []
@@ -156,7 +169,9 @@ def _decode_dfl_to_xyxy(det_outputs: dict, img_size: int):
         stride = strides[level_name]
         # Decode DFL: [B, 64, H, W] -> [B, 4, 16, H, W] -> softmax -> weighted sum
         reg_dist = reg_preds.view(B, 4, DFL_REG_MAX, H, W)
-        proj = torch.arange(DFL_REG_MAX, dtype=torch.float32, device=cls_logits.device).view(1, 1, DFL_REG_MAX, 1, 1)
+        proj = torch.arange(DFL_REG_MAX, dtype=torch.float32, device=cls_logits.device).view(
+            1, 1, DFL_REG_MAX, 1, 1
+        )
         decoded = (reg_dist.softmax(dim=2) * proj).sum(dim=2)
         # Grid cell centers (in input pixel coords)
         ys = torch.arange(H, dtype=torch.float32, device=cls_logits.device)
@@ -182,7 +197,13 @@ def _decode_dfl_to_xyxy(det_outputs: dict, img_size: int):
         all_scores = torch.cat(level_scores, dim=1)
         all_labels = torch.cat(level_labels, dim=1)
     else:
-        all_boxes = torch.zeros(1, 0, 4, dtype=torch.float32, device=cls_logits.device if level_boxes else "cpu")
-        all_scores = torch.zeros(1, 0, dtype=torch.float32, device=cls_logits.device if level_boxes else "cpu")
-        all_labels = torch.zeros(1, 0, dtype=torch.long, device=cls_logits.device if level_boxes else "cpu")
+        all_boxes = torch.zeros(
+            1, 0, 4, dtype=torch.float32, device=cls_logits.device if level_boxes else "cpu"
+        )
+        all_scores = torch.zeros(
+            1, 0, dtype=torch.float32, device=cls_logits.device if level_boxes else "cpu"
+        )
+        all_labels = torch.zeros(
+            1, 0, dtype=torch.long, device=cls_logits.device if level_boxes else "cpu"
+        )
     return all_boxes, all_scores, all_labels

@@ -35,6 +35,7 @@ from evaluation.evaluate import (
 # Helper: detection boxes from heatmaps
 # ---------------------------------------------------------------------------
 
+
 def _heatmaps_to_detection(
     pred_heatmaps: torch.Tensor,
     gt_heatmap: torch.Tensor,
@@ -55,13 +56,14 @@ def _heatmaps_to_detection(
         RuntimeError: always — this placeholder must never be silently called.
     """
     import logging as _lg
+
     _lg.getLogger(__name__).warning(
-        '[FIX D8] _heatmaps_to_detection placeholder called — producing FAKE 64x64 boxes! '
-        'This will result in meaningless mAP values. Fix caller to use real cls_preds/reg_preds.'
+        "[FIX D8] _heatmaps_to_detection placeholder called — producing FAKE 64x64 boxes! "
+        "This will result in meaningless mAP values. Fix caller to use real cls_preds/reg_preds."
     )
     raise RuntimeError(
-        '_heatmaps_to_detection is a placeholder and must not be silently called. '
-        'Use compute_det_metrics_extended with real cls_preds + reg_preds from the model.'
+        "_heatmaps_to_detection is a placeholder and must not be silently called. "
+        "Use compute_det_metrics_extended with real cls_preds + reg_preds from the model."
     )
     # Placeholder: treat each spatial location as a detection candidate
     B, C, H, W = pred_heatmaps.shape
@@ -73,7 +75,7 @@ def _heatmaps_to_detection(
     for b in range(B):
         # Per-class peak detection (simple argmax over spatial dims)
         cls_sigmoid = torch.sigmoid(pred_heatmaps[b])  # [C, H, W]
-        max_scores, max_locs = cls_sigmoid.max(dim=1)   # [H, W], [H, W]
+        max_scores, max_locs = cls_sigmoid.max(dim=1)  # [H, W], [H, W]
 
         keep = max_scores > score_thresh
         scores = max_scores[keep].cpu().numpy()
@@ -86,10 +88,15 @@ def _heatmaps_to_detection(
             boxes = np.zeros((0, 4), dtype=np.float32)
         else:
             ys_np, xs_np = ys.cpu().numpy(), xs.cpu().numpy()
-            boxes = np.stack([
-                xs_np - 32, ys_np - 32,
-                xs_np + 32, ys_np + 32,
-            ], axis=1).astype(np.float32)
+            boxes = np.stack(
+                [
+                    xs_np - 32,
+                    ys_np - 32,
+                    xs_np + 32,
+                    ys_np + 32,
+                ],
+                axis=1,
+            ).astype(np.float32)
 
         dp_boxes.append(boxes)
         dp_scores.append(scores)
@@ -111,6 +118,7 @@ def _heatmaps_to_detection(
 # ---------------------------------------------------------------------------
 # Main dispatcher
 # ---------------------------------------------------------------------------
+
 
 def compute_metrics(
     pred: dict,
@@ -142,8 +150,8 @@ def compute_metrics(
     results = {}
 
     # ---- Activity F1 ----
-    act_logits = pred.get('act_logits')
-    activity_labels = target.get('activity')
+    act_logits = pred.get("act_logits")
+    activity_labels = target.get("activity")
     if act_logits is not None and activity_labels is not None:
         act_logits_np = act_logits.detach().cpu().numpy()
         activity_labels_np = activity_labels.detach().cpu().numpy()
@@ -153,14 +161,14 @@ def compute_metrics(
             all_pred=act_pred_np,
             all_logits=act_logits_np,
         )
-        results['F1_action'] = act_metrics.get('act_macro_f1', 0.0)
+        results["F1_action"] = act_metrics.get("act_macro_f1", 0.0)
     else:
-        results['F1_action'] = 0.0
+        results["F1_action"] = 0.0
 
     # ---- Detection mAP50 ----
     # Fallback: compute from heatmaps if cls_preds/reg_preds not available
-    heatmaps = pred.get('heatmaps')
-    gt_heatmap = target.get('heatmap')
+    heatmaps = pred.get("heatmaps")
+    gt_heatmap = target.get("heatmap")
     if heatmaps is not None:
         try:
             # Try compute_det_metrics_extended if we have proper box format
@@ -169,48 +177,51 @@ def compute_metrics(
                 heatmaps, gt_heatmap
             )
             det_metrics = compute_det_metrics_extended(
-                dp_boxes, dp_scores, dp_labels,
-                dg_boxes, dg_labels,
+                dp_boxes,
+                dp_scores,
+                dp_labels,
+                dg_boxes,
+                dg_labels,
             )
-            results['mAP50'] = det_metrics.get('det_mAP50', 0.0)
+            results["mAP50"] = det_metrics.get("det_mAP50", 0.0)
         except Exception:
-            results['mAP50'] = 0.0
+            results["mAP50"] = 0.0
     else:
-        results['mAP50'] = 0.0
+        results["mAP50"] = 0.0
 
     # ---- Head Pose MAE ----
-    head_pose_pred = pred.get('head_pose')
-    head_pose_gt = target.get('head_pose')
+    head_pose_pred = pred.get("head_pose")
+    head_pose_gt = target.get("head_pose")
     if head_pose_pred is not None and head_pose_gt is not None:
         hp_pred_np = head_pose_pred.detach().cpu().numpy()
         hp_gt_np = head_pose_gt.detach().cpu().numpy()
         hp_metrics = compute_head_pose_metrics(hp_pred_np, hp_gt_np)
-        results['MAE'] = hp_metrics.get('head_pose_MAE', 0.0)
+        results["MAE"] = hp_metrics.get("head_pose_MAE", 0.0)
     else:
-        results['MAE'] = 0.0
+        results["MAE"] = 0.0
 
     # ---- PSR F1 ----
-    psr_logits = pred.get('psr_logits')
-    psr_labels = target.get('psr_labels')
+    psr_logits = pred.get("psr_logits")
+    psr_labels = target.get("psr_labels")
     if psr_logits is not None and psr_labels is not None:
         psr_logits_np = psr_logits.detach().cpu().numpy()
         psr_labels_np = psr_labels.detach().cpu().numpy()
         psr_metrics = compute_psr_metrics(psr_logits_np, psr_labels_np)
-        results['F1_psr'] = psr_metrics.get('psr_overall_f1', 0.0)
+        results["F1_psr"] = psr_metrics.get("psr_overall_f1", 0.0)
     else:
-        results['F1_psr'] = 0.0
+        results["F1_psr"] = 0.0
 
     # ---- Combined score ----
     # Weighted combination (higher is better):
     # mAP50 (det) * 0.25 + F1_action * 0.25 + (1 - MAE/10) * 0.25 + F1_psr * 0.25
     # Normalize MAE so it's 0-1 where 1 is best (inverse, clamped)
-    mae_component = max(0.0, 1.0 - results['MAE'] / 10.0)
+    mae_component = max(0.0, 1.0 - results["MAE"] / 10.0)
     combined = (
-        results['mAP50'] * 0.25 +
-        results['F1_action'] * 0.25 +
-        mae_component * 0.25 +
-        results['F1_psr'] * 0.25
+        results["mAP50"] * 0.25
+        + results["F1_action"] * 0.25
+        + mae_component * 0.25
+        + results["F1_psr"] * 0.25
     )
-    results['combined'] = combined
+    results["combined"] = combined
 
     return results

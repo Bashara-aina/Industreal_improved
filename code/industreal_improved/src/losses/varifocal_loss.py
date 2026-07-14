@@ -1,4 +1,5 @@
 """Varifocal Loss (Zhang et al. 2021 CVPR Oral) — IoU-aware classification."""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,5 +16,5 @@ class VarifocalLoss(nn.Module):
         # target[:, c] = IoU for positive class, 0 for negative
         pred_score = pred.sigmoid()
         weight = self.alpha * pred_score.pow(self.gamma) * (1 - target) + target
-        loss = F.binary_cross_entropy_with_logits(pred, target, reduction='none') * weight
+        loss = F.binary_cross_entropy_with_logits(pred, target, reduction="none") * weight
         return loss.sum() / max(target.sum(), 1.0)

@@ -3,15 +3,16 @@
 Minimal real-data smoke test: load real dataset batch, run one training step, report.
 Uses same import path pattern as scripts/smoke_test.py and scripts/test_e2e_training.py.
 """
+
 import sys, os, torch, time
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 WORK_DIR = os.path.normpath(os.path.join(SCRIPTS_DIR, os.pardir))
-SRC_DIR = os.path.join(WORK_DIR, 'src')
+SRC_DIR = os.path.join(WORK_DIR, "src")
 sys.path.insert(0, WORK_DIR)
-sys.path.insert(1, os.path.join(SRC_DIR, 'models'))
-sys.path.insert(2, os.path.join(SRC_DIR, 'training'))
-sys.path.insert(3, os.path.join(SRC_DIR, 'evaluation'))
+sys.path.insert(1, os.path.join(SRC_DIR, "models"))
+sys.path.insert(2, os.path.join(SRC_DIR, "training"))
+sys.path.insert(3, os.path.join(SRC_DIR, "evaluation"))
 sys.path.insert(4, SRC_DIR)
 
 import config as C
@@ -36,11 +37,11 @@ from models import model as model_module
 from training import losses as losses_module
 from data.industreal_dataset import IndustRealMultiTaskDataset as dataset_module
 
-print("="*60)
+print("=" * 60)
 print("MINIMAL REAL-DATA SMOKE TEST")
-print("="*60)
+print("=" * 60)
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
 
 # Build model
@@ -77,7 +78,7 @@ ema = model_module.EMA(model, decay=C.EMA_DECAY)
 # Load dataset
 print("\n[5] Loading dataset...")
 ds = dataset_module(
-    split='train',
+    split="train",
     augment=False,
     max_recordings=C.DEBUG_MAX_VIDEOS,
     subset_ratio=C.SUBSET_RATIO,
@@ -85,8 +86,10 @@ ds = dataset_module(
 print(f"  Dataset: {len(ds)} samples")
 
 loader = torch.utils.data.DataLoader(
-    ds, batch_size=C.BATCH_SIZE,
-    shuffle=False, num_workers=0,
+    ds,
+    batch_size=C.BATCH_SIZE,
+    shuffle=False,
+    num_workers=0,
     pin_memory=False,
 )
 
@@ -98,17 +101,23 @@ if batch is None:
 
 # Unpack batch (no custom collate_fn → returns dict with 'images' dict)
 batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
-frames = batch['images']['rgb'].to(device).float().div(255.0)  # [B, 3, H, W] uint8→float32 [0,1]
+frames = batch["images"]["rgb"].to(device).float().div(255.0)  # [B, 3, H, W] uint8→float32 [0,1]
 
 # Build targets dict matching MultiTaskLoss.forward expected format
 targets = {
-    'detection': [{'boxes': batch['gt_boxes']['rgb'][i], 'labels': batch['gt_classes']['rgb'][i]}
-                  for i in range(frames.size(0))],
-    'keypoints': batch['hand_joints'].reshape(frames.size(0), 26, 2)[:, :17, :],  # [B, 17, 2] from [B, 52]
-    'pose_confidence': torch.ones(frames.size(0), 17, device=device),  # dense hand joints, no confidence
-    'head_pose': batch['head_pose'],  # already on device
-    'activity': batch['action_label'],  # already on device
-    'psr_labels': batch['psr_labels'],  # already on device
+    "detection": [
+        {"boxes": batch["gt_boxes"]["rgb"][i], "labels": batch["gt_classes"]["rgb"][i]}
+        for i in range(frames.size(0))
+    ],
+    "keypoints": batch["hand_joints"].reshape(frames.size(0), 26, 2)[
+        :, :17, :
+    ],  # [B, 17, 2] from [B, 52]
+    "pose_confidence": torch.ones(
+        frames.size(0), 17, device=device
+    ),  # dense hand joints, no confidence
+    "head_pose": batch["head_pose"],  # already on device
+    "activity": batch["action_label"],  # already on device
+    "psr_labels": batch["psr_labels"],  # already on device
 }
 
 t0 = time.time()
@@ -118,8 +127,16 @@ optimizer.zero_grad()
 outputs = model(frames)
 
 # Ensure float
-for key in ['cls_preds', 'reg_preds', 'heatmaps', 'keypoints',
-            'pose_confidence', 'head_pose', 'act_logits', 'psr_logits']:
+for key in [
+    "cls_preds",
+    "reg_preds",
+    "heatmaps",
+    "keypoints",
+    "pose_confidence",
+    "head_pose",
+    "act_logits",
+    "psr_logits",
+]:
     if key in outputs and isinstance(outputs[key], torch.Tensor):
         outputs[key] = outputs[key].float()
 

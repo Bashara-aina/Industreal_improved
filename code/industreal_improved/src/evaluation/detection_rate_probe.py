@@ -6,6 +6,7 @@ Quick detection rate probe (134-debate NQ-3):
 
 Usage: CUDA_VISIBLE_DEVICES=1 python3 src/evaluation/detection_rate_probe.py
 """
+
 from __future__ import annotations
 
 import json
@@ -14,7 +15,6 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-import numpy as np
 import torch
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -32,7 +32,6 @@ if str(_SRC.parent) not in sys.path:
 import src.config as C
 from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
 from src.models.model import POPWMultiTaskModel
-from evaluate import decode_boxes, nms_numpy
 
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD = (0.229, 0.224, 0.225)
@@ -44,22 +43,28 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("Device: %s", device)
 
-    base_ckpt_dir = Path(getattr(C, "RUNS", _SRC.parent / "src" / "runs")) / "rf_stages" / "checkpoints"
+    base_ckpt_dir = (
+        Path(getattr(C, "RUNS", _SRC.parent / "src" / "runs")) / "rf_stages" / "checkpoints"
+    )
     ckpt_path = base_ckpt_dir / "best.pth"
     logger.info("Loading checkpoint: %s", ckpt_path)
 
     state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     cfg = state.get("config", {})
 
-    model = POPWMultiTaskModel(
-        pretrained=True,
-        backbone_type=cfg.get("BACKBONE_TYPE", "convnext_tiny"),
-        use_hand_film=bool(cfg.get("USE_HAND_FILM", True)),
-        use_headpose_film=bool(cfg.get("USE_HEADPOSE_FILM", False)),
-        use_videomae=bool(cfg.get("USE_VIDEOMAE", False)),
-        train_pose=bool(cfg.get("TRAIN_HEAD_POSE", True)),
-        use_backbone_checkpoint=bool(cfg.get("USE_BACKBONE_CHECKPOINT", False)),
-    ).to(device).eval()
+    model = (
+        POPWMultiTaskModel(
+            pretrained=True,
+            backbone_type=cfg.get("BACKBONE_TYPE", "convnext_tiny"),
+            use_hand_film=bool(cfg.get("USE_HAND_FILM", True)),
+            use_headpose_film=bool(cfg.get("USE_HEADPOSE_FILM", False)),
+            use_videomae=bool(cfg.get("USE_VIDEOMAE", False)),
+            train_pose=bool(cfg.get("TRAIN_HEAD_POSE", True)),
+            use_backbone_checkpoint=bool(cfg.get("USE_BACKBONE_CHECKPOINT", False)),
+        )
+        .to(device)
+        .eval()
+    )
 
     result = model.load_state_dict(state["model"], strict=False)
     if result.missing_keys:
@@ -69,12 +74,17 @@ def main():
 
     val_ds = IndustRealMultiTaskDataset(split="val", img_size=(C.IMG_HEIGHT, C.IMG_WIDTH))
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=1, shuffle=False, num_workers=0, pin_memory=False, collate_fn=collate_fn,
+        val_ds,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=False,
+        collate_fn=collate_fn,
     )
 
     # Per-threshold accumulators
-    det_counts = {t: defaultdict(int) for t in THRESHOLDS}        # {thr: {class_id: count}}
-    det_frames = {t: 0 for t in THRESHOLDS}                       # frames with any detection
+    det_counts = {t: defaultdict(int) for t in THRESHOLDS}  # {thr: {class_id: count}}
+    det_frames = {t: 0 for t in THRESHOLDS}  # frames with any detection
     total_frames = 0
     total_gt_boxes = 0
     gt_class_counts = defaultdict(int)
@@ -146,13 +156,19 @@ def main():
         print(f"Threshold {thr:.2f}:")
         print(f"  Total detections: {n_det}")
         print(f"  Detections/frame: {det_per_frame:.2f}")
-        print(f"  Frames with any detection: {frames_with_det}/{total_frames} ({100*frames_with_det/max(total_frames,1):.1f}%)")
+        print(
+            f"  Frames with any detection: {frames_with_det}/{total_frames} ({100 * frames_with_det / max(total_frames, 1):.1f}%)"
+        )
         print()
 
     print("Per-class GT counts (top 20):")
     sorted_gt = sorted(gt_class_counts.items(), key=lambda x: -x[1])
     for cid, cnt in sorted_gt[:20]:
-        cname = C.INDUSTREAL_CLASS_NAMES.get(str(cid), cid) if hasattr(C, "INDUSTREAL_CLASS_NAMES") else cid
+        cname = (
+            C.INDUSTREAL_CLASS_NAMES.get(str(cid), cid)
+            if hasattr(C, "INDUSTREAL_CLASS_NAMES")
+            else cid
+        )
         print(f"  Class {cid} ({cname}): {cnt}")
 
     print()
@@ -160,7 +176,11 @@ def main():
         print(f"\nPer-class detection counts @ thr={thr:.2f} (top 15):")
         sorted_det = sorted(det_counts[thr].items(), key=lambda x: -x[1])
         for cid, cnt in sorted_det[:15]:
-            cname = C.INDUSTREAL_CLASS_NAMES.get(str(cid), cid) if hasattr(C, "INDUSTREAL_CLASS_NAMES") else cid
+            cname = (
+                C.INDUSTREAL_CLASS_NAMES.get(str(cid), cid)
+                if hasattr(C, "INDUSTREAL_CLASS_NAMES")
+                else cid
+            )
             print(f"  Class {cid} ({cname}): {cnt}")
 
     # Save

@@ -22,19 +22,18 @@ Usage:
 import argparse
 import json
 import logging
-import os
 import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 
-logging.basicConfig(level=logging.INFO, format='%(message)s')
-logger = logging.getLogger('eval_psr_tau_dist')
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger("eval_psr_tau_dist")
 
 # Path setup matching evaluate.py pattern
 _SRC = Path(__file__).resolve().parent  # src/evaluation/
-for _sub in ['..', 'models', 'training', 'data']:
+for _sub in ["..", "models", "training", "data"]:
     _p = (_SRC / _sub).resolve()
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
@@ -86,8 +85,12 @@ def compute_tau_distribution(
         gt_valid_frames = np.flatnonzero(vm)
         if len(gt_valid_frames) < 2:
             per_component[str(c)] = {
-                "mean": None, "median": None, "p25": None, "p75": None,
-                "p95": None, "n_transitions": 0,
+                "mean": None,
+                "median": None,
+                "p25": None,
+                "p75": None,
+                "p95": None,
+                "n_transitions": 0,
             }
             continue
 
@@ -97,15 +100,23 @@ def compute_tau_distribution(
 
         if len(gt_changes) == 0:
             per_component[str(c)] = {
-                "mean": None, "median": None, "p25": None, "p75": None,
-                "p95": None, "n_transitions": 0,
+                "mean": None,
+                "median": None,
+                "p25": None,
+                "p75": None,
+                "p95": None,
+                "n_transitions": 0,
             }
             continue
 
         if len(pred_changes) == 0:
             per_component[str(c)] = {
-                "mean": None, "median": None, "p25": None, "p75": None,
-                "p95": None, "n_transitions": len(gt_changes),
+                "mean": None,
+                "median": None,
+                "p25": None,
+                "p75": None,
+                "p95": None,
+                "n_transitions": len(gt_changes),
             }
             all_taus.append(None)
             continue
@@ -174,7 +185,7 @@ def extract_psr_predictions_from_eval(
     logger.info("Model loaded and in eval mode.")
 
     # Build validation dataset
-    transform = C.get_transform('val')
+    transform = C.get_transform("val")
     val_ds = IndustRealDataset(
         C.VAL_ANNOTATION_FILE,
         transform=transform,
@@ -210,8 +221,7 @@ def extract_psr_predictions_from_eval(
     all_psr_logits = np.concatenate(psr_preds_logits)
     all_psr_labels = np.concatenate(psr_labels)
     logger.info(
-        f"Collected PSR predictions: logits={all_psr_logits.shape}, "
-        f"labels={all_psr_labels.shape}"
+        f"Collected PSR predictions: logits={all_psr_logits.shape}, labels={all_psr_labels.shape}"
     )
     return all_psr_logits, all_psr_labels
 
@@ -220,22 +230,15 @@ def main():
     parser = argparse.ArgumentParser(
         description="Compute per-component PSR tau (delay) distribution."
     )
+    parser.add_argument("--ckpt", type=str, required=True, help="Path to checkpoint .pth file")
     parser.add_argument(
-        "--ckpt", type=str, required=True,
-        help="Path to checkpoint .pth file"
+        "--out_path",
+        type=str,
+        default=None,
+        help="Output JSON path (default: auto-generated next to checkpoint)",
     )
-    parser.add_argument(
-        "--out_path", type=str, default=None,
-        help="Output JSON path (default: auto-generated next to checkpoint)"
-    )
-    parser.add_argument(
-        "--max_batches", type=int, default=0,
-        help="Max batches to eval (0 = all)"
-    )
-    parser.add_argument(
-        "--device", type=str, default="cuda",
-        help="Device (cuda or cpu)"
-    )
+    parser.add_argument("--max_batches", type=int, default=0, help="Max batches to eval (0 = all)")
+    parser.add_argument("--device", type=str, default="cuda", help="Device (cuda or cpu)")
     args = parser.parse_args()
 
     ckpt_path = Path(args.ckpt)

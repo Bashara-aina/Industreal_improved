@@ -1,10 +1,13 @@
 """Asymmetric Loss for extreme-imbalance binary classification (Ridnik et al. 2021 ICCV)."""
+
 import torch
 import torch.nn as nn
 
 
 class AsymmetricLoss(nn.Module):
-    def __init__(self, gamma_neg: float = 4.0, gamma_pos: float = 0.0, clip: float = 0.05, eps: float = 1e-8):
+    def __init__(
+        self, gamma_neg: float = 4.0, gamma_pos: float = 0.0, clip: float = 0.05, eps: float = 1e-8
+    ):
         super().__init__()
         self.gamma_neg = gamma_neg
         self.gamma_pos = gamma_pos

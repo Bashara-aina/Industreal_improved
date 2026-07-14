@@ -13,6 +13,7 @@ Usage:
 Output:
     headpose_visualizations/psr_transitions_01_assy_0_1.png
 """
+
 from pathlib import Path
 
 import cv2
@@ -25,8 +26,7 @@ REC_DIR = Path(
 PSR_RAW_CSV = REC_DIR / "PSR_labels_raw.csv"
 NUM_COMPONENTS = 11
 OUTPUT_DIR = Path(
-    "/home/newadmin/swarm-bot/project/popw/working/code/"
-    "industreal_improved/psr_visualizations"
+    "/home/newadmin/swarm-bot/project/popw/working/code/industreal_improved/psr_visualizations"
 )
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -119,8 +119,13 @@ def draw_diagram(
     for c, label in enumerate(COMPONENT_LABELS):
         y = MARGIN_TOP + c * CELL_H + CELL_H // 2 + 5
         cv2.putText(
-            img, label, (5, y),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1,
+            img,
+            label,
+            (5, y),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (200, 200, 200),
+            1,
         )
 
     for t in range(0, num_frames, 100 * stride):
@@ -129,20 +134,29 @@ def draw_diagram(
             img,
             f"{t}",
             (x - 5, img_h - 5),
-            cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150, 150, 150), 1,
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.35,
+            (150, 150, 150),
+            1,
         )
 
     cv2.putText(
         img,
         title,
         (MARGIN_LEFT, 25),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2,
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (255, 255, 255),
+        2,
     )
     cv2.putText(
         img,
         f"{num_frames} frames @ {FPS}fps = {num_frames / FPS:.1f}s",
         (MARGIN_LEFT, 48),
-        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (180, 180, 180), 1,
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (180, 180, 180),
+        1,
     )
     return img
 

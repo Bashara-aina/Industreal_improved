@@ -1,4 +1,5 @@
 """Huberised Geodesic Loss for 6D pose estimation (Geist et al., ICML 2024)."""
+
 import torch
 import torch.nn.functional as F
 
@@ -11,16 +12,18 @@ def _gram_schmidt_rotation(fwd: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
     return torch.stack([r1, r2, r3], dim=2)
 
 
-def _geodesic_angle(R_pred: torch.Tensor, R_gt: torch.Tensor) -> torch.Tensor:
+def _geodesic_angle(r_pred: torch.Tensor, r_gt: torch.Tensor) -> torch.Tensor:
     """Geodesic angular distance on SO(3) in degrees. [B,3,3] → [B]."""
-    rel = torch.bmm(R_pred.transpose(1, 2), R_gt)
+    rel = torch.bmm(r_pred.transpose(1, 2), r_gt)
     trace = rel[:, 0, 0] + rel[:, 1, 1] + rel[:, 2, 2]
     cos_theta = (trace - 1.0) / 2.0
     cos_theta = cos_theta.clamp(-1.0 + 1e-6, 1.0 - 1e-6)
     return torch.acos(cos_theta) * (180.0 / 3.141592653589793)
 
 
-def huberised_geodesic_loss(pred: torch.Tensor, target: torch.Tensor, delta: float = 30.0) -> torch.Tensor:
+def huberised_geodesic_loss(
+    pred: torch.Tensor, target: torch.Tensor, delta: float = 30.0
+) -> torch.Tensor:
     """Huber-capped geodesic error in degrees.
 
     Args:

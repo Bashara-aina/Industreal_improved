@@ -1,4 +1,5 @@
 """UW-SO: Uncertainty-Weighted Softmax Ordinal weighting (Kirchdorfer 2025 IJCV)."""
+
 import torch
 import torch.nn.functional as F
 from typing import Dict

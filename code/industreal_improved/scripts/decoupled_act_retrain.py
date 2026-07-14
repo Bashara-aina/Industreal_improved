@@ -14,6 +14,7 @@ Usage:
 Reference: doc 207 §6 item 4, Kang et al. "Decoupling Representation and
 Classifier for Long-Tailed Recognition" (ICLR 2020).
 """
+
 # DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import json
@@ -30,12 +31,12 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
         sys.path.insert(0, _p)
 
 import src.config as C
+
 C.NUM_ACT_OUTPUTS = 75
 C.ACT_CLASS_GROUPING = "none"
 
 from src.data.industreal_dataset import IndustRealMultiTaskDataset
 from src.models.mvit_mtl_model import MTLMViTModel
-from src.training.samplers import ClassBalancedBatchSampler  # if exists
 
 
 def compute_class_counts(ds, num_classes=75):
@@ -104,10 +105,11 @@ def main():
 
     ckpt_sd = ckpt["model_state_dict"]
     model_sd = model.state_dict()
-    filtered = {k: v for k, v in ckpt_sd.items()
-                if k in model_sd and model_sd[k].shape == v.shape}
+    filtered = {k: v for k, v in ckpt_sd.items() if k in model_sd and model_sd[k].shape == v.shape}
     model.load_state_dict(filtered, strict=False)
-    print(f"Loaded {len(filtered)}/{len(ckpt_sd)} tensors from checkpoint (epoch {ckpt.get('epoch','?')})")
+    print(
+        f"Loaded {len(filtered)}/{len(ckpt_sd)} tensors from checkpoint (epoch {ckpt.get('epoch', '?')})"
+    )
 
     # ── Freeze backbone + all non-activity heads ──────────────────────────
     for name, param in model.named_parameters():
@@ -118,16 +120,22 @@ def main():
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
-    print(f"Trainable: {trainable/1e6:.2f}M / {total/1e6:.2f}M total (act_head only)")
+    print(f"Trainable: {trainable / 1e6:.2f}M / {total / 1e6:.2f}M total (act_head only)")
 
     # ── Data ─────────────────────────────────────────────────────────────
     train_ds = IndustRealMultiTaskDataset(
-        split="train", img_size=(224, 224), augment=False,
-        sequence_mode=True, sequence_length=16,
+        split="train",
+        img_size=(224, 224),
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
     )
     val_ds = IndustRealMultiTaskDataset(
-        split="val", img_size=(224, 224), augment=False,
-        sequence_mode=True, sequence_length=16,
+        split="val",
+        img_size=(224, 224),
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
     )
 
     # Class-balanced sampling: compute sample weights
@@ -150,15 +158,20 @@ def main():
     )
 
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=args.batch_size,
+        train_ds,
+        batch_size=args.batch_size,
         sampler=sampler,
         num_workers=args.num_workers,
-        pin_memory=True, drop_last=True,
+        pin_memory=True,
+        drop_last=True,
     )
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=args.batch_size,
-        shuffle=False, num_workers=args.num_workers,
-        pin_memory=True, drop_last=False,
+        val_ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        drop_last=False,
     )
     print(f"Train: {len(train_ds)} windows, Val: {len(val_ds)} windows")
     print(f"Class-balanced sampling enabled (inverse frequency)")
@@ -166,7 +179,9 @@ def main():
     # ── Optimizer (classifier only) ──────────────────────────────────────
     optimizer = torch.optim.SGD(
         [p for p in model.parameters() if p.requires_grad],
-        lr=args.lr, momentum=0.9, weight_decay=1e-4,
+        lr=args.lr,
+        momentum=0.9,
+        weight_decay=1e-4,
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
@@ -220,12 +235,15 @@ def main():
 
         if acc > best_acc:
             best_acc = acc
-            torch.save({
-                "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "method": "decoupled_retrain",
-                "val_acc": acc,
-            }, output_dir / "best.pt")
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "method": "decoupled_retrain",
+                    "val_acc": acc,
+                },
+                output_dir / "best.pt",
+            )
             print(f"  New best: {acc:.4f}")
 
     print(f"\nDecoupled retrain complete. Best acc: {best_acc:.4f}")

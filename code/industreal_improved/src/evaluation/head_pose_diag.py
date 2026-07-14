@@ -4,11 +4,10 @@
 # fixed at commit bff38b790; eval_pose_kalman.py uses the correct indices.
 
 """Quick head pose diagnostic — shows forward vs up vs position breakdown."""
-import json
+
 import sys
 from pathlib import Path
 
-import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -19,6 +18,7 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="src/runs/rf_stages/checkpoints/best.pth")
     parser.add_argument("--max-batches", type=int, default=500)
@@ -29,26 +29,29 @@ def main():
 
     for ckpt_path, name in [(args.checkpoint, "checkpoint"), (args.ckpt2, "ckpt2")]:
         print(f"\n=== {name}: {ckpt_path} ===")
-        ck = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+        ck = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         model = POPWMultiTaskModel(
             pretrained=True,
-            backbone_type='convnext_tiny',
+            backbone_type="convnext_tiny",
             use_hand_film=True,
             use_headpose_film=True,
             use_videomae=False,
             train_pose=False,
         )
-        state_dict = {k: v for k, v in ck["model"].items()
-                      if 'total_ops' not in k and 'total_params' not in k}
+        state_dict = {
+            k: v for k, v in ck["model"].items() if "total_ops" not in k and "total_params" not in k
+        }
         model.load_state_dict(state_dict, strict=False)
         model._seq_len = 1
         model = model.cuda().eval()
 
         from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
         from torch.utils.data import DataLoader
+
         val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
-        val_loader = DataLoader(val_ds, batch_size=1, num_workers=0,
-                                collate_fn=collate_fn, shuffle=False)
+        val_loader = DataLoader(
+            val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False
+        )
 
         # Per-channel angular MAE
         ch_mae = [0.0] * 9  # per-dimension MAE
@@ -90,17 +93,19 @@ def main():
                 l_n = l / (l.norm() + 1e-8)
                 cos = (p_n * l_n).sum().clamp(-1, 1)
                 vec_mae[vi] += torch.rad2deg(torch.acos(cos)).item()
-            vec_mae[2] += ((hp_p[0, 3:6] - hp_l[0, 3:6]).norm() * 1000).item()  # mm (position, do not report)
+            vec_mae[2] += (
+                (hp_p[0, 3:6] - hp_l[0, 3:6]).norm() * 1000
+            ).item()  # mm (position, do not report)
             vec_n += 1
 
         print(f"  Per-dim MAE (raw units):")
-        labels = ['fwd_x', 'fwd_y', 'fwd_z', 'up_x', 'up_y', 'up_z', 'pos_x', 'pos_y', 'pos_z']
+        labels = ["fwd_x", "fwd_y", "fwd_z", "up_x", "up_y", "up_z", "pos_x", "pos_y", "pos_z"]
         for c, l in enumerate(labels):
-            print(f"    {l}: {ch_mae[c]/ch_n:.4f}")
+            print(f"    {l}: {ch_mae[c] / ch_n:.4f}")
         print(f"  Vector MAE:")
-        print(f"    forward: {vec_mae[0]/vec_n:.2f}°")
-        print(f"    up: {vec_mae[1]/vec_n:.2f}°")
-        print(f"    position: {vec_mae[2]/vec_n:.2f} mm")
+        print(f"    forward: {vec_mae[0] / vec_n:.2f}°")
+        print(f"    up: {vec_mae[1] / vec_n:.2f}°")
+        print(f"    position: {vec_mae[2] / vec_n:.2f} mm")
 
 
 if __name__ == "__main__":

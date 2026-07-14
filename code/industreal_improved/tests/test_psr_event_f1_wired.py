@@ -300,7 +300,7 @@ class TestWireUp:
         """Results dict contains the three new metric keys."""
         # Single recording, single transition at frame 10
         logits = [np.full((1, 11), 5.0, dtype=np.float32)]  # high logit = positive
-        labels = [np.full((1, 11), 1, dtype=np.float32)]     # positive label
+        labels = [np.full((1, 11), 1, dtype=np.float32)]  # positive label
         logits.append(np.full((1, 11), -5.0, dtype=np.float32))
         labels.append(np.full((1, 11), 0, dtype=np.float32))
         rec_ids = ["rec_0", "rec_0"]
@@ -351,11 +351,11 @@ class TestWireUp:
     def test_multiple_recordings_aggregated(self):
         """Metrics aggregate correctly across multiple recordings."""
         # Two recordings, each with one transition
-        logits = [np.full((1, 11), 5.0, dtype=np.float32)]   # rec_0 frame 10, high
+        logits = [np.full((1, 11), 5.0, dtype=np.float32)]  # rec_0 frame 10, high
         labels = [np.full((1, 11), 1, dtype=np.float32)]
         logits.append(np.full((1, 11), -5.0, dtype=np.float32))  # rec_0 frame 0, low
         labels.append(np.full((1, 11), 0, dtype=np.float32))
-        logits.append(np.full((1, 11), 5.0, dtype=np.float32))   # rec_1 frame 20, high
+        logits.append(np.full((1, 11), 5.0, dtype=np.float32))  # rec_1 frame 20, high
         labels.append(np.full((1, 11), 1, dtype=np.float32))
         logits.append(np.full((1, 11), -5.0, dtype=np.float32))  # rec_1 frame 0, low
         labels.append(np.full((1, 11), 0, dtype=np.float32))

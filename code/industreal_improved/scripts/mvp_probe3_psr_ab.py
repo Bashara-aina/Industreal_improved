@@ -17,17 +17,15 @@ Usage:
     python scripts/mvp_probe3_psr_ab.py --variant c  # current
     python scripts/mvp_probe3_psr_ab.py --variant ab  # A/B both
 """
+
 # DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import json
 import sys
-import time
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
@@ -38,13 +36,12 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
         sys.path.insert(0, _p)
 
 import src.config as C
+
 C.NUM_ACT_OUTPUTS = 75
 C.ACT_CLASS_GROUPING = "none"
 
 from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn_sequences
-from src.models.mvit_mtl_model import (
-    MTLMViTModel, PSRHead, MViTFeaturePyramid
-)
+from src.models.mvit_mtl_model import MTLMViTModel
 from src.evaluation.decoder_oracle_bound import event_f1
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -52,8 +49,8 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def normalize_images(images, device):
     images = images.float() / 255.0
-    mean = torch.tensor([0.45]*3, device=device).view(1, 1, 3, 1, 1)
-    std = torch.tensor([0.225]*3, device=device).view(1, 1, 3, 1, 1)
+    mean = torch.tensor([0.45] * 3, device=device).view(1, 1, 3, 1, 1)
+    std = torch.tensor([0.225] * 3, device=device).view(1, 1, 3, 1, 1)
     images = (images - mean) / std
     images = images.permute(0, 2, 1, 3, 4).contiguous()
     return images
@@ -80,26 +77,38 @@ def extract_p5(model: MTLMViTModel, images: torch.Tensor) -> torch.Tensor:
 
 def train_and_eval_psr(variant: str, n_steps: int, batch_size: int):
     """Train PSR head on P5 features, evaluate at T=8 (current) or T=16 (original)."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"PROBE 3 — variant {variant}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     # Build dataset
     train_ds = IndustRealMultiTaskDataset(
-        split="train", img_size=(224, 224),
-        augment=False, sequence_mode=True, sequence_length=16,
+        split="train",
+        img_size=(224, 224),
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
     )
     val_ds = IndustRealMultiTaskDataset(
-        split="val", img_size=(224, 224),
-        augment=False, sequence_mode=True, sequence_length=16,
+        split="val",
+        img_size=(224, 224),
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
     )
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=batch_size, shuffle=True,
-        collate_fn=collate_fn_sequences, num_workers=0,
+        train_ds,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=collate_fn_sequences,
+        num_workers=0,
     )
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False,
-        collate_fn=collate_fn_sequences, num_workers=0,
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collate_fn_sequences,
+        num_workers=0,
     )
 
     # Build model (frozen backbone, train PSR head only)
@@ -136,7 +145,7 @@ def train_and_eval_psr(variant: str, n_steps: int, batch_size: int):
         optimizer.step()
         losses.append(loss.item())
         if (step + 1) % 50 == 0:
-            print(f"  Step {step+1}/{n_steps}: loss = {loss.item():.4f}")
+            print(f"  Step {step + 1}/{n_steps}: loss = {loss.item():.4f}")
 
     final_loss = losses[-1]
     initial_loss = losses[0]
@@ -200,9 +209,13 @@ def train_and_eval_psr(variant: str, n_steps: int, batch_size: int):
 
 def main():
     parser = argparse.ArgumentParser(description="MVP Probe 3: PSR temporal A/B")
-    parser.add_argument("--variant", choices=["a", "b", "c", "ab"], default="c",
-                        help="a=T=16 logits + T=16 labels, b=T=8 logits + downsample labels, "
-                             "c=T=8 logits + downsample labels (current), ab=run all")
+    parser.add_argument(
+        "--variant",
+        choices=["a", "b", "c", "ab"],
+        default="c",
+        help="a=T=16 logits + T=16 labels, b=T=8 logits + downsample labels, "
+        "c=T=8 logits + downsample labels (current), ab=run all",
+    )
     parser.add_argument("--n-steps", type=int, default=300)
     parser.add_argument("--batch-size", type=int, default=2)
     parser.add_argument("--output", type=str, default="/tmp/probe3_results.json")

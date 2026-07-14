@@ -78,8 +78,12 @@ def parse_log(log_path: str) -> dict:
         # --- Log-var values ---
         if "kd_d=" in line and current_epoch is not None:
             ep = result["epochs"][-1]
-            for label, vkey in [("kd_d", "log_var_det"), ("kd_hp", "log_var_pose"),
-                                ("kd_a", "log_var_act"), ("kd_r", "log_var_psr")]:
+            for label, vkey in [
+                ("kd_d", "log_var_det"),
+                ("kd_hp", "log_var_pose"),
+                ("kd_a", "log_var_act"),
+                ("kd_r", "log_var_psr"),
+            ]:
                 m2 = re.search(rf"\b{label}=([+-]?\d+\.\d+)", line)
                 if m2:
                     ep["log_vars"][vkey] = float(m2.group(1))
@@ -142,14 +146,10 @@ def check_logvar_bounds(data: dict) -> bool:
             if vkey in ep["log_vars"]:
                 val = ep["log_vars"][vkey]
                 if bound_type == "min" and val < bound_val:
-                    print(
-                        f"  FAIL: Epoch {ep['epoch']} {vkey}={val:.4f} < min {bound_val}"
-                    )
+                    print(f"  FAIL: Epoch {ep['epoch']} {vkey}={val:.4f} < min {bound_val}")
                     ok = False
                 elif bound_type == "max" and val > bound_val:
-                    print(
-                        f"  FAIL: Epoch {ep['epoch']} {vkey}={val:.4f} > max {bound_val}"
-                    )
+                    print(f"  FAIL: Epoch {ep['epoch']} {vkey}={val:.4f} > max {bound_val}")
                     ok = False
     if ok:
         print(f"  PASS: All log-var values within bounds")
@@ -233,18 +233,22 @@ def main():
     # Print summary table
     print()
     print("--- Per-Epoch Summary ---")
-    print(f"{'Epoch':>6} {'loss_det':>9} {'loss_pose':>10} {'loss_act':>9} {'loss_psr':>9} "
-          f"{'lv_det':>7} {'lv_pose':>7} {'lv_act':>7} {'lv_psr':>7} {'nan':>4}")
+    print(
+        f"{'Epoch':>6} {'loss_det':>9} {'loss_pose':>10} {'loss_act':>9} {'loss_psr':>9} "
+        f"{'lv_det':>7} {'lv_pose':>7} {'lv_act':>7} {'lv_psr':>7} {'nan':>4}"
+    )
     for ep in data["epochs"]:
         ls = ep["losses"]
         lv = ep["log_vars"]
         nan_flag = "Y" if ep["has_nan"] else "."
-        print(f"{ep['epoch']:>6} "
-              f"{ls.get('loss_det', 0):>9.4f} {ls.get('loss_pose', 0):>10.4f} "
-              f"{ls.get('loss_act', 0):>9.4f} {ls.get('loss_psr', 0):>9.4f} "
-              f"{lv.get('log_var_det', 0):>7.2f} {lv.get('log_var_pose', 0):>7.2f} "
-              f"{lv.get('log_var_act', 0):>7.2f} {lv.get('log_var_psr', 0):>7.2f} "
-              f"{nan_flag:>4}")
+        print(
+            f"{ep['epoch']:>6} "
+            f"{ls.get('loss_det', 0):>9.4f} {ls.get('loss_pose', 0):>10.4f} "
+            f"{ls.get('loss_act', 0):>9.4f} {ls.get('loss_psr', 0):>9.4f} "
+            f"{lv.get('log_var_det', 0):>7.2f} {lv.get('log_var_pose', 0):>7.2f} "
+            f"{lv.get('log_var_act', 0):>7.2f} {lv.get('log_var_psr', 0):>7.2f} "
+            f"{nan_flag:>4}"
+        )
 
     if failed > 0:
         print(f"\nFAILED: {failed} check(s) failed")

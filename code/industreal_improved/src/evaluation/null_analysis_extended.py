@@ -3,6 +3,7 @@
 Uses cached PSR predictions from psr_data_cache_best.pth (no GPU needed).
 Reference: Opus 141 Q24 (extend to all 16 recs), Q29 (add Edit metric).
 """
+
 import json
 from pathlib import Path
 import sys
@@ -160,8 +161,16 @@ def main():
 
     # Per-component Edit
     ours_pc = [per_rec_edit[r]["ours_edit_per_component"] for r in recordings if r in per_rec_edit]
-    zeros_pc = [per_rec_edit[r]["null_all_zeros_edit_per_component"] for r in recordings if r in per_rec_edit]
-    cp_pc = [per_rec_edit[r]["null_copy_prev_edit_per_component"] for r in recordings if r in per_rec_edit]
+    zeros_pc = [
+        per_rec_edit[r]["null_all_zeros_edit_per_component"]
+        for r in recordings
+        if r in per_rec_edit
+    ]
+    cp_pc = [
+        per_rec_edit[r]["null_copy_prev_edit_per_component"]
+        for r in recordings
+        if r in per_rec_edit
+    ]
 
     mean_ours_pc = np.mean(ours_pc, axis=0).tolist() if ours_pc else None
     mean_zeros_pc = np.mean(zeros_pc, axis=0).tolist() if zeros_pc else None
@@ -197,10 +206,10 @@ def main():
     print(f"Saved: {md_path}")
 
     # Print results
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"  NULL-POS EXTENDED ANALYSIS — All 16 Recordings + Edit")
     print(f"  GPU used: No (from cached logits)")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
     print(f"\nPOS (mean across {len(per_rec_pos)} recordings):")
     print(f"  Ours              {pos_summary['ours_pos_mean']:.6f}")
@@ -232,7 +241,9 @@ def build_markdown(pos_summary, edit_summary, pce):
     lines.append("")
     lines.append(f"## Coverage")
     lines.append("")
-    lines.append(f"- **{pos_summary['n_recordings']} recordings**, **{pos_summary['n_frames']:,}** valid frames")
+    lines.append(
+        f"- **{pos_summary['n_recordings']} recordings**, **{pos_summary['n_frames']:,}** valid frames"
+    )
     lines.append(f"- 11 PSR binary components")
     lines.append(f"- 3 models: Ours (epoch_18 best.pth), Null all-zeros, Null copy-prev")
     lines.append(f"- 2 metrics: POS (pairwise orientation score), Edit (Hamming / T)")
@@ -242,9 +253,15 @@ def build_markdown(pos_summary, edit_summary, pce):
     lines.append("")
     lines.append("| Model | Mean POS | Std POS |")
     lines.append("|---|---|---|")
-    lines.append(f"| Ours | {pos_summary['ours_pos_mean']:.6f} | {pos_summary['ours_pos_std']:.6f} |")
-    lines.append(f"| Null all-zeros | {pos_summary['null_all_zeros_pos_mean']:.6f} | {pos_summary['null_all_zeros_pos_std']:.6f} |")
-    lines.append(f"| Null copy-prev | {pos_summary['null_copy_prev_pos_mean']:.6f} | {pos_summary['null_copy_prev_pos_std']:.6f} |")
+    lines.append(
+        f"| Ours | {pos_summary['ours_pos_mean']:.6f} | {pos_summary['ours_pos_std']:.6f} |"
+    )
+    lines.append(
+        f"| Null all-zeros | {pos_summary['null_all_zeros_pos_mean']:.6f} | {pos_summary['null_all_zeros_pos_std']:.6f} |"
+    )
+    lines.append(
+        f"| Null copy-prev | {pos_summary['null_copy_prev_pos_mean']:.6f} | {pos_summary['null_copy_prev_pos_std']:.6f} |"
+    )
     lines.append("")
     lines.append(f"**{pos_summary['interpretation']}**")
     lines.append("")
@@ -253,9 +270,15 @@ def build_markdown(pos_summary, edit_summary, pce):
     lines.append("")
     lines.append("| Model | Mean Edit | Std Edit |")
     lines.append("|---|---|---|")
-    lines.append(f"| Ours | {edit_summary['ours_edit_mean']:.6f} | {edit_summary['ours_edit_std']:.6f} |")
-    lines.append(f"| Null all-zeros | {edit_summary['null_all_zeros_edit_mean']:.6f} | {edit_summary['null_all_zeros_edit_std']:.6f} |")
-    lines.append(f"| Null copy-prev | {edit_summary['null_copy_prev_edit_mean']:.6f} | {edit_summary['null_copy_prev_edit_std']:.6f} |")
+    lines.append(
+        f"| Ours | {edit_summary['ours_edit_mean']:.6f} | {edit_summary['ours_edit_std']:.6f} |"
+    )
+    lines.append(
+        f"| Null all-zeros | {edit_summary['null_all_zeros_edit_mean']:.6f} | {edit_summary['null_all_zeros_edit_std']:.6f} |"
+    )
+    lines.append(
+        f"| Null copy-prev | {edit_summary['null_copy_prev_edit_mean']:.6f} | {edit_summary['null_copy_prev_edit_std']:.6f} |"
+    )
     lines.append("")
 
     lines.append("## Per-Component Edit (mean across recordings)")
@@ -277,7 +300,9 @@ def build_markdown(pos_summary, edit_summary, pce):
     lines.append("|---|---|---|---|---|")
     for rec in sorted(pos_summary["per_recording"].keys()):
         p = pos_summary["per_recording"][rec]
-        lines.append(f"| {rec} | {p['n_frames']} | {p['ours_pos']:.4f} | {p['null_all_zeros_pos']:.4f} | {p['null_copy_prev_pos']:.4f} |")
+        lines.append(
+            f"| {rec} | {p['n_frames']} | {p['ours_pos']:.4f} | {p['null_all_zeros_pos']:.4f} | {p['null_copy_prev_pos']:.4f} |"
+        )
     lines.append("")
 
     lines.append("## Per-Recording Edit")
@@ -286,7 +311,9 @@ def build_markdown(pos_summary, edit_summary, pce):
     lines.append("|---|---|---|---|---|")
     for rec in sorted(edit_summary["per_recording"].keys()):
         p = edit_summary["per_recording"][rec]
-        lines.append(f"| {rec} | {p['n_frames']} | {p['ours_edit']:.4f} | {p['null_all_zeros_edit']:.4f} | {p['null_copy_prev_edit']:.4f} |")
+        lines.append(
+            f"| {rec} | {p['n_frames']} | {p['ours_edit']:.4f} | {p['null_all_zeros_edit']:.4f} | {p['null_copy_prev_edit']:.4f} |"
+        )
     lines.append("")
 
     lines.append("## Key Findings")
@@ -297,16 +324,24 @@ def build_markdown(pos_summary, edit_summary, pce):
     o_edit = edit_summary["ours_edit_mean"]
     nz_edit = edit_summary["null_all_zeros_edit_mean"]
     nc_edit = edit_summary["null_copy_prev_edit_mean"]
-    lines.append(f"1. **POS inflation confirmed.** Our model POS ({o_pos:.4f}) is essentially identical to null copy-prev ({nc_pos:.4f}) and null all-zeros ({nz_pos:.4f}). POS is structurally inflated by frame-to-frame label persistence and is not a meaningful metric for PSR.")
-    lines.append(f"2. **Edit reveals real signal.** Our model Edit ({o_edit:.4f}) is _lower_ than null all-zeros ({nz_edit:.4f}) but _higher_ than null copy-prev ({nc_edit:.4f}). This means the model does learn some PSR structure but is worse than simply copying the previous frame.")
-    lines.append(f"3. **Per-component variation.** The model's Edit error is concentrated in rare-transition components:")
+    lines.append(
+        f"1. **POS inflation confirmed.** Our model POS ({o_pos:.4f}) is essentially identical to null copy-prev ({nc_pos:.4f}) and null all-zeros ({nz_pos:.4f}). POS is structurally inflated by frame-to-frame label persistence and is not a meaningful metric for PSR."
+    )
+    lines.append(
+        f"2. **Edit reveals real signal.** Our model Edit ({o_edit:.4f}) is _lower_ than null all-zeros ({nz_edit:.4f}) but _higher_ than null copy-prev ({nc_edit:.4f}). This means the model does learn some PSR structure but is worse than simply copying the previous frame."
+    )
+    lines.append(
+        f"3. **Per-component variation.** The model's Edit error is concentrated in rare-transition components:"
+    )
     for i in range(NUM_COMPONENTS):
         c = f"comp{i}"
         gt = pce[c]["gt_pos_frac_mean"]
         oe = pce[c]["ours_edit_mean"]
         ce = pce[c]["null_copy_prev_edit_mean"]
         lines.append(f"    - {c}: GT prevalence {gt:.3f}, Ours Edit {oe:.4f} vs copy-prev {ce:.4f}")
-    lines.append(f"4. **Conclusion.** POS is a flawed metric for sparse binary PSR sequences. Edit distance provides a more meaningful accuracy measure. The model shows positive but modest learned signal, with null copy-prev as a strong baseline.")
+    lines.append(
+        f"4. **Conclusion.** POS is a flawed metric for sparse binary PSR sequences. Edit distance provides a more meaningful accuracy measure. The model shows positive but modest learned signal, with null copy-prev as a strong baseline."
+    )
     lines.append("")
 
     return "\n".join(lines)

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Debug Q43: per-recording POS breakdown."""
+
 import csv
 import sys
 from pathlib import Path
@@ -10,23 +11,24 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.evaluation.evaluate import _compute_psr_pos_vectorized, _compute_psr_pos_canonical
 
-VAL_ROOT = Path('/media/newadmin/master/POPW/datasets/industreal/recordings/val')
+VAL_ROOT = Path("/media/newadmin/master/POPW/datasets/industreal/recordings/val")
 NUM_COMPONENTS = 11
 
+
 def load_psr_labels(rec_dir: Path):
-    psr_file = rec_dir / 'PSR_labels_raw.csv'
-    rgb_dir = rec_dir / 'rgb'
-    num_frames = len(sorted(rgb_dir.glob('*.jpg')))
+    psr_file = rec_dir / "PSR_labels_raw.csv"
+    rgb_dir = rec_dir / "rgb"
+    num_frames = len(sorted(rgb_dir.glob("*.jpg")))
 
     sparse = []
-    with open(psr_file, encoding='utf-8') as f:
+    with open(psr_file, encoding="utf-8") as f:
         reader = csv.reader(f)
         for row in reader:
             if len(row) < NUM_COMPONENTS + 1:
                 continue
             try:
                 frame_num = int(Path(row[0]).stem)
-                values = np.array([float(v) for v in row[1:NUM_COMPONENTS + 1]], dtype=np.float64)
+                values = np.array([float(v) for v in row[1 : NUM_COMPONENTS + 1]], dtype=np.float64)
                 sparse.append((frame_num, values))
             except (ValueError, IndexError):
                 continue
@@ -49,6 +51,7 @@ def load_psr_labels(rec_dir: Path):
     gt_safe[~valid_mask] = 0.0
     return gt_safe, valid_mask
 
+
 def per_component_pos_debug(gt_safe, valid_mask, canon_pred):
     """Debug POS per component."""
     N, C = gt_safe.shape
@@ -63,7 +66,7 @@ def per_component_pos_debug(gt_safe, valid_mask, canon_pred):
         run_vals = gt_c[run_starts]
 
         if len(run_vals) < 2:
-            results[c] = {'status': 'skipped', 'runs': len(run_vals), 'run_vals': run_vals.tolist()}
+            results[c] = {"status": "skipped", "runs": len(run_vals), "run_vals": run_vals.tolist()}
             continue
 
         total_pairs = len(run_vals) - 1
@@ -77,13 +80,14 @@ def per_component_pos_debug(gt_safe, valid_mask, canon_pred):
                 correct_pairs += 1
 
         results[c] = {
-            'status': 'evaluated',
-            'correct': int(correct_pairs),
-            'total': int(total_pairs),
-            'pos': correct_pairs / total_pairs if total_pairs > 0 else 0.0,
-            'run_vals': run_vals.tolist(),
+            "status": "evaluated",
+            "correct": int(correct_pairs),
+            "total": int(total_pairs),
+            "pos": correct_pairs / total_pairs if total_pairs > 0 else 0.0,
+            "run_vals": run_vals.tolist(),
         }
     return results
+
 
 # ========== MAIN ==========
 print("=" * 72)
@@ -119,15 +123,19 @@ for t in range(N):
         canon_concat[t, i] = 1
 
 print(f"Total frames: {N}, total recordings: {total_rec}")
-pos_concat = _compute_psr_pos_vectorized(canon_concat, gt_safe_concat.astype(np.int64), valid_mask_concat)
+pos_concat = _compute_psr_pos_vectorized(
+    canon_concat, gt_safe_concat.astype(np.int64), valid_mask_concat
+)
 print(f"Concatenated POS: {pos_concat:.6f}")
 
 # Debug components in concatenated
 print("\nPer-component (concatenated):")
-dbg_concat = per_component_pos_debug(gt_safe_concat.astype(np.int64), valid_mask_concat, canon_concat)
+dbg_concat = per_component_pos_debug(
+    gt_safe_concat.astype(np.int64), valid_mask_concat, canon_concat
+)
 for c in range(C):
     r = dbg_concat[c]
-    if r['status'] == 'evaluated':
+    if r["status"] == "evaluated":
         print(f"  comp{c}: POS={r['pos']:.4f} ({r['correct']}/{r['total']}) runs={r['run_vals']}")
     else:
         print(f"  comp{c}: SKIPPED ({r['runs']} run vals)")
@@ -157,8 +165,8 @@ for rec_dir in rec_dirs:
 
     dbg = per_component_pos_debug(gt.astype(np.int64), vm, canon)
     for c in range(C):
-        if dbg[c]['status'] == 'evaluated':
-            comp_pos_matrix[c].append(dbg[c]['pos'])
+        if dbg[c]["status"] == "evaluated":
+            comp_pos_matrix[c].append(dbg[c]["pos"])
 
 # Compute macro-average
 rec_macro = np.mean(rec_pos_values) if rec_pos_values else 0.0
@@ -168,12 +176,12 @@ print(f"Per-recording macro-average: {rec_macro:.6f}")
 comp_macro = {c: np.mean(vals) for c, vals in comp_pos_matrix.items() if vals}
 print(f"\nPer-component macro-average (across recordings with 3+ runs):")
 for c in sorted(comp_macro.keys()):
-    print(f"  comp{c}: {comp_macro[c]:.4f} (evaluated in {len(comp_pos_matrix[c])}/{total_rec} recordings)")
+    print(
+        f"  comp{c}: {comp_macro[c]:.4f} (evaluated in {len(comp_pos_matrix[c])}/{total_rec} recordings)"
+    )
 
 # Use the actual function
-pos_blind_concat = _compute_psr_pos_canonical(
-    gt_safe_concat.astype(np.int64), valid_mask_concat
-)
+pos_blind_concat = _compute_psr_pos_canonical(gt_safe_concat.astype(np.int64), valid_mask_concat)
 print(f"\n_compute_psr_pos_canonical (concat): {pos_blind_concat:.6f}")
 
 # Compute per-recording using the function

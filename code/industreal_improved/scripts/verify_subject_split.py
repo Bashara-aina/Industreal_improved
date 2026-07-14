@@ -11,11 +11,11 @@ directories (no per-window iteration), so it completes in seconds.
 Usage:
     python scripts/verify_subject_split.py
 """
+
 import argparse
 import json
 import sys
 from pathlib import Path
-from collections import defaultdict
 
 # Path setup
 _CODE_ROOT = Path(__file__).resolve().parent.parent
@@ -24,6 +24,7 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
         sys.path.insert(0, _p)
 
 import src.config as C
+
 C.NUM_ACT_OUTPUTS = 75
 C.ACT_CLASS_GROUPING = "none"
 

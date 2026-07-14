@@ -7,11 +7,20 @@ __pycache__/
 # Training logs (not checked in)
 *.log
 
-# Runtime training state (PIDs, epochs, checkpoints)
+# Experiment outputs — do not commit runs, checkpoints, or results
+runs/
 src/runs/
 checkpoints/
 
-# Large analysis artifacts (41MB training logs)
+# Archives
+*.tar.gz
+*.zip
+*.7z
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Large analysis artifacts
 analyses/*/logs/
 
 # Archives of old/pre-reorg source
@@ -25,3 +34,7 @@ archive/
 # OS
 .DS_Store
 Thumbs.db
+
+# IDE
+.idea/
+.vscode/

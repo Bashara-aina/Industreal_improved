@@ -31,8 +31,7 @@ from src import config as _C  # [FIX 2026-07-25] Config import for Q48 hysteresi
 # ============================================================================
 # Gaussian Transition Target
 # ============================================================================
-def build_transition_targets(psr_labels: torch.Tensor, sigma: float = 3.0
-                             ) -> torch.Tensor:
+def build_transition_targets(psr_labels: torch.Tensor, sigma: float = 3.0) -> torch.Tensor:
     """Convert binary-per-frame PSR labels to Gaussian-smeared transition targets.
 
     Args:
@@ -87,16 +86,15 @@ class MonotonicDecoder(nn.Module):
     before others (derived from the ground-truth procedure graph).
     """
 
-    def __init__(self, num_components: int = 11,
-                 procedure_order: Optional[List[Tuple[int, int]]] = None):
+    def __init__(
+        self, num_components: int = 11, procedure_order: Optional[List[Tuple[int, int]]] = None
+    ):
         super().__init__()
         self.num_components = num_components
         # Default procedure order: comp0→comp1→comp2→... (sequential)
-        self.procedure_order = procedure_order or [
-            (i, i + 1) for i in range(num_components - 1)
-        ]
+        self.procedure_order = procedure_order or [(i, i + 1) for i in range(num_components - 1)]
         # Register as buffer so it's on the right device
-        self.register_buffer('_order_matrix', self._build_order_matrix())
+        self.register_buffer("_order_matrix", self._build_order_matrix())
 
     def _build_order_matrix(self) -> torch.Tensor:
         """Build [C, C] matrix where M[i,j] = 1 if i must be placed before j."""
@@ -106,8 +104,7 @@ class MonotonicDecoder(nn.Module):
                 M[before, after] = 1.0
         return M
 
-    def forward(self, transition_logits: torch.Tensor,
-                threshold: float = 0.3) -> torch.Tensor:
+    def forward(self, transition_logits: torch.Tensor, threshold: float = 0.3) -> torch.Tensor:
         """Decode per-frame transition logits into state predictions.
 
         Args:
@@ -126,7 +123,7 @@ class MonotonicDecoder(nn.Module):
         # transition metric crashed to safe-default zeros (doc 107 Q1/Q18).
         logits = transition_logits
         if logits.dim() == 4 and logits.shape[-1] == 1:
-            logits = logits.squeeze(-1)   # [B,T,C,1] -> [B,T,C]
+            logits = logits.squeeze(-1)  # [B,T,C,1] -> [B,T,C]
         if logits.dim() == 2:
             # A 2-D input to a TEMPORAL decoder can only sensibly mean one
             # recording [T,C]; decode it as a single batch element.
@@ -136,16 +133,18 @@ class MonotonicDecoder(nn.Module):
 
         # Initialize: all components start at 0
         states = torch.zeros(B, T, n_comp, device=device)
-        current_state = torch.zeros(B, n_comp, device=device)  # [B, C] — current per-component state
+        current_state = torch.zeros(
+            B, n_comp, device=device
+        )  # [B, C] — current per-component state
         # [FIX 2026-07-05 Opus 126 Q48] Hysteresis state: per-component counter of
         # consecutive frames above PSR_TRANSITION_THRESHOLD_LO. When the counter
         # reaches PSR_TRANSITION_MIN_SUSTAINED AND the current frame's prob is
         # above PSR_TRANSITION_THRESHOLD_HI, the component fires. This addresses
         # the Mode A PSR collapse (98.4% of logits above 0.3 firing at frame 0):
         # requiring sustained evidence before firing suppresses one-frame spikes.
-        sustain_hi = float(getattr(_C, 'PSR_TRANSITION_THRESHOLD_HI', 0.5))
-        sustain_lo = float(getattr(_C, 'PSR_TRANSITION_THRESHOLD_LO', 0.3))
-        sustain_min = int(getattr(_C, 'PSR_TRANSITION_MIN_SUSTAINED', 3))
+        sustain_hi = float(getattr(_C, "PSR_TRANSITION_THRESHOLD_HI", 0.5))
+        sustain_lo = float(getattr(_C, "PSR_TRANSITION_THRESHOLD_LO", 0.3))
+        sustain_min = int(getattr(_C, "PSR_TRANSITION_MIN_SUSTAINED", 3))
         sustain_counter = torch.zeros(B, n_comp, device=device)  # [B, C]
 
         for t in range(T):
@@ -153,7 +152,7 @@ class MonotonicDecoder(nn.Module):
             trans_prob = logits[:, t, :]  # [B, C]
 
             # Components that haven't been placed yet
-            can_transition = (current_state == 0)
+            can_transition = current_state == 0
 
             # Apply procedure-order constraint: a component can only transition
             # if ALL components that must come before it are already placed
@@ -170,9 +169,9 @@ class MonotonicDecoder(nn.Module):
             above_lo = (trans_prob > sustain_lo).float()  # [B, C]
             sustain_counter = sustain_counter * above_lo + above_lo  # resets on low-prob frame
             # Component fires only if sustained AND current frame's prob is high
-            sustained = (sustain_counter >= sustain_min)  # [B, C] bool
-            high_now = (trans_prob > sustain_hi)  # [B, C] bool
-            transition = (high_now & sustained & can_transition)  # [B, C] bool
+            sustained = sustain_counter >= sustain_min  # [B, C] bool
+            high_now = trans_prob > sustain_hi  # [B, C] bool
+            transition = high_now & sustained & can_transition  # [B, C] bool
             # Once placed, stays placed — use addition+clamp instead of bitwise OR
             # to avoid NotImplementedError: 'bitwise_or' not implemented for Float on CPU
             current_state = (current_state + transition.float()).clamp(max=1.0)
@@ -203,10 +202,16 @@ class PSRTransitionPredictor(nn.Module):
     Toggle via config.PSR_HEAD_REPAIR env var (PSR_HEAD_REPAIR=1).
     """
 
-    def __init__(self, input_dim: int = 512, hidden_dim: int = 256,
-                 num_components: int = 11, num_heads: int = 4,
-                 num_layers: int = 3, dropout: float = 0.1,
-                 use_repaired_head: bool = False):
+    def __init__(
+        self,
+        input_dim: int = 512,
+        hidden_dim: int = 256,
+        num_components: int = 11,
+        num_heads: int = 4,
+        num_layers: int = 3,
+        dropout: float = 0.1,
+        use_repaired_head: bool = False,
+    ):
         super().__init__()
         self.num_components = num_components
         self.hidden_dim = hidden_dim
@@ -217,9 +222,12 @@ class PSRTransitionPredictor(nn.Module):
 
         # Causal transformer for temporal modeling
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim, nhead=num_heads,
-            dim_feedforward=hidden_dim * 4, dropout=dropout,
-            batch_first=True, norm_first=True,
+            d_model=hidden_dim,
+            nhead=num_heads,
+            dim_feedforward=hidden_dim * 4,
+            dropout=dropout,
+            batch_first=True,
+            norm_first=True,
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
@@ -227,13 +235,18 @@ class PSRTransitionPredictor(nn.Module):
         # [PSR HEAD REPAIR 2026-07-06] use_repaired_head=True uses:
         #   LeakyReLU(0.01) instead of ReLU(inplace=True)
         #   Xavier init + bias=0.0 (was normal(0,0.01) + bias=-1.0)
-        self.transition_heads = nn.ModuleList([
-            nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim // 2),
-                nn.LeakyReLU(negative_slope=0.01) if use_repaired_head else nn.ReLU(inplace=True),
-                nn.Linear(hidden_dim // 2, 1),
-            ) for _ in range(num_components)
-        ])
+        self.transition_heads = nn.ModuleList(
+            [
+                nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim // 2),
+                    nn.LeakyReLU(negative_slope=0.01)
+                    if use_repaired_head
+                    else nn.ReLU(inplace=True),
+                    nn.Linear(hidden_dim // 2, 1),
+                )
+                for _ in range(num_components)
+            ]
+        )
 
         # Monotonic decoder
         self.decoder = MonotonicDecoder(num_components=num_components)
@@ -258,8 +271,9 @@ class PSRTransitionPredictor(nn.Module):
                 # Bias toward "no transition" — sigmoid(-1) ≈ 0.27
                 nn.init.constant_(head[2].bias, -1.0)
 
-    def forward(self, features: torch.Tensor,
-                return_states: bool = False) -> Dict[str, torch.Tensor]:
+    def forward(
+        self, features: torch.Tensor, return_states: bool = False
+    ) -> Dict[str, torch.Tensor]:
         """Predict PSR transitions and states from temporal features.
 
         Args:
@@ -277,29 +291,27 @@ class PSRTransitionPredictor(nn.Module):
         x = self.input_proj(features)  # [B, T, hidden_dim]
 
         # Causal mask
-        causal_mask = torch.triu(
-            torch.ones(T, T, device=features.device), diagonal=1
-        ).bool()
+        causal_mask = torch.triu(torch.ones(T, T, device=features.device), diagonal=1).bool()
 
         # Causal transformer
         encoded = self.transformer(x, mask=causal_mask)  # [B, T, hidden_dim]
 
         # Per-component transition logits
-        transition_logits = torch.cat([
-            head(encoded) for head in self.transition_heads
-        ], dim=-1)  # [B, T, C]
+        transition_logits = torch.cat(
+            [head(encoded) for head in self.transition_heads], dim=-1
+        )  # [B, T, C]
 
-        result = {'transition_logits': transition_logits}
+        result = {"transition_logits": transition_logits}
 
         if return_states:
             transition_probs = torch.sigmoid(transition_logits)
-            result['states'] = self.decoder(transition_probs)
+            result["states"] = self.decoder(transition_probs)
 
         return result
 
-    def compute_loss(self, transition_logits: torch.Tensor,
-                     psr_labels: torch.Tensor,
-                     sigma: float = 3.0) -> Tuple[torch.Tensor, Dict[str, float]]:
+    def compute_loss(
+        self, transition_logits: torch.Tensor, psr_labels: torch.Tensor, sigma: float = 3.0
+    ) -> Tuple[torch.Tensor, Dict[str, float]]:
         """Compute event-detection loss with Gaussian-smeared transition targets.
 
         Args:
@@ -323,9 +335,7 @@ class PSRTransitionPredictor(nn.Module):
         alpha = 0.25 * targets + 0.75 * (1 - targets)
         focal_weight = abs(targets - torch.sigmoid(transition_logits)) ** 2
 
-        bce = F.binary_cross_entropy_with_logits(
-            transition_logits, targets, reduction='none'
-        )
+        bce = F.binary_cross_entropy_with_logits(transition_logits, targets, reduction="none")
         loss = (alpha * focal_weight * bce * masks.float()).sum() / total
 
         # Training regularization: encourage monotonicity
@@ -349,11 +359,11 @@ class PSRTransitionPredictor(nn.Module):
         f1 = 2 * prec * rec / max(prec + rec, 1e-8)
 
         metrics = {
-            'transition_loss': loss.item(),
-            'transition_precision': prec.item(),
-            'transition_recall': rec.item(),
-            'transition_f1': f1.item(),
-            'reg_loss': reg_loss.item() if isinstance(reg_loss, torch.Tensor) else reg_loss,
+            "transition_loss": loss.item(),
+            "transition_precision": prec.item(),
+            "transition_recall": rec.item(),
+            "transition_f1": f1.item(),
+            "reg_loss": reg_loss.item() if isinstance(reg_loss, torch.Tensor) else reg_loss,
         }
 
         return loss, metrics

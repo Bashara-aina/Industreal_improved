@@ -7,25 +7,23 @@ to decide if TCN+ViT is worth the full 2-3 day run.
 Usage:
     python -m src.training.train_activity_tcn
 """
+
 import argparse
 import logging
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from src import config as C
-from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
+from src.data.industreal_dataset import IndustRealMultiTaskDataset
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
-logger = logging.getLogger('train_activity_tcn')
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("train_activity_tcn")
 
 
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -43,6 +41,7 @@ def normalize(images):
 
 class FeatureClipDataset(Dataset):
     """Pre-extracted ConvNeXt features arranged as clips."""
+
     def __init__(self, features, labels, recording_ids, clip_len=16, stride=8):
         self.features = features  # [N, 768]
         self.labels = labels  # [N]
@@ -51,6 +50,7 @@ class FeatureClipDataset(Dataset):
         self.stride = stride
         # Group by recording
         from collections import defaultdict
+
         rec_to_indices = defaultdict(list)
         for i, rid in enumerate(recording_ids):
             rec_to_indices[rid].append(i)
@@ -58,7 +58,7 @@ class FeatureClipDataset(Dataset):
         self.clips = []
         for rid, idxs in rec_to_indices.items():
             for start in range(0, len(idxs) - clip_len + 1, stride):
-                self.clips.append(idxs[start:start + clip_len])
+                self.clips.append(idxs[start : start + clip_len])
         logger.info(f"Built {len(self.clips)} clips of length {clip_len}")
 
     def __len__(self):
@@ -73,34 +73,39 @@ class FeatureClipDataset(Dataset):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--clip-len', type=int, default=16)
-    parser.add_argument('--stride', type=int, default=8)
-    parser.add_argument('--batch-size', type=int, default=64)
-    parser.add_argument('--epochs', type=int, default=30)
-    parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--hidden', type=int, default=256)
-    parser.add_argument('--levels', type=int, default=3)
-    parser.add_argument('--save-dir', default='src/runs/rf_stages/checkpoints/activity_tcn')
+    parser.add_argument("--clip-len", type=int, default=16)
+    parser.add_argument("--stride", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--hidden", type=int, default=256)
+    parser.add_argument("--levels", type=int, default=3)
+    parser.add_argument("--save-dir", default="src/runs/rf_stages/checkpoints/activity_tcn")
     args = parser.parse_args()
 
     Path(args.save_dir).mkdir(parents=True, exist_ok=True)
 
-    device = torch.device('cuda')
+    device = torch.device("cuda")
 
     # Load backbone
     logger.info("Loading ConvNeXt-Tiny backbone (frozen)...")
     from src.models.model import ConvNeXtBackbone
+
     backbone = ConvNeXtBackbone(pretrained=True)
-    ckpt = torch.load('src/runs/rf_stages/checkpoints/best.pth', map_location='cpu', weights_only=False)
-    bb_state = {k.replace('backbone.', ''): v for k, v in ckpt['model'].items() if k.startswith('backbone.')}
+    ckpt = torch.load(
+        "src/runs/rf_stages/checkpoints/best.pth", map_location="cpu", weights_only=False
+    )
+    bb_state = {
+        k.replace("backbone.", ""): v for k, v in ckpt["model"].items() if k.startswith("backbone.")
+    }
     backbone.load_state_dict(bb_state, strict=False)
     backbone = backbone.to(device).eval()
     for p in backbone.parameters():
         p.requires_grad = False
 
     # Load datasets
-    train_ds = IndustRealMultiTaskDataset(split='train', sequence_mode=False)
-    val_ds = IndustRealMultiTaskDataset(split='val', sequence_mode=False)
+    train_ds = IndustRealMultiTaskDataset(split="train", sequence_mode=False)
+    val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
 
     # Pre-extract features
     logger.info("Pre-extracting train features...")
@@ -112,7 +117,9 @@ def main():
     logger.info(f"Val features: {val_feats.shape}")
 
     # Build clip datasets
-    train_clips = FeatureClipDataset(train_feats, train_labels, train_recs, args.clip_len, args.stride)
+    train_clips = FeatureClipDataset(
+        train_feats, train_labels, train_recs, args.clip_len, args.stride
+    )
     val_clips = FeatureClipDataset(val_feats, val_labels, val_recs, args.clip_len, args.stride)
 
     train_loader = DataLoader(train_clips, batch_size=args.batch_size, shuffle=True, num_workers=0)
@@ -120,7 +127,10 @@ def main():
 
     # Import TCN
     from src.models.activity_tcn import ActivityTCN
-    model = ActivityTCN(in_dim=768, num_classes=69, hidden=args.hidden, levels=args.levels).to(device)
+
+    model = ActivityTCN(in_dim=768, num_classes=69, hidden=args.hidden, levels=args.levels).to(
+        device
+    )
     optim = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=args.epochs)
 
@@ -180,11 +190,13 @@ def main():
                         val_total += 1
         val_acc = val_correct / max(val_total, 1)
 
-        logger.info(f"Epoch {epoch}/{args.epochs}: train_loss={train_loss:.4f} train_acc={train_acc:.4f} | val_acc={val_acc:.4f} (majority={majority_acc:.4f})")
+        logger.info(
+            f"Epoch {epoch}/{args.epochs}: train_loss={train_loss:.4f} train_acc={train_acc:.4f} | val_acc={val_acc:.4f} (majority={majority_acc:.4f})"
+        )
         if val_acc > best_val:
             best_val = val_acc
 
-    logger.info(f"\n{'='*60}")
+    logger.info(f"\n{'=' * 60}")
     logger.info(f"TCN Probe Results")
     logger.info(f"  Majority baseline: {majority_acc:.4f}")
     logger.info(f"  Best val clip acc: {best_val:.4f}")
@@ -195,21 +207,28 @@ def main():
         logger.info(f"  GATING DECISION: GRAY ZONE — minimal TCN+ViT attempt")
     else:
         logger.info(f"  GATING DECISION: FAIL — cut TCN+ViT")
-    logger.info(f"{'='*60}")
+    logger.info(f"{'=' * 60}")
 
     # Save results
     import json
-    out = Path(args.save_dir) / 'results.json'
-    with open(out, 'w') as f:
-        json.dump({
-            'clip_len': args.clip_len,
-            'stride': args.stride,
-            'hidden': args.hidden,
-            'levels': args.levels,
-            'majority_baseline': majority_acc,
-            'best_val_clip_acc': best_val,
-            'gating_decision': 'PASS' if best_val > 0.27 else ('GRAY' if best_val > majority_acc else 'FAIL')
-        }, f, indent=2)
+
+    out = Path(args.save_dir) / "results.json"
+    with open(out, "w") as f:
+        json.dump(
+            {
+                "clip_len": args.clip_len,
+                "stride": args.stride,
+                "hidden": args.hidden,
+                "levels": args.levels,
+                "majority_baseline": majority_acc,
+                "best_val_clip_acc": best_val,
+                "gating_decision": "PASS"
+                if best_val > 0.27
+                else ("GRAY" if best_val > majority_acc else "FAIL"),
+            },
+            f,
+            indent=2,
+        )
     logger.info(f"Saved {out}")
 
 
@@ -223,20 +242,20 @@ def extract_features(dataset, backbone, device):
             if i % 5000 == 0:
                 logger.info(f"  {i}/{len(dataset)}")
             sample = dataset[i]
-            image = sample['images']['rgb'].unsqueeze(0).to(device).float()
+            image = sample["images"]["rgb"].unsqueeze(0).to(device).float()
             image = normalize(image)
             feature = backbone(image)
             if feature.dim() == 4:
                 feature = feature.mean(dim=(-2, -1))
             feats_list.append(feature.cpu().squeeze(0))
-            label = sample['activity']
-            if hasattr(label, 'item'):
+            label = sample["activity"]
+            if hasattr(label, "item"):
                 label = label.item()
             labels_list.append(int(label))
-            meta = sample.get('metadata', {})
-            recs_list.append(meta.get('recording_id', 'unknown'))
+            meta = sample.get("metadata", {})
+            recs_list.append(meta.get("recording_id", "unknown"))
     return torch.stack(feats_list), torch.tensor(labels_list), recs_list
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

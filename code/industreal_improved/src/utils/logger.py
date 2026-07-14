@@ -3,7 +3,6 @@ TensorBoard logging utilities for IndustReal training.
 """
 
 import os
-from typing import Optional
 
 from torch.utils.tensorboard import SummaryWriter
 

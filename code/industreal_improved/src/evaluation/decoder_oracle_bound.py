@@ -58,6 +58,7 @@ from src import config as C
 # Data loading
 # =========================================================================
 
+
 def load_psr_labels(rec_dir: Path, num_frames: int) -> np.ndarray:
     """Load and fill-forward PSR labels for a recording.
     Matches the dataset's _parse_psr_raw() logic.
@@ -111,8 +112,8 @@ def count_frames(rec_dir: Path) -> int:
 # Oracle construction
 # =========================================================================
 
-def build_oracle_logits(gt_states: np.ndarray,
-                        mode: str = "sustained") -> np.ndarray:
+
+def build_oracle_logits(gt_states: np.ndarray, mode: str = "sustained") -> np.ndarray:
     """Build oracle transition logits from GT states.
 
     For components with gt_states[0, c] = 1 (already placed at start),
@@ -175,11 +176,14 @@ def build_oracle_logits(gt_states: np.ndarray,
 # MonotonicDecoder with pre-initialized state
 # =========================================================================
 
-def decode_oracle(oracle_logits: np.ndarray,
-                  decoder: MonotonicDecoder,
-                  device: str = "cuda",
-                  initial_state: np.ndarray = None,
-                  use_procedure_order: bool = True) -> np.ndarray:
+
+def decode_oracle(
+    oracle_logits: np.ndarray,
+    decoder: MonotonicDecoder,
+    device: str = "cuda",
+    initial_state: np.ndarray = None,
+    use_procedure_order: bool = True,
+) -> np.ndarray:
     """Run MonotonicDecoder with optional initial state pre-initialization.
 
     The standard decoder always starts from zeros. For the oracle, we need
@@ -225,7 +229,7 @@ def decode_oracle(oracle_logits: np.ndarray,
         trans_prob = logits_t[:, t, :]  # [B, C]
 
         # Components not yet placed can transition
-        can_transition = (current_state == 0)
+        can_transition = current_state == 0
 
         # Procedure-order constraint (skipped if use_procedure_order=False)
         if use_procedure_order:
@@ -235,9 +239,9 @@ def decode_oracle(oracle_logits: np.ndarray,
         # Hysteresis
         above_lo = (trans_prob > sustain_lo).float()
         sustain_counter = sustain_counter * above_lo + above_lo
-        sustained = (sustain_counter >= sustain_min)
-        high_now = (trans_prob > sustain_hi)
-        transition = (high_now & sustained & can_transition)
+        sustained = sustain_counter >= sustain_min
+        high_now = trans_prob > sustain_hi
+        transition = high_now & sustained & can_transition
 
         current_state = (current_state + transition.float()).clamp(max=1.0)
         states[:, t, :] = current_state
@@ -248,6 +252,7 @@ def decode_oracle(oracle_logits: np.ndarray,
 # =========================================================================
 # Metrics
 # =========================================================================
+
 
 def event_f1(pred_tr: np.ndarray, gt_tr: np.ndarray, tol: int = 3) -> float:
     """Event F1 with greedy matching within tolerance. B3/STORM protocol."""
@@ -277,16 +282,14 @@ def event_f1(pred_tr: np.ndarray, gt_tr: np.ndarray, tol: int = 3) -> float:
     return 2 * prec * rec / max(prec + rec, 1e-9)
 
 
-def compute_per_component_f1(pred_states: np.ndarray,
-                              gt_states: np.ndarray,
-                              tol: int = 3) -> dict:
+def compute_per_component_f1(pred_states: np.ndarray, gt_states: np.ndarray, tol: int = 3) -> dict:
     """Compute per-component and aggregate transition F1."""
     pred_tr = np.clip(pred_states[1:] - pred_states[:-1], a_min=0, a_max=None)
     gt_tr = np.clip(gt_states[1:] - gt_states[:-1], a_min=0, a_max=None)
 
     per_comp = {}
     for c in range(pred_states.shape[1]):
-        per_comp[c] = event_f1(pred_tr[:, c:c+1], gt_tr[:, c:c+1], tol=tol)
+        per_comp[c] = event_f1(pred_tr[:, c : c + 1], gt_tr[:, c : c + 1], tol=tol)
 
     macro_f1 = float(np.mean(list(per_comp.values()))) if per_comp else 0.0
 
@@ -318,8 +321,7 @@ def compute_per_component_f1(pred_states: np.ndarray,
     }
 
 
-def compute_structure_analysis(pred_states: np.ndarray,
-                                gt_states: np.ndarray) -> dict:
+def compute_structure_analysis(pred_states: np.ndarray, gt_states: np.ndarray) -> dict:
     """Analyze structural violations and decoder behavior."""
     pred_tr = np.clip(pred_states[1:] - pred_states[:-1], a_min=0, a_max=None)
     gt_tr = np.clip(gt_states[1:] - gt_states[:-1], a_min=0, a_max=None)
@@ -382,6 +384,7 @@ def compute_structure_analysis(pred_states: np.ndarray,
 # Actual decoder baseline (for comparison)
 # =========================================================================
 
+
 def run_actual_decoder():
     """Get actual decoder F1 from existing evaluation logs.
 
@@ -418,24 +421,34 @@ def run_actual_decoder():
 # Main
 # =========================================================================
 
+
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(
-        description="MonotonicDecoder Oracle Bound (Opus 141 Q46)"
+    parser = argparse.ArgumentParser(description="MonotonicDecoder Oracle Bound (Opus 141 Q46)")
+    parser.add_argument(
+        "--save-dir",
+        type=str,
+        default="src/runs/rf_stages/checkpoints/decoder_oracle_bound",
+        help="Output directory for results",
     )
-    parser.add_argument("--save-dir", type=str,
-                        default="src/runs/rf_stages/checkpoints/decoder_oracle_bound",
-                        help="Output directory for results")
-    parser.add_argument("--tolerance", type=int, default=3,
-                        help="Frame tolerance for event matching")
-    parser.add_argument("--mode", type=str, default="sustained",
-                        choices=["impulse", "sustained"],
-                        help="Oracle mode: impulse or sustained")
-    parser.add_argument("--relaxed", action="store_true",
-                        help="Remove procedure-order constraint entirely. "
-                             "Isolates hysteresis/threshold bottleneck "
-                             "from procedure-order bottleneck.")
+    parser.add_argument(
+        "--tolerance", type=int, default=3, help="Frame tolerance for event matching"
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="sustained",
+        choices=["impulse", "sustained"],
+        help="Oracle mode: impulse or sustained",
+    )
+    parser.add_argument(
+        "--relaxed",
+        action="store_true",
+        help="Remove procedure-order constraint entirely. "
+        "Isolates hysteresis/threshold bottleneck "
+        "from procedure-order bottleneck.",
+    )
     args = parser.parse_args()
 
     save_dir = Path(args.save_dir)
@@ -492,9 +505,13 @@ def main():
 
         # Run decoder with pre-initialized current_state
         initial_state = gt_states_bin[0, :]  # [11]: what's already placed at frame 0
-        pred_states = decode_oracle(oracle_logits, decoder, device,
-                                     initial_state=initial_state,
-                                     use_procedure_order=not args.relaxed)
+        pred_states = decode_oracle(
+            oracle_logits,
+            decoder,
+            device,
+            initial_state=initial_state,
+            use_procedure_order=not args.relaxed,
+        )
 
         # ── Debug: log first few transitions ─────────────────────────────
         gt_transitions = np.clip(gt_states_bin[1:] - gt_states_bin[:-1], a_min=0, a_max=None)
@@ -504,8 +521,7 @@ def main():
         n_pred = int(pred_transitions.sum())
 
         # ── Compute metrics ──────────────────────────────────────────────
-        f1_metrics = compute_per_component_f1(pred_states, gt_states_bin,
-                                               tol=args.tolerance)
+        f1_metrics = compute_per_component_f1(pred_states, gt_states_bin, tol=args.tolerance)
         structure = compute_structure_analysis(pred_states, gt_states_bin)
 
         per_recording[rec_id] = {
@@ -519,10 +535,12 @@ def main():
             "delay_stats": structure["delay_stats"],
         }
 
-        print(f"  {rec_id}: {num_frames:5d} frames, "
-              f"GT={n_gt:2d} transitions, Pred={n_pred:2d}, "
-              f"macro F1={f1_metrics['macro_f1']:.4f}, "
-              f"micro F1={f1_metrics['micro_f1']:.4f}")
+        print(
+            f"  {rec_id}: {num_frames:5d} frames, "
+            f"GT={n_gt:2d} transitions, Pred={n_pred:2d}, "
+            f"macro F1={f1_metrics['macro_f1']:.4f}, "
+            f"micro F1={f1_metrics['micro_f1']:.4f}"
+        )
 
         # For the first recording, print detailed transition info
         if rec_id == rec_ids[0]:
@@ -533,7 +551,9 @@ def main():
                 if len(gt_t) > 0 or len(pred_t) > 0:
                     gt_str = f"GT={gt_t.tolist()}" if len(gt_t) > 0 else "GT=[]"
                     pred_str = f"Pred={pred_t.tolist()}" if len(pred_t) > 0 else "Pred=[]"
-                    print(f"    comp{c}: {gt_str}, {pred_str}, F1={f1_metrics['per_component_f1'][str(c)]:.4f}")
+                    print(
+                        f"    comp{c}: {gt_str}, {pred_str}, F1={f1_metrics['per_component_f1'][str(c)]:.4f}"
+                    )
 
     # ── Aggregate ────────────────────────────────────────────────────────
     if not per_recording:
@@ -584,7 +604,6 @@ def main():
         }
 
     # Global F1
-    from src.evaluation.psr_transition_f1 import event_f1 as global_event_f1
     global_pred_tr_list = []
     global_gt_tr_list = []
 
@@ -644,9 +663,13 @@ def main():
         gt_states_bin = (gt_states > 0.5).astype(np.float32)
         oracle_logits = build_oracle_logits(gt_states_bin, mode=args.mode)
         initial_state = gt_states_bin[0, :]
-        pred_states = decode_oracle(oracle_logits, decoder, device,
-                                     initial_state=initial_state,
-                                     use_procedure_order=not args.relaxed)
+        pred_states = decode_oracle(
+            oracle_logits,
+            decoder,
+            device,
+            initial_state=initial_state,
+            use_procedure_order=not args.relaxed,
+        )
         all_pred.append(pred_states)
         all_gt.append(gt_states_bin)
 
@@ -757,17 +780,18 @@ def main():
     for c_str in sorted(oracle_per_component.keys(), key=int):
         v = oracle_per_component[c_str]
         md_lines.append(
-            f"| comp{c_str} | {v['mean']:.4f} | {v['std']:.4f} | "
-            f"{v['min']:.4f} | {v['max']:.4f} |"
+            f"| comp{c_str} | {v['mean']:.4f} | {v['std']:.4f} | {v['min']:.4f} | {v['max']:.4f} |"
         )
 
-    md_lines.extend([
-        f"",
-        f"## Per-Recording Results",
-        f"",
-        f"| Recording | Frames | GT Trans | Pred Trans | Macro F1 | Micro F1 | Violations |",
-        f"|-----------|--------|----------|------------|----------|----------|------------|",
-    ])
+    md_lines.extend(
+        [
+            f"",
+            f"## Per-Recording Results",
+            f"",
+            f"| Recording | Frames | GT Trans | Pred Trans | Macro F1 | Micro F1 | Violations |",
+            f"|-----------|--------|----------|------------|----------|----------|------------|",
+        ]
+    )
     for rec_id in sorted(per_recording.keys()):
         r = per_recording[rec_id]
         md_lines.append(
@@ -777,29 +801,33 @@ def main():
         )
 
     if delay_summary:
-        md_lines.extend([
-            f"",
-            f"## Decoder Delay Analysis",
-            f"",
-            f"| Stat | Value |",
-            f"|------|-------|",
-            f"| Mean Delay | {delay_summary['mean']:.2f} frames |",
-            f"| Median Delay | {delay_summary['median']:.2f} frames |",
-            f"| Std Delay | {delay_summary['std']:.2f} frames |",
-            f"| P90 Delay | {delay_summary['p90']:.2f} frames |",
-            f"| Min Delay | {delay_summary['min']} frames |",
-            f"| Max Delay | {delay_summary['max']} frames |",
-            f"| N Matched | {delay_summary['n']} |",
-        ])
+        md_lines.extend(
+            [
+                f"",
+                f"## Decoder Delay Analysis",
+                f"",
+                f"| Stat | Value |",
+                f"|------|-------|",
+                f"| Mean Delay | {delay_summary['mean']:.2f} frames |",
+                f"| Median Delay | {delay_summary['median']:.2f} frames |",
+                f"| Std Delay | {delay_summary['std']:.2f} frames |",
+                f"| P90 Delay | {delay_summary['p90']:.2f} frames |",
+                f"| Min Delay | {delay_summary['min']} frames |",
+                f"| Max Delay | {delay_summary['max']} frames |",
+                f"| N Matched | {delay_summary['n']} |",
+            ]
+        )
 
-    md_lines.extend([
-        f"",
-        f"## Interpretation",
-        f"",
-        interpretation,
-        f"",
-        delay_interpretation,
-    ])
+    md_lines.extend(
+        [
+            f"",
+            f"## Interpretation",
+            f"",
+            interpretation,
+            f"",
+            delay_interpretation,
+        ]
+    )
 
     if gap_actual:
         md_lines.append(gap_actual)
@@ -810,13 +838,15 @@ def main():
     print(f"Report saved to {md_path}")
 
     # ── Print summary ────────────────────────────────────────────────────
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"DECODER ORACLE BOUND RESULTS ({args.mode} mode)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  Recordings:       {results['summary']['n_recordings']}")
     print(f"  Total frames:     {results['summary']['n_total_frames']}")
-    print(f"  Total transitions: {results['summary']['n_total_gt_transitions']} GT, "
-          f"{results['summary']['n_total_pred_transitions']} predicted")
+    print(
+        f"  Total transitions: {results['summary']['n_total_gt_transitions']} GT, "
+        f"{results['summary']['n_total_pred_transitions']} predicted"
+    )
     print(f"")
     print(f"  Oracle Macro F1:  {oracle_macro:.4f}")
     print(f"  Oracle Micro F1:  {oracle_micro:.4f}")
@@ -829,15 +859,17 @@ def main():
         print(f"    comp{c_str}: {v['mean']:.4f} ± {v['std']:.4f}")
     if delay_summary:
         print(f"")
-        print(f"  Decoder delay: mean={delay_summary['mean']:.2f}f, "
-              f"median={delay_summary['median']:.2f}f, "
-              f"p90={delay_summary['p90']:.2f}f, "
-              f"n={delay_summary['n']}")
+        print(
+            f"  Decoder delay: mean={delay_summary['mean']:.2f}f, "
+            f"median={delay_summary['median']:.2f}f, "
+            f"p90={delay_summary['p90']:.2f}f, "
+            f"n={delay_summary['n']}"
+        )
     if actual["macro_f1"] is not None:
         print(f"")
         print(f"  Actual baseline:  macro F1={actual['macro_f1']:.4f}")
         print(f"  Gap (oracle - actual): {oracle_macro - actual['macro_f1']:.4f}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ Tracks recording_id + frame_num so we can sort temporally for decoder eval.
 
 Usage: python3 src/evaluation/sweep_psr_threshold.py
 """
+
 import json
 import sys
 from collections import defaultdict
@@ -30,8 +31,8 @@ def decode_monotone(probs, sustain_hi=0.5, sustain_lo=0.3, sustain_min=3):
     for t in range(T):
         above_lo = (probs[t] > sustain_lo).float()
         counter = counter * above_lo + above_lo
-        sustained = (counter >= sustain_min)
-        high_now = (probs[t] > sustain_hi)
+        sustained = counter >= sustain_min
+        high_now = probs[t] > sustain_hi
         transition = high_now & sustained & (current == 0)
         current = (current + transition.float()).clamp(max=1.0)
         states[t] = current
@@ -55,7 +56,9 @@ def event_f1(pred_states, gt_states, tol=3):
         for pf in p_frames:
             for gi, gf in enumerate(g_frames):
                 if gi not in matched and abs(pf - gf) <= tol:
-                    matched.add(gi); tp += 1; break
+                    matched.add(gi)
+                    tp += 1
+                    break
             else:
                 fp += 1
         fn_tot += len(g_frames) - len(matched)
@@ -65,8 +68,8 @@ def event_f1(pred_states, gt_states, tol=3):
 
 
 def ordered_pair_fraction(pred_states, gt_states):
-    pred_pairs = (pred_states[1:] - pred_states[:-1])
-    gt_pairs = (gt_states[1:] - gt_states[:-1])
+    pred_pairs = pred_states[1:] - pred_states[:-1]
+    gt_pairs = gt_states[1:] - gt_states[:-1]
     return float((torch.sign(pred_pairs) == torch.sign(gt_pairs)).float().mean())
 
 
@@ -89,28 +92,34 @@ def collect_data():
     ckpt_path = CKPT_PATH
     print(f"Loading {ckpt_path}...")
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    print(f"Epoch: {ckpt.get('epoch', 'unknown')}, combined: {ckpt.get('best_combined', 'unknown')}")
+    print(
+        f"Epoch: {ckpt.get('epoch', 'unknown')}, combined: {ckpt.get('best_combined', 'unknown')}"
+    )
 
     from src.models.model import POPWMultiTaskModel
+
     model = POPWMultiTaskModel(
         pretrained=True,
-        backbone_type='convnext_tiny',
+        backbone_type="convnext_tiny",
         use_hand_film=True,
         use_headpose_film=True,
         use_videomae=False,
         train_pose=False,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict)
     model._seq_len = 1
     model = model.cuda().eval()
 
     from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
     from torch.utils.data import DataLoader
+
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
-    val_loader = DataLoader(val_ds, batch_size=1, num_workers=0,
-                            collate_fn=collate_fn, shuffle=False)
+    val_loader = DataLoader(
+        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False
+    )
 
     rec_logits = defaultdict(list)
     rec_labels = defaultdict(list)
@@ -163,8 +172,16 @@ def collect_data():
     print(f"\nCollected {n_batches} batches, {n_recs} recordings, {total_frames} frames")
 
     # Cache to disk
-    torch.save({"rec_logits": dict(rec_logits), "rec_labels": dict(rec_labels),
-                "n_batches": n_batches, "total_frames": total_frames, "n_recs": n_recs}, CACHE_PATH)
+    torch.save(
+        {
+            "rec_logits": dict(rec_logits),
+            "rec_labels": dict(rec_labels),
+            "n_batches": n_batches,
+            "total_frames": total_frames,
+            "n_recs": n_recs,
+        },
+        CACHE_PATH,
+    )
     print(f"Cached to {CACHE_PATH}")
     return dict(rec_logits), dict(rec_labels), n_batches, total_frames, n_recs
 
@@ -188,7 +205,9 @@ def main():
     valid_all = all_labels != -1
 
     print(f"\n--- Global stats ---")
-    print(f"Logits: min={all_logits.min():.3f}, max={all_logits.max():.3f}, mean={all_logits.mean():.3f}")
+    print(
+        f"Logits: min={all_logits.min():.3f}, max={all_logits.max():.3f}, mean={all_logits.mean():.3f}"
+    )
     print(f"Labels: min={all_labels.min()}, max={all_labels.max()}")
     print(f"  pos_frac={all_labels[valid_all].mean():.3f}")
     sig = 1 / (1 + np.exp(-all_logits))
@@ -201,10 +220,11 @@ def main():
         valid = all_labels[:, c] != -1
         gt_frac = all_labels[valid, c].mean() if valid.sum() > 0 else 0
         mean_l = float(all_logits[:, c].mean())
-        pred_frac = float((1/(1+np.exp(-all_logits[:, c]))).mean())
+        pred_frac = float((1 / (1 + np.exp(-all_logits[:, c]))).mean())
         bias_per_comp[c] = mean_l
-        print(f"  comp={c}: mean_logit={mean_l:.3f}, pred_pos={pred_frac:.3f}, "
-              f"gt_pos={gt_frac:.3f}")
+        print(
+            f"  comp={c}: mean_logit={mean_l:.3f}, pred_pos={pred_frac:.3f}, gt_pos={gt_frac:.3f}"
+        )
 
     # Global threshold sweep (per-frame F1)
     print(f"\n--- Global threshold sweep (per-frame F1) ---")
@@ -289,8 +309,10 @@ def main():
         print(f"{hi:<6.2f} {lo:<6.2f} {smin:<5} {avg_f1:<9.4f} {avg_pos:<9.4f}")
 
     best_decoder = max(decoder_results, key=lambda r: r[3])
-    print(f"  Best decoder: hi={best_decoder[0]:.2f}, lo={best_decoder[1]:.2f}, "
-          f"min={best_decoder[2]} => F1={best_decoder[3]:.4f}")
+    print(
+        f"  Best decoder: hi={best_decoder[0]:.2f}, lo={best_decoder[1]:.2f}, "
+        f"min={best_decoder[2]} => F1={best_decoder[3]:.4f}"
+    )
 
     # Bias-calibrated decoder
     cal_dec_f1s, cal_dec_poss = [], []
@@ -314,29 +336,39 @@ def main():
 
     # Save
     out_path = Path("src/runs/rf_stages/checkpoints/psr_threshold_sweep.json")
-    json.dump({
-        "model": CKPT_PATH,
-        "total_frames": total_frames,
-        "n_recordings": n_recs,
-        "n_batches": n_batches,
-        "bias_per_component": bias_per_comp,
-        "global_threshold_sweep": [
-            {"thresh": t, "f1": f1, "n_unique": nu, "pred_pos_frac": ppf}
-            for t, f1, nu, ppf in global_results
-        ],
-        "best_global_threshold": best_global[0],
-        "best_global_f1": best_global[1],
-        "per_component_thresholds": {str(k): {"threshold": v[0], "f1": v[1]} for k, v in per_comp_best.items()},
-        "bias_calibrated_f1": cal_avg_f1,
-        "decoder_sweep": [
-            {"hi": hi, "lo": lo, "min_sustained": smin, "f1": f1, "pos": pos}
-            for hi, lo, smin, f1, pos in decoder_results
-        ],
-        "best_decoder": {"hi": best_decoder[0], "lo": best_decoder[1],
-                         "min_sustained": best_decoder[2], "f1": best_decoder[3],
-                         "pos": best_decoder[4]},
-        "bias_calibrated_decoder": {"f1": cal_dec_f1, "pos": cal_dec_pos},
-    }, open(out_path, "w"), indent=2)
+    json.dump(
+        {
+            "model": CKPT_PATH,
+            "total_frames": total_frames,
+            "n_recordings": n_recs,
+            "n_batches": n_batches,
+            "bias_per_component": bias_per_comp,
+            "global_threshold_sweep": [
+                {"thresh": t, "f1": f1, "n_unique": nu, "pred_pos_frac": ppf}
+                for t, f1, nu, ppf in global_results
+            ],
+            "best_global_threshold": best_global[0],
+            "best_global_f1": best_global[1],
+            "per_component_thresholds": {
+                str(k): {"threshold": v[0], "f1": v[1]} for k, v in per_comp_best.items()
+            },
+            "bias_calibrated_f1": cal_avg_f1,
+            "decoder_sweep": [
+                {"hi": hi, "lo": lo, "min_sustained": smin, "f1": f1, "pos": pos}
+                for hi, lo, smin, f1, pos in decoder_results
+            ],
+            "best_decoder": {
+                "hi": best_decoder[0],
+                "lo": best_decoder[1],
+                "min_sustained": best_decoder[2],
+                "f1": best_decoder[3],
+                "pos": best_decoder[4],
+            },
+            "bias_calibrated_decoder": {"f1": cal_dec_f1, "pos": cal_dec_pos},
+        },
+        open(out_path, "w"),
+        indent=2,
+    )
     print(f"\nSaved to {out_path}")
 
 

@@ -3,6 +3,7 @@
 Loads a saved checkpoint and runs detection mAP eval with TTA.
 Does not require training to be stopped — reads from best.pt.
 """
+
 # DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import sys
@@ -14,6 +15,7 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
         sys.path.insert(0, _p)
 
 import logging
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("eval_tta")
 
@@ -25,7 +27,7 @@ import src.config as C
 from src.models.mvit_mtl_model import MTLMViTModel
 from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn_sequences
 from src.evaluation.det_tta import decode_det_tta
-from src.evaluation.evaluate import compute_det_metrics_extended, nms_numpy
+from src.evaluation.evaluate import compute_det_metrics_extended
 
 
 def main():
@@ -38,8 +40,9 @@ def main():
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--score-thresh", type=float, default=0.05)
     parser.add_argument("--nms-iou", type=float, default=0.5)
-    parser.add_argument("--sequence-length", type=int, default=32,
-                        help="T frames per sequence (matching training)")
+    parser.add_argument(
+        "--sequence-length", type=int, default=32, help="T frames per sequence (matching training)"
+    )
     parser.add_argument("--output", type=str, default=None)
     args = parser.parse_args()
 
@@ -51,8 +54,7 @@ def main():
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
     sd = ckpt.get("model_state_dict", ckpt)
     model_sd = model.state_dict()
-    filtered = {k: v for k, v in sd.items()
-                if k in model_sd and v.shape == model_sd[k].shape}
+    filtered = {k: v for k, v in sd.items() if k in model_sd and v.shape == model_sd[k].shape}
     skipped = sum(1 for k in sd if k not in filtered)
     logger.info(f"Loaded {len(filtered)}/{len(sd)} tensors, skipped {skipped}")
     model.load_state_dict(filtered, strict=False)
@@ -60,13 +62,18 @@ def main():
 
     logger.info(f"Building {args.split} dataset (img_size={args.img_size}, sequence_mode=True)...")
     ds = IndustRealMultiTaskDataset(
-        split=args.split, img_size=(args.img_size, args.img_size),
-        sequence_mode=True, augment=False,
+        split=args.split,
+        img_size=(args.img_size, args.img_size),
+        sequence_mode=True,
+        augment=False,
         sequence_length=args.sequence_length,
     )
     loader = DataLoader(
-        ds, batch_size=args.batch_size, shuffle=False,
-        num_workers=args.num_workers, pin_memory=True,
+        ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
         collate_fn=collate_fn_sequences,
     )
 
@@ -89,17 +96,19 @@ def main():
                 images = images.permute(0, 2, 1, 3, 4).contiguous()
             else:
                 raise ValueError(f"Expected 5D sequence tensor, got {images.dim()}D")
-            assert images.size(2) >= 1, \
-                f"Expected T >= 1, got T={images.size(2)}"
+            assert images.size(2) >= 1, f"Expected T >= 1, got T={images.size(2)}"
             images = images.float() / 255.0
             mean = torch.tensor([0.45, 0.45, 0.45], device=device).view(1, 3, 1, 1, 1)
             std = torch.tensor([0.225, 0.225, 0.225], device=device).view(1, 3, 1, 1, 1)
             images = (images.to(device) - mean) / std
 
             tta_results = decode_det_tta(
-                model, images, img_size=args.img_size,
+                model,
+                images,
+                img_size=args.img_size,
                 score_thresh=args.score_thresh,
-                nms_iou_thresh=args.nms_iou, device=device,
+                nms_iou_thresh=args.nms_iou,
+                device=device,
             )
 
             for b, tta_res in enumerate(tta_results):
@@ -112,8 +121,8 @@ def main():
                 if isinstance(det_item, dict):
                     gt_b = det_item.get("boxes", torch.zeros(0, 4))
                     gt_l = det_item.get("labels", torch.zeros(0, dtype=torch.long))
-                    gt_boxes_all.append(gt_b.cpu().numpy() if hasattr(gt_b, 'cpu') else gt_b)
-                    gt_labels_all.append(gt_l.cpu().numpy() if hasattr(gt_l, 'cpu') else gt_l)
+                    gt_boxes_all.append(gt_b.cpu().numpy() if hasattr(gt_b, "cpu") else gt_b)
+                    gt_labels_all.append(gt_l.cpu().numpy() if hasattr(gt_l, "cpu") else gt_l)
                 else:
                     gt_boxes_all.append(np.zeros((0, 4), dtype=np.float32))
                     gt_labels_all.append(np.zeros(0, dtype=np.int64))
@@ -125,10 +134,13 @@ def main():
     logger.info(f"Total samples: {len(pred_boxes_all)}")
     logger.info("Computing mAP with COCO-style interpolation...")
     result = compute_det_metrics_extended(
-        pred_boxes_all, pred_scores_all, pred_labels_all,
-        gt_boxes_all, gt_labels_all,
+        pred_boxes_all,
+        pred_scores_all,
+        pred_labels_all,
+        gt_boxes_all,
+        gt_labels_all,
         num_classes=C.NUM_DET_CLASSES,
-        interpolation_mode='coco',
+        interpolation_mode="coco",
     )
     logger.info("=" * 60)
     logger.info(f"WITH HORIZONTAL-FLIP TTA")
@@ -138,27 +150,33 @@ def main():
     logger.info(f"  Classes w/ GT in eval: {result['det_n_present_classes']}/{C.NUM_DET_CLASSES}")
     logger.info("=" * 60)
     # Per-class top performers
-    per_class = result.get('det_per_class', [])
-    sorted_pc = sorted([(c['ap'], c['gt'], c['name']) for c in per_class if c['gt'] > 0], reverse=True)
+    per_class = result.get("det_per_class", [])
+    sorted_pc = sorted(
+        [(c["ap"], c["gt"], c["name"]) for c in per_class if c["gt"] > 0], reverse=True
+    )
     logger.info("Top 5 classes by AP@0.5:")
     for ap, gt, name in sorted_pc[:5]:
         logger.info(f"  {name}: AP={ap:.4f} ({int(gt)} GT)")
 
     if args.output:
         import json
+
         out = {
             "checkpoint": args.checkpoint,
             "split": args.split,
             "n_samples": len(pred_boxes_all),
-            "det_mAP50": result['det_mAP50'],
-            "det_mAP_50_95": result['det_mAP_50_95'],
-            "det_mAP50_pc": result['det_mAP50_pc'],
-            "det_n_present_classes": result['det_n_present_classes'],
-            "per_class": [{"channel": c['channel'], "name": c['name'], "ap": c['ap'], "gt": c['gt']}
-                         for c in per_class if c['gt'] > 0],
+            "det_mAP50": result["det_mAP50"],
+            "det_mAP_50_95": result["det_mAP_50_95"],
+            "det_mAP50_pc": result["det_mAP50_pc"],
+            "det_n_present_classes": result["det_n_present_classes"],
+            "per_class": [
+                {"channel": c["channel"], "name": c["name"], "ap": c["ap"], "gt": c["gt"]}
+                for c in per_class
+                if c["gt"] > 0
+            ],
         }
         Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-        with open(args.output, 'w') as f:
+        with open(args.output, "w") as f:
             json.dump(out, f, indent=2, default=str)
         logger.info(f"Saved metrics to {args.output}")
 

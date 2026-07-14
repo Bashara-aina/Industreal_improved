@@ -1,32 +1,31 @@
 """
- IndustReal Multi-Task Dataset Loader
- =====================================
- Supports:
-   - Action Recognition (AR): 74 atomic action classes (per-frame labels via interpolation)
-   - Assembly State Detection (ASD): 24 classes (COCO format OD_labels.json)
-   - Procedure Step Recognition (PSR): 11 components (per-frame binary state via interpolation)
-   - Head Pose: 9-DoF (per-frame from pose.csv)
-   - Hand Joints: 52 coordinates (per-frame from hands.csv)
-   - Single egocentric RGB camera (1280x720, 10 FPS)
+IndustReal Multi-Task Dataset Loader
+=====================================
+Supports:
+  - Action Recognition (AR): 74 atomic action classes (per-frame labels via interpolation)
+  - Assembly State Detection (ASD): 24 classes (COCO format OD_labels.json)
+  - Procedure Step Recognition (PSR): 11 components (per-frame binary state via interpolation)
+  - Head Pose: 9-DoF (per-frame from pose.csv)
+  - Hand Joints: 52 coordinates (per-frame from hands.csv)
+  - Single egocentric RGB camera (1280x720, 10 FPS)
 
- Recording structure:
-     recordings/
-     ├── train/
-     │   └── {recording_id}/
-     │       ├── rgb/000000.jpg ...          (1280x720, 10 FPS)
-     │       ├── AR_labels.csv               (sparse per-recording action spans)
-     │       ├── OD_labels.json              (COCO format object detections)
-     │       ├── PSR_labels_raw.csv          (sparse per-component state changes)
-     │       ├── pose.csv                    (dense 9-DoF head pose)
-     │       └── hands.csv                   (dense 52-D hand joints)
-     ├── val/
-     └── test/
- """
+Recording structure:
+    recordings/
+    ├── train/
+    │   └── {recording_id}/
+    │       ├── rgb/000000.jpg ...          (1280x720, 10 FPS)
+    │       ├── AR_labels.csv               (sparse per-recording action spans)
+    │       ├── OD_labels.json              (COCO format object detections)
+    │       ├── PSR_labels_raw.csv          (sparse per-component state changes)
+    │       ├── pose.csv                    (dense 9-DoF head pose)
+    │       └── hands.csv                   (dense 52-D hand joints)
+    ├── val/
+    └── test/
+"""
 
 from __future__ import annotations
 
 import csv
-import gc
 import json
 import logging
 import random
@@ -38,15 +37,16 @@ from typing import Dict, List, Optional
 from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
+
 cv2.setNumThreads(0)
-_cv_set_loglevel = getattr(cv2, 'setLogLevel', None)
-_cv_log_level_error = getattr(cv2, 'LOG_LEVEL_ERROR', None)
+_cv_set_loglevel = getattr(cv2, "setLogLevel", None)
+_cv_log_level_error = getattr(cv2, "LOG_LEVEL_ERROR", None)
 if callable(_cv_set_loglevel) and _cv_log_level_error is not None:
     _cv_set_loglevel(_cv_log_level_error)
 
 import numpy as np
 import torch
-from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from torch.utils.data import Dataset, WeightedRandomSampler
 from PIL import Image
 
 from src import config as C
@@ -78,7 +78,7 @@ def apply_spatial_aug(
         aug_boxes: [M, 4] xyxy tensor (invalid boxes filtered out)
         aug_keypoints: [17, 2] tensor with flipped/swapped keypoints
     """
-    if not getattr(C, 'USE_SPATIAL_AUG', False):
+    if not getattr(C, "USE_SPATIAL_AUG", False):
         return image, boxes, keypoints
 
     _, H, W = image.shape
@@ -110,10 +110,10 @@ def apply_spatial_aug(
     y_offset = random.randint(0, max(0, H - crop_h))
 
     # Crop image
-    image = image[:, y_offset:y_offset + crop_h, x_offset:x_offset + crop_w]
+    image = image[:, y_offset : y_offset + crop_h, x_offset : x_offset + crop_w]
     # Resize back to original size
     image = torch.nn.functional.interpolate(
-        image.unsqueeze(0), size=(H, W), mode='bilinear', align_corners=False
+        image.unsqueeze(0), size=(H, W), mode="bilinear", align_corners=False
     ).squeeze(0)
 
     if boxes.shape[0] > 0:
@@ -143,8 +143,8 @@ def apply_spatial_aug(
 
 
 _IMAGENET_MEAN = torch.tensor(C.IMAGENET_MEAN, dtype=torch.float32).view(3, 1, 1)
-_IMAGENET_STD  = torch.tensor(C.IMAGENET_STD, dtype=torch.float32).view(3, 1, 1)
-_RESAMPLING = getattr(Image, 'Resampling', None)
+_IMAGENET_STD = torch.tensor(C.IMAGENET_STD, dtype=torch.float32).view(3, 1, 1)
+_RESAMPLING = getattr(Image, "Resampling", None)
 _BILINEAR = _RESAMPLING.BILINEAR if _RESAMPLING is not None else Image.BILINEAR
 
 # =========================================================================
@@ -159,7 +159,9 @@ _BILINEAR = _RESAMPLING.BILINEAR if _RESAMPLING is not None else Image.BILINEAR
 FRAME_CACHE: Dict[str, np.ndarray] = {}  # {(recording_id, frame_num): np.ndarray}
 _FRAME_CACHE_LOADED = False
 _FRAME_CACHE_LOCK = threading.Lock()
-_FRAME_CACHE_METADATA: Dict[str, Dict] = {}  # {recording_id: {num_frames, loaded, corrupt_frames[]}}
+_FRAME_CACHE_METADATA: Dict[
+    str, Dict
+] = {}  # {recording_id: {num_frames, loaded, corrupt_frames[]}}
 
 
 def clear_frame_cache() -> None:
@@ -177,10 +179,8 @@ def clear_frame_cache() -> None:
         FRAME_CACHE.clear()
         _FRAME_CACHE_METADATA.clear()
         _FRAME_CACHE_LOADED = False
-    logger.info(
-        f'[FRAME_CACHE] cleared {n_entries} entries '
-        f'({n_bytes / (1024 ** 3):.2f} GB freed)'
-    )
+    logger.info(f"[FRAME_CACHE] cleared {n_entries} entries ({n_bytes / (1024**3):.2f} GB freed)")
+
 
 # Corrupted frames known to fail PIL — substitute with zero arrays
 _KNOWN_BAD_FRAMES: set = set()
@@ -188,7 +188,7 @@ _KNOWN_BAD_FRAMES: set = set()
 
 def preload_all_frames(
     recordings_root: Path,
-    split: str = 'train',
+    split: str = "train",
     stride: int = 3,
     verbose: bool = True,
     progress_bar=None,
@@ -202,7 +202,7 @@ def preload_all_frames(
 
     if _FRAME_CACHE_LOADED:
         if verbose:
-            logger.info('[FRAME_CACHE] Already loaded, skipping preload.')
+            logger.info("[FRAME_CACHE] Already loaded, skipping preload.")
         return len(FRAME_CACHE)
 
     t0 = time_module.time()
@@ -216,14 +216,14 @@ def preload_all_frames(
         if not rec_dir.is_dir():
             continue
         recording_id = rec_dir.name
-        rgb_dir = rec_dir / 'rgb'
+        rgb_dir = rec_dir / "rgb"
         if not rgb_dir.exists():
             continue
 
         frame_nums = []
         for entry in sorted(rgb_dir.iterdir()):
             name = entry.name
-            if name.endswith('.jpg') and name[:-4].isdigit():
+            if name.endswith(".jpg") and name[:-4].isdigit():
                 frame_nums.append(int(name[:-4]))
 
         if not frame_nums:
@@ -240,8 +240,8 @@ def preload_all_frames(
 
     if verbose:
         logger.info(
-            f'[FRAME_CACHE] Pre-loading {len(all_frames)} frames '
-            f'({len(rec_frame_counts)} recordings) into RAM...'
+            f"[FRAME_CACHE] Pre-loading {len(all_frames)} frames "
+            f"({len(rec_frame_counts)} recordings) into RAM..."
         )
 
     # Pre-load all frames using thread pool
@@ -250,12 +250,13 @@ def preload_all_frames(
 
     def _load_one(args):
         recording_id, frame_num = args
-        rgb_dir = recordings_dir / recording_id / 'rgb'
-        img_path = rgb_dir / f'{frame_num:06d}.jpg'
+        rgb_dir = recordings_dir / recording_id / "rgb"
+        img_path = rgb_dir / f"{frame_num:06d}.jpg"
         try:
-            with open(img_path, 'rb') as f:
+            with open(img_path, "rb") as f:
                 data = f.read()
             import io
+
             img = Image.open(io.BytesIO(data))
             arr = np.array(img, dtype=np.uint8)  # [H, W, 3]
             return (recording_id, frame_num, arr)
@@ -291,11 +292,11 @@ def preload_all_frames(
                 progress_bar.update(1)
 
     _FRAME_CACHE_METADATA = {
-        'loaded': True,
-        'num_frames': loaded_count,
-        'num_recordings': len(rec_frame_counts),
-        'corrupt_frames': list(_KNOWN_BAD_FRAMES),
-        'rec_frame_counts': rec_frame_counts,
+        "loaded": True,
+        "num_frames": loaded_count,
+        "num_recordings": len(rec_frame_counts),
+        "corrupt_frames": list(_KNOWN_BAD_FRAMES),
+        "rec_frame_counts": rec_frame_counts,
     }
     _FRAME_CACHE_LOADED = True
 
@@ -305,9 +306,9 @@ def preload_all_frames(
 
     if verbose:
         logger.info(
-            f'[FRAME_CACHE] Done. Loaded {loaded_count} frames '
-            f'({failed_count} corrupt → zero) in {elapsed:.0f}s ≈ {mem_gb:.1f} GB. '
-            f'Speed: {loaded_count / elapsed:.0f} frames/s.'
+            f"[FRAME_CACHE] Done. Loaded {loaded_count} frames "
+            f"({failed_count} corrupt → zero) in {elapsed:.0f}s ≈ {mem_gb:.1f} GB. "
+            f"Speed: {loaded_count / elapsed:.0f} frames/s."
         )
 
     return loaded_count
@@ -326,7 +327,7 @@ def get_cached_frame(recording_id: str, frame_num: int) -> np.ndarray:
 # COCO Cache (process-level) — one JSON per recording
 # =========================================================================
 _PROC_COCO_CACHE: Dict[str, Dict[int, List[Dict[str, Any]]]] = {}
-_PROC_COCO_CACHE_MAX = max(1, min(getattr(C, 'COCO_CACHE_SIZE', 30), 30))
+_PROC_COCO_CACHE_MAX = max(1, min(getattr(C, "COCO_CACHE_SIZE", 30), 30))
 
 # [FIX D5] COCO image dimensions cache — parsed once per recording, reused per frame.
 # Maps coco_path -> {frame_num: (width, height)}. Avoids re-parsing the full COCO
@@ -342,26 +343,26 @@ def _parse_coco_file(coco_path: str) -> Dict[int, List[Dict[str, Any]]]:
     if not Path(coco_path).exists():
         return {}
     try:
-        with open(coco_path, 'r', encoding='utf-8', errors='ignore') as f:
+        with open(coco_path, "r", encoding="utf-8", errors="ignore") as f:
             coco = json.load(f)
     except Exception:
         return {}
 
     # Build image_id → frame_num mapping from file_name
     id_to_frame: Dict[int, int] = {}
-    for img_info in coco.get('images', []):
-        file_name = img_info.get('file_name', '')
+    for img_info in coco.get("images", []):
+        file_name = img_info.get("file_name", "")
         stem = Path(file_name).stem
         try:
             frame_num = int(stem)
-            id_to_frame[img_info['id']] = frame_num
+            id_to_frame[img_info["id"]] = frame_num
         except (ValueError, KeyError):
             pass
 
     # Group annotations by frame number
     frame_to_annots: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
-    for ann in coco.get('annotations', []):
-        frame_num = id_to_frame.get(ann.get('image_id'))
+    for ann in coco.get("annotations", []):
+        frame_num = id_to_frame.get(ann.get("image_id"))
         if frame_num is not None:
             frame_to_annots[frame_num].append(ann)
 
@@ -399,15 +400,15 @@ def _get_coco_img_dims(coco_path: str, frame_num: int) -> Tuple[int, int]:
         return (1280, 720)
 
     dims: Dict[int, Tuple[int, int]] = {}
-    for img in raw_coco.get('images', []):
-        fname = str(img.get('file_name', ''))
+    for img in raw_coco.get("images", []):
+        fname = str(img.get("file_name", ""))
         stem = Path(fname).stem
         try:
             fid = int(stem)
         except (ValueError, TypeError):
             continue
-        w = int(img.get('width', 1280))
-        h = int(img.get('height', 720))
+        w = int(img.get("width", 1280))
+        h = int(img.get("height", 720))
         dims[fid] = (w, h)
 
     _PROC_COCO_DIMS_CACHE[coco_path] = dims
@@ -451,13 +452,13 @@ class _PerRecordingCache:
         Returns: np.ndarray of shape [num_frames] with raw action IDs.
         Frames without any AR coverage get -1 (sentinel for "unlabeled").
         """
-        ar_file = self.rec_dir / 'AR_labels.csv'
+        ar_file = self.rec_dir / "AR_labels.csv"
         if not ar_file.exists():
             return np.full(self._num_frames, -1, dtype=np.int64)
 
         # Load all action spans
         spans: List[Tuple[int, int, int]] = []  # (start_frame, end_frame, action_id)
-        with open(ar_file, encoding='utf-8') as f:
+        with open(ar_file, encoding="utf-8") as f:
             reader = csv.reader(f)
             for row in reader:
                 if len(row) < 5:
@@ -483,12 +484,12 @@ class _PerRecordingCache:
                 # to prevent ScatterGatherKernel OOB in loss functions during validation.
                 if action_id < 0 or action_id >= C.NUM_CLASSES_ACT:
                     logger.warning(
-                        f'[industreal_dataset] Clamping OOB action_id={action_id} '
-                        f'(valid 0..{C.NUM_CLASSES_ACT - 1}) in {self.rec_dir.name} '
-                        f'frames [{start}:{end}]'
+                        f"[industreal_dataset] Clamping OOB action_id={action_id} "
+                        f"(valid 0..{C.NUM_CLASSES_ACT - 1}) in {self.rec_dir.name} "
+                        f"frames [{start}:{end}]"
                     )
                     action_id = max(0, min(action_id, C.NUM_CLASSES_ACT - 1))
-                labels[start: end + 1] = action_id
+                labels[start : end + 1] = action_id
 
         return labels
 
@@ -497,23 +498,26 @@ class _PerRecordingCache:
         Each segment = (start_frame, end_frame, action_id). NA (action_id=0) excluded.
         Returns: list of (start, end, action_id) tuples.
         """
-        ar_file = self.rec_dir / 'AR_labels.csv'
+        ar_file = self.rec_dir / "AR_labels.csv"
         if not ar_file.exists():
             return []
         segments = []
-        with open(ar_file, encoding='utf-8') as f:
+        with open(ar_file, encoding="utf-8") as f:
             reader = csv.reader(f)
             for row in reader:
-                if len(row) < 5: continue
+                if len(row) < 5:
+                    continue
                 try:
                     action_id = int(row[1])
-                    if action_id == 0: continue  # NA excluded from metric clips
+                    if action_id == 0:
+                        continue  # NA excluded from metric clips
                     start = int(Path(row[3]).stem)
                     end = int(Path(row[4]).stem)
                     end = min(end, self._num_frames - 1)
                     if start < self._num_frames and end > start:
                         segments.append((start, end, action_id))
-                except (ValueError, IndexError): continue
+                except (ValueError, IndexError):
+                    continue
         return segments
 
     def _parse_psr_raw(self) -> np.ndarray:
@@ -524,13 +528,13 @@ class _PerRecordingCache:
         Fill forward: once a component becomes 1 (or -1), it stays that way.
         Initial state (before first change): all zeros.
         """
-        psr_file = self.rec_dir / 'PSR_labels_raw.csv'
+        psr_file = self.rec_dir / "PSR_labels_raw.csv"
         if not psr_file.exists():
             return np.zeros((self._num_frames, C.NUM_PSR_COMPONENTS), dtype=np.float32)
 
         # Load sparse rows: (frame_num, [11 component values])
         sparse: List[Tuple[int, np.ndarray]] = []
-        with open(psr_file, encoding='utf-8') as f:
+        with open(psr_file, encoding="utf-8") as f:
             reader = csv.reader(f)
             for row in reader:
                 if len(row) < 12:
@@ -573,13 +577,13 @@ class _PerRecordingCache:
         Format: frame.jpg,forward_x,forward_y,forward_z,position_x,position_y,position_z,up_x,up_y,up_z
         Returns: np.ndarray of shape [num_frames, 9]
         """
-        pose_file = self.rec_dir / 'pose.csv'
+        pose_file = self.rec_dir / "pose.csv"
         if not pose_file.exists():
             return np.zeros((self._num_frames, C.NUM_HEAD_POSE_DOF), dtype=np.float32)
 
         pose_data = np.zeros((self._num_frames, C.NUM_HEAD_POSE_DOF), dtype=np.float32)
 
-        with open(pose_file, encoding='utf-8') as f:
+        with open(pose_file, encoding="utf-8") as f:
             reader = csv.reader(f)
             for row in reader:
                 if len(row) < 10:
@@ -622,13 +626,13 @@ class _PerRecordingCache:
             pos_max = float(np.abs(pos).max()) if np.any(pos) else 0.0
             if fwd_norm > 0.0 and not (0.5 < fwd_norm < 1.5):
                 logger.warning(
-                    f'[_parse_pose {self.rec_dir.name}] forward vector mean norm '
-                    f'{fwd_norm:.3f} is not ~1; check that pose.csv columns 1-3 are unit vectors.'
+                    f"[_parse_pose {self.rec_dir.name}] forward vector mean norm "
+                    f"{fwd_norm:.3f} is not ~1; check that pose.csv columns 1-3 are unit vectors."
                 )
             if pos_max > 5.0:
                 logger.warning(
-                    f'[_parse_pose {self.rec_dir.name}] position max abs {pos_max:.2f} > 5; '
-                    f'evaluate.py:position_MAE_mm assumes metres and applies *1000.'
+                    f"[_parse_pose {self.rec_dir.name}] position max abs {pos_max:.2f} > 5; "
+                    f"evaluate.py:position_MAE_mm assumes metres and applies *1000."
                 )
 
         return pose_data
@@ -639,13 +643,13 @@ class _PerRecordingCache:
         Format: frame.jpg, left_hand_26_joints*2, right_hand_26_joints*2
         Returns: np.ndarray of shape [num_frames, 52]
         """
-        hands_file = self.rec_dir / 'hands.csv'
+        hands_file = self.rec_dir / "hands.csv"
         if not hands_file.exists():
             return np.zeros((self._num_frames, 52), dtype=np.float32)
 
         hands_data = np.zeros((self._num_frames, 52), dtype=np.float32)
 
-        with open(hands_file, encoding='utf-8') as f:
+        with open(hands_file, encoding="utf-8") as f:
             reader = csv.reader(f)
             for row in reader:
                 if len(row) < 53:
@@ -674,22 +678,22 @@ class _PerRecordingCache:
 
     @property
     def ar_per_frame(self) -> np.ndarray:
-        assert self._ar_per_frame is not None, 'Call load() first'
+        assert self._ar_per_frame is not None, "Call load() first"
         return self._ar_per_frame
 
     @property
     def psr_per_frame(self) -> np.ndarray:
-        assert self._psr_per_frame is not None, 'Call load() first'
+        assert self._psr_per_frame is not None, "Call load() first"
         return self._psr_per_frame
 
     @property
     def pose(self) -> np.ndarray:
-        assert self._pose is not None, 'Call load() first'
+        assert self._pose is not None, "Call load() first"
         return self._pose
 
     @property
     def hands(self) -> np.ndarray:
-        assert self._hands is not None, 'Call load() first'
+        assert self._hands is not None, "Call load() first"
         return self._hands
 
 
@@ -714,7 +718,7 @@ class IndustRealMultiTaskDataset(Dataset):
 
     def __init__(
         self,
-        split: str = 'train',
+        split: str = "train",
         img_size: Tuple[int, int] = C.IMG_SIZE,
         augment: bool = False,
         seed: int = C.SEED,
@@ -748,9 +752,9 @@ class IndustRealMultiTaskDataset(Dataset):
         # Paths
         self.recordings_root = C.RECORDINGS_ROOT
         self.split_csv = {
-            'train': C.TRAIN_CSV,
-            'val': C.VAL_CSV,
-            'test': C.TEST_CSV,
+            "train": C.TRAIN_CSV,
+            "val": C.VAL_CSV,
+            "test": C.TEST_CSV,
         }[split]
 
         # Per-recording annotation cache
@@ -760,9 +764,9 @@ class IndustRealMultiTaskDataset(Dataset):
         self._rec_frame_paths: Dict[str, List[int]] = {}
 
         # Load clip for VideoMAE only when enabled
-        self._load_clip = bool(getattr(C, 'USE_VIDEOMAE', False))
-        self._clip_num_frames = getattr(C, 'VIDEOMAE_NUM_FRAMES', 16)
-        self._clip_stride = getattr(C, 'VIDEOMAE_SAMPLE_STRIDE', 1)
+        self._load_clip = bool(getattr(C, "USE_VIDEOMAE", False))
+        self._clip_num_frames = getattr(C, "VIDEOMAE_NUM_FRAMES", 16)
+        self._clip_stride = getattr(C, "VIDEOMAE_SAMPLE_STRIDE", 1)
 
         # Scan recordings and build sample index
         self.samples = self._scan_and_index()
@@ -773,49 +777,54 @@ class IndustRealMultiTaskDataset(Dataset):
         # Validation/test: cached too but with a tighter cap (min(max_cache, 2000)) since
         # val sets are smaller and the bottleneck there is lower.
         self._ram_cache: Dict[str, bytes] = {}
-        _max_cache = getattr(C, 'RAM_CACHE_MAX_IMAGES', 5000)
+        _max_cache = getattr(C, "RAM_CACHE_MAX_IMAGES", 5000)
         if _max_cache > 0:
-            if self.split != 'train':
+            if self.split != "train":
                 _max_cache = min(_max_cache, 2000)
             n = min(len(self.samples), _max_cache)
-            logger.info(f'[RAM_CACHE] Pre-loading {n} {self.split} images as JPEG bytes (cap={_max_cache})...')
+            logger.info(
+                f"[RAM_CACHE] Pre-loading {n} {self.split} images as JPEG bytes (cap={_max_cache})..."
+            )
             t0 = time_module.time()
             from collections import OrderedDict
+
             self._ram_cache = OrderedDict()
             for i, s in enumerate(self.samples):
                 if len(self._ram_cache) >= _max_cache:
-                    logger.info(f'[RAM_CACHE] Cap reached ({_max_cache}) — stopping cache fill')
+                    logger.info(f"[RAM_CACHE] Cap reached ({_max_cache}) — stopping cache fill")
                     break
                 if i % 1000 == 0 and i > 0:
                     elapsed = time_module.time() - t0
-                    logger.info(f'[RAM_CACHE] {i}/{n} scanned — {len(self._ram_cache)} cached, {elapsed:.0f}s')
+                    logger.info(
+                        f"[RAM_CACHE] {i}/{n} scanned — {len(self._ram_cache)} cached, {elapsed:.0f}s"
+                    )
                 try:
-                    with open(s['img_path'], 'rb') as _f:
-                        self._ram_cache[s['img_path']] = _f.read()
+                    with open(s["img_path"], "rb") as _f:
+                        self._ram_cache[s["img_path"]] = _f.read()
                 except Exception:
                     pass  # skip unreadable — fallback to disk
             total = time_module.time() - t0
             mb = len(self._ram_cache) * 350 / 1024
-            logger.info(f'[RAM_CACHE] Done — {len(self._ram_cache)} images cached in {total:.0f}s (~{mb:.1f}MB estimated)')
+            logger.info(
+                f"[RAM_CACHE] Done — {len(self._ram_cache)} images cached in {total:.0f}s (~{mb:.1f}MB estimated)"
+            )
         else:
-            logger.info(f'[RAM_CACHE] Skipped — cap=0')
+            logger.info(f"[RAM_CACHE] Skipped — cap=0")
 
         # Activity IDs for class-balanced sampling.
         # [Route A — file 75] When ACT_CLASS_GROUPING='verb', remap raw action_id
         # to its verb-group index so the sampler/counts operate in group space.
         # Identity when grouping is off.
-        _raw_ids = np.array(
-            [s['action_label'] for s in self.samples], dtype=np.int64
-        )
-        _remap = getattr(C, 'remap_activity_label', None)
-        _mode = str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower()
-        if _remap is not None and _mode in ('verb', 'hybrid'):
+        _raw_ids = np.array([s["action_label"] for s in self.samples], dtype=np.int64)
+        _remap = getattr(C, "remap_activity_label", None)
+        _mode = str(getattr(C, "ACT_CLASS_GROUPING", "none")).lower()
+        if _remap is not None and _mode in ("verb", "hybrid"):
             self.activity_ids = np.array([_remap(int(a)) for a in _raw_ids], dtype=np.int64)
         else:
             self.activity_ids = _raw_ids
         valid_ids = self.activity_ids[self.activity_ids >= 0]  # exclude -1 sentinel
         self.class_counts = np.bincount(
-            valid_ids, minlength=int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_ACT_CLASSES))
+            valid_ids, minlength=int(getattr(C, "NUM_ACT_OUTPUTS", C.NUM_ACT_CLASSES))
         )
 
         # Doc 01 §D.1: Build sequence sample index for PSR sequence training
@@ -823,13 +832,13 @@ class IndustRealMultiTaskDataset(Dataset):
         if self.sequence_mode:
             self._seq_samples = self._build_seq_sample_index()
             logger.info(
-                f'[industreal_dataset] Sequence mode: {len(self._seq_samples)} windows '
-                f'(T={self.sequence_length}, stride=1) across {len(self._rec_frame_paths)} recordings'
+                f"[industreal_dataset] Sequence mode: {len(self._seq_samples)} windows "
+                f"(T={self.sequence_length}, stride=1) across {len(self._rec_frame_paths)} recordings"
             )
 
         logger.info(
-            f'[industreal_dataset] Loaded {len(self.samples)} frames '
-            f'(split={split}, recordings={max_recordings or "all"})'
+            f"[industreal_dataset] Loaded {len(self.samples)} frames "
+            f"(split={split}, recordings={max_recordings or 'all'})"
         )
 
     def clear_coco_cache(self) -> None:
@@ -843,7 +852,7 @@ class IndustRealMultiTaskDataset(Dataset):
         Lazily computes from the per-recording annotation caches.
         Returns: [11] array of prevalence values in [0, 1].
         """
-        if getattr(self, '_psr_prevalence_cache', None) is not None:
+        if getattr(self, "_psr_prevalence_cache", None) is not None:
             return self._psr_prevalence_cache
 
         total_frames = 0
@@ -862,11 +871,13 @@ class IndustRealMultiTaskDataset(Dataset):
         """Returns [(rec_id, start, end, action_id), ...] from AR spans; NA excluded."""
         segs = []
         for rec_dir in sorted((self.recordings_root / self.split).iterdir()):
-            if not rec_dir.is_dir(): continue
+            if not rec_dir.is_dir():
+                continue
             rec_id = rec_dir.name
             cache = self._anno_cache.get(rec_id)
             if cache is None:
-                cache = _PerRecordingCache(rec_dir); cache.load(99999)
+                cache = _PerRecordingCache(rec_dir)
+                cache.load(99999)
                 self._anno_cache[rec_id] = cache
             for start, end, aid in cache._parse_ar_segments():
                 segs.append((rec_id, int(start), int(end), int(aid)))
@@ -880,13 +891,13 @@ class IndustRealMultiTaskDataset(Dataset):
         idxs = np.linspace(start, end, T).round().astype(int)
         frames = []
         for fn in idxs:
-            img_path = self.recordings_root / self.split / rec_id / 'rgb' / f'{fn:06d}.jpg'
+            img_path = self.recordings_root / self.split / rec_id / "rgb" / f"{fn:06d}.jpg"
             try:
-                img = Image.open(img_path).convert('RGB')
+                img = Image.open(img_path).convert("RGB")
                 img = img.resize((self.img_size[0], self.img_size[1]), _BILINEAR)
                 arr = np.array(img, dtype=np.float32) / 255.0
-                arr = (arr - np.array([0.485,0.456,0.406])) / np.array([0.229,0.224,0.225])
-                frames.append(torch.from_numpy(arr).permute(2,0,1))
+                arr = (arr - np.array([0.485, 0.456, 0.406])) / np.array([0.229, 0.224, 0.225])
+                frames.append(torch.from_numpy(arr).permute(2, 0, 1))
             except Exception:
                 frames.append(torch.zeros(3, self.img_size[1], self.img_size[0]))
         if not frames:
@@ -903,9 +914,9 @@ class IndustRealMultiTaskDataset(Dataset):
             return self._getitem_sequence(idx)
 
         sample = self.samples[idx]
-        recording_id = sample['recording_id']
-        frame_num = sample['frame_num']
-        img_path = sample['img_path']
+        recording_id = sample["recording_id"]
+        frame_num = sample["frame_num"]
+        img_path = sample["img_path"]
 
         # Load and resize RGB image
         rgb_tensor = self._load_image(img_path)
@@ -915,34 +926,29 @@ class IndustRealMultiTaskDataset(Dataset):
 
         # AR action label. [Route A — file 75] Remap raw action_id to verb-group
         # index when ACT_CLASS_GROUPING='verb' (identity otherwise). Preserves -1.
-        _raw_al = int(sample['action_label'])
-        _remap = getattr(C, 'remap_activity_label', None)
-        if _remap is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() in ('verb', 'hybrid'):
+        _raw_al = int(sample["action_label"])
+        _remap = getattr(C, "remap_activity_label", None)
+        if _remap is not None and str(getattr(C, "ACT_CLASS_GROUPING", "none")).lower() in (
+            "verb",
+            "hybrid",
+        ):
             _raw_al = _remap(_raw_al)
         action_label = torch.tensor(_raw_al, dtype=torch.long)
 
         # PSR per-frame labels
-        psr_labels = torch.from_numpy(
-            cache.psr_per_frame[frame_num]
-        ).float()
+        psr_labels = torch.from_numpy(cache.psr_per_frame[frame_num]).float()
 
         # Head pose
-        head_pose = torch.from_numpy(
-            cache.pose[frame_num]
-        ).float()
+        head_pose = torch.from_numpy(cache.pose[frame_num]).float()
 
         # Hand joints (52-D)
-        hand_joints = torch.from_numpy(
-            cache.hands[frame_num]
-        ).float()
+        hand_joints = torch.from_numpy(cache.hands[frame_num]).float()
 
         # Detection boxes from COCO
-        gt_boxes, gt_classes = self._extract_boxes_from_coco(
-            recording_id, frame_num
-        )
+        gt_boxes, gt_classes = self._extract_boxes_from_coco(recording_id, frame_num)
 
         # Apply spatial augmentation during training
-        if self.augment and getattr(C, 'USE_SPATIAL_AUG', False):
+        if self.augment and getattr(C, "USE_SPATIAL_AUG", False):
             rgb_tensor, gt_boxes, _ = apply_spatial_aug(
                 rgb_tensor,
                 gt_boxes,
@@ -956,20 +962,20 @@ class IndustRealMultiTaskDataset(Dataset):
             clip_rgb = self._load_clip_frames(recording_id, frame_num)
 
         return {
-            'images': {'rgb': rgb_tensor},
-            'gt_boxes': {'rgb': gt_boxes},
-            'gt_classes': {'rgb': gt_classes},
-            'head_pose': head_pose,
-            'psr_labels': psr_labels,
-            'hand_joints': hand_joints,
-            'action_label': action_label,
-            'activity': action_label,  # Alias for IKEA loss compatibility
-            'detection': {'boxes': gt_boxes, 'labels': gt_classes},  # Flat detection dict
-            'clip_rgb': clip_rgb,
-            'metadata': {
-                'recording_id': recording_id,
-                'frame_num': frame_num,
-            }
+            "images": {"rgb": rgb_tensor},
+            "gt_boxes": {"rgb": gt_boxes},
+            "gt_classes": {"rgb": gt_classes},
+            "head_pose": head_pose,
+            "psr_labels": psr_labels,
+            "hand_joints": hand_joints,
+            "action_label": action_label,
+            "activity": action_label,  # Alias for IKEA loss compatibility
+            "detection": {"boxes": gt_boxes, "labels": gt_classes},  # Flat detection dict
+            "clip_rgb": clip_rgb,
+            "metadata": {
+                "recording_id": recording_id,
+                "frame_num": frame_num,
+            },
         }
 
     def _getitem_sequence(self, idx: int) -> Dict[str, Any]:
@@ -990,43 +996,40 @@ class IndustRealMultiTaskDataset(Dataset):
                 - gt_boxes/gt_classes: only for middle frame (detection task)
         """
         seq_sample = self._seq_samples[idx]
-        recording_id = seq_sample['recording_id']
-        frame_nums = seq_sample['frames']
+        recording_id = seq_sample["recording_id"]
+        frame_nums = seq_sample["frames"]
         T = len(frame_nums)
 
         cache = self._anno_cache[recording_id]
-        rgb_dir = self.recordings_root / self.split / recording_id / 'rgb'
+        rgb_dir = self.recordings_root / self.split / recording_id / "rgb"
 
         # Load all T frames as [T, 3, H, W] via _load_image (uses RAM cache)
         frames_list: List[torch.Tensor] = []
         for fn in frame_nums:
-            img_path = str(rgb_dir / f'{fn:06d}.jpg')
+            img_path = str(rgb_dir / f"{fn:06d}.jpg")
             frames_list.append(self._load_image(img_path))
 
         rgb_tensor = torch.stack(frames_list, dim=0)  # [T, 3, H, W]
 
         # PSR labels for all T frames: [T, 11]
-        psr_labels = torch.from_numpy(
-            cache.psr_per_frame[frame_nums]
-        ).float()
+        psr_labels = torch.from_numpy(cache.psr_per_frame[frame_nums]).float()
 
         # Head poses for all T frames: [T, 9]
-        head_pose = torch.from_numpy(
-            cache.pose[frame_nums]
-        ).float()
+        head_pose = torch.from_numpy(cache.pose[frame_nums]).float()
 
         # Hand joints for all T frames: [T, 52]
-        hand_joints = torch.from_numpy(
-            cache.hands[frame_nums]
-        ).float()
+        hand_joints = torch.from_numpy(cache.hands[frame_nums]).float()
 
         # AR: majority vote action label in window (most common non-NA)
         action_labels_per_frame = cache.ar_per_frame[frame_nums]
         unique, counts = np.unique(action_labels_per_frame, return_counts=True)
         most_common_action = int(unique[np.argmax(counts)])
         # [Route A — file 75] Remap to verb-group index (identity when off). Preserves -1.
-        _remap = getattr(C, 'remap_activity_label', None)
-        if _remap is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() in ('verb', 'hybrid'):
+        _remap = getattr(C, "remap_activity_label", None)
+        if _remap is not None and str(getattr(C, "ACT_CLASS_GROUPING", "none")).lower() in (
+            "verb",
+            "hybrid",
+        ):
             most_common_action = _remap(most_common_action)
 
         # Detection: only for middle frame (for ASD task alignment)
@@ -1034,19 +1037,19 @@ class IndustRealMultiTaskDataset(Dataset):
         gt_boxes, gt_classes = self._extract_boxes_from_coco(recording_id, mid_frame)
 
         return {
-            'images': {'rgb': rgb_tensor},
-            'gt_boxes': {'rgb': gt_boxes},
-            'gt_classes': {'rgb': gt_classes},
-            'head_pose': head_pose,
-            'psr_labels': psr_labels,
-            'hand_joints': hand_joints,
-            'action_label': torch.tensor(most_common_action, dtype=torch.long),
-            'clip_rgb': None,
-            'metadata': {
-                'recording_id': recording_id,
-                'frame_nums': frame_nums,
-                'sequence_length': T,
-            }
+            "images": {"rgb": rgb_tensor},
+            "gt_boxes": {"rgb": gt_boxes},
+            "gt_classes": {"rgb": gt_classes},
+            "head_pose": head_pose,
+            "psr_labels": psr_labels,
+            "hand_joints": hand_joints,
+            "action_label": torch.tensor(most_common_action, dtype=torch.long),
+            "clip_rgb": None,
+            "metadata": {
+                "recording_id": recording_id,
+                "frame_nums": frame_nums,
+                "sequence_length": T,
+            },
         }
 
     # =====================================================================
@@ -1056,11 +1059,11 @@ class IndustRealMultiTaskDataset(Dataset):
     def _load_image_raw(self, img_path: str) -> torch.Tensor:
         """Load and resize RGB image from disk to [3, H, W]."""
         try:
-            img = Image.open(img_path).convert('RGB')
+            img = Image.open(img_path).convert("RGB")
             img = img.resize((self.img_size[0], self.img_size[1]), _BILINEAR)
             img = np.array(img, dtype=np.uint8)
         except Exception as e:
-            logger.warning(f'Failed to load {img_path}: {e}. Using blank image.')
+            logger.warning(f"Failed to load {img_path}: {e}. Using blank image.")
             img = np.zeros((self.img_size[1], self.img_size[0], 3), dtype=np.uint8)
 
         return torch.from_numpy(img).permute(2, 0, 1)  # (3, H, W)
@@ -1071,16 +1074,15 @@ class IndustRealMultiTaskDataset(Dataset):
         if cached is not None:
             try:
                 from io import BytesIO
-                img = Image.open(BytesIO(cached)).convert('RGB')
+
+                img = Image.open(BytesIO(cached)).convert("RGB")
                 img = img.resize((self.img_size[0], self.img_size[1]), _BILINEAR)
                 return torch.from_numpy(np.array(img, dtype=np.uint8)).permute(2, 0, 1)
             except Exception:
                 pass  # fall through to disk load
         return self._load_image_raw(img_path)
 
-    def _load_clip_frames(
-        self, recording_id: str, target_frame: int
-    ) -> torch.Tensor:
+    def _load_clip_frames(self, recording_id: str, target_frame: int) -> torch.Tensor:
         """
         Load a temporal clip of T frames for VideoMAE using random temporal stride.
 
@@ -1093,9 +1095,7 @@ class IndustRealMultiTaskDataset(Dataset):
         """
         frame_nums = self._rec_frame_paths.get(recording_id, [])
         if not frame_nums:
-            return torch.zeros(
-                self._clip_num_frames, 3, 224, 224, dtype=torch.float32
-            )
+            return torch.zeros(self._clip_num_frames, 3, 224, 224, dtype=torch.float32)
 
         T = self._clip_num_frames
 
@@ -1122,12 +1122,12 @@ class IndustRealMultiTaskDataset(Dataset):
             clip_indices.append(frame_nums[idx])
 
         # Load and resize frames to 224×224
-        rgb_dir = self.recordings_root / self.split / recording_id / 'rgb'
+        rgb_dir = self.recordings_root / self.split / recording_id / "rgb"
         frames: List[torch.Tensor] = []
         for fn in clip_indices:
-            img_path = rgb_dir / f'{fn:06d}.jpg'
+            img_path = rgb_dir / f"{fn:06d}.jpg"
             try:
-                img = Image.open(str(img_path)).convert('RGB')
+                img = Image.open(str(img_path)).convert("RGB")
                 img = img.resize((224, 224), _BILINEAR)
                 arr = np.array(img, dtype=np.float32)
             except Exception:
@@ -1150,7 +1150,7 @@ class IndustRealMultiTaskDataset(Dataset):
 
     def _get_coco_path(self, recording_id: str) -> str:
         """Construct path to COCO JSON for a recording."""
-        return str(self.recordings_root / self.split / recording_id / 'OD_labels.json')
+        return str(self.recordings_root / self.split / recording_id / "OD_labels.json")
 
     def _extract_boxes_from_coco(
         self, recording_id: str, frame_num: int
@@ -1195,17 +1195,17 @@ class IndustRealMultiTaskDataset(Dataset):
         boxes = []
         classes = []
         for ann in annots:
-            bbox = ann.get('bbox', [])
+            bbox = ann.get("bbox", [])
             if len(bbox) == 4:
                 x, y, w, h = bbox
                 # [GAP 4.1] Rescale to IMG_SIZE
-                boxes.append([x*_sx, y*_sy, (x+w)*_sx, (y+h)*_sy])
+                boxes.append([x * _sx, y * _sy, (x + w) * _sx, (y + h) * _sy])
                 # [OPUS FIX #5] COCO category_id is 1-24; head outputs 0-23.
                 # Subtract 1 to convert to 0-indexed (matches head output).
-                raw_cat = ann.get('category_id', 0)
+                raw_cat = ann.get("category_id", 0)
                 idx = raw_cat - 1
                 # Safety guard: clamp to valid range [0, NUM_DET_CLASSES-1]
-                if idx < 0 or idx >=24:
+                if idx < 0 or idx >= 24:
                     idx = 0  # map out-of-range to background on any anomaly
                 classes.append(idx)
 
@@ -1227,11 +1227,11 @@ class IndustRealMultiTaskDataset(Dataset):
     def _load_split_recordings(self) -> set:
         """Load recording IDs for this split from the CSV file."""
         if not self.split_csv.exists():
-            logger.warning(f'Split CSV not found: {self.split_csv}')
+            logger.warning(f"Split CSV not found: {self.split_csv}")
             return set()
 
         recording_ids = set()
-        with open(self.split_csv, encoding='utf-8') as f:
+        with open(self.split_csv, encoding="utf-8") as f:
             reader = csv.reader(f)
             for row in reader:
                 if len(row) >= 1:
@@ -1259,7 +1259,7 @@ class IndustRealMultiTaskDataset(Dataset):
             num_frames = len(frame_nums)
             if num_frames < T:
                 logger.debug(
-                    f'  [_build_seq_seq] Skipping {recording_id}: only {num_frames} frames < T={T}'
+                    f"  [_build_seq_seq] Skipping {recording_id}: only {num_frames} frames < T={T}"
                 )
                 continue
 
@@ -1284,20 +1284,22 @@ class IndustRealMultiTaskDataset(Dataset):
                 num_dets = len(mid_annots)
                 det_classes: set = set()
                 for ann in mid_annots:
-                    cat_id = ann.get('category_id', 0)
+                    cat_id = ann.get("category_id", 0)
                     idx = cat_id - 1  # 0-indexed
                     if 0 <= idx < 24:
                         det_classes.add(idx)
 
-                seq_samples.append({
-                    'recording_id': recording_id,
-                    'start_frame_idx': start_idx,
-                    'frames': window_frames,
-                    'psr_has_any': psr_has_any,
-                    'action_label': action_label,
-                    'num_dets': num_dets,
-                    'det_classes': det_classes,
-                })
+                seq_samples.append(
+                    {
+                        "recording_id": recording_id,
+                        "start_frame_idx": start_idx,
+                        "frames": window_frames,
+                        "psr_has_any": psr_has_any,
+                        "action_label": action_label,
+                        "num_dets": num_dets,
+                        "det_classes": det_classes,
+                    }
+                )
 
         return seq_samples
 
@@ -1316,7 +1318,7 @@ class IndustRealMultiTaskDataset(Dataset):
         """
         split_rec_ids = self._load_split_recordings()
         if not split_rec_ids:
-            logger.warning(f'[industreal_dataset] No recordings found in split: {self.split}')
+            logger.warning(f"[industreal_dataset] No recordings found in split: {self.split}")
             return []
 
         all_samples: List[Dict[str, Any]] = []
@@ -1341,11 +1343,12 @@ class IndustRealMultiTaskDataset(Dataset):
             # Pre-scan: map recording_id → set of AR action classes present
             _rec_ar_classes: dict = {}
             for _rid, _rdir in _candidates:
-                _ar_file = _rdir / 'AR_labels.csv'
+                _ar_file = _rdir / "AR_labels.csv"
                 _cls_set = set()
                 if _ar_file.exists():
                     import csv as _csv
-                    with open(_ar_file, encoding='utf-8') as _f:
+
+                    with open(_ar_file, encoding="utf-8") as _f:
                         for _row in _csv.reader(_f):
                             if len(_row) >= 2:
                                 try:
@@ -1371,14 +1374,13 @@ class IndustRealMultiTaskDataset(Dataset):
                 _remaining.remove(_best)
             # Append remaining recordings (in alphabetical order) if we didn't fill
             _chosen += _remaining
-            _candidates[:] = _chosen[: _max_recs]
+            _candidates[:] = _chosen[:_max_recs]
 
         # Build ordered list: if greedy coverage was applied, use that order; otherwise alphabetical
         _ordered = _candidates if (_max_recs and len(_candidates) <= _max_recs) else _candidates
         rec_count = 0
         for recording_id, rec_dir in _ordered:
-
-            rgb_dir = rec_dir / 'rgb'
+            rgb_dir = rec_dir / "rgb"
             if not rgb_dir.exists():
                 continue
 
@@ -1386,7 +1388,7 @@ class IndustRealMultiTaskDataset(Dataset):
             frame_nums: List[int] = []
             for entry in rgb_dir.iterdir():
                 name = entry.name
-                if name.endswith('.jpg'):
+                if name.endswith(".jpg"):
                     stem = name[:-4]
                     if stem.isdigit():
                         frame_nums.append(int(stem))
@@ -1411,7 +1413,7 @@ class IndustRealMultiTaskDataset(Dataset):
             # Build per-frame sample records
             stride = (
                 C.TRAIN_FRAME_STRIDE
-                if self.split == 'train' and not C.DEBUG_MODE
+                if self.split == "train" and not C.DEBUG_MODE
                 else C.EVAL_FRAME_STRIDE
             )
 
@@ -1430,20 +1432,22 @@ class IndustRealMultiTaskDataset(Dataset):
                 num_dets = len(annots)
                 det_classes: set = set()
                 for ann in annots:
-                    cat_id = ann.get('category_id', 0)
+                    cat_id = ann.get("category_id", 0)
                     idx = cat_id - 1  # 0-indexed (matches _extract_boxes_from_coco)
                     if 0 <= idx < 24:
                         det_classes.add(idx)
 
-                all_samples.append({
-                    'recording_id': recording_id,
-                    'frame_num': fn,
-                    'img_path': str(rgb_dir / f'{fn:06d}.jpg'),
-                    'action_label': action_label,
-                    'psr_has_any': psr_has_any,
-                    'num_dets': num_dets,
-                    'det_classes': det_classes,
-                })
+                all_samples.append(
+                    {
+                        "recording_id": recording_id,
+                        "frame_num": fn,
+                        "img_path": str(rgb_dir / f"{fn:06d}.jpg"),
+                        "action_label": action_label,
+                        "psr_has_any": psr_has_any,
+                        "num_dets": num_dets,
+                        "det_classes": det_classes,
+                    }
+                )
 
             rec_count += 1
 
@@ -1469,9 +1473,9 @@ class IndustRealMultiTaskDataset(Dataset):
         # ~50x/epoch and memorized). Use 'balanced' for CE runs / when the loss is
         # NOT already class-balanced; with CB-Focal (beta=0.999, 50x cap) the loss
         # already rebalances, so leave this on 'cb' to avoid double-emphasis.
-        _mode = str(getattr(C, 'ACT_SAMPLER_MODE', 'cb')).lower()
-        if _mode == 'balanced':
-            _floor = float(getattr(C, 'ACT_SAMPLER_COUNT_FLOOR', 15.0))
+        _mode = str(getattr(C, "ACT_SAMPLER_MODE", "cb")).lower()
+        if _mode == "balanced":
+            _floor = float(getattr(C, "ACT_SAMPLER_COUNT_FLOOR", 15.0))
             _eff = np.maximum(counts, _floor)
             class_weights = np.where(counts > 0, 1.0 / _eff, 0.0)
         else:
@@ -1492,18 +1496,18 @@ class IndustRealMultiTaskDataset(Dataset):
         # where the rarer secondary tasks (PSR, detection) have valid labels.
         # The boost is small (≤2x) and applied multiplicatively, so it never
         # overpowers the activity class balance.
-        if bool(getattr(C, 'USE_TASK_AWARE_SAMPLING', False)):
-            psr_boost = float(getattr(C, 'TASK_AWARE_PSR_BOOST', 1.5))
-            det_boost = float(getattr(C, 'TASK_AWARE_DET_BOOST', 1.2))
+        if bool(getattr(C, "USE_TASK_AWARE_SAMPLING", False)):
+            psr_boost = float(getattr(C, "TASK_AWARE_PSR_BOOST", 1.5))
+            det_boost = float(getattr(C, "TASK_AWARE_DET_BOOST", 1.2))
             for i in range(len(sample_weights)):
                 if i >= len(self.samples):
                     continue
                 sample = self.samples[i]
                 # PSR: boost frames where any component has a positive label
-                if sample.get('psr_has_any', False):
+                if sample.get("psr_has_any", False):
                     sample_weights[i] *= psr_boost
                 # Detection: boost frames with at least one detection target
-                if sample.get('num_dets', 0) > 0:
+                if sample.get("num_dets", 0) > 0:
                     sample_weights[i] *= det_boost
             # Re-normalize so weights still sum to 1
             total_w = sample_weights.sum()
@@ -1517,11 +1521,11 @@ class IndustRealMultiTaskDataset(Dataset):
         # frames to exactly `det_frac`, so in expectation that fraction of every
         # batch carries boxes regardless of how sparse the OD labels are. Activity
         # class-balance is preserved *within* the GT and non-GT sub-populations.
-        det_frac = float(getattr(C, 'DET_GT_FRAME_FRACTION', 0.0))
+        det_frac = float(getattr(C, "DET_GT_FRAME_FRACTION", 0.0))
         if det_frac > 0.0:
             gt_mask = np.array(
                 [
-                    (i < len(self.samples)) and (self.samples[i].get('num_dets', 0) > 0)
+                    (i < len(self.samples)) and (self.samples[i].get("num_dets", 0) > 0)
                     for i in range(len(sample_weights))
                 ],
                 dtype=bool,
@@ -1530,11 +1534,11 @@ class IndustRealMultiTaskDataset(Dataset):
             n_total = len(gt_mask)
             if n_gt == 0:
                 logger.warning(
-                    '[get_sampler] DET_GT_FRAME_FRACTION=%.2f requested but this '
-                    'subset contains ZERO frames with detection boxes. The detector '
-                    'CANNOT learn from it — the death spiral is upstream of the '
-                    'sampler. Check OD_labels.json coverage, raise SUBSET_RATIO, or '
-                    'select an OD-bearing recording subset (run diag_gt_coverage.py).',
+                    "[get_sampler] DET_GT_FRAME_FRACTION=%.2f requested but this "
+                    "subset contains ZERO frames with detection boxes. The detector "
+                    "CANNOT learn from it — the death spiral is upstream of the "
+                    "sampler. Check OD_labels.json coverage, raise SUBSET_RATIO, or "
+                    "select an OD-bearing recording subset (run diag_gt_coverage.py).",
                     det_frac,
                 )
             elif 0 < n_gt < n_total:
@@ -1548,11 +1552,15 @@ class IndustRealMultiTaskDataset(Dataset):
                 if total_w > 0:
                     sample_weights = sample_weights / total_w
                 logger.info(
-                    '[get_sampler] DET_GT_FRAME_FRACTION=%.2f: %d/%d (%.2f%%) frames '
-                    'carry GT boxes -> reweighted so ~%.0f%% of every batch is '
-                    'GT-bearing (was ~%.2f%% under base sampler).',
-                    det_frac, n_gt, n_total, 100.0 * n_gt / max(n_total, 1),
-                    100.0 * det_frac, 100.0 * n_gt / max(n_total, 1),
+                    "[get_sampler] DET_GT_FRAME_FRACTION=%.2f: %d/%d (%.2f%%) frames "
+                    "carry GT boxes -> reweighted so ~%.0f%% of every batch is "
+                    "GT-bearing (was ~%.2f%% under base sampler).",
+                    det_frac,
+                    n_gt,
+                    n_total,
+                    100.0 * n_gt / max(n_total, 1),
+                    100.0 * det_frac,
+                    100.0 * n_gt / max(n_total, 1),
                 )
 
         # [DIAG 2026-07-01 Opus round-4 Q1] Effective per-class sampling rate.
@@ -1562,7 +1570,7 @@ class IndustRealMultiTaskDataset(Dataset):
         # draws from both pools. Log the realized per-class mass so the distortion
         # is visible before a 100-epoch run (answers the "confirm or log" ask).
         try:
-            _no = int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_ACT_CLASSES))
+            _no = int(getattr(C, "NUM_ACT_OUTPUTS", C.NUM_ACT_CLASSES))
             _mass = np.zeros(_no, dtype=np.float64)
             for _i, _aid in enumerate(self.activity_ids):
                 if 0 <= _aid < _no:
@@ -1573,14 +1581,18 @@ class IndustRealMultiTaskDataset(Dataset):
                 _ratio = float(_present.max() / max(_present.min(), 1e-12))
                 _topk = np.argsort(_mass)[::-1][:5]
                 logger.info(
-                    '[get_sampler] effective per-class sampling mass: %d classes present, '
-                    'max/min ratio=%.1fx (uniform would be 1.0x), max=%.4f vs uniform=%.4f. '
-                    'Top-5 sampled class ids=%s. Ratio >> 1 means DET_GT/task-aware reweighting '
-                    'is distorting activity balance.',
-                    _present.size, _ratio, float(_present.max()), _uniform, _topk.tolist(),
+                    "[get_sampler] effective per-class sampling mass: %d classes present, "
+                    "max/min ratio=%.1fx (uniform would be 1.0x), max=%.4f vs uniform=%.4f. "
+                    "Top-5 sampled class ids=%s. Ratio >> 1 means DET_GT/task-aware reweighting "
+                    "is distorting activity balance.",
+                    _present.size,
+                    _ratio,
+                    float(_present.max()),
+                    _uniform,
+                    _topk.tolist(),
                 )
         except Exception as _diag_exc:  # never let diagnostics break sampler build
-            logger.debug('[get_sampler] per-class mass diag skipped: %s', _diag_exc)
+            logger.debug("[get_sampler] per-class mass diag skipped: %s", _diag_exc)
 
         return WeightedRandomSampler(
             weights=torch.as_tensor(sample_weights, dtype=torch.double),
@@ -1595,10 +1607,7 @@ class IndustRealMultiTaskDataset(Dataset):
         per batch. Returns empty list when no detection GT is available
         (e.g., ablation_A_3060 subset with no OD labels).
         """
-        return [
-            i for i, s in enumerate(self.samples)
-            if s.get('num_dets', 0) > 0
-        ]
+        return [i for i, s in enumerate(self.samples) if s.get("num_dets", 0) > 0]
 
     # =====================================================================
     # Task-Aware Sampling (175 §5.3)
@@ -1615,12 +1624,12 @@ class IndustRealMultiTaskDataset(Dataset):
         Returns:
             list of length NUM_DET_CLASSES with frame-count per class.
         """
-        if hasattr(self, '_det_class_freq_cache'):
+        if hasattr(self, "_det_class_freq_cache"):
             return self._det_class_freq_cache
 
         freq = [0] * 24  # NUM_DET_CLASSES = 24
         for s in self.samples:
-            for cls_id in s.get('det_classes', set()):
+            for cls_id in s.get("det_classes", set()):
                 if 0 <= cls_id < 24:
                     freq[cls_id] += 1
 
@@ -1646,7 +1655,7 @@ class IndustRealMultiTaskDataset(Dataset):
         if self.sequence_mode:
             samples = self._seq_samples
             activity_ids = np.array(
-                [s.get('action_label', -1) for s in self._seq_samples],
+                [s.get("action_label", -1) for s in self._seq_samples],
                 dtype=np.int64,
             )
         else:
@@ -1659,7 +1668,7 @@ class IndustRealMultiTaskDataset(Dataset):
 
         # Step 1: Class-balanced activity weighting (CB effective-number)
         valid_ids = activity_ids[activity_ids >= 0]
-        num_classes = int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_CLASSES_ACT))
+        num_classes = int(getattr(C, "NUM_ACT_OUTPUTS", C.NUM_CLASSES_ACT))
         counts = np.bincount(valid_ids, minlength=num_classes).astype(np.float64)
 
         beta = C.CB_BETA
@@ -1672,15 +1681,14 @@ class IndustRealMultiTaskDataset(Dataset):
         class_weights /= class_weights.sum()
 
         weights = np.array(
-            [class_weights[aid] if 0 <= aid < len(class_weights) else 0.0
-             for aid in activity_ids],
+            [class_weights[aid] if 0 <= aid < len(class_weights) else 0.0 for aid in activity_ids],
             dtype=np.float64,
         )
 
         # Step 2: PSR boost — upweight frames with any transition
-        psr_boost = float(getattr(C, 'TASK_AWARE_PSR_BOOST', 2.5))
+        psr_boost = float(getattr(C, "TASK_AWARE_PSR_BOOST", 2.5))
         for i, s in enumerate(samples):
-            if s.get('psr_has_any', False):
+            if s.get("psr_has_any", False):
                 weights[i] *= psr_boost
 
         # Step 3: Rare detection class upsampling
@@ -1689,24 +1697,23 @@ class IndustRealMultiTaskDataset(Dataset):
         total_det_frames = sum(det_class_freq)
         rare_threshold = 0.01 * total_det_frames if total_det_frames > 0 else 0
         rare_classes = {
-            c for c, cnt in enumerate(det_class_freq)
-            if cnt > 0 and cnt < rare_threshold
+            c for c, cnt in enumerate(det_class_freq) if cnt > 0 and cnt < rare_threshold
         }
 
         if rare_classes:
-            rare_boost = float(getattr(C, 'TASK_AWARE_RARE_DET_BOOST', 3.0))
+            rare_boost = float(getattr(C, "TASK_AWARE_RARE_DET_BOOST", 3.0))
             for i, s in enumerate(samples):
-                sample_classes = s.get('det_classes', set())
+                sample_classes = s.get("det_classes", set())
                 if sample_classes & rare_classes:
                     weights[i] *= rare_boost
 
         # Step 4: Pose-only downsampling
         # Frames with only pose (no PSR transition, no detections) are
         # downweighted since pose is dense and easy to learn.
-        pose_downscale = float(getattr(C, 'TASK_AWARE_POSE_DOWNSCALE', 0.5))
+        pose_downscale = float(getattr(C, "TASK_AWARE_POSE_DOWNSCALE", 0.5))
         for i, s in enumerate(samples):
-            has_psr = s.get('psr_has_any', False)
-            has_det = s.get('num_dets', 0) > 0
+            has_psr = s.get("psr_has_any", False)
+            has_det = s.get("num_dets", 0) > 0
             if not has_psr and not has_det:
                 weights[i] *= pose_downscale
 
@@ -1734,6 +1741,7 @@ class IndustRealMultiTaskDataset(Dataset):
 # =========================================================================
 # GuaranteedGTBatchSampler
 # =========================================================================
+
 
 class GuaranteedGTBatchSampler:
     """Batch-level sampler that guarantees at least one GT frame per batch.
@@ -1815,7 +1823,7 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Tuple[torch.Tensor, Dict[str, Any
     # Guard: empty batch returns empty tensors (avoids stack crash)
     if not batch:
         return torch.empty(0, 3, C.IMG_HEIGHT, C.IMG_WIDTH), {}
-    images = torch.stack([item['images']['rgb'] for item in batch], dim=0)
+    images = torch.stack([item["images"]["rgb"] for item in batch], dim=0)
 
     detection_list = []
     head_poses = []
@@ -1825,18 +1833,19 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Tuple[torch.Tensor, Dict[str, Any
     box_masks_list = []
 
     for item in batch:
-        boxes = item['gt_boxes']['rgb']        # [N, 4]
-        classes = item['gt_classes']['rgb']     # [N]
+        boxes = item["gt_boxes"]["rgb"]  # [N, 4]
+        classes = item["gt_classes"]["rgb"]  # [N]
 
         # Flatten into per-sample detection dict (IKEA pattern)
-        detection_list.append({'boxes': boxes, 'labels': classes})
+        detection_list.append({"boxes": boxes, "labels": classes})
 
-        head_poses.append(item['head_pose'])
-        psr_labels_list.append(item['psr_labels'])
-        hand_joints_list.append(item['hand_joints'])
+        head_poses.append(item["head_pose"])
+        psr_labels_list.append(item["psr_labels"])
+        hand_joints_list.append(item["hand_joints"])
         activity_labels.append(
-            item['action_label'] if isinstance(item['action_label'], torch.Tensor)
-            else torch.tensor(item['action_label'], dtype=torch.long)
+            item["action_label"]
+            if isinstance(item["action_label"], torch.Tensor)
+            else torch.tensor(item["action_label"], dtype=torch.long)
         )
 
         # Build per-sample box mask
@@ -1847,7 +1856,7 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Tuple[torch.Tensor, Dict[str, Any
         box_masks_list.append(box_mask)
 
     # Determine max_boxes for padding
-    max_boxes = max(b.shape[0] for b in [item['gt_boxes']['rgb'] for item in batch]) if batch else 0
+    max_boxes = max(b.shape[0] for b in [item["gt_boxes"]["rgb"] for item in batch]) if batch else 0
     max_boxes = max(max_boxes, 1)
 
     # Pad boxes/classes across batch
@@ -1856,8 +1865,8 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Tuple[torch.Tensor, Dict[str, Any
     stacked_box_mask = torch.zeros(len(batch), max_boxes, dtype=torch.bool)
 
     for i, item in enumerate(batch):
-        boxes = item['gt_boxes']['rgb']
-        classes = item['gt_classes']['rgb']
+        boxes = item["gt_boxes"]["rgb"]
+        classes = item["gt_classes"]["rgb"]
         n = boxes.shape[0]
         if n > 0:
             stacked_boxes[i, :n] = boxes
@@ -1870,39 +1879,41 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Tuple[torch.Tensor, Dict[str, Any
     n_joints_per_hand = 26  # IndustReal format: 26 hand keypoints × 2 coords = 52
     n_select = 17
     step = n_joints_per_hand // n_select  # 1
-    selected_indices = list(range(0, n_joints_per_hand, step))[:n_select]  # [0, 1, 2, ..., 16] = 17 joints
-    keypoints = torch.stack([
-        h.view(n_joints_per_hand, 2)[selected_indices] for h in hand_joints_list
-    ], dim=0)  # [B, 17, 2]
+    selected_indices = list(range(0, n_joints_per_hand, step))[
+        :n_select
+    ]  # [0, 1, 2, ..., 16] = 17 joints
+    keypoints = torch.stack(
+        [h.view(n_joints_per_hand, 2)[selected_indices] for h in hand_joints_list], dim=0
+    )  # [B, 17, 2]
     # [FIX 2026-06-18] Normalize hand keypoints from pixel coords to [0, 1].
     # hands.csv stores MediaPipe hand landmarks in 1280×720 pixel space. The Wing
     # loss expects both predictions and targets in the same [0, 1] normalized space.
     # Without this, the raw Wing loss is ~267 vs ~0.2 after normalization — the
     # coordinate scale mismatch makes the loss contribution meaningless.
-    keypoints = keypoints / torch.tensor(
-        [C.IMG_WIDTH, C.IMG_HEIGHT], dtype=keypoints.dtype
-    )
+    keypoints = keypoints / torch.tensor([C.IMG_WIDTH, C.IMG_HEIGHT], dtype=keypoints.dtype)
     pose_confidence = torch.ones_like(keypoints[:, :, 0])  # [B, 17]
 
     activity_stacked = torch.stack(activity_labels, dim=0)
-    activity_mask = (activity_stacked >= 0).float()  # 1.0 for labeled, 0.0 for unlabeled (-1 sentinel)
+    activity_mask = (
+        activity_stacked >= 0
+    ).float()  # 1.0 for labeled, 0.0 for unlabeled (-1 sentinel)
 
     targets: Dict[str, Any] = {
-        'detection': detection_list,
-        'box_mask': {'rgb': stacked_box_mask},
-        'head_pose': torch.stack(head_poses, dim=0),
-        'psr_labels': torch.stack(psr_labels_list, dim=0),
-        'hand_joints': torch.stack(hand_joints_list, dim=0),
-        'activity': activity_stacked,
-        'activity_mask': activity_mask,
-        'metadata': [item['metadata'] for item in batch],
-        'keypoints': keypoints,
-        'pose_confidence': pose_confidence,
+        "detection": detection_list,
+        "box_mask": {"rgb": stacked_box_mask},
+        "head_pose": torch.stack(head_poses, dim=0),
+        "psr_labels": torch.stack(psr_labels_list, dim=0),
+        "hand_joints": torch.stack(hand_joints_list, dim=0),
+        "activity": activity_stacked,
+        "activity_mask": activity_mask,
+        "metadata": [item["metadata"] for item in batch],
+        "keypoints": keypoints,
+        "pose_confidence": pose_confidence,
     }
 
-    clip_rgb_items = [item.get('clip_rgb') for item in batch]
+    clip_rgb_items = [item.get("clip_rgb") for item in batch]
     if any(c is not None for c in clip_rgb_items):
-        targets['clip_rgb'] = torch.stack(clip_rgb_items, dim=0)  # [B, T, 3, 224, 224]
+        targets["clip_rgb"] = torch.stack(clip_rgb_items, dim=0)  # [B, T, 3, 224, 224]
 
     return images, targets
 
@@ -1936,32 +1947,33 @@ def collate_fn_sequences(
 
     B = len(batch)
 
-    images = torch.stack([item['images']['rgb'] for item in batch], dim=0)
-    psr_labels = torch.stack([item['psr_labels'] for item in batch], dim=0)
-    head_pose = torch.stack([item['head_pose'] for item in batch], dim=0)
-    hand_joints = torch.stack([item['hand_joints'] for item in batch], dim=0)
+    images = torch.stack([item["images"]["rgb"] for item in batch], dim=0)
+    psr_labels = torch.stack([item["psr_labels"] for item in batch], dim=0)
+    head_pose = torch.stack([item["head_pose"] for item in batch], dim=0)
+    hand_joints = torch.stack([item["hand_joints"] for item in batch], dim=0)
 
     sequence_lengths = torch.tensor(
-        [item['metadata'].get('sequence_length', psr_labels.shape[1]) for item in batch],
-        dtype=torch.long
+        [item["metadata"].get("sequence_length", psr_labels.shape[1]) for item in batch],
+        dtype=torch.long,
     )
 
     activity_labels = torch.tensor(
         [
-            item['action_label'].item() if isinstance(item['action_label'], torch.Tensor)
-            else int(item['action_label'])
+            item["action_label"].item()
+            if isinstance(item["action_label"], torch.Tensor)
+            else int(item["action_label"])
             for item in batch
         ],
-        dtype=torch.long
+        dtype=torch.long,
     )
 
-    metadata_list = [item['metadata'] for item in batch]
+    metadata_list = [item["metadata"] for item in batch]
 
     detection_list = []
     max_boxes = 0
     for item in batch:
-        boxes = item['gt_boxes']['rgb']
-        detection_list.append({'boxes': boxes, 'labels': item['gt_classes']['rgb']})
+        boxes = item["gt_boxes"]["rgb"]
+        detection_list.append({"boxes": boxes, "labels": item["gt_classes"]["rgb"]})
         if boxes.shape[0] > max_boxes:
             max_boxes = boxes.shape[0]
 
@@ -1972,8 +1984,8 @@ def collate_fn_sequences(
     stacked_box_mask = torch.zeros(B, max_boxes, dtype=torch.bool)
 
     for i, item in enumerate(batch):
-        boxes = item['gt_boxes']['rgb']
-        classes = item['gt_classes']['rgb']
+        boxes = item["gt_boxes"]["rgb"]
+        classes = item["gt_classes"]["rgb"]
         n = boxes.shape[0]
         if n > 0:
             stacked_boxes[i, :n] = boxes
@@ -1981,15 +1993,17 @@ def collate_fn_sequences(
             stacked_box_mask[i, :n] = True
 
     targets: Dict[str, Any] = {
-        'detection': detection_list,
-        'box_mask': {'rgb': stacked_box_mask},
-        'head_pose': head_pose,
-        'psr_labels': psr_labels,
-        'sequence_lengths': sequence_lengths,
-        'hand_joints': hand_joints,
-        'activity': activity_labels,
-        'activity_mask': (activity_labels >= 0).float(),  # [OPUS v5] was missing from sequence collate
-        'metadata': metadata_list,
+        "detection": detection_list,
+        "box_mask": {"rgb": stacked_box_mask},
+        "head_pose": head_pose,
+        "psr_labels": psr_labels,
+        "sequence_lengths": sequence_lengths,
+        "hand_joints": hand_joints,
+        "activity": activity_labels,
+        "activity_mask": (
+            activity_labels >= 0
+        ).float(),  # [OPUS v5] was missing from sequence collate
+        "metadata": metadata_list,
     }
 
     return images, targets

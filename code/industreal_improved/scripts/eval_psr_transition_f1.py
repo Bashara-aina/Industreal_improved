@@ -42,6 +42,7 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 # Metric helpers
 # ---------------------------------------------------------------------------
 
+
 def compute_tau(pred_tr: np.ndarray, gt_tr: np.ndarray, tol: int = 3) -> float:
     """Compute mean delay tau (frame offset) for matched transition events.
 
@@ -141,25 +142,30 @@ def frames_to_seconds(n_frames: int, fps: float = 30.0) -> float:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="PSR transition event-F1 evaluation (175 §7.2)"
-    )
+    parser = argparse.ArgumentParser(description="PSR transition event-F1 evaluation (175 §7.2)")
     parser.add_argument(
         "--checkpoint",
         default="code/industreal_improved/src/runs/rf_stages/checkpoints/best.pth",
         help="Path to model checkpoint (.pth)",
     )
     parser.add_argument(
-        "--max-batches", type=int, default=5000,
+        "--max-batches",
+        type=int,
+        default=5000,
         help="Max batches to evaluate (default: 5000, ~full val set at batch=1)",
     )
     parser.add_argument(
-        "--tolerance", type=int, default=3,
+        "--tolerance",
+        type=int,
+        default=3,
         help="Frame tolerance for event matching (default: 3, matches B3/STORM)",
     )
     parser.add_argument(
-        "--threshold", type=float, default=0.10,
+        "--threshold",
+        type=float,
+        default=0.10,
         help="Global sigmoid threshold for PSR binary prediction (default: 0.10, matches PSR headline protocol)",
     )
     parser.add_argument(
@@ -198,13 +204,15 @@ def main():
     from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
 
     model = POPWMultiTaskModel(
-        pretrained=True, backbone_type="convnext_tiny",
-        use_hand_film=True, use_headpose_film=True,
-        use_videomae=False, train_pose=False,
+        pretrained=True,
+        backbone_type="convnext_tiny",
+        use_hand_film=True,
+        use_headpose_film=True,
+        use_videomae=False,
+        train_pose=False,
     )
     state_dict = {
-        k: v for k, v in ckpt["model"].items()
-        if "total_ops" not in k and "total_params" not in k
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
     }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = 1
@@ -213,7 +221,11 @@ def main():
     # ── Data ────────────────────────────────────────────────────────────
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False,
+        val_ds,
+        batch_size=1,
+        num_workers=0,
+        collate_fn=collate_fn,
+        shuffle=False,
     )
 
     # Per-recording accumulators
@@ -272,7 +284,7 @@ def main():
         gt = rec_labels[rec]
         frames = np.array(rec_frame_nums[rec])
         sort_idx = np.argsort(frames)
-        preds_sorted = np.array(preds)[sort_idx]   # [T, 11] sigmoid probabilities
+        preds_sorted = np.array(preds)[sort_idx]  # [T, 11] sigmoid probabilities
         gt_sorted = np.array(gt)[sort_idx]
 
         # Keep only frames with valid GT labels
@@ -345,15 +357,17 @@ def main():
         "n_recordings": len(per_rec),
         "tolerance": args.tolerance,
         "threshold": (
-            "per_component_optimal"
-            if per_comp_thresholds is not None
-            else args.threshold
+            "per_component_optimal" if per_comp_thresholds is not None else args.threshold
         ),
         "event_f1_macro": float(np.mean(event_f1s)) if event_f1s else 0.0,
         "tau_mean_frames": tau_mean_frames,
         "tau_abs_mean_frames": tau_abs_mean_frames,
-        "tau_mean_seconds": tau_mean_frames / FPS if not np.isnan(tau_mean_frames) else float("nan"),
-        "tau_abs_mean_seconds": tau_abs_mean_frames / FPS if not np.isnan(tau_abs_mean_frames) else float("nan"),
+        "tau_mean_seconds": tau_mean_frames / FPS
+        if not np.isnan(tau_mean_frames)
+        else float("nan"),
+        "tau_abs_mean_seconds": tau_abs_mean_frames / FPS
+        if not np.isnan(tau_abs_mean_frames)
+        else float("nan"),
         "pos_macro": float(np.mean(poss)) if poss else 0.0,
         "per_recording": per_rec,
     }
@@ -371,8 +385,12 @@ def main():
     print(f"  Recordings:          {len(per_rec)}")
     print()
     print(f"  event_f1@+/-{args.tolerance}:  {summary['event_f1_macro']:.4f}  (macro avg)")
-    print(f"  tau (mean delay):     {tau_mean_frames:.2f} frames  ({summary['tau_mean_seconds']:.1f}s)")
-    print(f"  tau_abs (abs delay):  {tau_abs_mean_frames:.2f} frames  ({summary['tau_abs_mean_seconds']:.1f}s)")
+    print(
+        f"  tau (mean delay):     {tau_mean_frames:.2f} frames  ({summary['tau_mean_seconds']:.1f}s)"
+    )
+    print(
+        f"  tau_abs (abs delay):  {tau_abs_mean_frames:.2f} frames  ({summary['tau_abs_mean_seconds']:.1f}s)"
+    )
     print(f"  POS (macro):          {summary['pos_macro']:.4f}")
     print()
     print("  Reference (STORM CVIU 2025, test split):")

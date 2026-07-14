@@ -1,4 +1,5 @@
 """LDAM-DRW (Cao et al. 2019 NeurIPS)."""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -6,11 +7,13 @@ from typing import List
 
 
 class LDAMLoss(nn.Module):
-    def __init__(self, cls_num_list: List[int], max_m: float = 0.5, s: float = 30, reweight_epoch: int = 35):
+    def __init__(
+        self, cls_num_list: List[int], max_m: float = 0.5, s: float = 30, reweight_epoch: int = 35
+    ):
         super().__init__()
         m_list = 1.0 / torch.sqrt(torch.sqrt(torch.tensor(cls_num_list, dtype=torch.float)))
         m_list = m_list * (max_m / m_list.max())
-        self.register_buffer('m_list', m_list)
+        self.register_buffer("m_list", m_list)
         self.cls_num_list = cls_num_list
         self.s = s
         self.reweight_epoch = reweight_epoch

@@ -2,9 +2,9 @@
 
 Usage: python3 src/evaluation/psr_full_38k_optimal.py
 """
+
 import json
 import sys
-from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -96,8 +96,10 @@ def reconcile_10k_vs_38k(rec_logits, rec_labels):
         sub_lbl = all_labels[:n_frames]
         sub_valid = valid[:n_frames]
         binary_0_10 = (sub_sig > 0.10).astype(np.int32)
-        macro_f1_0_10 = sum(per_frame_f1(binary_0_10[:, c], sub_lbl[:, c], sub_valid[:, c])
-                           for c in range(11)) / 11.0
+        macro_f1_0_10 = (
+            sum(per_frame_f1(binary_0_10[:, c], sub_lbl[:, c], sub_valid[:, c]) for c in range(11))
+            / 11.0
+        )
         masks[subset_name] = {
             "n_frames": n_frames,
             "global_0.10_macro_f1": float(macro_f1_0_10),
@@ -126,12 +128,12 @@ def run_loo_cv(rec_logits, rec_labels):
         held_logits = rec_logits[held_out].numpy()
         held_labels = rec_labels[held_out].numpy()
 
-        train_logits = np.concatenate([
-            rec_logits[r].numpy() for r in rec_ids if r != held_out
-        ], axis=0)
-        train_labels = np.concatenate([
-            rec_labels[r].numpy() for r in rec_ids if r != held_out
-        ], axis=0)
+        train_logits = np.concatenate(
+            [rec_logits[r].numpy() for r in rec_ids if r != held_out], axis=0
+        )
+        train_labels = np.concatenate(
+            [rec_labels[r].numpy() for r in rec_ids if r != held_out], axis=0
+        )
 
         # Get optimal thresholds on training set
         opt, _ = sweep_per_component(train_logits, train_labels)
@@ -166,8 +168,10 @@ def run_loo_cv(rec_logits, rec_labels):
             "improvement": float(improvement),
             "opt_thresholds_from_train": {str(c): float(opt_thresh[c]) for c in range(11)},
         }
-        print(f"  held={held_out}: global={global_f1:.4f}, transferred={opt_f1:.4f}, "
-              f"oracle={held_bound_f1:.4f}, improvement={improvement:+.4f}")
+        print(
+            f"  held={held_out}: global={global_f1:.4f}, transferred={opt_f1:.4f}, "
+            f"oracle={held_bound_f1:.4f}, improvement={improvement:+.4f}"
+        )
 
     mean_imp = float(np.mean(improvements))
     std_imp = float(np.std(improvements))
@@ -205,9 +209,9 @@ def main():
     valid_all = all_labels != -1
 
     # ---- 1. Per-component optimal threshold sweep on full 38k ----
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("STEP 1: Per-component optimal threshold sweep (full 38k)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     optimal, sweep_details = sweep_per_component(all_logits, all_labels)
 
     # Evaluate with optimal thresholds
@@ -223,14 +227,18 @@ def main():
 
     print(f"\nThresholds: {[opt_thresh[c] for c in range(11)]}")
     print(f"\nPer-component results:")
-    print(f"{'comp':<6} {'F1_opt':<10} {'F1_0.10':<10} {'thresh':<8} {'precision':<10} {'recall':<10} {'pos_frac':<10}")
+    print(
+        f"{'comp':<6} {'F1_opt':<10} {'F1_0.10':<10} {'thresh':<8} {'precision':<10} {'recall':<10} {'pos_frac':<10}"
+    )
     for c in range(11):
         valid = all_labels[:, c] != -1
         pos_frac = all_labels[valid, c].mean() if valid.sum() > 0 else 0
         r_opt = per_comp_opt[f"comp{c}"]
         r_glob = per_comp_global[f"comp{c}"]
-        print(f"comp{c:<4} {r_opt['f1']:<10.4f} {r_glob['f1']:<10.4f} {opt_thresh[c]:<8.2f} "
-              f"{r_opt['precision']:<10.4f} {r_opt['recall']:<10.4f} {pos_frac:<10.4f}")
+        print(
+            f"comp{c:<4} {r_opt['f1']:<10.4f} {r_glob['f1']:<10.4f} {opt_thresh[c]:<8.2f} "
+            f"{r_opt['precision']:<10.4f} {r_opt['recall']:<10.4f} {pos_frac:<10.4f}"
+        )
 
     print(f"\nMacro-F1 (per-comp optimal): {opt_macro_f1:.4f}")
     print(f"Macro-F1 (global 0.10):      {global_0_10_macro_f1:.4f}")
@@ -267,9 +275,9 @@ def main():
         json.dump(compact, f, indent=2)
 
     # ---- 2. LOO-CV on full 38k ----
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("STEP 2: Leave-one-recording-out CV (full 38k)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     loo_results = run_loo_cv(rec_logits, rec_labels)
     loo_path = save_dir / "loo_cv.json"
     with open(loo_path, "w") as f:
@@ -277,34 +285,40 @@ def main():
     print(f"\nSaved LOO-CV to {loo_path}")
 
     # ---- 3. Reconciliation: 10k vs 38k ----
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("STEP 3: Reconcile 10k vs 38k gap")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     recon = reconcile_10k_vs_38k(rec_logits, rec_labels)
     print(f"\n10k subset (first 10000 frames):")
     print(f"  global_0.10_macro_f1 = {recon['10k_subset']['global_0.10_macro_f1']:.4f}")
     print(f"38k full:")
     print(f"  global_0.10_macro_f1 = {recon['38k_full']['global_0.10_macro_f1']:.4f}")
-    gap = recon['10k_subset']['global_0.10_macro_f1'] - recon['38k_full']['global_0.10_macro_f1']
+    gap = recon["10k_subset"]["global_0.10_macro_f1"] - recon["38k_full"]["global_0.10_macro_f1"]
     print(f"\nGap: {gap:.4f}")
 
     # Per-component breakdown of the gap
     print(f"\nPer-component 0.10 F1 breakdown:")
     print(f"{'comp':<6} {'10k':<10} {'38k':<10} {'gap':<10}")
     for c in range(11):
-        f1_10k = recon['10k_subset']['per_comp_0.10'][f"comp{c}"]
-        f1_38k = recon['38k_full']['per_comp_0.10'][f"comp{c}"]
+        f1_10k = recon["10k_subset"]["per_comp_0.10"][f"comp{c}"]
+        f1_38k = recon["38k_full"]["per_comp_0.10"][f"comp{c}"]
         print(f"comp{c:<4} {f1_10k:<10.4f} {f1_38k:<10.4f} {f1_10k - f1_38k:<+10.4f}")
 
     # Also compare optimal across 10k and 38k
     print(f"\nOptimal thresholds comparison:")
-    print(f"{'comp':<6} {'10k_opt_thr':<12} {'10k_opt_F1':<12} {'38k_opt_thr':<12} {'38k_opt_F1':<12}")
+    print(
+        f"{'comp':<6} {'10k_opt_thr':<12} {'10k_opt_F1':<12} {'38k_opt_thr':<12} {'38k_opt_F1':<12}"
+    )
     # Reload 10k optimal for comparison
     try:
-        opt_10k = json.load(open("src/runs/rf_stages/checkpoints/psr_optimal_thr/optimal_thresholds.json"))
+        opt_10k = json.load(
+            open("src/runs/rf_stages/checkpoints/psr_optimal_thr/optimal_thresholds.json")
+        )
         for c in range(11):
-            print(f"comp{c:<4} {opt_10k['optimal_thresholds'][c]:<12.2f} "
-                  f"{'N/A':<12} {opt_thresh[c]:<12.2f} {per_comp_opt[f'comp{c}']['f1']:<12.4f}")
+            print(
+                f"comp{c:<4} {opt_10k['optimal_thresholds'][c]:<12.2f} "
+                f"{'N/A':<12} {opt_thresh[c]:<12.2f} {per_comp_opt[f'comp{c}']['f1']:<12.4f}"
+            )
     except FileNotFoundError:
         print("  (10k optimal file not found)")
 
@@ -312,23 +326,25 @@ def main():
     notes = f"""# PSR Full-38k Reconciliation: 10k vs 38k Gap Analysis
 
 ## Background
-- 10k subset (val-selected upper bound): global_0.10 F1 = {recon['10k_subset']['global_0.10_macro_f1']:.4f}
-- Full 38k stream: global_0.10 F1 = {recon['38k_full']['global_0.10_macro_f1']:.4f}
+- 10k subset (val-selected upper bound): global_0.10 F1 = {recon["10k_subset"]["global_0.10_macro_f1"]:.4f}
+- Full 38k stream: global_0.10 F1 = {recon["38k_full"]["global_0.10_macro_f1"]:.4f}
 - Gap: {gap:.4f}
 
 ## Per-component optimal thresholds
-- 10k: {json.dumps(opt_10k['optimal_thresholds'] if 'opt_10k' in dir() else 'N/A')}
+- 10k: {json.dumps(opt_10k["optimal_thresholds"] if "opt_10k" in dir() else "N/A")}
 - 38k: {[round(t, 2) for t in opt_thresh]}
 
 ## Full-38k optimal macro-F1: {opt_macro_f1:.4f}
-## Full-38k LOO-CV: {loo_results['loo_improvement_mean']:.4f} ± {loo_results['loo_improvement_std']:.4f}
+## Full-38k LOO-CV: {loo_results["loo_improvement_mean"]:.4f} ± {loo_results["loo_improvement_std"]:.4f}
 
 ## Gap Analysis per component (global 0.10 F1)
 """
     for c in range(11):
-        f1_10k = recon['10k_subset']['per_comp_0.10'][f"comp{c}"]
-        f1_38k = recon['38k_full']['per_comp_0.10'][f"comp{c}"]
-        notes += f"- comp{c}: {f1_10k:.4f} (10k) vs {f1_38k:.4f} (38k), gap={f1_10k - f1_38k:+.4f}\n"
+        f1_10k = recon["10k_subset"]["per_comp_0.10"][f"comp{c}"]
+        f1_38k = recon["38k_full"]["per_comp_0.10"][f"comp{c}"]
+        notes += (
+            f"- comp{c}: {f1_10k:.4f} (10k) vs {f1_38k:.4f} (38k), gap={f1_10k - f1_38k:+.4f}\n"
+        )
 
     notes += f"""
 ## Root cause
@@ -346,7 +362,7 @@ The honest primary is now: full-38k per-comp-optimal macro-F1 = {opt_macro_f1:.4
 (previously reported: 0.7499 on 10k). This is the number to report in the paper.
 
 ### LOO-CV bound
-- Improvement from per-comp calibration: {loo_results['loo_improvement_mean']:.4f} ± {loo_results['loo_improvement_std']:.4f}
+- Improvement from per-comp calibration: {loo_results["loo_improvement_mean"]:.4f} ± {loo_results["loo_improvement_std"]:.4f}
 - This bound is consistent with the 10k-subset bound of +0.0358 ± 0.0216
 """
     notes_path = save_dir / "reconciliation_notes.md"
@@ -355,13 +371,15 @@ The honest primary is now: full-38k per-comp-optimal macro-F1 = {opt_macro_f1:.4
     print(f"\nSaved reconciliation notes to {notes_path}")
 
     # ---- Summary ----
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("SUMMARY")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Full-38k optimal macro-F1:   {opt_macro_f1:.4f}")
     print(f"Full-38k global_0.10 macro-F1: {global_0_10_macro_f1:.4f}")
     print(f"Improvement:                   {opt_macro_f1 - global_0_10_macro_f1:+.4f}")
-    print(f"LOO-CV improvement:           {loo_results['loo_improvement_mean']:.4f} ± {loo_results['loo_improvement_std']:.4f}")
+    print(
+        f"LOO-CV improvement:           {loo_results['loo_improvement_mean']:.4f} ± {loo_results['loo_improvement_std']:.4f}"
+    )
     print(f"10k vs 38k gap at global 0.10: {gap:.4f}")
     print(f"All results saved to: {save_dir}")
 

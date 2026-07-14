@@ -3,9 +3,9 @@
 Implements the EXACT MViTv2 architecture from facebookresearch/SlowFast
 (slowfast/models/attention.py) with combined QKV (separate_qkv=False).
 """
+
 import argparse
 import json
-import sys
 from pathlib import Path
 import numpy as np
 import torch
@@ -19,6 +19,7 @@ class Mlp(nn.Module):
         self.fc1 = nn.Linear(in_features, hidden_features)
         self.act = nn.GELU()
         self.fc2 = nn.Linear(hidden_features, out_features)
+
     def forward(self, x):
         return self.fc2(self.act(self.fc1(x)))
 
@@ -54,10 +55,15 @@ def get_rel_pos(rel_pos, d):
     if isinstance(d, int):
         if rel_pos.shape[0] == d:
             return rel_pos
-        return F.interpolate(
-            rel_pos.reshape(1, -1, rel_pos.shape[1]).permute(0, 2, 1),
-            size=d, mode="linear",
-        ).reshape(rel_pos.shape[1], d).permute(1, 0)
+        return (
+            F.interpolate(
+                rel_pos.reshape(1, -1, rel_pos.shape[1]).permute(0, 2, 1),
+                size=d,
+                mode="linear",
+            )
+            .reshape(rel_pos.shape[1], d)
+            .permute(1, 0)
+        )
     return rel_pos
 
 
@@ -70,12 +76,16 @@ def cal_rel_pos_spatial(attn, q, has_cls_embed, q_shape, k_shape, rel_pos_h, rel
 
     q_h_ratio = max(k_h / q_h, 1.0)
     k_h_ratio = max(q_h / k_h, 1.0)
-    dist_h = (torch.arange(q_h, device=attn.device)[:, None] * q_h_ratio -
-              torch.arange(k_h, device=attn.device)[None, :] * k_h_ratio) + (k_h - 1) * k_h_ratio
+    dist_h = (
+        torch.arange(q_h, device=attn.device)[:, None] * q_h_ratio
+        - torch.arange(k_h, device=attn.device)[None, :] * k_h_ratio
+    ) + (k_h - 1) * k_h_ratio
     q_w_ratio = max(k_w / q_w, 1.0)
     k_w_ratio = max(q_w / k_w, 1.0)
-    dist_w = (torch.arange(q_w, device=attn.device)[:, None] * q_w_ratio -
-              torch.arange(k_w, device=attn.device)[None, :] * k_w_ratio) + (k_w - 1) * k_w_ratio
+    dist_w = (
+        torch.arange(q_w, device=attn.device)[:, None] * q_w_ratio
+        - torch.arange(k_w, device=attn.device)[None, :] * k_w_ratio
+    ) + (k_w - 1) * k_w_ratio
 
     rel_pos_h = get_rel_pos(rel_pos_h, dh)
     rel_pos_w = get_rel_pos(rel_pos_w, dw)
@@ -104,8 +114,10 @@ def cal_rel_pos_temporal(attn, q, has_cls_embed, q_shape, k_shape, rel_pos_t):
     rel_pos_t = get_rel_pos(rel_pos_t, dt)
     q_t_ratio = max(k_t / q_t, 1.0)
     k_t_ratio = max(q_t / k_t, 1.0)
-    dist_t = (torch.arange(q_t, device=attn.device)[:, None] * q_t_ratio -
-              torch.arange(k_t, device=attn.device)[None, :] * k_t_ratio) + (k_t - 1) * k_t_ratio
+    dist_t = (
+        torch.arange(q_t, device=attn.device)[:, None] * q_t_ratio
+        - torch.arange(k_t, device=attn.device)[None, :] * k_t_ratio
+    ) + (k_t - 1) * k_t_ratio
     Rt = rel_pos_t[dist_t.long()]
 
     B, nh, qN, dim = q.shape
@@ -124,17 +136,28 @@ def cal_rel_pos_temporal(attn, q, has_cls_embed, q_shape, k_shape, rel_pos_t):
 class MultiScaleAttention(nn.Module):
     """SlowFast MultiScaleAttention with combined QKV (separate_qkv=False)."""
 
-    def __init__(self, dim, dim_out, input_size, num_heads=1, qkv_bias=True,
-                 kernel_q=(1,1,1), kernel_kv=(1,1,1),
-                 stride_q=(1,1,1), stride_kv=(1,1,1),
-                 has_cls_embed=True, mode="conv",
-                 rel_pos_spatial=True, rel_pos_temporal=True,
-                 residual_pooling=True):
+    def __init__(
+        self,
+        dim,
+        dim_out,
+        input_size,
+        num_heads=1,
+        qkv_bias=True,
+        kernel_q=(1, 1, 1),
+        kernel_kv=(1, 1, 1),
+        stride_q=(1, 1, 1),
+        stride_kv=(1, 1, 1),
+        has_cls_embed=True,
+        mode="conv",
+        rel_pos_spatial=True,
+        rel_pos_temporal=True,
+        residual_pooling=True,
+    ):
         super().__init__()
         self.num_heads = num_heads
         self.dim_out = dim_out
         head_dim = dim_out // num_heads
-        self.scale = head_dim ** -0.5
+        self.scale = head_dim**-0.5
         self.has_cls_embed = has_cls_embed
         self.mode = mode
         self.residual_pooling = residual_pooling
@@ -149,19 +172,22 @@ class MultiScaleAttention(nn.Module):
             self.pool_q = None
             self.norm_q = None
         else:
-            self.pool_q = nn.Conv3d(dim_conv, dim_conv, kernel_q, stride_q,
-                                     padding_q, groups=dim_conv, bias=False)
+            self.pool_q = nn.Conv3d(
+                dim_conv, dim_conv, kernel_q, stride_q, padding_q, groups=dim_conv, bias=False
+            )
             self.norm_q = nn.LayerNorm(dim_conv)
 
         if all(s == 1 for s in kernel_kv) and all(s == 1 for s in stride_kv):
             self.pool_k = self.pool_v = None
             self.norm_k = self.norm_v = None
         else:
-            self.pool_k = nn.Conv3d(dim_conv, dim_conv, kernel_kv, stride_kv,
-                                     padding_kv, groups=dim_conv, bias=False)
+            self.pool_k = nn.Conv3d(
+                dim_conv, dim_conv, kernel_kv, stride_kv, padding_kv, groups=dim_conv, bias=False
+            )
             self.norm_k = nn.LayerNorm(dim_conv)
-            self.pool_v = nn.Conv3d(dim_conv, dim_conv, kernel_kv, stride_kv,
-                                     padding_kv, groups=dim_conv, bias=False)
+            self.pool_v = nn.Conv3d(
+                dim_conv, dim_conv, kernel_kv, stride_kv, padding_kv, groups=dim_conv, bias=False
+            )
             self.norm_v = nn.LayerNorm(dim_conv)
 
         # Relative position — SlowFast style
@@ -191,12 +217,12 @@ class MultiScaleAttention(nn.Module):
         v, _ = attention_pool(v, self.pool_v, thw, self.has_cls_embed, self.norm_v)
 
         attn = (q * self.scale) @ k.transpose(-2, -1)
-        if hasattr(self, 'rel_pos_h'):
-            attn = cal_rel_pos_spatial(attn, q, self.has_cls_embed, q_thw, k_thw,
-                                       self.rel_pos_h, self.rel_pos_w)
-        if hasattr(self, 'rel_pos_t'):
-            attn = cal_rel_pos_temporal(attn, q, self.has_cls_embed, q_thw, k_thw,
-                                        self.rel_pos_t)
+        if hasattr(self, "rel_pos_h"):
+            attn = cal_rel_pos_spatial(
+                attn, q, self.has_cls_embed, q_thw, k_thw, self.rel_pos_h, self.rel_pos_w
+            )
+        if hasattr(self, "rel_pos_t"):
+            attn = cal_rel_pos_temporal(attn, q, self.has_cls_embed, q_thw, k_thw, self.rel_pos_t)
         attn = attn.softmax(dim=-1)
         x_out = attn @ v
 
@@ -212,13 +238,25 @@ class MultiScaleAttention(nn.Module):
 
 
 class MultiScaleBlock(nn.Module):
-    def __init__(self, dim, dim_out, num_heads, input_size,
-                 mlp_ratio=4.0, qkv_bias=True,
-                 kernel_q=(1,1,1), kernel_kv=(1,1,1),
-                 stride_q=(1,1,1), stride_kv=(1,1,1),
-                 has_cls_embed=True, mode="conv",
-                 rel_pos_spatial=True, rel_pos_temporal=True,
-                 residual_pooling=True, dim_mul_in_att=True):
+    def __init__(
+        self,
+        dim,
+        dim_out,
+        num_heads,
+        input_size,
+        mlp_ratio=4.0,
+        qkv_bias=True,
+        kernel_q=(1, 1, 1),
+        kernel_kv=(1, 1, 1),
+        stride_q=(1, 1, 1),
+        stride_kv=(1, 1, 1),
+        has_cls_embed=True,
+        mode="conv",
+        rel_pos_spatial=True,
+        rel_pos_temporal=True,
+        residual_pooling=True,
+        dim_mul_in_att=True,
+    ):
         super().__init__()
         self.dim = dim
         self.dim_out = dim_out
@@ -227,11 +265,17 @@ class MultiScaleBlock(nn.Module):
         attn_dim = dim_out if dim_mul_in_att else dim
 
         self.attn = MultiScaleAttention(
-            dim, attn_dim, input_size, num_heads=num_heads,
+            dim,
+            attn_dim,
+            input_size,
+            num_heads=num_heads,
             qkv_bias=qkv_bias,
-            kernel_q=kernel_q, kernel_kv=kernel_kv,
-            stride_q=stride_q, stride_kv=stride_kv,
-            has_cls_embed=has_cls_embed, mode=mode,
+            kernel_q=kernel_q,
+            kernel_kv=kernel_kv,
+            stride_q=stride_q,
+            stride_kv=stride_kv,
+            has_cls_embed=has_cls_embed,
+            mode=mode,
             rel_pos_spatial=rel_pos_spatial,
             rel_pos_temporal=rel_pos_temporal,
             residual_pooling=residual_pooling,
@@ -267,8 +311,9 @@ class MViTv2S(nn.Module):
 
     def __init__(self, num_classes=75):
         super().__init__()
-        self.patch_embed_proj = nn.Conv3d(3, 96, kernel_size=(3, 7, 7),
-                                           stride=(2, 4, 4), padding=(1, 3, 3))
+        self.patch_embed_proj = nn.Conv3d(
+            3, 96, kernel_size=(3, 7, 7), stride=(2, 4, 4), padding=(1, 3, 3)
+        )
         self.cls_token = nn.Parameter(torch.zeros(1, 1, 96))
         nn.init.trunc_normal_(self.cls_token, std=0.02)
 
@@ -276,22 +321,22 @@ class MViTv2S(nn.Module):
         # Input sizes computed: after patch_embed -> (T=8, H=56, W=56)
         # Then each block's Q pooling determines next input size
         configs = [
-            (96,   96,   1, (1,1,1), (1,8,8)),   # 0: in=(8,56,56) Q=(8,56,56)
-            (96,   192,  2, (1,2,2), (1,4,4)),   # 1: in=(8,56,56) Q=(8,28,28)
-            (192,  192,  2, (1,1,1), (1,4,4)),   # 2: in=(8,28,28) Q=(8,28,28)
-            (192,  384,  4, (1,2,2), (1,2,2)),   # 3: in=(8,28,28) Q=(8,14,14)
-            (384,  384,  4, (1,1,1), (1,2,2)),   # 4: in=(8,14,14) Q=(8,14,14)
-            (384,  384,  4, (1,1,1), (1,2,2)),   # 5
-            (384,  384,  4, (1,1,1), (1,2,2)),   # 6
-            (384,  384,  4, (1,1,1), (1,2,2)),   # 7
-            (384,  384,  4, (1,1,1), (1,2,2)),   # 8
-            (384,  384,  4, (1,1,1), (1,2,2)),   # 9
-            (384,  384,  4, (1,1,1), (1,2,2)),   # 10
-            (384,  384,  4, (1,1,1), (1,2,2)),   # 11
-            (384,  384,  4, (1,1,1), (1,2,2)),   # 12
-            (384,  384,  4, (1,1,1), (1,2,2)),   # 13
-            (384,  768,  8, (1,2,2), (1,1,1)),   # 14: in=(8,14,14) Q=(8,7,7)
-            (768,  768,  8, (1,1,1), (1,1,1)),   # 15: in=(8,7,7) Q=(8,7,7)
+            (96, 96, 1, (1, 1, 1), (1, 8, 8)),  # 0: in=(8,56,56) Q=(8,56,56)
+            (96, 192, 2, (1, 2, 2), (1, 4, 4)),  # 1: in=(8,56,56) Q=(8,28,28)
+            (192, 192, 2, (1, 1, 1), (1, 4, 4)),  # 2: in=(8,28,28) Q=(8,28,28)
+            (192, 384, 4, (1, 2, 2), (1, 2, 2)),  # 3: in=(8,28,28) Q=(8,14,14)
+            (384, 384, 4, (1, 1, 1), (1, 2, 2)),  # 4: in=(8,14,14) Q=(8,14,14)
+            (384, 384, 4, (1, 1, 1), (1, 2, 2)),  # 5
+            (384, 384, 4, (1, 1, 1), (1, 2, 2)),  # 6
+            (384, 384, 4, (1, 1, 1), (1, 2, 2)),  # 7
+            (384, 384, 4, (1, 1, 1), (1, 2, 2)),  # 8
+            (384, 384, 4, (1, 1, 1), (1, 2, 2)),  # 9
+            (384, 384, 4, (1, 1, 1), (1, 2, 2)),  # 10
+            (384, 384, 4, (1, 1, 1), (1, 2, 2)),  # 11
+            (384, 384, 4, (1, 1, 1), (1, 2, 2)),  # 12
+            (384, 384, 4, (1, 1, 1), (1, 2, 2)),  # 13
+            (384, 768, 8, (1, 2, 2), (1, 1, 1)),  # 14: in=(8,14,14) Q=(8,7,7)
+            (768, 768, 8, (1, 1, 1), (1, 1, 1)),  # 15: in=(8,7,7) Q=(8,7,7)
         ]
 
         # Track input sizes for rel_pos computation
@@ -299,14 +344,22 @@ class MViTv2S(nn.Module):
         self.blocks = nn.ModuleList()
         for dim, dim_out, nH, qs, kvs in configs:
             input_size = (t, h, w)
-            self.blocks.append(MultiScaleBlock(
-                dim=dim, dim_out=dim_out, num_heads=nH,
-                input_size=input_size,
-                kernel_q=(3,3,3), kernel_kv=(3,3,3),
-                stride_q=qs, stride_kv=kvs,
-                rel_pos_spatial=True, rel_pos_temporal=True,
-                residual_pooling=True, dim_mul_in_att=True,
-            ))
+            self.blocks.append(
+                MultiScaleBlock(
+                    dim=dim,
+                    dim_out=dim_out,
+                    num_heads=nH,
+                    input_size=input_size,
+                    kernel_q=(3, 3, 3),
+                    kernel_kv=(3, 3, 3),
+                    stride_q=qs,
+                    stride_kv=kvs,
+                    rel_pos_spatial=True,
+                    rel_pos_temporal=True,
+                    residual_pooling=True,
+                    dim_mul_in_att=True,
+                )
+            )
             # Update for next block
             t = t // qs[0] if qs[0] > 1 else t
             h = h // qs[1] if qs[1] > 1 else h
@@ -331,9 +384,9 @@ class MViTv2S(nn.Module):
         return x
 
 
-def load_mecanno_mvitv2_full(weights_path, device='cpu'):
-    ckpt = torch.load(weights_path, map_location='cpu', weights_only=False)
-    state = ckpt.get('model_state', ckpt)
+def load_mecanno_mvitv2_full(weights_path, device="cpu"):
+    ckpt = torch.load(weights_path, map_location="cpu", weights_only=False)
+    state = ckpt.get("model_state", ckpt)
 
     model = MViTv2S(num_classes=75)
     model.eval()
@@ -342,8 +395,8 @@ def load_mecanno_mvitv2_full(weights_path, device='cpu'):
     own_state = model.state_dict()
     loaded = set()
     for ckpt_key, param in state.items():
-        model_key = ckpt_key.replace('patch_embed.proj.', 'patch_embed_proj.')
-        model_key = model_key.replace('head.projection.', 'head_projection.')
+        model_key = ckpt_key.replace("patch_embed.proj.", "patch_embed_proj.")
+        model_key = model_key.replace("head.projection.", "head_projection.")
         if model_key in own_state and param.shape == own_state[model_key].shape:
             own_state[model_key].copy_(param)
             loaded.add(model_key)
@@ -363,6 +416,7 @@ def load_mecanno_mvitv2_full(weights_path, device='cpu'):
 # Dataset + Main
 # =========================================================================
 
+
 def build_clip_dataset(ar_csv, image_dir, clip_frames=16):
     pairs = []
     with open(ar_csv) as f:
@@ -378,9 +432,14 @@ def build_clip_dataset(ar_csv, image_dir, clip_frames=16):
             span = end_f - start_f + 1
             if span < clip_frames:
                 continue
-            indices = (list(range(start_f, end_f + 1)) if span == clip_frames else
-                       [start_f + int(round(i * (span - 1) / (clip_frames - 1)))
-                        for i in range(clip_frames)])
+            indices = (
+                list(range(start_f, end_f + 1))
+                if span == clip_frames
+                else [
+                    start_f + int(round(i * (span - 1) / (clip_frames - 1)))
+                    for i in range(clip_frames)
+                ]
+            )
             rgb_d = image_dir / parts[0] / "rgb"
             if rgb_d.exists() and all((rgb_d / f"{f:06d}.jpg").exists() for f in indices):
                 pairs.append((parts[0], action_id, indices))
@@ -391,12 +450,17 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--split", default="val", choices=["train", "val", "test"])
     parser.add_argument("--max_segments", type=int, default=0)
-    parser.add_argument("--ckpt", default="/media/newadmin/master/POPW/datasets/industreal/action_recognition_model_weights/mvit_rgb_meccano_pretrained.pyth")
+    parser.add_argument(
+        "--ckpt",
+        default="/media/newadmin/master/POPW/datasets/industreal/action_recognition_model_weights/mvit_rgb_meccano_pretrained.pyth",
+    )
     parser.add_argument("--out", default="/tmp/t3_full_eval.json")
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
 
-    device = torch.device("cuda" if (args.device == "cuda" and torch.cuda.is_available()) else "cpu")
+    device = torch.device(
+        "cuda" if (args.device == "cuda" and torch.cuda.is_available()) else "cpu"
+    )
     print(f"Device: {torch.cuda.get_device_name(0) if device.type == 'cuda' else 'cpu'}")
 
     BASE = Path(__file__).resolve().parent.parent
@@ -412,10 +476,15 @@ def main():
 
     from PIL import Image
     import torchvision.transforms as T
-    transform = T.Compose([
-        T.Resize(256), T.CenterCrop(224), T.ToTensor(),
-        T.Normalize(mean=[0.45, 0.45, 0.45], std=[0.225, 0.225, 0.225]),
-    ])
+
+    transform = T.Compose(
+        [
+            T.Resize(256),
+            T.CenterCrop(224),
+            T.ToTensor(),
+            T.Normalize(mean=[0.45, 0.45, 0.45], std=[0.225, 0.225, 0.225]),
+        ]
+    )
 
     val_root = Path("/media/newadmin/master/POPW/datasets/industreal/recordings") / args.split
     all_pairs = []
@@ -426,15 +495,16 @@ def main():
     print(f"Clips: {len(all_pairs)} in {args.split}/")
 
     if args.max_segments and len(all_pairs) > args.max_segments:
-        all_pairs = all_pairs[:args.max_segments]
+        all_pairs = all_pairs[: args.max_segments]
     print(f"Evaluating {len(all_pairs)} clips...\n")
 
     corr75 = corr69 = total = 0
     with torch.no_grad():
         for i, (rec_dir, (rid, aid, indices)) in enumerate(all_pairs):
             rgb_dir = rec_dir / "rgb"
-            frames = [transform(Image.open(rgb_dir / f"{f:06d}.jpg").convert("RGB"))
-                      for f in indices]
+            frames = [
+                transform(Image.open(rgb_dir / f"{f:06d}.jpg").convert("RGB")) for f in indices
+            ]
             clip = torch.stack(frames).permute(1, 0, 2, 3).unsqueeze(0).to(device)
             logits = model(clip)
             probs = F.softmax(logits, dim=-1).squeeze().cpu().numpy()
@@ -448,23 +518,29 @@ def main():
             corr69 += int(p69 == g69)
             total += 1
             if (i + 1) % 50 == 0 or i == 0:
-                print(f"  [{i+1}/{len(all_pairs)}] 75: {corr75/total*100:.1f}% 69: {corr69/total*100:.1f}%")
+                print(
+                    f"  [{i + 1}/{len(all_pairs)}] 75: {corr75 / total * 100:.1f}% 69: {corr69 / total * 100:.1f}%"
+                )
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"T3: MViTv2-S (Meccano) on {args.split}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"Clips: {total}")
-    print(f"75-class Top-1: {corr75/total*100:.2f}%")
-    print(f"69-class Top-1: {corr69/total*100:.2f}%")
+    print(f"75-class Top-1: {corr75 / total * 100:.2f}%")
+    print(f"69-class Top-1: {corr69 / total * 100:.2f}%")
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    json.dump({
-        "model": "MViTv2-S (SlowFast arch, WACV 2024 Meccano)",
-        "total_clips": total,
-        "top1_75": round(corr75 / total, 4) if total else 0,
-        "top1_69": round(corr69 / total, 4) if total else 0,
-    }, open(out_path, "w"), indent=2)
+    json.dump(
+        {
+            "model": "MViTv2-S (SlowFast arch, WACV 2024 Meccano)",
+            "total_clips": total,
+            "top1_75": round(corr75 / total, 4) if total else 0,
+            "top1_69": round(corr69 / total, 4) if total else 0,
+        },
+        open(out_path, "w"),
+        indent=2,
+    )
     print(f"\nSaved to {out_path}")
 
 

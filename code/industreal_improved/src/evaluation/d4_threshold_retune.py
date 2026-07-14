@@ -25,16 +25,13 @@ from __future__ import annotations
 
 import argparse
 import gc
-import itertools
 import json
 import logging
 import math
 import os
 import sys
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import torch
@@ -51,7 +48,6 @@ if str(_SRC.parent) not in sys.path:
 
 from src import config as C
 from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
-from src.models.psr_transition import MonotonicDecoder
 
 logger = logging.getLogger(__name__)
 
@@ -117,7 +113,8 @@ def collect_yolo_psr_scores(
 
         # s2 feature conversion: detections -> PSR logits [B, 11].
         psr_logits_batch = s2_from_yolo_detections(
-            results, detection_thresh=detection_thresh,
+            results,
+            detection_thresh=detection_thresh,
         )
         all_psr_logits.append(psr_logits_batch)
 
@@ -127,9 +124,7 @@ def collect_yolo_psr_scores(
 
         # Recording IDs and frame numbers for temporal grouping.
         for i in range(B):
-            metadata_item = (
-                targets["metadata"][i] if i < len(targets["metadata"]) else {}
-            )
+            metadata_item = targets["metadata"][i] if i < len(targets["metadata"]) else {}
             rec_id = metadata_item.get(
                 "recording_id",
                 metadata_item.get("rec_id", f"batch{bi}_i{i}"),
@@ -140,19 +135,18 @@ def collect_yolo_psr_scores(
                 rec_id = str(rec_id)
             all_rec_ids.append(rec_id)
 
-            frame_num = metadata_item.get(
-                "frame_num", metadata_item.get("frame_idx", 0)
-            )
+            frame_num = metadata_item.get("frame_num", metadata_item.get("frame_idx", 0))
             if isinstance(frame_num, torch.Tensor):
                 frame_num = frame_num.item()
             all_frame_nums.append(int(frame_num))
 
         if bi % 10 == 0:
-            n_det = sum(
-                (r.boxes is not None and len(r.boxes)) for r in results
-            )
+            n_det = sum((r.boxes is not None and len(r.boxes)) for r in results)
             logger.info(
-                "Batch %d: %d images, %d detections", bi, B, n_det,
+                "Batch %d: %d images, %d detections",
+                bi,
+                B,
+                n_det,
             )
 
         del images, targets, results
@@ -173,23 +167,11 @@ def collect_yolo_psr_scores(
         if lb.ndim == 1:
             lb = lb[None, :]
         for row in range(bl.shape[0]):
-            rec = (
-                all_rec_ids[flat_i]
-                if flat_i < len(all_rec_ids)
-                else f"rec_{flat_i}"
-            )
-            fn = (
-                all_frame_nums[flat_i]
-                if flat_i < len(all_frame_nums)
-                else flat_i
-            )
-            by_rec_logits.setdefault(rec, []).append(
-                bl[row, :C.NUM_PSR_COMPONENTS]
-            )
+            rec = all_rec_ids[flat_i] if flat_i < len(all_rec_ids) else f"rec_{flat_i}"
+            fn = all_frame_nums[flat_i] if flat_i < len(all_frame_nums) else flat_i
+            by_rec_logits.setdefault(rec, []).append(bl[row, : C.NUM_PSR_COMPONENTS])
             by_rec_gt.setdefault(rec, []).append(
-                lb[row, :C.NUM_PSR_COMPONENTS]
-                if row < lb.shape[0]
-                else None
+                lb[row, : C.NUM_PSR_COMPONENTS] if row < lb.shape[0] else None
             )
             by_rec_fn.setdefault(rec, []).append(fn)
             flat_i += 1
@@ -199,16 +181,15 @@ def collect_yolo_psr_scores(
         gts = by_rec_gt[rec]
         if any(g is None for g in gts) or len(rows) < 2:
             continue
-        order = np.argsort(
-            np.asarray(by_rec_fn[rec], dtype=np.int64), kind="stable"
-        )
+        order = np.argsort(np.asarray(by_rec_fn[rec], dtype=np.int64), kind="stable")
         logits = np.stack([rows[k] for k in order]).astype(np.float32)
         states = np.stack([gts[k] for k in order]).astype(np.float32)
         result[rec] = (logits, states)
 
     logger.info(
         "Collected %d recordings (total frames: %d)",
-        len(result), flat_i,
+        len(result),
+        flat_i,
     )
     return result
 
@@ -218,9 +199,7 @@ def collect_yolo_psr_scores(
 # ============================================================================
 def _build_psr_mask() -> np.ndarray:
     """Build the [24, 11] binary mask: PSR_MASK[c, comp] = 1."""
-    mask = np.zeros(
-        (C.NUM_DET_CLASSES, C.NUM_PSR_COMPONENTS), dtype=np.float32
-    )
+    mask = np.zeros((C.NUM_DET_CLASSES, C.NUM_PSR_COMPONENTS), dtype=np.float32)
     names = getattr(C, "DET_CLASS_NAMES", {})
     for one_idx, name_val in names.items():
         zero_idx = one_idx - 1
@@ -229,7 +208,9 @@ def _build_psr_mask() -> np.ndarray:
         if len(name_val) != C.NUM_PSR_COMPONENTS:
             logger.warning(
                 "DET_CLASS_NAMES[%d] has length %d, expected %d",
-                one_idx, len(name_val), C.NUM_PSR_COMPONENTS,
+                one_idx,
+                len(name_val),
+                C.NUM_PSR_COMPONENTS,
             )
             continue
         for comp in range(C.NUM_PSR_COMPONENTS):
@@ -264,9 +245,7 @@ def s2_from_yolo_detections(
         cls_ids = boxes.cls.cpu().numpy().astype(int)
         confs = boxes.conf.cpu().numpy().astype(np.float32)
 
-        det_logits = np.full(
-            C.NUM_PSR_COMPONENTS, -3.0, dtype=np.float32
-        )
+        det_logits = np.full(C.NUM_PSR_COMPONENTS, -3.0, dtype=np.float32)
         for cls_id, conf in zip(cls_ids, confs):
             if cls_id < 0 or cls_id >= C.NUM_DET_CLASSES:
                 continue
@@ -292,6 +271,7 @@ def s2_from_yolo_detections(
 # ============================================================================
 # Threshold Sweep
 # ============================================================================
+
 
 def compute_transition_f1_for_video(
     scores: np.ndarray,
@@ -344,9 +324,7 @@ def compute_transition_f1_for_video(
         # Compute transition F1 for this component
         gt_bin = gt_col.astype(np.int32)
         gt_trans = list(np.where(np.diff(gt_bin, prepend=0) == 1)[0])
-        pred_trans = list(
-            np.where(np.diff(decoded_states.numpy(), prepend=0) == 1)[0]
-        )
+        pred_trans = list(np.where(np.diff(decoded_states.numpy(), prepend=0) == 1)[0])
 
         n_gt = len(gt_trans)
         n_pred = len(pred_trans)
@@ -399,8 +377,7 @@ def sweep_thresholds(
     """
     total_combos = len(hi_values) * len(lo_values) * len(min_values)
     logger.info(
-        f"Sweeping {total_combos} threshold combinations "
-        f"over {len(collected_scores)} videos"
+        f"Sweeping {total_combos} threshold combinations over {len(collected_scores)} videos"
     )
 
     # Precompute per-component score distributions
@@ -454,9 +431,7 @@ def sweep_thresholds(
             for mi in min_values:
                 video_f1s = []
                 for scores, gt_states in collected_scores.values():
-                    vid_f1 = compute_transition_f1_for_video(
-                        scores, gt_states, hi, lo, mi
-                    )
+                    vid_f1 = compute_transition_f1_for_video(scores, gt_states, hi, lo, mi)
                     video_f1s.append(vid_f1)
 
                 mean_f1 = float(np.mean(video_f1s)) if video_f1s else 0.0
@@ -548,6 +523,7 @@ def _compute_per_component_thresholds(
 # Full D4 with Retuned Thresholds
 # ============================================================================
 
+
 def run_full_d4(
     collected_scores: dict[str, tuple[np.ndarray, np.ndarray]],
     thresholds: dict,
@@ -576,7 +552,8 @@ def run_full_d4(
 
         for c in range(n_components):
             vid_f1 = compute_transition_f1_for_video(
-                scores, gt_states,
+                scores,
+                gt_states,
                 float(sustain_hi[c]),
                 float(sustain_lo[c]),
                 int(sustain_min[c]),
@@ -628,24 +605,28 @@ def _serialize(obj):
 # Main
 # ============================================================================
 
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description="D4 Threshold Retune: Sweep Q48 hysteresis for YOLOv8m"
     )
     parser.add_argument(
-        "--yolo-ckpt", type=str,
+        "--yolo-ckpt",
+        type=str,
         default="src/runs/rf_stages/checkpoints/yolov8m_industreal.pt",
     )
     parser.add_argument(
-        "--output-dir", type=str,
+        "--output-dir",
+        type=str,
         default="src/runs/rf_stages/checkpoints/d4_retuned",
     )
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--max-batches", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--detection-thresh", type=float, default=0.1)
-    parser.add_argument("--fine-grid", action="store_true",
-                        help="Use finer grid around best region")
+    parser.add_argument(
+        "--fine-grid", action="store_true", help="Use finer grid around best region"
+    )
     parser.add_argument("--debug", action="store_true")
     return parser.parse_args()
 
@@ -722,7 +703,10 @@ def main():
     min_values = SUSTAIN_MIN_FINE if args.fine_grid else SUSTAIN_MIN_VALUES
 
     sweep_results = sweep_thresholds(
-        collected_scores, hi_values, lo_values, min_values,
+        collected_scores,
+        hi_values,
+        lo_values,
+        min_values,
     )
 
     # Save sweep results
@@ -744,7 +728,8 @@ def main():
     with open(thresh_path, "w") as f:
         json.dump(
             _serialize(sweep_results["per_component_thresholds"]),
-            f, indent=2,
+            f,
+            indent=2,
         )
     logger.info(f"Retuned thresholds saved to {thresh_path}")
 
@@ -774,8 +759,10 @@ def main():
     print()
     print(f"  Top-10 sweep results:")
     for i, entry in enumerate(sweep_results["sweep_log"][:10]):
-        print(f"    {i+1:2d}. hi={entry['sustain_hi']:.2f} lo={entry['sustain_lo']:.2f} "
-              f"min={entry['sustain_min']}  F1={entry['f1_at_t']:.4f}")
+        print(
+            f"    {i + 1:2d}. hi={entry['sustain_hi']:.2f} lo={entry['sustain_lo']:.2f} "
+            f"min={entry['sustain_min']}  F1={entry['f1_at_t']:.4f}"
+        )
     print()
     print(f"  Per-component thresholds:")
     for c in range(N_COMPONENTS):
@@ -791,7 +778,9 @@ def main():
 
     # Verdict
     if f1_retuned > 0.5:
-        verdict = "threshold-recalibration: decoder requires threshold recalibration for YOLOv8m features"
+        verdict = (
+            "threshold-recalibration: decoder requires threshold recalibration for YOLOv8m features"
+        )
     elif f1_retuned > 0.0:
         verdict = "threshold-partial: decoder shows marginal benefit — thresholds partially helpful"
     else:

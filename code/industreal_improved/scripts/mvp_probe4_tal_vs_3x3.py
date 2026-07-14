@@ -15,15 +15,13 @@ Note: This is the smallest, most surgical probe. The eval-harness check
 Usage:
     python scripts/mvp_probe4_tal_vs_3x3.py --n-steps 200
 """
+
 # DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import json
 import sys
-import time
 from pathlib import Path
-from typing import Optional
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -37,13 +35,13 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
         sys.path.insert(0, _p)
 
 import src.config as C
+
 C.NUM_ACT_OUTPUTS = 75
 C.ACT_CLASS_GROUPING = "none"
 
 from src.data.industreal_dataset import IndustRealMultiTaskDataset
 from src.models.mvit_mtl_model import MTLMViTModel
 from scripts.train_mtl_mvit import detection_loss as detection_loss_3x3
-from scripts.train_mtl_mvit import compute_activity_class_weights
 from src.losses.tal_assigner import TaskAlignedAssigner
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -52,8 +50,8 @@ N_FIXED = 200
 
 def normalize_images(images, device):
     images = images.float() / 255.0
-    mean = torch.tensor([0.45]*3, device=device).view(1, 1, 3, 1, 1)
-    std = torch.tensor([0.225]*3, device=device).view(1, 1, 3, 1, 1)
+    mean = torch.tensor([0.45] * 3, device=device).view(1, 1, 3, 1, 1)
+    std = torch.tensor([0.225] * 3, device=device).view(1, 1, 3, 1, 1)
     images = (images - mean) / std
     images = images.permute(0, 2, 1, 3, 4).contiguous()
     return images
@@ -103,7 +101,7 @@ def detection_loss_tal(
         n_levels += 1
         out = det_outputs[level_name]
         cls_logits = out["cls_logits"]  # [B, 24, H, W]
-        reg_preds = out["reg_preds"]    # [B, 4*reg_max, H, W]
+        reg_preds = out["reg_preds"]  # [B, 4*reg_max, H, W]
         B, _, H, W = cls_logits.shape
         stride = strides[level_name]
 
@@ -126,11 +124,16 @@ def detection_loss_tal(
         pred_xyxy = pred_xyxy.permute(0, 2, 3, 1).contiguous().view(B, -1, 4)  # [B, H*W, 4]
 
         # Apply TAL per image
-        cls_sig = torch.sigmoid(cls_logits).permute(0, 2, 3, 1).contiguous().view(B, -1, num_classes)  # [B, H*W, 24]
-        anchor_points = torch.stack([
-            cell_cx.view(-1),
-            cell_cy.view(-1),
-        ], dim=1)  # [H*W, 2]
+        cls_sig = (
+            torch.sigmoid(cls_logits).permute(0, 2, 3, 1).contiguous().view(B, -1, num_classes)
+        )  # [B, H*W, 24]
+        anchor_points = torch.stack(
+            [
+                cell_cx.view(-1),
+                cell_cy.view(-1),
+            ],
+            dim=1,
+        )  # [H*W, 2]
 
         for b in range(B):
             det_item = det_list[b] if isinstance(det_list[b], dict) else {}
@@ -154,8 +157,8 @@ def detection_loss_tal(
 
             # TAL
             target_labels, target_bboxes, target_scores, mask, _ = tal(
-                pred_cls=cls_sig[b:b+1],
-                pred_box=pred_xyxy[b:b+1],
+                pred_cls=cls_sig[b : b + 1],
+                pred_box=pred_xyxy[b : b + 1],
                 anchors=anchor_points,
                 gt_boxes=padded_boxes.unsqueeze(0),
                 gt_labels=padded_labels.unsqueeze(0),
@@ -166,25 +169,26 @@ def detection_loss_tal(
 
             # Focal classification loss on assigned cells
             cls_loss_per_cell = F.binary_cross_entropy_with_logits(
-                cls_sig[b:b+1], target_labels, reduction="none"
+                cls_sig[b : b + 1], target_labels, reduction="none"
             ).sum(dim=-1)  # [1, H*W]
             cls_loss = (cls_loss_per_cell * mask).sum() / (mask.sum() + 1e-6)
 
             # CIoU + DFL regression loss on assigned cells
             if mask.sum() > 0:
                 # CIoU
-                pred_assigned = pred_xyxy[b:b+1][mask.bool()]  # [n_assigned, 4]
-                tgt_assigned = target_bboxes[b:b+1][mask.bool()]  # [n_assigned, 4]
+                pred_assigned = pred_xyxy[b : b + 1][mask.bool()]  # [n_assigned, 4]
+                tgt_assigned = target_bboxes[b : b + 1][mask.bool()]  # [n_assigned, 4]
                 if pred_assigned.numel() > 0:
                     # Simplified CIoU (uses same as train_mtl_mvit)
                     from scripts.train_mtl_mvit import ciou_loss
+
                     iou_loss = ciou_loss(pred_assigned, tgt_assigned).mean()
                 else:
                     iou_loss = torch.tensor(0.0, device=device)
                 # DFL (simplified)
                 reg_loss = F.binary_cross_entropy_with_logits(
-                    reg_preds[b:b+1].view(1, 4*reg_max, -1).transpose(1, 2),
-                    torch.zeros(1, 4*reg_max, H*W, device=device),
+                    reg_preds[b : b + 1].view(1, 4 * reg_max, -1).transpose(1, 2),
+                    torch.zeros(1, 4 * reg_max, H * W, device=device),
                     reduction="mean",
                 )
             else:
@@ -199,14 +203,17 @@ def detection_loss_tal(
 
 def train_and_eval_compare(n_steps: int, batch_size: int):
     """Train detection head with 3x3 and TAL, eval on overfit-200 set."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"PROBE 4: TAL vs 3×3 on overfit-200 set")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     # Build dataset (200 fixed images)
     train_ds = IndustRealMultiTaskDataset(
-        split="train", img_size=(224, 224),
-        augment=False, sequence_mode=True, sequence_length=16,
+        split="train",
+        img_size=(224, 224),
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
     )
     indices = list(range(min(N_FIXED, len(train_ds))))
     subset_ds = Subset(train_ds, indices)
@@ -232,8 +239,7 @@ def train_and_eval_compare(n_steps: int, batch_size: int):
         p.requires_grad = False
 
     # Get the detection head params
-    head_params = [p for n, p in model.named_parameters()
-                   if "det_head" in n and p.requires_grad]
+    head_params = [p for n, p in model.named_parameters() if "det_head" in n and p.requires_grad]
     optimizer = optim.AdamW(head_params, lr=1e-3)
 
     # Train with 3x3

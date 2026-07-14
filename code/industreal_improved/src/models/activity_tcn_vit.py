@@ -7,6 +7,7 @@ Two-stream multi-head architecture:
 
 Frozen ConvNeXt-Tiny backbone features (768-dim) feed into both streams.
 """
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -14,6 +15,7 @@ import torch.nn.functional as F
 
 class TCNBlock(nn.Module):
     """Temporal Conv1D block with dilated convolution + residual."""
+
     def __init__(self, in_ch, out_ch, kernel_size=3, dilation=1, dropout=0.1):
         super().__init__()
         padding = (kernel_size - 1) * dilation // 2
@@ -39,14 +41,20 @@ class TemporalViT(nn.Module):
     Treats each frame as a token; applies multi-head self-attention
     over the temporal sequence (T=16 tokens per clip).
     """
+
     def __init__(self, in_dim=768, embed_dim=512, num_heads=8, num_layers=4, max_len=32):
         super().__init__()
         self.proj = nn.Linear(in_dim, embed_dim)
         self.pos_embed = nn.Parameter(torch.zeros(1, max_len, embed_dim))
         nn.init.trunc_normal_(self.pos_embed, std=0.02)
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=embed_dim, nhead=num_heads, dim_feedforward=embed_dim * 4,
-            dropout=0.1, activation='gelu', batch_first=True, norm_first=True
+            d_model=embed_dim,
+            nhead=num_heads,
+            dim_feedforward=embed_dim * 4,
+            dropout=0.1,
+            activation="gelu",
+            batch_first=True,
+            norm_first=True,
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.norm = nn.LayerNorm(embed_dim)
@@ -66,21 +74,24 @@ class ActivityTCNViT(nn.Module):
     ViT: 4 layers, 8 heads, dim 512, learned positional embeddings
     Fusion: concat TCN-pool + ViT-pool -> MLP -> classifier
     """
+
     def __init__(self, in_dim=768, num_classes=69, tcn_hidden=256, vit_dim=512, fusion_hidden=512):
         super().__init__()
         self.tcn_input = nn.Linear(in_dim, tcn_hidden)
         dilations = [1, 2, 4, 8]
-        self.tcn_blocks = nn.ModuleList([
-            TCNBlock(tcn_hidden, tcn_hidden, kernel_size=3, dilation=d, dropout=0.1)
-            for d in dilations
-        ])
+        self.tcn_blocks = nn.ModuleList(
+            [
+                TCNBlock(tcn_hidden, tcn_hidden, kernel_size=3, dilation=d, dropout=0.1)
+                for d in dilations
+            ]
+        )
         self.vit = TemporalViT(in_dim, vit_dim, num_heads=8, num_layers=4)
         self.fusion = nn.Sequential(
             nn.Linear(tcn_hidden + vit_dim, fusion_hidden),
             nn.LayerNorm(fusion_hidden),
             nn.GELU(),
             nn.Dropout(0.1),
-            nn.Linear(fusion_hidden, num_classes)
+            nn.Linear(fusion_hidden, num_classes),
         )
 
     def forward(self, x):

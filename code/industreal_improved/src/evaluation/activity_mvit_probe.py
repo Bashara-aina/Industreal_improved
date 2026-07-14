@@ -22,7 +22,6 @@ import logging
 import os
 import sys
 import time
-from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -74,7 +73,9 @@ def _mvit_transform(img: Image.Image) -> torch.Tensor:
 # =========================================================================
 # Remap table loader
 # =========================================================================
-_REMAP_PATH = _PROJECT_ROOT / "src" / "runs" / "rf_stages" / "checkpoints" / "act_remap_75_to_69.json"
+_REMAP_PATH = (
+    _PROJECT_ROOT / "src" / "runs" / "rf_stages" / "checkpoints" / "act_remap_75_to_69.json"
+)
 
 
 def _load_remap() -> dict:
@@ -127,7 +128,10 @@ class MViTClipDataset(Dataset):
 
         logger.info(
             "[MViTClipDataset] split=%s, %d clips, clip_len=%d, stride=%d",
-            split, len(self.clips), clip_len, stride,
+            split,
+            len(self.clips),
+            clip_len,
+            stride,
         )
 
     def _build_index(self, max_recordings: int | None) -> None:
@@ -230,7 +234,9 @@ def extract_clip_features(
         all_labels.append(labels_valid.cpu())
 
         if batch_idx > 0 and batch_idx % 200 == 0:
-            logger.info("  %s: batch %d/%d (skipped %d NA clips)", desc, batch_idx, len(loader), skipped)
+            logger.info(
+                "  %s: batch %d/%d (skipped %d NA clips)", desc, batch_idx, len(loader), skipped
+            )
 
         # Periodic GC to keep memory low during long extraction
         if batch_idx > 0 and batch_idx % 100 == 0:
@@ -301,22 +307,37 @@ def majority_class_baseline(labels: np.ndarray) -> tuple[float, int]:
 def main():
     parser = argparse.ArgumentParser(description="MViTv2-S activity linear probe")
     parser.add_argument("--clip-len", type=int, default=16, help="Frames per clip")
-    parser.add_argument("--stride", type=int, default=8, help="Stride between clips within a segment")
-    parser.add_argument("--batch-size", type=int, default=4, help="Batch size for feature extraction")
-    parser.add_argument("--probe-batch-size", type=int, default=256, help="Batch size for probe training")
+    parser.add_argument(
+        "--stride", type=int, default=8, help="Stride between clips within a segment"
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=4, help="Batch size for feature extraction"
+    )
+    parser.add_argument(
+        "--probe-batch-size", type=int, default=256, help="Batch size for probe training"
+    )
     parser.add_argument("--epochs", type=int, default=10, help="Probe training epochs")
     parser.add_argument("--lr", type=float, default=1e-3, help="Probe learning rate")
-    parser.add_argument("--save-dir", type=str,
-                        default="src/runs/rf_stages/checkpoints/activity_mvit_probe",
-                        help="Directory for results and cached features")
-    parser.add_argument("--max-recordings", type=int, default=None,
-                        help="Cap recordings for fast smoke test")
-    parser.add_argument("--force-reextract", action="store_true",
-                        help="Re-extract features even if cached")
+    parser.add_argument(
+        "--save-dir",
+        type=str,
+        default="src/runs/rf_stages/checkpoints/activity_mvit_probe",
+        help="Directory for results and cached features",
+    )
+    parser.add_argument(
+        "--max-recordings", type=int, default=None, help="Cap recordings for fast smoke test"
+    )
+    parser.add_argument(
+        "--force-reextract", action="store_true", help="Re-extract features even if cached"
+    )
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info("Device: %s  |  CUDA_VISIBLE_DEVICES=%s", device, os.environ.get("CUDA_VISIBLE_DEVICES", "all"))
+    logger.info(
+        "Device: %s  |  CUDA_VISIBLE_DEVICES=%s",
+        device,
+        os.environ.get("CUDA_VISIBLE_DEVICES", "all"),
+    )
 
     # Paths
     save_dir = Path(args.save_dir)
@@ -334,9 +355,11 @@ def main():
     # ---- 1. Load MViTv2-S extractor ----
     logger.info("Loading MViTv2-S (Kinetics-400 pretrained, frozen)...")
     extractor = VideoFeatureExtractor(backbone="mvit_v2_s", pretrained=True).to(device)
-    logger.info("Feature dim: %d, params: %d (frozen)",
-                extractor.feat_dim,
-                sum(p.numel() for p in extractor.parameters()))
+    logger.info(
+        "Feature dim: %d, params: %d (frozen)",
+        extractor.feat_dim,
+        sum(p.numel() for p in extractor.parameters()),
+    )
 
     # ---- 2. Build clip datasets ----
     logger.info("Building clip datasets (clip_len=%d, stride=%d)...", args.clip_len, args.stride)
@@ -372,7 +395,9 @@ def main():
             collate_fn=mvit_collate,
             prefetch_factor=2,
         )
-        train_features, train_labels = extract_clip_features(extractor, train_loader, device, desc="Train")
+        train_features, train_labels = extract_clip_features(
+            extractor, train_loader, device, desc="Train"
+        )
         logger.info("Train features extracted: %s in %.0fs", train_features.shape, time.time() - t0)
         # Free loader memory
         del train_loader
@@ -409,16 +434,24 @@ def main():
     # Compute 69-class majority baseline via remap
     val_labels_69 = np.array([id_to_group[lbl] for lbl in val_labels_np])
     maj_baseline_69, maj_class_69 = majority_class_baseline(val_labels_69)
-    logger.info("Majority-class baseline (69 classes): %.4f (group %d)", maj_baseline_69, maj_class_69)
+    logger.info(
+        "Majority-class baseline (69 classes): %.4f (group %d)", maj_baseline_69, maj_class_69
+    )
 
     # ---- 5. Build probe data loaders ----
     train_feat_dataset = TensorDataset(train_features, train_labels)
     train_loader_probe = DataLoader(
-        train_feat_dataset, batch_size=args.probe_batch_size, shuffle=True, num_workers=0,
+        train_feat_dataset,
+        batch_size=args.probe_batch_size,
+        shuffle=True,
+        num_workers=0,
     )
     val_feat_dataset = TensorDataset(val_features, val_labels)
     val_loader_probe = DataLoader(
-        val_feat_dataset, batch_size=args.probe_batch_size, shuffle=False, num_workers=0,
+        val_feat_dataset,
+        batch_size=args.probe_batch_size,
+        shuffle=False,
+        num_workers=0,
     )
 
     # ---- 6. Train linear probe ----
@@ -482,15 +515,23 @@ def main():
         val_acc_75 = val_correct_75 / max(val_total, 1)
 
         # Validation (69 classes via remap)
-        val_preds_69 = np.array([id_to_group[p] if p < len(id_to_group) else 0 for p in all_val_preds])
-        val_labels_69_arr = np.array([id_to_group[l] if l < len(id_to_group) else 0 for l in all_val_labels_list])
+        val_preds_69 = np.array(
+            [id_to_group[p] if p < len(id_to_group) else 0 for p in all_val_preds]
+        )
+        val_labels_69_arr = np.array(
+            [id_to_group[l] if l < len(id_to_group) else 0 for l in all_val_labels_list]
+        )
         val_acc_69 = float((val_preds_69 == val_labels_69_arr).mean())
 
         logger.info(
-            "Epoch %2d/%d | Train Loss: %.4f Acc: %.4f | "
-            "Val 75: %.4f | Val 69: %.4f | Time: %.0fs",
-            epoch + 1, args.epochs, train_loss, train_acc,
-            val_acc_75, val_acc_69, time.time() - t0,
+            "Epoch %2d/%d | Train Loss: %.4f Acc: %.4f | Val 75: %.4f | Val 69: %.4f | Time: %.0fs",
+            epoch + 1,
+            args.epochs,
+            train_loss,
+            train_acc,
+            val_acc_75,
+            val_acc_69,
+            time.time() - t0,
         )
 
         if val_acc_75 > best_val_top1_75:
@@ -527,7 +568,7 @@ def main():
         labels=np.array(all_val_labels_list),
         preds=np.array(all_val_preds),
         num_classes=num_classes_raw,
-        class_names=C.ACT_CLASS_NAMES if hasattr(C, 'ACT_CLASS_NAMES') else None,
+        class_names=C.ACT_CLASS_NAMES if hasattr(C, "ACT_CLASS_NAMES") else None,
     )
 
     # ---- 9. Save results ----
@@ -562,10 +603,10 @@ def main():
         },
         "verdict": (
             "SIGNAL DETECTED (>0.30) — fine-tuning worth 2-week investment"
-            if best_val_top1_69 > 0.30 else
-            "WEAK SIGNAL (0.25-0.30) — fine-tuning uncertain"
-            if best_val_top1_69 > 0.25 else
-            "NO STRONG SIGNAL (<=0.25) — MViTv2-S adds little over ConvNeXt"
+            if best_val_top1_69 > 0.30
+            else "WEAK SIGNAL (0.25-0.30) — fine-tuning uncertain"
+            if best_val_top1_69 > 0.25
+            else "NO STRONG SIGNAL (<=0.25) — MViTv2-S adds little over ConvNeXt"
         ),
         "notes": [
             "MViTv2-S features: 768-dim clip-level embeddings from torchvision Kinetics-400 weights",
@@ -585,10 +626,12 @@ def main():
 
     # Summary line for the agent report
     logger.info("=" * 60)
-    logger.info("SUMMARY: MViTv2-S probe val top-1 (75) = %.4f, (69) = %.4f",
-                best_val_top1_75, best_val_top1_69)
-    logger.info("         Improvement over ConvNeXt (0.2169): %+.4f",
-                best_val_top1_69 - 0.2169)
+    logger.info(
+        "SUMMARY: MViTv2-S probe val top-1 (75) = %.4f, (69) = %.4f",
+        best_val_top1_75,
+        best_val_top1_69,
+    )
+    logger.info("         Improvement over ConvNeXt (0.2169): %+.4f", best_val_top1_69 - 0.2169)
     logger.info("=" * 60)
 
     return best_val_top1_69

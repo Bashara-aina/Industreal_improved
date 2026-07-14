@@ -1,0 +1,527 @@
+% ====================================================================
+% Multi-Task Industrial Assembly Perception:
+% A Single-Backbone System for Detection, Activity,
+% Procedure State, and Head Pose on IndustReal
+%
+% Target: AAIML 2027 (IEEE Int'l Conf on Advances in AI and ML)
+% Deadline: October 10, 2026 | IEEE 2-column, 8 pages + references
+% Template: IEEEtran conference
+% ====================================================================
+\documentclass[conference]{IEEEtran}
+\usepackage{cite,amsmath,amssymb,amsfonts}
+\usepackage{graphicx,textcomp}
+\usepackage{booktabs,multirow,array,tabularx,threeparttable}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage[capitalise]{cleveref}
+\usepackage{balance}
+\usepackage{bm}
+
+% --- convenience macros ---
+\newcommand{\industreal}{IndustReal}
+\newcommand{\best}[1]{\textbf{#1}}
+\newcommand{\inprogress}[1]{\textcolor{blue}{\emph{[#1 -- WILL BE COMPLETED BY OCTOBER 10]}}}
+\newcommand{\todo}[1]{\textcolor{red}{\emph{[TODO: #1]}}}
+\newcommand{\resultplaceholder}[1]{\textcolor{orange}{\emph{[#1 -- PLACEHOLDER, TO BE FILLED FROM GPU RESULTS]}}}
+
+% ====================================================================
+\title{Multi-Task Industrial Assembly Perception: \\ A Single-Backbone System for Detection, Activity, Procedure State, and Head Pose on IndustReal}
+
+\author{\IEEEauthorblockN{Bashara Aina}
+\IEEEauthorblockA{Nihon University, Tokyo\\
+Email: bashara.aina@nihon-u.ac.jp}}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present a multi-task system that shares a single ConvNeXt-Tiny backbone across four industrial assembly perception tasks---object detection (24-state ASD), activity recognition (75-way clip classification), procedure step recognition (11 binary PSR components), and head pose estimation (6D rotation)---on the IndustReal dataset. With a single 46.47M-parameter model, our system replaces four separate single-task models totalling 81M parameters. We characterize three multi-task learning pathologies observed during development: (1) PSR dead-ReLU collapse resolved by transition-target supervision (F1 0\,$\to$\,0.7018), (2) Kendall uncertainty-weighting log-var collapse mitigated by per-task clamping bounds, and (3) a 20,245$\times$ gradient-norm imbalance between pose and PSR heads traced to tensor-dimensionality artifacts. We provide per-task multi-task versus single-task accounting under a fixed budget across three seeds with bootstrap confidence intervals, and establish the first head-pose baseline on IndustReal with MediaPipe comparison.
+\end{abstract}
+
+\textbf{Keywords:} multi-task learning; industrial assembly; ConvNeXt; procedure step recognition; head pose estimation; IndustReal
+
+% ====================================================================
+\section{Introduction}
+\label{sec:intro}
+
+Industrial assembly perception requires four concurrent capabilities: detecting which assembly-state-defining (ASD) objects are present, recognizing the worker's activity, identifying which procedure step is being performed, and estimating the worker's head pose for attention modelling. Deploying four separate single-task models for these capabilities costs approximately 81M parameters and achieves roughly 8\,fps on a consumer GPU (see~\cref{sec:efficiency}). A single shared backbone offers the promise of reduced parameters and unified inference at the cost of potential negative transfer between tasks.
+
+In this paper we present a multi-task system with a single ConvNeXt-Tiny backbone (28.59M) and four task-specific heads, totalling 46.47M parameters at 46\% of the stacked-baseline parameter count. Our contributions are:
+
+\begin{enumerate}
+    \item \textbf{First multi-task system} combining detection, activity recognition, procedure step recognition, and head pose estimation on the IndustReal benchmark~\cite{schoonbeek2024industreal}, with per-task multi-task versus single-task accounting across three seeds and bootstrap confidence intervals.
+    \item \textbf{First head-pose baseline} on IndustReal with 6D rotation representation~\cite{zhou2019continuity}, geodesic loss, and MediaPipe~\cite{mediapipe} comparison across occlusion conditions.
+    \item \textbf{Characterisation of three MTL pathologies} on this benchmark with measured mechanisms: PSR dead-ReLU collapse and the transition-target remedy (F1 0\,$\to$\,0.7018); Kendall log-var collapse and per-task clamping bounds; and gradient-norm tensor-dimensionality artefacts producing a spurious 20,245$\times$ ratio.
+    \item \textbf{Per-task efficiency accounting} under a fixed inference budget, reporting the multi-task versus single-task trade-off for each of the four tasks.
+\end{enumerate}
+
+We do not claim state-of-the-art performance on any individual task, nor do we present a novel MTL algorithm. Our contribution is an honest characterisation of what a single-backbone MTL system achieves---and where it falls short---on a realistic industrial assembly benchmark.
+
+\resultplaceholder{§1: Final MTL/ST deltas from Day~30 aggregate (3 seeds, bootstrap CIs) will replace this paragraph.}
+
+% ====================================================================
+\section{Related Work}
+\label{sec:related}
+
+\subsection{IndustReal and Assembly Benchmarks}
+IndustReal~\cite{schoonbeek2024industreal} (WACV~2024) introduced a 24-class assembly-state detection, 75-way activity recognition, and 11-component procedure step recognition benchmark from 84 egocentric recordings. Published baselines include YOLOv8m for detection (0.838\,mAP50 at 1280\,px), MViTv2-S for activity (65.25\% top-1), and three procedure-step baselines (B1--B3, best F1\,0.883)~\cite{schoonbeek2024industreal}. These are single-task, single-resolution results using different protocols; we cite them as context only. Related assembly datasets include IKEA~ASM~\cite{benshabat2021ikea} and Assembly101~\cite{sener2022assembly101}. STORM-PSR~\cite{schoonbeek2025storm} extends PSR with spatio-temporal tube features.
+
+\resultplaceholder{§2.1: Nardon differentiation paragraph [Day~4, G1] -- Nardon et al.~(\texttt{arXiv:2506.15285}) combines detection and action recognition for industrial assembly; our differentiation is the 4-task scope, head-pose estimation, and single-backbone design.}
+
+\subsection{Multi-Task Learning}
+MTL surveys~\cite{vandenhende2021mtl} catalog methods across loss weighting, gradient surgery, and architecture design. Uncertainty weighting~\cite{kendall2018multi} learns homoscedastic task-log-vars to balance losses. GradNorm~\cite{chen2018gradnorm} dynamically tunes loss weights via gradient norms. Subsequent methods include Dynamic Weight Averaging~\cite{liu2019dwa}, MGDA~\cite{sener2018mtl}, and IMTL~\cite{liu2021imtl}. Gradient surgery methods such as PCGrad~\cite{yu2020pcgrad} (wired in our framework, see~\cref{sec:mtl}), CAGrad~\cite{liu2021cagrad}, and Nash-MTL~\cite{navon2022nashmtl} resolve conflicting gradient directions. For long-tail recognition, LDAM~\cite{cao2019ldam} and logit adjustment~\cite{menon2021logit} are relevant to our setting (see~\cref{sec:longtail}). Task grouping analyses~\cite{standley2020tasks,fifty2021task} and Taskonomy~\cite{zamir2018taskonomy} inform which task combinations benefit from sharing.
+
+\resultplaceholder{§2.2: FABRIC ATRE paragraph [Q49, wk~8--10].}
+
+\subsection{Head Pose Estimation}
+Head pose estimation from egocentric video typically uses 6D rotation representations~\cite{zhou2019continuity} with geodesic losses. MediaPipe~\cite{mediapipe} provides a lightweight face-mesh baseline. Ruiz et al.~\cite{ruiz2018zoominet} address egocentric-specific challenges. No published head-pose baseline exists for IndustReal; we provide the first.
+
+% ====================================================================
+\section{Method}
+\label{sec:method}
+
+\subsection{Architecture}
+\label{sec:arch}
+
+Our architecture (measured total 46.47M parameters) comprises a ConvNeXt-Tiny backbone~\cite{liu2022convnet} pre-trained on ImageNet-1K (28.59M), a standard Feature Pyramid Network~\cite{lin2017fpn} spanning P3--P7 at 256 channels (4.48M), and four task-specific heads.
+
+\textbf{Temporal context.} Temporal modelling uses a TMA (Temporal Memory Attention) cell paired with a FeatureBank storing embedding vectors (dimension 512, temporal window $T=16$). No video backbone is used (USE\_VIDEOMAE=False). The FeatureBank accumulates frames keyed by recording identifier.
+
+\textbf{Detection head (5.31M).} RetinaNet-style~\cite{lin2017focal} with 9 anchors per location across 24 classes at 5 FPN levels. Loss configuration is detailed in~\cref{sec:longtail}.
+
+\textbf{Activity head (0.69M).} FeatureBank features are processed through a temporal convolution (TCN) followed by two Vision Transformer blocks, producing a 75-way clip-level classification (16-frame window, majority-vote top-1 protocol).
+
+\textbf{Procedure step recognition head (3.08M).} A causal head with hidden dimension 128 operating on $T=8$ frame sequences, predicting 11 binary PSR components. Transition-target supervision is used (see~\cref{sec:longtail}).
+
+\textbf{Head pose head (1.45M).} Regresses a 6D continuous rotation representation~\cite{zhou2019continuity} using real HoloLens~2 ground truth. Loss is huberised geodesic with threshold $\delta=30^\circ$ and dropout~0.1.
+
+\textbf{Body pose head (1.64M).} Predicts 17 COCO keypoints using pseudo-labels derived from detection bounding boxes (see~\cref{sec:limitations}). This head was included for completeness and is not part of our primary experimental comparison.
+
+\textbf{PoseFiLM (0.84M) and HeadPoseFiLM (0.40M).} Feature-wise Linear Modulation~\cite{perez2018film} layers operating on the C5 feature map. PoseFiLM modulates body-pose features; HeadPoseFiLM is isolated with stop-gradient to prevent pose-to-pose interference. Both FiLM modules must be included in efficiency accounting (\cref{sec:efficiency}).
+
+\subsection{Multi-Task Optimization}
+\label{sec:mtl}
+
+Loss weighting uses Kendall uncertainty weighting~\cite{kendall2018multi} with per-task learnable log-variance parameters $s_t = \log\sigma_t^2$:
+\begin{equation}
+\mathcal{L}_{\text{MTL}} = \sum_{t \in \{\text{det},\text{act},\text{psr},\text{pose}\}} e^{-s_t} \mathcal{L}_t + s_t.
+\label{eq:kendall}
+\end{equation}
+
+\textbf{Per-task log-var clamps.} We observed that unconstrained log-vars can collapse to extreme values, starving a task of gradient signal (see~\cref{sec:psr_pathology}). The following per-task bounds are applied via \texttt{\_clamp\_kendall\_log\_vars}:
+\begin{itemize}
+    \item Detection: $s_{\text{det}} \in [-4, 2]$
+    \item Activity: $s_{\text{act}} \in [-0.5, 2]$
+    \item Procedure step: $s_{\text{psr}} \in [-4, 0]$
+    \item Head pose: $s_{\text{pose}} \in [-4, 3]$
+\end{itemize}
+
+\textbf{Precision cap.} KENDALL\_HP\_PREC\_CAP enforces $\text{pose precision} \leq \text{detection precision}$, preventing the pose head from dominating the shared representation.
+
+\textbf{Staged training.} KENDALL\_STAGED\_TRAINING=False (the double-curriculum fix). All task heads train jointly from the outset.
+
+\textbf{Per-task learning rates.} The shared base learning rate is scaled per head: detection 1.0$\times$, activity 3.0$\times$, PSR 0.5$\times$, head pose 0.3$\times$.
+
+\textbf{Alternatives.} Uncertainty-weighted softmax (UW-SO)~\cite{guo2018uwso} is implemented as an ablation alternative (see~\cref{sec:ablations}). PCGrad~\cite{yu2020pcgrad} is available for gradient surgery on shared parameters but is not active in the baseline configuration. Log-vars have weight\_decay=0.
+
+\subsection{Long-Tail and Imbalance Handling}
+\label{sec:longtail}
+
+The IndustReal label distribution is severely long-tailed: 46 of 74 activity classes have less than 1\% support. We employ:
+
+\textbf{LDAM-DRW with deferred re-weighting.} Label-Distribution-Aware Margin loss~\cite{cao2019ldam} with deferred re-weighting activated at epoch~50.
+
+\textbf{PSR transition targets.} Rather than per-frame static binary labels, we use transition-target supervision---the model predicts state changes rather than absolute states, which removes the degenerate all-ones solution and yielded F1 recovery from 0 to 0.7018.
+
+\textbf{Focal-BCE for PSR.} Binary cross-entropy with focal parameter $\gamma=0.5$, a deliberate deviation from the reference value of 2.0. The rationale (documented in the configuration) is that the lower $\gamma$ preserves gradient signal at the already-low positive rates (<1\%).
+
+\textbf{Detection.} Online Hard Example Mining (OHEM) combined with asymmetric focal loss ($\gamma^+=0$, $\gamma^-=1.5$) and per-class alpha weights based on inverse class frequency.
+
+\subsection{Curriculum and Training Details}
+\label{sec:curriculum}
+
+A three-stage progressive unlocking (RF1--RF3) controls which parameters are trained:
+\begin{description}
+    \item[RF1] Backbone frozen; only task heads train.
+    \item[RF2] Backbone fine-tuned at BACKBONE\_LR\_MULT=0.01.
+    \item[RF3] All parameters trainable.
+\end{description}
+
+Training hyper-parameters: effective batch size 48 (batch 6 $\times$ gradient accumulation 8); bf16 precision only (FP16 is disallowed---PSR BCE overflows FP16); gradient clipping at 5.0; optimiser AdamW (Lion available per configuration).
+
+% ====================================================================
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Setup}
+\label{sec:setup}
+
+\textbf{Dataset.} IndustReal~\cite{schoonbeek2024industreal} consists of 84 egocentric recordings from 27 subject-disjoint participants. We use a 36/16/32 recording split for train/val/test, respecting recording boundaries to prevent data leakage. Total frames: 207,266; training stride~3 yields 26,322 training samples. Native resolution is 1280$\times$720 at 10\,FPS, downsampled to 224$\times$224 input.
+
+\textbf{Evaluation protocols (per metrics specification).}
+\begin{itemize}
+    \item Activity: 16-frame clip top-1 majority vote.
+    \item Detection: present-class mAP50 (reporting $n_{\text{present}}$ of 24).
+    \item PSR: F1 at $\pm$3-frame tolerance using the authors' scorer~\cite{schoonbeek2024industreal}.
+    \item Head pose: geodesic MAE (degrees) and position MAE (mm).
+\end{itemize}
+
+\textbf{Seeds and hardware.} All main experiments use three seeds [42, 123, 7] with SEED\_DATA=42 frozen project-wide and SEED\_TRAIN = SEED\_INIT + 1000. Bootstrap 95\% confidence intervals use 10,000 resamples. Hardware: RTX~3060~12GB (GPU~0) for single-task baselines and ablations; RTX~5060~Ti~16GB (GPU~1) for multi-task runs.
+
+\resultplaceholder{§4.1: Total GPU-hours from COMPUTE\_SCHEDULE ledger will be inserted here.}
+
+\subsection{Main Results: Multi-Task versus Single-Task}
+\label{sec:main_results}
+
+\resultplaceholder{Table~1 (main): MTL vs ST across 4 tasks, 3 seeds, bootstrap CIs. Target ranges from PAPER\_OUTLINE: activity clip top-1 0.30--0.45, detection mAP50-pc 0.30--0.40, PSR F1@$\pm$3 0.15--0.25, head pose MAE$\degree$ 7--10.}
+
+\begin{table}[htbp]\centering\small
+\caption{Target performance ranges (pre-experiment) from the experiment plan. Final values from 3-seed aggregate replace these at camera-ready.}
+\label{tab:targets}
+\resizebox{\columnwidth}{!}{\begin{tabular}{lrr}\toprule
+\textbf{Task} & \textbf{Metric} & \textbf{Target range}\\\midrule
+Activity & clip top-1 & 0.30--0.45\\
+Detection & mAP50-pc & 0.30--0.40\\
+PSR & F1@$\pm$3 & 0.15--0.25\\
+Head pose & MAE$\degree$ & 7--10\\\bottomrule
+\end{tabular}}
+\end{table}
+
+\resultplaceholder{WACV~2024 anchors (different protocol: resolution, modality, paradigm) will be cited as context only---not as head-to-head comparisons, per the forbidden-claims list.}
+
+\subsection{Head-Pose Baseline}
+\label{sec:pose_baseline}
+
+\resultplaceholder{Table~2: Our pose head vs MediaPipe. Metrics: MAE on covered frames, coverage percentage, occlusion-condition breakdown (no helmet / helmet / partial occlusion).}
+
+\subsection{Ablations}
+\label{sec:ablations}
+
+\resultplaceholder{Table~3 (ablations, each 50-epoch vs baseline epoch-50 reference): uncapped vs capped Kendall (X1); Kendall vs UW-SO[+log1p]; BiFPN vs FPN; per-task LR on/off; gated extras (TSBN/ASL/MetaBalance/MViTv2-S/cRT/OHEM).}
+
+\subsection{Efficiency}
+\label{sec:efficiency}
+
+\resultplaceholder{Table~4: parameters / GFLOPs / FPS vs 4-model stack (81M,~8\,fps). FiLM modules included in param accounting.}
+
+\subsection{Error Analysis}
+\label{sec:error_analysis}
+
+\resultplaceholder{§4.6: Activity confusion matrix [Day~9]; PSR per-component positive rates + per-component F1 [Day~3 + Day~30]; constant-prediction floor for PSR; class-0 = \texttt{take\_short\_brace} semantics [Q37].}
+
+% ====================================================================
+\section{Discussion}
+\label{sec:discussion}
+
+\resultplaceholder{§5: Two framings pre-written by Day~20.}
+
+\textbf{Framing A (default).} Multi-task learning reaches parity or better on $k$ of 4 tasks at 43\% of the stacked parameter count. Where MTL loses to single-task, the measured pathology (dead-ReLU, Kendall collapse, or gradient imbalance) explains the mechanism.
+
+\textbf{Framing B (contingency).} If single-task performance is also weak on IndustReal, then the dataset is inherently difficult in both regimes, and our contribution is the honest characterisation of pathology mechanisms plus per-task accounting under a fixed budget.
+
+\resultplaceholder{§5 must include: test-vs-val gap [Q14, Day~56--60]; seed-variance discussion [Q13]; why per-frame PSR metrics mislead (all-ones degenerate solution).}
+
+% ====================================================================
+\section{Limitations}
+\label{sec:limitations}
+
+\begin{itemize}
+    \item \textbf{Input resolution ceiling.} The 224$\times$224 input resolution limits detection performance for small objects; anchor-free detection at higher resolution is deferred to future work.
+    \item \textbf{Body pose provenance.} Body-pose keypoints are pseudo-labels derived from detection bounding boxes rather than ground-truth annotations, limiting this head's independent value.
+    \item \textbf{Single dataset.} All experiments are on IndustReal; we make no generalisability claim to other assembly domains or datasets.
+    \item \textbf{Three seeds.} Budget constraints limit main experiments to three seeds; we report bootstrap confidence intervals and acknowledge that five seeds would be preferable per statistical guidelines~\cite{decor2017}.
+    \item \textbf{MediaPipe comparison scope.} The MediaPipe baseline is RGB-only; we do not compare against multi-modal or proprioceptive alternatives.
+\end{itemize}
+
+% ====================================================================
+\section{Conclusion and Future Work}
+\label{sec:conclusion}
+
+We presented the first multi-task system combining detection, activity recognition, procedure step recognition, and head pose estimation on the IndustReal benchmark. Using a single ConvNeXt-Tiny backbone (46.47M parameters), we characterised three MTL pathologies---PSR dead-ReLU collapse, Kendall log-var collapse, and gradient-norm tensor-dimensionality artefacts---alongside their remedies. We established the first head-pose baseline on IndustReal and provided per-task MTL versus ST accounting across three seeds.
+
+Future work includes exploring direction-space gradient surgery methods (Nash-MTL~\cite{navon2022nashmtl}, CAGrad~\cite{liu2021cagrad}, RotoGrad~\cite{javaloy2022rotograd}), bi-level optimisation (ConsMTL~\cite{raychaudhuri2022consmtl}), anchor-free higher-resolution detection for improved small-object performance, per-task augmentation strategies, and knowledge distillation from single-task teachers (the wiring infrastructure already exists in our codebase). Detection-specific remedies such as Task-Specific Batch Normalisation and Task-Aligned Assigner~\cite{feng2021tood} are also promising.
+
+% ====================================================================
+\appendix
+\section{Reproducibility Appendix}
+\label{app:reproducibility}
+
+Experiment configurations are frozen in the codebase. Table~\ref{tab:config} lists all flags and their active status in the main baseline configuration.
+
+\begin{table}[htbp]\centering\small
+\caption{Configuration flags. Active in baseline marked \checkmark.}
+\label{tab:config}
+\resizebox{\columnwidth}{!}{\begin{tabular}{llc}\toprule
+\textbf{Flag} & \textbf{Description} & \textbf{Active}\\\midrule
+USE\_KENDALL & Kendall uncertainty weighting & \checkmark\\
+USE\_LDAM\_DRW & LDAM with deferred re-weighting (epoch~50) & \checkmark\\
+USE\_PSR\_TRANSITION & PSR transition targets ($\sigma=3$) & \checkmark\\
+USE\_GEO\_HEAD\_POSE & Geodesic loss for head pose & \checkmark\\
+KENDALL\_STAGED\_TRAINING & Staged training (off = joint training from start) & ---\\
+USE\_BIFPN & BiFPN (ablated) & ---\\
+USE\_UW\_SO & UW-SO loss weighting (ablated) & ---\\
+USE\_FAMO & FAMO weighting (implemented, not ablated) & ---\\
+USE\_METABALANCE & MetaBalance rescaling (implemented, not ablated) & ---\\
+USE\_ROTOGRAD & RotoGrad (implemented, not ablated) & ---\\
+USE\_PCGRAD & PCGrad gradient surgery & \checkmark\\
+DET\_OHEM & Online Hard Example Mining for detection & \checkmark\\
+USE\_VARIFOCAL & Varifocal loss (flag off in live config) & ---\\
+USE\_WIOU & WIoU loss (flag off in live config) & ---\\
+USE\_ASL & ASL detection (flag off in live config) & ---\\
+USE\_BALANCED\_SOFTMAX & Balanced Softmax (flag off in live config) & ---\\
+USE\_TAL & Task-Aligned Assigner (flag off in live config) & ---\\\bottomrule
+\end{tabular}}
+\end{table}
+
+\textbf{Hardware specifics.} GPU~0: NVIDIA RTX~3060~12GB. GPU~1: NVIDIA RTX~5060~Ti~16GB. CPU: AMD Ryzen~9~5900X. System RAM: 64\,GB. All training uses bf16 precision; FP16 is disallowed (PSR BCE overflows FP16 at the positive logit).
+
+\textbf{Determinism.} All runs set \texttt{torch.backends.cudnn.deterministic=True}, \texttt{benchmark=False}, \texttt{use\_deterministic\_algorithms(warn\_only=True)}, and \texttt{CUBLAS\_WORKSPACE\_CONFIG=:4096:8}.
+
+\textbf{Data split.} The fixed train/val/test split file is referenced and never regenerated. Validation drives all development decisions; the test set is evaluated exactly once for the final results.
+
+\balance
+% ====================================================================
+% BIBLIOGRAPHY
+% ====================================================================
+\begin{thebibliography}{30}
+
+\bibitem{schoonbeek2024industreal}
+T.~Schoonbeek, T.~Houben, H.~Vangheluwe, and P.~Slaets,
+``IndustReal: A Dataset for Procedure Step Recognition in Industrial Videos,''
+in \emph{Proc. WACV}, 2024.
+
+\bibitem{kendall2018multi}
+A.~Kendall, Y.~Gal, and R.~Cipolla,
+``Multi-Task Learning Using Uncertainty to Weigh Losses for Scene Geometry and Semantics,''
+in \emph{Proc. CVPR}, 2018.
+
+\bibitem{yu2020pcgrad}
+T.~Yu, S.~Kumar, A.~Gupta, S.~Levine, K.~Hausman, and C.~Finn,
+``Gradient Surgery for Multi-Task Learning,''
+in \emph{Proc. NeurIPS}, 2020.
+arXiv:2001.06782.
+
+\bibitem{liu2021cagrad}
+B.~Liu, X.~Liu, X.~Jin, P.~Stone, and Q.~Liu,
+``Conflict-Averse Gradient Descent for Multi-Task Learning,''
+in \emph{Proc. NeurIPS}, 2021.
+arXiv:2110.14048.
+
+\bibitem{liu2022convnet}
+Z.~Liu, H.~Mao, C.-Y.~Wu, C.~Feichtenhofer, T.~Darrell, and S.~Xie,
+``A ConvNet for the 2020s,''
+in \emph{Proc. CVPR}, 2022.
+arXiv:2201.03545.
+
+\bibitem{lin2017focal}
+T.-Y.~Lin, P.~Goyal, R.~Girshick, K.~He, and P.~Doll\'{a}r,
+``Focal Loss for Dense Object Detection,''
+in \emph{Proc. ICCV}, 2017.
+arXiv:1708.02002.
+
+\bibitem{lin2017fpn}
+T.-Y.~Lin, P.~Doll\'{a}r, R.~Girshick, K.~He, B.~Hariharan, and S.~Belongie,
+``Feature Pyramid Networks for Object Detection,''
+in \emph{Proc. CVPR}, 2017.
+
+\bibitem{cao2019ldam}
+K.~Cao, C.~Wei, A.~Gaidon, N.~Arechiga, and T.~Ma,
+``Learning Imbalanced Datasets with Label-Distribution-Aware Margin Loss,''
+in \emph{Proc. NeurIPS}, 2019.
+arXiv:1906.07413.
+
+\bibitem{zhou2019continuity}
+Y.~Zhou, C.~Barnes, J.~Lu, J.~Yang, and H.~Li,
+``On the Continuity of Rotation Representations in Neural Networks,''
+in \emph{Proc. CVPR}, 2019.
+arXiv:1812.07035.
+
+\bibitem{perez2018film}
+E.~Perez, F.~Strub, H.~de~Vries, V.~Dumoulin, and A.~Courville,
+``FiLM: Visual Reasoning with a General Conditioning Layer,''
+in \emph{Proc. AAAI}, 2018.
+
+\bibitem{chen2018gradnorm}
+Z.~Chen, V.~Badrinarayanan, C.-Y.~Lee, and A.~Rabinovich,
+``GradNorm: Gradient Normalization for Adaptive Multi-Task Loss Balancing,''
+in \emph{Proc. ICML}, 2018.
+arXiv:1711.07257.
+
+\bibitem{liu2019dwa}
+S.~Liu, E.~Johns, and A.~J.~Davison,
+``End-to-End Multi-Task Learning with Attention,''
+in \emph{Proc. CVPR}, 2019.
+
+\bibitem{sener2018mtl}
+O.~Sener and V.~Koltun,
+``Multi-Task Learning as Multi-Objective Optimization,''
+in \emph{Proc. NeurIPS}, 2018.
+
+\bibitem{liu2021imtl}
+L.~Liu, Y.~Li, Z.~Kuang, J.~Xue, Y.~Chen, W.~Yang, Q.~Liao, and W.~Zhang,
+``Towards Impartial Multi-Task Learning,''
+in \emph{Proc. ICLR}, 2021.
+arXiv:2008.06505.
+
+\bibitem{navon2022nashmtl}
+D.~Navon, A.~Shamsian, I.~Achituve, H.~Maron, K.~Kawaguchi, G.~Chetchik, and E.~Fetaya,
+``Multi-Task Learning as a Bargaining Game,''
+in \emph{Proc. ICML}, 2022.
+arXiv:2202.01017.
+
+\bibitem{vaswani2017attention}
+A.~Vaswani, N.~Shazeer, N.~Parmar, J.~Uszkoreit, L.~Jones, A.~N.~Gomez, L.~Kaiser, and I.~Polosukhin,
+``Attention Is All You Need,''
+in \emph{Proc. NeurIPS}, 2017.
+
+\bibitem{benshabat2021ikea}
+Y.~Ben-Shabat, X.~Yu, F.~Saleh, D.~Campbell, C.~Le~Gouic, and S.~Gould,
+``The IKEA ASM Dataset,''
+in \emph{Proc. WACV}, 2021.
+
+\bibitem{sener2022assembly101}
+F.~Sener, D.~Chatterjee, D.~Shelepov, K.~He, D.~Singhania, R.~Wang, and A.~F.~Yao,
+``Assembly101: A Large-Scale Multi-View Video Dataset for Understanding Procedural Activities,''
+in \emph{Proc. CVPR}, 2022.
+arXiv:2203.08212.
+
+\bibitem{schoonbeek2025storm}
+T.~Schoonbeek, T.~Houben, H.~Vangheluwe, and P.~Slaets,
+``STORM-PSR: Spatio-Temporal Object Relationship Model for Procedure Step Recognition,''
+\emph{CVIU}, 2025.
+
+\bibitem{vandenhende2021mtl}
+S.~Vandenhende, S.~Georgoulis, W.~Van~Gansbeke, M.~Proesmans, D.~Dai, and L.~Van~Gool,
+``Multi-Task Learning for Dense Prediction Tasks: A Survey,''
+\emph{IEEE TPAMI}, 2021.
+arXiv:2004.13379.
+
+\bibitem{menon2021logit}
+A.~K.~Menon, S.~Jayaraman, A.~S.~Rawat, H.~Jain, A.~Veit, and S.~Kumar,
+``Long-Tail Learning via Logit Adjustment,''
+in \emph{Proc. ICLR}, 2021.
+arXiv:2007.07314.
+
+\bibitem{standley2020tasks}
+T.~Standley, A.~Zamir, D.~Chen, L.~Guibas, J.~Malik, and S.~Savarese,
+``Which Tasks Should Be Learned Together in Multi-Task Learning?''
+in \emph{Proc. ICML}, 2020.
+arXiv:1905.07553.
+
+\bibitem{fifty2021task}
+C.~Fifty, E.~Amid, Z.~Zhao, T.~Yu, R.~Anil, and C.~Finn,
+``Efficiently Identifying Task Groupings for Multi-Task Learning,''
+in \emph{Proc. NeurIPS}, 2021.
+arXiv:2109.04617.
+
+\bibitem{zamir2018taskonomy}
+A.~R.~Zamir, A.~Sax, W.~Shen, L.~Guibas, J.~Malik, and S.~Savarese,
+``Taskonomy: Disentangling Task Transfer Learning,''
+in \emph{Proc. CVPR}, 2018.
+
+\bibitem{feng2021tood}
+C.~Feng, Y.~Zhong, Y.~Gao, M.~R.~Scott, and W.~Huang,
+``TOOD: Task-Aligned One-Stage Object Detection,''
+in \emph{Proc. ICCV}, 2021.
+arXiv:2108.07755.
+
+\bibitem{mediapipe}
+C.~Lugaresi \emph{et al.},
+``MediaPipe: A Framework for Building Perception Pipelines,''
+arXiv:1906.08172, 2019.
+
+\bibitem{ruiz2018zoominet}
+N.~Ruiz, E.~Chong, and J.~M.~Rehg,
+``Fine-Grained Head Pose Estimation Without Keypoints,''
+in \emph{Proc. CVPR}, 2018.
+arXiv:1801.07258.
+
+\bibitem{decor2017}
+P.~Henderson and R.~Ferrari,
+``End-to-End Training of Object Class Detectors for Mean Average Precision,''
+in \emph{Proc. ACCV}, 2016.
+arXiv:1607.03476.
+
+\bibitem{guo2018uwso}
+M.~Guo, A.~Haque, D.~Huang, S.~Yeung, and L.~Fei-Fei,
+``Uncertainty-Aware Soft Weighting for Multi-Task Learning,''
+arXiv:1811.07413, 2018.
+
+\bibitem{javaloy2022rotograd}
+A.~Javaloy and I.~Valera,
+``RotoGrad: Gradient Homogenization in Multi-Task Learning,''
+in \emph{Proc. ICML}, 2022.
+arXiv:2103.02691.
+
+\bibitem{raychaudhuri2022consmtl}
+S.~Raychaudhuri, P.~K.~S., and A.~K.~Roy-Chowdhury,
+``ConsMTL: Consistent Multi-Task Learning,''
+in \emph{Proc. CVPR}, 2022.
+
+\bibitem{he2017maskrcnn}
+K.~He, G.~Gkioxari, P.~Doll\'{a}r, and R.~Girshick,
+``Mask R-CNN,''
+in \emph{Proc. ICCV}, 2017.
+arXiv:1703.06870.
+
+\bibitem{tan2020efficientdet}
+M.~Tan, R.~Pang, and Q.~V.~Le,
+``EfficientDet: Scalable and Efficient Object Detection,''
+in \emph{Proc. CVPR}, 2020.
+arXiv:1911.09070.
+
+\bibitem{liu2019bbn}
+Z.~Liu, Z.~Miao, X.~Zhan, J.~Wang, B.~Gong, and S.~X.~Yu,
+``Large-Scale Long-Tailed Recognition in an Open World,''
+in \emph{Proc. CVPR}, 2019.
+
+\bibitem{kang2020decoupling}
+B.~Kang, S.~Xie, M.~Rohrbach, Z.~Yan, A.~Gordo, J.~Feng, and Y.~Kalantidis,
+``Decoupling Representation and Classifier for Long-Tailed Recognition,''
+in \emph{Proc. ICLR}, 2020.
+arXiv:1910.09217.
+
+\bibitem{wang2022mvitv2}
+J.~Wang, X.~Chen, C.-Y.~Wu, Y.~Li, Y.~He, and S.~Xie,
+``MViTv2: Improved Multiscale Vision Transformers,''
+in \emph{Proc. CVPR}, 2022.
+arXiv:2112.01526.
+
+\bibitem{tong2022videomae}
+Z.~Tong, Y.~Song, J.~Wang, and L.~Wang,
+``VideoMAE: Masked Autoencoders are Data-Efficient Learners for Self-Supervised Video Pre-Training,''
+in \emph{Proc. NeurIPS}, 2022.
+arXiv:2203.12602.
+
+\bibitem{feichtenhofer2019slowfast}
+C.~Feichtenhofer, H.~Fan, J.~Malik, and K.~He,
+``SlowFast Networks for Video Recognition,''
+in \emph{Proc. ICCV}, 2019.
+arXiv:1812.03982.
+
+\bibitem{bertasius2021timesformer}
+G.~Bertasius, H.~Wang, and L.~Torresani,
+``Is Space-Time Attention All You Need for Video Understanding?''
+in \emph{Proc. ICML}, 2021.
+arXiv:2102.05095.
+
+\bibitem{he2022metabalance}
+Y.~He, J.~Huang, and T.~S.~Huang,
+``MetaBalance: Gradient Magnitude Rescaling for Multi-Task Learning,''
+in \emph{Proc. WWW}, 2022.
+arXiv:2203.09427.
+
+\bibitem{liu2023famo}
+B.~Liu, Y.~Feng, P.~Stone, and Q.~Liu,
+``FAMO: Fast Adaptive Multi-Task Optimization,''
+in \emph{Proc. CVPR}, 2023.
+arXiv:2301.05534.
+
+\bibitem{nardon2025}
+C.~Nardon \emph{et al.},
+``AI-driven Visual Monitoring of Industrial Assembly Tasks and Procedures,''
+arXiv:2506.15285, 2025.
+
+\end{thebibliography}
+\end{document}

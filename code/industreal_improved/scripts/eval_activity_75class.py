@@ -27,13 +27,10 @@ For a true production eval, the multi-task model must emit 75-class logits direc
 """
 
 import argparse
-import gc
 import json
 import logging
-import os
 import sys
 import time
-from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -66,7 +63,9 @@ _PROBE_FEATURES_VAL = _PROBE_DIR / "features_val.pt"
 _REMAP_PATH = _PROJECT_ROOT / "config" / "class_maps" / "class_69_to_75.json"
 _CLASS_MAP_69_TO_75 = _PROJECT_ROOT / "config" / "class_maps" / "class_69_to_75.json"
 
-DEFAULT_SAVE_DIR = _PROJECT_ROOT / "src" / "runs" / "rf_stages" / "checkpoints" / "activity_75class_eval"
+DEFAULT_SAVE_DIR = (
+    _PROJECT_ROOT / "src" / "runs" / "rf_stages" / "checkpoints" / "activity_75class_eval"
+)
 
 # Reconstruction note: mapping file created 2026-07-08 by inverting
 # act_remap_75_to_69.json (hybrid grouping, threshold=100).
@@ -226,7 +225,11 @@ def train_probe(
 
         logger.info(
             "Epoch %2d/%d | loss=%.4f train_acc=%.4f val_acc=%.4f",
-            epoch + 1, epochs, train_loss, train_acc, val_acc,
+            epoch + 1,
+            epochs,
+            train_loss,
+            train_acc,
+            val_acc,
         )
 
         scheduler.step()
@@ -244,8 +247,8 @@ def compute_metrics(
     all_labels: np.ndarray,
     all_preds: np.ndarray,
     all_logits: np.ndarray = None,
-    class_names: list[str] = None,
-    class_map: dict = None,
+    class_names: list[str] | None = None,
+    class_map: dict | None = None,
 ) -> dict:
     """Compute clip-level top-1, top-5, macro-F1, per-class precision/recall.
 
@@ -261,7 +264,6 @@ def compute_metrics(
     """
     from sklearn.metrics import (
         classification_report,
-        confusion_matrix,
         f1_score,
         precision_score,
         recall_score,
@@ -308,21 +310,26 @@ def compute_metrics(
         present_filter = present_labels
 
     try:
-        macro_f1 = float(f1_score(labels_v, preds_v, average="macro",
-                                   labels=present_filter, zero_division=0))
-        weighted_f1 = float(f1_score(labels_v, preds_v, average="weighted",
-                                      zero_division=0))
-        macro_precision = float(precision_score(labels_v, preds_v, average="macro",
-                                                 labels=present_filter, zero_division=0))
-        macro_recall = float(recall_score(labels_v, preds_v, average="macro",
-                                           labels=present_filter, zero_division=0))
+        macro_f1 = float(
+            f1_score(labels_v, preds_v, average="macro", labels=present_filter, zero_division=0)
+        )
+        weighted_f1 = float(f1_score(labels_v, preds_v, average="weighted", zero_division=0))
+        macro_precision = float(
+            precision_score(
+                labels_v, preds_v, average="macro", labels=present_filter, zero_division=0
+            )
+        )
+        macro_recall = float(
+            recall_score(labels_v, preds_v, average="macro", labels=present_filter, zero_division=0)
+        )
     except Exception:
         macro_f1 = weighted_f1 = macro_precision = macro_recall = 0.0
 
     # --- Per-class precision/recall/F1 ---
     try:
         report = classification_report(
-            labels_v, preds_v,
+            labels_v,
+            preds_v,
             labels=present_filter,
             zero_division=0,
             output_dict=True,
@@ -335,15 +342,14 @@ def compute_metrics(
     if class_map is not None:
         id_to_group = class_map["id_to_group_forward"]
         group_names = class_map.get("group_names", [])
-        labels_69 = np.array([id_to_group[l] if 0 <= l < len(id_to_group) else 0
-                               for l in labels_v])
-        preds_69 = np.array([id_to_group[p] if 0 <= p < len(id_to_group) else 0
-                              for p in preds_v])
+        labels_69 = np.array([id_to_group[l] if 0 <= l < len(id_to_group) else 0 for l in labels_v])
+        preds_69 = np.array([id_to_group[p] if 0 <= p < len(id_to_group) else 0 for p in preds_v])
         top1_69 = (preds_69 == labels_69).mean()
         present_69 = sorted(set(labels_69.tolist()))
         try:
-            macro_f1_69 = float(f1_score(labels_69, preds_69, average="macro",
-                                          labels=present_69, zero_division=0))
+            macro_f1_69 = float(
+                f1_score(labels_69, preds_69, average="macro", labels=present_69, zero_division=0)
+            )
         except Exception:
             macro_f1_69 = 0.0
         metrics_69 = {
@@ -373,7 +379,7 @@ def compute_metrics(
 def evaluate_feature_probe(
     save_dir: Path,
     device: torch.device,
-    probe_kwargs: dict = None,
+    probe_kwargs: dict | None = None,
 ) -> dict:
     """Evaluate on cached frozen-probe features.
 
@@ -386,7 +392,8 @@ def evaluate_feature_probe(
         logger.error(
             "Cached probe features not found at %s and %s. "
             "Run activity_mvit_probe.py first to extract features.",
-            _PROBE_FEATURES_TRAIN, _PROBE_FEATURES_VAL,
+            _PROBE_FEATURES_TRAIN,
+            _PROBE_FEATURES_VAL,
         )
         return {"error": "cached features not found"}
 
@@ -466,7 +473,7 @@ def evaluate_checkpoint(
     checkpoint_path: Path,
     save_dir: Path,
     device: torch.device,
-    max_recordings: int = None,
+    max_recordings: int | None = None,
     clip_length: int = 16,
     stride: int = 8,
 ) -> dict:
@@ -486,7 +493,11 @@ def evaluate_checkpoint(
     from src.models.model import POPWMultiTaskModel
 
     # Determine output dimension from checkpoint state dict
-    act_weight_key = [k for k in ckpt["model"].keys() if "act" in k.lower() and "weight" in k.lower() and "classifier" in k.lower()]
+    act_weight_key = [
+        k
+        for k in ckpt["model"].keys()
+        if "act" in k.lower() and "weight" in k.lower() and "classifier" in k.lower()
+    ]
     num_act_outputs = 75  # default
     if act_weight_key:
         num_act_outputs = ckpt["model"][act_weight_key[0]].shape[0]
@@ -502,20 +513,21 @@ def evaluate_checkpoint(
         train_pose=False,
         num_act_classes=num_act_outputs,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if "total_ops" not in k and "total_params" not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model = model.to(device).eval()
     logger.info("Model loaded on %s", device)
 
     # Build clip-level dataset
-    from src.evaluation.eval_activity_clip import MViTClipDataset  # adapted for generic model
 
     class GenericClipDataset(torch.utils.data.Dataset):
         """16-frame clip dataset from AR_labels.csv segments."""
 
-        def __init__(self, split: str, clip_len: int = 16, stride: int = 8,
-                     max_recordings: int = None):
+        def __init__(
+            self, split: str, clip_len: int = 16, stride: int = 8, max_recordings: int | None = None
+        ):
             self.clip_len = clip_len
             self.clips = []
             self._build(split, max_recordings)
@@ -561,6 +573,7 @@ def evaluate_checkpoint(
                 try:
                     from PIL import Image
                     from torchvision.transforms import functional as TF
+
                     img = Image.open(img_path).convert("RGB")
                     img = TF.resize(img, [256], antialias=True)
                     img = TF.center_crop(img, [224, 224])
@@ -576,10 +589,14 @@ def evaluate_checkpoint(
             return clip, action_id
 
     logger.info("Building val clip dataset...")
-    val_ds = GenericClipDataset(split="val", clip_len=clip_length, stride=stride,
-                                 max_recordings=max_recordings)
+    val_ds = GenericClipDataset(
+        split="val", clip_len=clip_length, stride=stride, max_recordings=max_recordings
+    )
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=1, shuffle=False, num_workers=0,
+        val_ds,
+        batch_size=1,
+        shuffle=False,
+        num_workers=0,
     )
     logger.info("Val clips: %d", len(val_ds))
 
@@ -602,7 +619,9 @@ def evaluate_checkpoint(
     t0 = time.time()
     for idx in range(len(val_ds)):
         clip, label = val_ds[idx]
-        clip = clip.unsqueeze(0).to(device)  # [1, 16, 3, 224, 224]; model may need [1, 3, 16, 224, 224]
+        clip = clip.unsqueeze(0).to(
+            device
+        )  # [1, 16, 3, 224, 224]; model may need [1, 3, 16, 224, 224]
         with torch.no_grad():
             outputs = model(clip)
         logits = outputs.get("act_logits")
@@ -670,8 +689,16 @@ def save_metrics(metrics: dict, save_dir: Path):
         f.write("=" * 60 + "\n")
         f.write("ACTIVITY 75-CLASS CLIP-LEVEL EVALUATION\n")
         f.write("=" * 60 + "\n\n")
-        for key in ["top1_75", "top5_75", "macro_f1_75", "weighted_f1_75",
-                     "macro_precision_75", "macro_recall_75", "clip_count", "valid_clip_count"]:
+        for key in [
+            "top1_75",
+            "top5_75",
+            "macro_f1_75",
+            "weighted_f1_75",
+            "macro_precision_75",
+            "macro_recall_75",
+            "clip_count",
+            "valid_clip_count",
+        ]:
             if key in metrics:
                 f.write(f"  {key:<25} = {metrics[key]}\n")
 
@@ -698,29 +725,46 @@ def main():
         description="Clip-level activity evaluation on 75 fine-grained classes"
     )
     parser.add_argument(
-        "--mode", type=str, default="feature-probe",
+        "--mode",
+        type=str,
+        default="feature-probe",
         choices=["feature-probe", "checkpoint"],
         help="Evaluation mode: feature-probe (cached MViTv2-S features) or checkpoint (multi-task model)",
     )
-    parser.add_argument("--checkpoint", type=str, default=None,
-                        help="Path to checkpoint.pth (for --mode checkpoint)")
-    parser.add_argument("--save-dir", type=str, default=str(DEFAULT_SAVE_DIR),
-                        help="Output directory for metrics.json")
-    parser.add_argument("--probe-epochs", type=int, default=10,
-                        help="Probe training epochs (feature-probe mode)")
-    parser.add_argument("--probe-lr", type=float, default=1e-3,
-                        help="Probe learning rate (feature-probe mode)")
-    parser.add_argument("--clip-length", type=int, default=16,
-                        help="Frames per clip (checkpoint mode)")
-    parser.add_argument("--stride", type=int, default=8,
-                        help="Clip stride (checkpoint mode)")
-    parser.add_argument("--max-recordings", type=int, default=None,
-                        help="Cap recordings for fast test (checkpoint mode)")
-    parser.add_argument("--cpu", action="store_true",
-                        help="Force CPU even if CUDA is available")
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to checkpoint.pth (for --mode checkpoint)",
+    )
+    parser.add_argument(
+        "--save-dir",
+        type=str,
+        default=str(DEFAULT_SAVE_DIR),
+        help="Output directory for metrics.json",
+    )
+    parser.add_argument(
+        "--probe-epochs", type=int, default=10, help="Probe training epochs (feature-probe mode)"
+    )
+    parser.add_argument(
+        "--probe-lr", type=float, default=1e-3, help="Probe learning rate (feature-probe mode)"
+    )
+    parser.add_argument(
+        "--clip-length", type=int, default=16, help="Frames per clip (checkpoint mode)"
+    )
+    parser.add_argument("--stride", type=int, default=8, help="Clip stride (checkpoint mode)")
+    parser.add_argument(
+        "--max-recordings",
+        type=int,
+        default=None,
+        help="Cap recordings for fast test (checkpoint mode)",
+    )
+    parser.add_argument("--cpu", action="store_true", help="Force CPU even if CUDA is available")
     args = parser.parse_args()
 
-    device = torch.device("cpu") if args.cpu or not torch.cuda.is_available() else torch.device("cuda")
+    device = (
+        torch.device("cpu") if args.cpu or not torch.cuda.is_available() else torch.device("cuda")
+    )
     logger.info("Device: %s", device)
     logger.info("Mode: %s", args.mode)
 

@@ -9,6 +9,7 @@ The loss shifts logits by log(prior(y)) before softmax, equivalent to
 logit-adjustment with tau=1 and the reference distribution set to the
 marginal class priors.
 """
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -29,7 +30,7 @@ class BalancedSoftmaxLoss(nn.Module):
     def __init__(self, num_classes: int):
         super().__init__()
         self.num_classes = num_classes
-        self.register_buffer('class_priors', torch.ones(num_classes) / num_classes)
+        self.register_buffer("class_priors", torch.ones(num_classes) / num_classes)
 
     def set_class_counts(self, counts, eps: float = 1e-8):
         """Update class priors from empirical class frequencies.

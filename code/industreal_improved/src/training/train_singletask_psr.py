@@ -25,6 +25,7 @@ Examples:
     PSR_SEQ_EVERY_N_BATCHES=1 python src/training/train_singletask_psr.py \\
         --batch-size 2 --max-epochs 5 --sequence-mode
 """
+
 import os
 import sys
 import argparse
@@ -37,8 +38,9 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 # ---- Phase 2: Patch config BEFORE any training module imports ----
 import src.config as C
+
 # Apply the ablation_psr_only preset first, then explicitly enforce task flags
-C.apply_preset('ablation_psr_only')
+C.apply_preset("ablation_psr_only")
 C.TRAIN_PSR = True
 C.TRAIN_DET = False
 C.TRAIN_HEAD_POSE = False
@@ -49,12 +51,12 @@ C.STAGED_TRAINING = False
 #   - BF16 needs no GradScaler (unlike FP16 which PSR seq-loss spikes corrupted)
 #   - The existing PSR repair wrapper forces MIXED_PRECISION=True for 2x throughput
 C.MIXED_PRECISION = True
-C.AMP_DTYPE = 'bf16'
+C.AMP_DTYPE = "bf16"
 
 # Sequence mode: every batch is a seq batch when PSR is the only trained head.
 # The ablation_psr_only preset description recommends PSR_SEQ_EVERY_N_BATCHES=1.
 # Allow override via env var (default 1 for single-task PSR).
-C.PSR_SEQ_EVERY_N_BATCHES = int(os.environ.get('PSR_SEQ_EVERY_N_BATCHES', '1'))
+C.PSR_SEQ_EVERY_N_BATCHES = int(os.environ.get("PSR_SEQ_EVERY_N_BATCHES", "1"))
 
 # ---- Phase 3: Now import train (reads patched config at module level) ----
 from src.training import train
@@ -68,42 +70,57 @@ train.CFG_TRAIN_ACT = False
 
 # ---- Phase 4: Parse CLI args (mirrors train.py __main__) ----
 parser = argparse.ArgumentParser(
-    description='Single-task ConvNeXt-Tiny PSR training (Opus 141, 2nd baseline)',
+    description="Single-task ConvNeXt-Tiny PSR training (Opus 141, 2nd baseline)",
     formatter_class=argparse.RawDescriptionHelpFormatter,
 )
-parser.add_argument('--preset', type=str, default=None,
+parser.add_argument(
+    "--preset",
+    type=str,
+    default=None,
     help="Config preset name from config.PRESETS "
-         "(e.g. 'recovery', 'benchmark_full', 'benchmark_quick').")
-parser.add_argument('--max-epochs', type=int, default=None,
-    help='Override C.EPOCHS (default 100)')
-parser.add_argument('--batch-size', type=int, default=None,
-    help='Override C.BATCH_SIZE (default 6 in ablation_psr_only preset)')
-parser.add_argument('--resume', type=str, default=None,
-    help='Path to checkpoint to resume from')
-parser.add_argument('--debug', action='store_true',
-    help='Run in debug mode (small dataset, fast validation)')
-parser.add_argument('--seed', '-s', type=int, default=None,
-    help='Random seed override')
-parser.add_argument('--subset-ratio', type=float,
-    default=getattr(C, 'SUBSET_RATIO', 1.0),
-    help='Fraction of recordings to use (0.0-1.0)')
-parser.add_argument('--num-workers', type=int, default=None,
-    help='Override DataLoader num_workers')
-parser.add_argument('--no-staged-training', action='store_true',
-    help='Disable 3-stage progressive training')
-parser.add_argument('--start-epoch', type=int, default=None,
-    help='Override starting epoch')
-parser.add_argument('--reset-scheduler', action='store_true',
-    help='Reset scheduler state after loading checkpoint')
-parser.add_argument('--reinit-heads', action='store_true',
-    help='Re-initialize det/act/psr heads + FPN from priors')
-parser.add_argument('--detach-reg-fpn', action='store_true',
-    help='Detach FPN features for regression subnet')
-parser.add_argument('--detach-psr-fpn', action='store_true',
-    help='Detach FPN features for PSR head')
-parser.add_argument('--sequence-mode', action='store_true',
-    help='Enable PSR sequence mode: PSR_SEQ_EVERY_N_BATCHES=1 '
-         '(every batch is a sequence batch). Recommended for PSR-only training.')
+    "(e.g. 'recovery', 'benchmark_full', 'benchmark_quick').",
+)
+parser.add_argument("--max-epochs", type=int, default=None, help="Override C.EPOCHS (default 100)")
+parser.add_argument(
+    "--batch-size",
+    type=int,
+    default=None,
+    help="Override C.BATCH_SIZE (default 6 in ablation_psr_only preset)",
+)
+parser.add_argument("--resume", type=str, default=None, help="Path to checkpoint to resume from")
+parser.add_argument(
+    "--debug", action="store_true", help="Run in debug mode (small dataset, fast validation)"
+)
+parser.add_argument("--seed", "-s", type=int, default=None, help="Random seed override")
+parser.add_argument(
+    "--subset-ratio",
+    type=float,
+    default=getattr(C, "SUBSET_RATIO", 1.0),
+    help="Fraction of recordings to use (0.0-1.0)",
+)
+parser.add_argument("--num-workers", type=int, default=None, help="Override DataLoader num_workers")
+parser.add_argument(
+    "--no-staged-training", action="store_true", help="Disable 3-stage progressive training"
+)
+parser.add_argument("--start-epoch", type=int, default=None, help="Override starting epoch")
+parser.add_argument(
+    "--reset-scheduler", action="store_true", help="Reset scheduler state after loading checkpoint"
+)
+parser.add_argument(
+    "--reinit-heads", action="store_true", help="Re-initialize det/act/psr heads + FPN from priors"
+)
+parser.add_argument(
+    "--detach-reg-fpn", action="store_true", help="Detach FPN features for regression subnet"
+)
+parser.add_argument(
+    "--detach-psr-fpn", action="store_true", help="Detach FPN features for PSR head"
+)
+parser.add_argument(
+    "--sequence-mode",
+    action="store_true",
+    help="Enable PSR sequence mode: PSR_SEQ_EVERY_N_BATCHES=1 "
+    "(every batch is a sequence batch). Recommended for PSR-only training.",
+)
 
 args = parser.parse_args()
 
@@ -111,13 +128,13 @@ args = parser.parse_args()
 if args.preset:
     C.apply_preset(args.preset)
     train._refresh_runtime_cfg()
-    train.logger.info(f'[train] Applied preset: {args.preset}')
+    train.logger.info(f"[train] Applied preset: {args.preset}")
 
-if args.preset and args.preset.startswith('stage_rf'):
-    _stage_root = Path(C.OUTPUT_ROOT).parent / 'rf_stages'
-    os.environ['OUTPUT_ROOT_OVERRIDE'] = str(_stage_root)
+if args.preset and args.preset.startswith("stage_rf"):
+    _stage_root = Path(C.OUTPUT_ROOT).parent / "rf_stages"
+    os.environ["OUTPUT_ROOT_OVERRIDE"] = str(_stage_root)
     C.update_dynamic_paths()
-    train.logger.info(f'[train] Stage preset detected — redirected OUTPUT_ROOT to {_stage_root}')
+    train.logger.info(f"[train] Stage preset detected — redirected OUTPUT_ROOT to {_stage_root}")
 
 if args.max_epochs is not None:
     C.EPOCHS = args.max_epochs
@@ -127,31 +144,32 @@ if args.batch_size is not None:
 if args.num_workers is not None:
     C.NUM_WORKERS = args.num_workers
 
-if getattr(args, 'detach_reg_fpn', False):
+if getattr(args, "detach_reg_fpn", False):
     C.DETACH_REG_FPN = True
-if getattr(args, 'detach_psr_fpn', False):
+if getattr(args, "detach_psr_fpn", False):
     C.DETACH_PSR_FPN = True
 
 # Sequence mode: every batch gets PSR sequence targets
-if getattr(args, 'sequence_mode', False):
+if getattr(args, "sequence_mode", False):
     C.PSR_SEQ_EVERY_N_BATCHES = 1
-    train.logger.info('[train] PSR_SEQ_EVERY_N_BATCHES=1 (--sequence-mode) — '
-                      'every batch is a sequence batch')
+    train.logger.info(
+        "[train] PSR_SEQ_EVERY_N_BATCHES=1 (--sequence-mode) — every batch is a sequence batch"
+    )
 
 # TRAIN_MAX_STEPS from env
-_env_max_steps = int(os.environ.get('TRAIN_MAX_STEPS', '0'))
+_env_max_steps = int(os.environ.get("TRAIN_MAX_STEPS", "0"))
 if _env_max_steps > 0:
     C.TRAIN_MAX_STEPS = _env_max_steps
 
 # EVAL_MAX_BATCHES from env
-_env_eval_max_batches = int(os.environ.get('EVAL_MAX_BATCHES', '0'))
+_env_eval_max_batches = int(os.environ.get("EVAL_MAX_BATCHES", "0"))
 if _env_eval_max_batches > 0:
     C.EVAL_MAX_BATCHES = _env_eval_max_batches
 
 if args.no_staged_training:
     C.STAGED_TRAINING = False
 
-if hasattr(args, 'debug') and args.debug:
+if hasattr(args, "debug") and args.debug:
     C.DEBUG_MODE = True
     C.DEBUG_MAX_VIDEOS = 5
     C.VAL_EVERY = 999

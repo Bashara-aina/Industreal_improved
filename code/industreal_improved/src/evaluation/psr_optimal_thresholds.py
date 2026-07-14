@@ -1,4 +1,5 @@
 """Optimal per-component threshold sweep on epoch_18 checkpoint."""
+
 import json
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="src/runs/rf_stages/checkpoints/best.pth")
     parser.add_argument("--save-dir", default="/tmp/psr_optimal_threshold")
@@ -27,25 +29,29 @@ def main():
     print(f"Epoch: {ckpt.get('epoch')}")
 
     from src.models.model import POPWMultiTaskModel
+
     model = POPWMultiTaskModel(
         pretrained=True,
-        backbone_type='convnext_tiny',
+        backbone_type="convnext_tiny",
         use_hand_film=True,
         use_headpose_film=True,
         use_videomae=False,
         train_pose=False,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = 1
     model = model.cuda().eval()
 
     from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
     from torch.utils.data import DataLoader
+
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
-    val_loader = DataLoader(val_ds, batch_size=1, num_workers=0,
-                            collate_fn=collate_fn, shuffle=False)
+    val_loader = DataLoader(
+        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False
+    )
 
     # Collect per-component sigmas and labels
     per_comp_sig = [[] for _ in range(11)]

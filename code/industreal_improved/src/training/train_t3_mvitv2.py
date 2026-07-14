@@ -16,9 +16,9 @@ Usage: python3 src/training/train_t3_mvitv2.py --ckpt weights/MVIT_RGB_16x4.pth
 Status: BLOCKED on pretrained weights (URL 403). Script ready, runs when weights
 are available from any K400 MViTv2 mirror.
 """
+
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -29,7 +29,6 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src import config as C
 
 
 def load_remap_table() -> dict:
@@ -64,10 +63,13 @@ class IndustRealActivityDatasetRemapped(Dataset):
 
     Output: (clip [3, 16, H, W], remapped_label [69])
     """
+
     def __init__(self, split: str = "val", clip_frames: int = 16, stride: int = 2):
         from src.data.industreal_dataset import IndustRealMultiTaskDataset
-        self.base = IndustRealMultiTaskDataset(split=split, sequence_mode=True,
-                                              sequence_length=clip_frames)
+
+        self.base = IndustRealMultiTaskDataset(
+            split=split, sequence_mode=True, sequence_length=clip_frames
+        )
         self.clip_frames = clip_frames
         self.stride = stride
         self.id_to_group = load_remap_table()["id_to_group"]
@@ -127,6 +129,7 @@ def train_t3(args):
 
     print(f"Loading MViTv2-S from {args.ckpt}...")
     from src.models.video_stream import K400VideoStream
+
     stream = K400VideoStream(model_name="mvitv2_s", pretrained=True)
     encoder = stream.encoder
     encoder = encoder.to(device)
@@ -135,8 +138,9 @@ def train_t3(args):
     head = nn.Linear(stream.hidden_size, 69).to(device)
 
     # Optimizer
-    optimizer = torch.optim.AdamW(list(encoder.parameters()) + list(head.parameters()),
-                                   lr=1e-4, weight_decay=0.01)
+    optimizer = torch.optim.AdamW(
+        list(encoder.parameters()) + list(head.parameters()), lr=1e-4, weight_decay=0.01
+    )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     # Datasets
@@ -182,24 +186,32 @@ def train_t3(args):
                 correct += (pred == label.argmax(dim=-1)).sum().item()
                 total += pred.size(0)
         val_acc = correct / total
-        print(f"Epoch {epoch+1}/{args.epochs}: train_loss={running_loss/len(train_loader):.4f}, val_acc={val_acc:.4f}")
+        print(
+            f"Epoch {epoch + 1}/{args.epochs}: train_loss={running_loss / len(train_loader):.4f}, val_acc={val_acc:.4f}"
+        )
 
     # Save
     out_path = Path("src/runs/rf_stages/checkpoints/t3_mvitv2_act.pth")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({
-        "encoder_state": encoder.state_dict(),
-        "head_state": head.state_dict(),
-        "remap_table": remap,
-        "val_acc": val_acc,
-    }, out_path)
+    torch.save(
+        {
+            "encoder_state": encoder.state_dict(),
+            "head_state": head.state_dict(),
+            "remap_table": remap,
+            "val_acc": val_acc,
+        },
+        out_path,
+    )
     print(f"Saved T3 model to {out_path}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ckpt", default="weights/MVIT_RGB_16x4.pth",
-                       help="Path to MViTv2-S K400 pretrained weights")
+    parser.add_argument(
+        "--ckpt",
+        default="weights/MVIT_RGB_16x4.pth",
+        help="Path to MViTv2-S K400 pretrained weights",
+    )
     parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--batch_size", type=int, default=8)
     args = parser.parse_args()

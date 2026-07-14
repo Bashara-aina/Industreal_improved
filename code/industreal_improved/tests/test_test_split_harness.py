@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import sys
 from pathlib import Path
 
@@ -33,9 +32,11 @@ for _p in [_ROOT, _ROOT / "src", _ROOT / "src" / "evaluation"]:
 # Fixtures
 # ===================================================================
 
+
 @pytest.fixture(scope="session")
 def split_config():
     from src import split_config as sc
+
     return sc
 
 
@@ -44,6 +45,7 @@ def orchestrator_module():
     """Import the orchestrator (may fail if dependencies missing)."""
     try:
         from scripts import eval_test_split as ets
+
         return ets
     except ImportError as e:
         pytest.skip(f"Orchestrator module not importable: {e}")
@@ -55,12 +57,15 @@ def orchestrator_module():
 def expected_table_a_keys():
     """Minimal set of keys expected in the SOTA Table A output structure."""
     return {
-        "detection": {"annotated_frames_mAP50", "entire_video_mAP50",
-                      "sota_annotated", "sota_video", "reference"},
-        "activity": {"top1_75cls", "top1_75cls_pct",
-                     "sota_top1", "reference"},
-        "psr": {"event_f1", "tau_seconds", "pos",
-                "sota_event_f1", "sota_tau_seconds", "reference"},
+        "detection": {
+            "annotated_frames_mAP50",
+            "entire_video_mAP50",
+            "sota_annotated",
+            "sota_video",
+            "reference",
+        },
+        "activity": {"top1_75cls", "top1_75cls_pct", "sota_top1", "reference"},
+        "psr": {"event_f1", "tau_seconds", "pos", "sota_event_f1", "sota_tau_seconds", "reference"},
         "pose": {"fwd_mae", "up_mae", "sota", "reference"},
     }
 
@@ -68,6 +73,7 @@ def expected_table_a_keys():
 # ===================================================================
 # Tests
 # ===================================================================
+
 
 class TestSplitConfig:
     """Verify split_config exports and protocol enforcement (Section 7.1)."""
@@ -80,17 +86,13 @@ class TestSplitConfig:
 
         assert len(test) == 10, f"Expected 10 test subjects, got {len(test)}"
         assert len(set(test)) == 10, f"Duplicates in test subjects: {test}"
-        assert not set(test) & set(val), (
-            f"Test/val overlap: {set(test) & set(val)}"
-        )
+        assert not set(test) & set(val), f"Test/val overlap: {set(test) & set(val)}"
 
     @staticmethod
     def test_test_subjects_non_overlapping_with_train(split_config):
         train = split_config.TRAIN_SUBJECTS
         test = split_config.TEST_SUBJECTS
-        assert not set(train) & set(test), (
-            f"Train/test overlap: {set(train) & set(test)}"
-        )
+        assert not set(train) & set(test), f"Train/test overlap: {set(train) & set(test)}"
 
     @staticmethod
     def test_require_split_passes_for_test(split_config):
@@ -149,12 +151,12 @@ class TestOrchestratorImports:
     @staticmethod
     def test_orchestrator_has_test_subjects(orchestrator_module):
         from src.split_config import TEST_SUBJECTS
+
         assert len(TEST_SUBJECTS) == 10
 
     @staticmethod
     def test_orchestrator_enforces_require_split(orchestrator_module):
         """require_split is called at module import time.  Verify it enforces."""
-        import importlib
         import src.split_config as sc
 
         # The eval_test_split module should have called require_split("test", True)
@@ -248,11 +250,22 @@ class TestTableAStructure:
             "psr",
             "pose",
         ]
-        det_keys = {"annotated_frames_mAP50", "entire_video_mAP50",
-                    "sota_annotated", "sota_video", "reference"}
+        det_keys = {
+            "annotated_frames_mAP50",
+            "entire_video_mAP50",
+            "sota_annotated",
+            "sota_video",
+            "reference",
+        }
         act_keys = {"top1_75cls", "top1_75cls_pct", "sota_top1", "reference"}
-        psr_keys = {"event_f1", "tau_seconds", "pos",
-                    "sota_event_f1", "sota_tau_seconds", "reference"}
+        psr_keys = {
+            "event_f1",
+            "tau_seconds",
+            "pos",
+            "sota_event_f1",
+            "sota_tau_seconds",
+            "reference",
+        }
         pose_keys = {"fwd_mae", "up_mae", "sota", "reference"}
 
         # Verify section names from Section 8
@@ -265,8 +278,13 @@ class TestTableAStructure:
     def test_metrics_json_matches_table_a():
         """If a metrics.json exists, verify its structure."""
         metrics_path = (
-            _ROOT / "src" / "runs" / "rf_stages" / "checkpoints"
-            / "test_split_eval" / "metrics.json"
+            _ROOT
+            / "src"
+            / "runs"
+            / "rf_stages"
+            / "checkpoints"
+            / "test_split_eval"
+            / "metrics.json"
         )
         if not metrics_path.exists():
             pytest.skip("test_split_eval/metrics.json not found (run eval first)")
@@ -314,16 +332,20 @@ class TestGracefulDegradation:
         event_f1 = None
         try:
             from src.evaluation.decoder_oracle_bound import event_f1  # noqa: F401
+
             event_f1 = True
         except ImportError:
             pass
         if not event_f1:
             try:
                 from src.evaluation.psr_transition_f1 import event_f1  # noqa: F401
+
                 event_f1 = True
             except ImportError:
                 pass
-        assert event_f1, "event_f1 not importable from either decoder_oracle_bound or psr_transition_f1"
+        assert event_f1, (
+            "event_f1 not importable from either decoder_oracle_bound or psr_transition_f1"
+        )
 
     @staticmethod
     def test_eval_scripts_importable():
@@ -332,6 +354,7 @@ class TestGracefulDegradation:
             from scripts import eval_activity_75class  # noqa: F401
             import scripts.eval_detection_dual_protocol as eddp  # noqa: F401
             import scripts.eval_psr_transition_f1 as eptf  # noqa: F401
+
             eval_ok = True
         except Exception:
             eval_ok = False
@@ -344,9 +367,12 @@ class TestGracefulDegradation:
     def test_orchestrator_help_runs(orchestrator_module):
         """The CLI should have help text."""
         import subprocess
+
         result = subprocess.run(
             [sys.executable, "-m", "scripts.eval_test_split", "--help"],
-            capture_output=True, text=True, cwd=str(_ROOT),
+            capture_output=True,
+            text=True,
+            cwd=str(_ROOT),
         )
         assert result.returncode == 0
         assert "Test-split evaluation orchestrator" in result.stdout

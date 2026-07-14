@@ -14,9 +14,9 @@ Also exercises:
 Run: cd /media/newadmin/master/POPW/working/code/industreal_improved_to_archive/src
      python3 -m pytest test_stage_transition.py -v
 """
+
 import sys
 import os
-import types
 import torch
 import torch.nn as nn
 from unittest.mock import MagicMock, patch
@@ -42,8 +42,10 @@ from training.train import (  # noqa: E402
 # surface that train.py touches at the Stage 3 boundary.
 # ---------------------------------------------------------------------------
 
+
 class _MockHeadProj(nn.Module):
     """Stand-in for ActivityHead.videomae_proj (a small nn.Sequential)."""
+
     def __init__(self, dim_in=384, dim_out=256):
         super().__init__()
         self.proj = nn.Linear(dim_in, dim_out)
@@ -70,6 +72,7 @@ class _MockVideoMAEStream(nn.Module):
 
 class _MockBackbone(nn.Module):
     """Fake backbone that mimics ResNet50 layer1-4 attribute surface."""
+
     def __init__(self):
         super().__init__()
         # Use a single Linear for each "layer" — train.py walks named_children
@@ -88,6 +91,7 @@ class _MockModel(nn.Module):
       model.psr_head
       model.videomae_stream
     """
+
     def __init__(self):
         super().__init__()
         self.backbone = _MockBackbone()
@@ -104,11 +108,15 @@ def _build_fake_param_groups(model):
     """Build the optimizer.param_groups structure that train.py uses."""
     activity_psr_params = list(model.activity_head.parameters()) + list(model.psr_head.parameters())
     backbone_params = list(model.backbone.parameters())
-    other_head_params = list(model.pose_head.parameters()) + list(model.head_pose.parameters()) + list(model.det_head.parameters())
+    other_head_params = (
+        list(model.pose_head.parameters())
+        + list(model.head_pose.parameters())
+        + list(model.det_head.parameters())
+    )
     return [
-        {"params": backbone_params, "lr": 1e-5},         # 0: backbone
-        {"params": other_head_params, "lr": 1e-3},       # 1: pose/hp/det
-        {"params": activity_psr_params, "lr": 1e-3},     # 2: act+psr (the warmup target)
+        {"params": backbone_params, "lr": 1e-5},  # 0: backbone
+        {"params": other_head_params, "lr": 1e-3},  # 1: pose/hp/det
+        {"params": activity_psr_params, "lr": 1e-3},  # 2: act+psr (the warmup target)
     ]
 
 
@@ -117,8 +125,17 @@ def _build_fake_param_groups(model):
 # exercises the exact decision tree without spinning up the full loop.
 # ---------------------------------------------------------------------------
 
-def _trigger_stage3_entry(model, optimizer, ema, epoch, criterion, stage3_warmup_state,
-                          device="cpu", videomae_unfreeze_epoch=None):
+
+def _trigger_stage3_entry(
+    model,
+    optimizer,
+    ema,
+    epoch,
+    criterion,
+    stage3_warmup_state,
+    device="cpu",
+    videomae_unfreeze_epoch=None,
+):
     """
     Mirrors the stage-transition block in train.py:2306-2348.
     Returns the (possibly re-initialized) ema.
@@ -133,21 +150,19 @@ def _trigger_stage3_entry(model, optimizer, ema, epoch, criterion, stage3_warmup
             criterion.log_var_psr.data.fill_(0.0)
 
         # Begin warmup ramp
-        if (not stage3_warmup_state["active"]
-                and stage3_warmup_state["warmup_epochs"] > 0):
+        if not stage3_warmup_state["active"] and stage3_warmup_state["warmup_epochs"] > 0:
             stage3_warmup_state["active"] = True
             stage3_warmup_state["start_epoch"] = epoch
             stage3_warmup_state["epochs_remaining"] = stage3_warmup_state["warmup_epochs"]
 
         # Reinitialize EMA
         from models.model import EMA as EMAClass
+
         stage3_decay = _get_ema_decay(epoch)
         ema = EMAClass(model, decay=stage3_decay, device=device)
 
     # VideoMAE projection unfreeze (mirrors train.py:2350-2397)
-    if (videomae_unfreeze_epoch is not None
-            and epoch == videomae_unfreeze_epoch
-            and C.USE_VIDEOMAE):
+    if videomae_unfreeze_epoch is not None and epoch == videomae_unfreeze_epoch and C.USE_VIDEOMAE:
         activity_head = getattr(model, "activity_head", None)
         if activity_head is not None and getattr(activity_head, "videomae_proj", None) is not None:
             for p in activity_head.videomae_proj.parameters():
@@ -159,6 +174,7 @@ def _trigger_stage3_entry(model, optimizer, ema, epoch, criterion, stage3_warmup
 # ===========================================================================
 # Tests
 # ===========================================================================
+
 
 class TestGetStage:
     """Boundary tests for get_stage() — Doc 2 B.1 schedule."""
@@ -185,26 +201,20 @@ class TestStageFreezeSchedule:
         # Activity + PSR heads must be frozen in stage 1
         for name, p in model.named_parameters():
             if "activity_head" in name or "psr_head" in name:
-                assert not p.requires_grad, (
-                    f"Stage 1 should freeze {name}, but it is trainable"
-                )
+                assert not p.requires_grad, f"Stage 1 should freeze {name}, but it is trainable"
 
     def test_stage2_still_freezes_activity_and_psr_heads(self):
         model = _MockModel()
         _set_stage_requires_grad(model, stage=2, backbone_type="resnet50")
         for name, p in model.named_parameters():
             if "activity_head" in name or "psr_head" in name:
-                assert not p.requires_grad, (
-                    f"Stage 2 should freeze {name}, but it is trainable"
-                )
+                assert not p.requires_grad, f"Stage 2 should freeze {name}, but it is trainable"
 
     def test_stage3_unfreezes_everything(self):
         model = _MockModel()
         _set_stage_requires_grad(model, stage=3, backbone_type="resnet50")
         for name, p in model.named_parameters():
-            assert p.requires_grad, (
-                f"Stage 3 must leave {name} trainable, but it is frozen"
-            )
+            assert p.requires_grad, f"Stage 3 must leave {name} trainable, but it is frozen"
 
 
 class TestStage3Entry:
@@ -234,8 +244,11 @@ class TestStage3Entry:
 
         # Cross from epoch 15 (stage 2) -> epoch 16 (stage 3)
         ema = _trigger_stage3_entry(
-            model, optimizer, ema,
-            epoch=16, criterion=criterion,
+            model,
+            optimizer,
+            ema,
+            epoch=16,
+            criterion=criterion,
             stage3_warmup_state=stage3_warmup_state,
         )
 
@@ -245,8 +258,7 @@ class TestStage3Entry:
         )
         assert stage3_warmup_state["start_epoch"] == 16
         assert stage3_warmup_state["epochs_remaining"] == 3, (
-            f"epochs_remaining should be 3, got "
-            f"{stage3_warmup_state['epochs_remaining']}"
+            f"epochs_remaining should be 3, got {stage3_warmup_state['epochs_remaining']}"
         )
 
     def test_ema_is_reinitialized_with_stage3_decay(self):
@@ -259,16 +271,23 @@ class TestStage3Entry:
         criterion.log_var_psr = nn.Parameter(torch.tensor(0.0))
 
         stage3_warmup_state = {
-            "active": False, "param_group_idx": 2, "base_lr": 1e-3,
-            "start_epoch": -1, "warmup_epochs": 3, "epochs_remaining": 0,
+            "active": False,
+            "param_group_idx": 2,
+            "base_lr": 1e-3,
+            "start_epoch": -1,
+            "warmup_epochs": 3,
+            "epochs_remaining": 0,
         }
 
         # Patch models.model.EMA so we can verify it was constructed afresh
         with patch("models.model.EMA") as MockEMA:
             MockEMA.return_value = MagicMock(name="new_ema")
             ema = _trigger_stage3_entry(
-                model, optimizer, ema,
-                epoch=16, criterion=criterion,
+                model,
+                optimizer,
+                ema,
+                epoch=16,
+                criterion=criterion,
                 stage3_warmup_state=stage3_warmup_state,
             )
 
@@ -278,7 +297,9 @@ class TestStage3Entry:
             assert call_args.args[0] is model, "EMA must wrap the same model"
             # The decay should come from _get_ema_decay(16)
             expected_decay = _get_ema_decay(16)
-            actual_decay = call_args.kwargs.get("decay", call_args.args[1] if len(call_args.args) > 1 else None)
+            actual_decay = call_args.kwargs.get(
+                "decay", call_args.args[1] if len(call_args.args) > 1 else None
+            )
             assert actual_decay == expected_decay, (
                 f"EMA decay should be {expected_decay}, got {actual_decay}"
             )
@@ -303,14 +324,21 @@ class TestStage3Entry:
             criterion.log_var_act = nn.Parameter(torch.tensor(0.0))
             criterion.log_var_psr = nn.Parameter(torch.tensor(0.0))
             stage3_warmup_state = {
-                "active": False, "param_group_idx": 2, "base_lr": 1e-3,
-                "start_epoch": -1, "warmup_epochs": 3, "epochs_remaining": 0,
+                "active": False,
+                "param_group_idx": 2,
+                "base_lr": 1e-3,
+                "start_epoch": -1,
+                "warmup_epochs": 3,
+                "epochs_remaining": 0,
             }
 
             # Hit the unfreeze epoch (10 is a common value)
             _trigger_stage3_entry(
-                model, optimizer, ema,
-                epoch=10, criterion=criterion,
+                model,
+                optimizer,
+                ema,
+                epoch=10,
+                criterion=criterion,
                 stage3_warmup_state=stage3_warmup_state,
                 videomae_unfreeze_epoch=10,
             )
@@ -318,8 +346,7 @@ class TestStage3Entry:
             # Assertion 3: videomae_proj is now trainable
             for p in model.activity_head.videomae_proj.parameters():
                 assert p.requires_grad, (
-                    "activity_head.videomae_proj must be unfrozen at the "
-                    "VideoMAE unfreeze epoch"
+                    "activity_head.videomae_proj must be unfrozen at the VideoMAE unfreeze epoch"
                 )
         finally:
             C.USE_VIDEOMAE = original_use_vm
@@ -334,15 +361,22 @@ class TestStage3Entry:
         criterion.log_var_act = nn.Parameter(torch.tensor(0.5))
         criterion.log_var_psr = nn.Parameter(torch.tensor(0.5))
         stage3_warmup_state = {
-            "active": False, "param_group_idx": 2, "base_lr": 1e-3,
-            "start_epoch": -1, "warmup_epochs": 3, "epochs_remaining": 0,
+            "active": False,
+            "param_group_idx": 2,
+            "base_lr": 1e-3,
+            "start_epoch": -1,
+            "warmup_epochs": 3,
+            "epochs_remaining": 0,
         }
 
         with patch("models.model.EMA") as MockEMA:
             MockEMA.return_value = MagicMock()
             ema = _trigger_stage3_entry(
-                model, optimizer, ema,
-                epoch=10, criterion=criterion,
+                model,
+                optimizer,
+                ema,
+                epoch=10,
+                criterion=criterion,
                 stage3_warmup_state=stage3_warmup_state,
             )
             # Warmup must NOT have been activated
@@ -368,15 +402,22 @@ class TestStage3Entry:
             criterion.log_var_act = nn.Parameter(torch.tensor(0.5))
             criterion.log_var_psr = nn.Parameter(torch.tensor(0.5))
             stage3_warmup_state = {
-                "active": False, "param_group_idx": 2, "base_lr": 1e-3,
-                "start_epoch": -1, "warmup_epochs": 3, "epochs_remaining": 0,
+                "active": False,
+                "param_group_idx": 2,
+                "base_lr": 1e-3,
+                "start_epoch": -1,
+                "warmup_epochs": 3,
+                "epochs_remaining": 0,
             }
 
             with patch("models.model.EMA") as MockEMA:
                 MockEMA.return_value = MagicMock()
                 ema = _trigger_stage3_entry(
-                    model, optimizer, ema,
-                    epoch=16, criterion=criterion,
+                    model,
+                    optimizer,
+                    ema,
+                    epoch=16,
+                    criterion=criterion,
                     stage3_warmup_state=stage3_warmup_state,
                     videomae_unfreeze_epoch=10,  # already past
                 )
@@ -404,12 +445,10 @@ class TestEmaDecaySchedule:
         d0 = _get_ema_decay(0)
         d50 = _get_ema_decay(50)
         d99 = _get_ema_decay(99)
-        assert d0 <= d50 <= d99, (
-            f"EMA decay should be non-decreasing: "
-            f"d0={d0} d50={d50} d99={d99}"
-        )
+        assert d0 <= d50 <= d99, f"EMA decay should be non-decreasing: d0={d0} d50={d50} d99={d99}"
 
 
 if __name__ == "__main__":
     import pytest
+
     sys.exit(pytest.main([__file__, "-v"]))

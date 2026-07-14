@@ -5,6 +5,7 @@ import torch.nn as nn
 
 try:
     from torchvision.models.video import MViT_V2_S_Weights, mvit_v2_s
+
     HAS_TORCHVISION_MVIT = True
 except ImportError:
     HAS_TORCHVISION_MVIT = False
@@ -14,8 +15,7 @@ def load_mvit_v2_s(pretrained: bool = True) -> nn.Module:
     """Load MViTv2-S pretrained on Kinetics-400 from torchvision."""
     if not HAS_TORCHVISION_MVIT:
         raise ImportError(
-            "torchvision >= 0.15 with MViTv2-S required. "
-            "Install: pip install torchvision --upgrade"
+            "torchvision >= 0.15 with MViTv2-S required. Install: pip install torchvision --upgrade"
         )
     weights = MViT_V2_S_Weights.DEFAULT if pretrained else None
     model = mvit_v2_s(weights=weights)

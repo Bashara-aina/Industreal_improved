@@ -8,6 +8,7 @@ For the same predictions:
 Output: json with both metrics per recording, summary stats,
 and per_comp_f1.json/md with per-component transition F1.
 """
+
 import json
 import sys
 from collections import defaultdict
@@ -22,8 +23,17 @@ _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD = (0.229, 0.224, 0.225)
 
 COMPONENT_NAMES = [
-    "comp0", "comp1", "comp2", "comp3", "comp4",
-    "comp5", "comp6", "comp7", "comp8", "comp9", "comp10",
+    "comp0",
+    "comp1",
+    "comp2",
+    "comp3",
+    "comp4",
+    "comp5",
+    "comp6",
+    "comp7",
+    "comp8",
+    "comp9",
+    "comp10",
 ]
 
 
@@ -98,13 +108,17 @@ def per_component_event_f1(pred_tr, gt_tr, tol=3):
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="src/runs/rf_stages/checkpoints/best.pth")
     parser.add_argument("--max-batches", type=int, default=5000)
     parser.add_argument("--save-dir", default="src/runs/rf_stages/checkpoints/psr_per_vs_trans")
     parser.add_argument("--tolerance", type=int, default=3)
-    parser.add_argument("--thresholds", default=None,
-                        help="Path to optimal_thresholds.json for per-component thresholds")
+    parser.add_argument(
+        "--thresholds",
+        default=None,
+        help="Path to optimal_thresholds.json for per-component thresholds",
+    )
     args = parser.parse_args()
 
     Path(args.save_dir).mkdir(parents=True, exist_ok=True)
@@ -128,12 +142,16 @@ def main():
     from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
 
     model = POPWMultiTaskModel(
-        pretrained=True, backbone_type='convnext_tiny',
-        use_hand_film=True, use_headpose_film=True,
-        use_videomae=False, train_pose=False,
+        pretrained=True,
+        backbone_type="convnext_tiny",
+        use_hand_film=True,
+        use_headpose_film=True,
+        use_videomae=False,
+        train_pose=False,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = 1
     model = model.cuda().eval()
@@ -141,7 +159,11 @@ def main():
     decoder = MonotonicDecoder(num_components=11)
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False,
+        val_ds,
+        batch_size=1,
+        num_workers=0,
+        collate_fn=collate_fn,
+        shuffle=False,
     )
 
     # Collect per-recording per-frame predictions and labels
@@ -194,7 +216,8 @@ def main():
 
     # Compute both metrics per recording
     from src import config as C
-    remap_fn = getattr(C, 'remap_activity_label', None)
+
+    remap_fn = getattr(C, "remap_activity_label", None)
 
     per_frame_f1_per_rec = {}
     transition_f1_per_rec = {}
@@ -237,7 +260,9 @@ def main():
 
         # Per-component transition F1 (Opus 141 Q45)
         comp_f1s, comp_macro, comp_micro = per_component_event_f1(
-            pred_tr[valid_tr], gt_tr[valid_tr], tol=args.tolerance,
+            pred_tr[valid_tr],
+            gt_tr[valid_tr],
+            tol=args.tolerance,
         )
         per_comp_trans_f1_per_rec[rec] = {
             "per_component": {COMPONENT_NAMES[i]: float(comp_f1s[i]) for i in range(11)},
@@ -255,9 +280,7 @@ def main():
         pred_events = "".join(
             str(int(b)) for b in (preds_sorted[1:] != preds_sorted[:-1]).any(axis=1)
         )
-        gt_events = "".join(
-            str(int(b)) for b in (gt_sorted[1:] != gt_sorted[:-1]).any(axis=1)
-        )
+        gt_events = "".join(str(int(b)) for b in (gt_sorted[1:] != gt_sorted[:-1]).any(axis=1))
         if gt_events:
             m, k = len(pred_events), len(gt_events)
             dp = np.zeros((m + 1, k + 1))
@@ -281,8 +304,12 @@ def main():
         "n_frames": n,
         "n_recordings": len(per_frame_f1_per_rec),
         "tolerance": args.tolerance,
-        "per_frame_macro_f1": float(np.mean(list(per_frame_f1_per_rec.values()))) if per_frame_f1_per_rec else 0.0,
-        "transition_macro_f1": float(np.mean(list(transition_f1_per_rec.values()))) if transition_f1_per_rec else 0.0,
+        "per_frame_macro_f1": float(np.mean(list(per_frame_f1_per_rec.values())))
+        if per_frame_f1_per_rec
+        else 0.0,
+        "transition_macro_f1": float(np.mean(list(transition_f1_per_rec.values())))
+        if transition_f1_per_rec
+        else 0.0,
         "macro_pos": float(np.mean(list(pos_per_rec.values()))) if pos_per_rec else 0.0,
         "macro_edit": float(np.mean(list(edit_per_rec.values()))) if edit_per_rec else 0.0,
         "per_recording": {
@@ -333,10 +360,7 @@ def main():
             "std": float(np.std(micro_list)),
         },
         "per_component": per_comp_summary,
-        "per_recording": {
-            rec: per_comp_trans_f1_per_rec[rec]
-            for rec in per_comp_trans_f1_per_rec
-        },
+        "per_recording": {rec: per_comp_trans_f1_per_rec[rec] for rec in per_comp_trans_f1_per_rec},
     }
 
     # Save JSON
@@ -369,8 +393,12 @@ def main():
             f"| {cname} | {s['mean']:.4f} | {s['std']:.4f} "
             f"| {s['min']:.4f} | {s['max']:.4f} | {s['n_recordings']} |\n"
         )
-    lines_md.append(f"\n**Macro average:** {per_comp_cross_rec['macro_across_recordings']['mean']:.4f}  \n")
-    lines_md.append(f"**Micro average:** {per_comp_cross_rec['micro_across_recordings']['mean']:.4f}  \n")
+    lines_md.append(
+        f"\n**Macro average:** {per_comp_cross_rec['macro_across_recordings']['mean']:.4f}  \n"
+    )
+    lines_md.append(
+        f"**Micro average:** {per_comp_cross_rec['micro_across_recordings']['mean']:.4f}  \n"
+    )
     with open(per_comp_md, "w") as f:
         f.writelines(lines_md)
     print(f"Markdown report saved to {per_comp_md}")
@@ -381,15 +409,17 @@ def main():
     print(f"Macro Edit: {summary['macro_edit']:.4f}")
 
     # Print per-component table
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("PER-COMPONENT TRANSITION F1 (Opus 141 Q45)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"{'Component':<12} {'Mean F1':<10} {'Std':<10} {'Min':<10} {'Max':<10} {'Recs':<6}")
-    print(f"{'-'*58}")
+    print(f"{'-' * 58}")
     for cname in COMPONENT_NAMES:
         s = per_comp_summary[cname]
-        print(f"{cname:<12} {s['mean']:.4f}     {s['std']:.4f}     {s['min']:.4f}     {s['max']:.4f}     {s['n_recordings']:<6}")
-    print(f"{'-'*58}")
+        print(
+            f"{cname:<12} {s['mean']:.4f}     {s['std']:.4f}     {s['min']:.4f}     {s['max']:.4f}     {s['n_recordings']:<6}"
+        )
+    print(f"{'-' * 58}")
     print(f"{'Macro':<12} {per_comp_cross_rec['macro_across_recordings']['mean']:.4f}")
     print(f"{'Micro':<12} {per_comp_cross_rec['micro_across_recordings']['mean']:.4f}")
 

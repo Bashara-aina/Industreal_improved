@@ -21,6 +21,7 @@ Usage:
         --pose /path/to/st_pose/best.pt \
         --output /path/to/soup_backbone.pt
 """
+
 import argparse
 import sys
 from collections import OrderedDict
@@ -36,17 +37,29 @@ def main():
     parser.add_argument("--psr", type=str, default=None, help="Path to ST-psr best.pt")
     parser.add_argument("--pose", type=str, default=None, help="Path to ST-pose best.pt")
     parser.add_argument("--output", type=str, required=True, help="Output path for soup backbone")
-    parser.add_argument("--backbone-key", type=str, default="model_state_dict",
-                        help="Top-level key in checkpoint (default: model_state_dict)")
-    parser.add_argument("--backbone-prefix", type=str, default="feature_pyramid.backbone",
-                        help="Prefix for backbone state dict keys")
+    parser.add_argument(
+        "--backbone-key",
+        type=str,
+        default="model_state_dict",
+        help="Top-level key in checkpoint (default: model_state_dict)",
+    )
+    parser.add_argument(
+        "--backbone-prefix",
+        type=str,
+        default="feature_pyramid.backbone",
+        help="Prefix for backbone state dict keys",
+    )
     args = parser.parse_args()
 
     # Collect available specialists
     specs = []
     spec_names = []
-    for name, path in [("det", args.det), ("act", args.act),
-                       ("psr", args.psr), ("pose", args.pose)]:
+    for name, path in [
+        ("det", args.det),
+        ("act", args.act),
+        ("psr", args.psr),
+        ("pose", args.pose),
+    ]:
         if path is None:
             print(f"  Skipping {name} (not provided)")
             continue
@@ -56,15 +69,18 @@ def main():
         ckpt = torch.load(path, map_location="cpu", weights_only=False)
         sd = ckpt.get(args.backbone_key, ckpt)
         # Filter to backbone keys
-        backbone_sd = {k: v for k, v in sd.items()
-                       if k.startswith(args.backbone_prefix)}
+        backbone_sd = {k: v for k, v in sd.items() if k.startswith(args.backbone_prefix)}
         if not backbone_sd:
             print(f"  WARNING: no keys with prefix '{args.backbone_prefix}' in {path}")
             continue
         # Strip the prefix so the saved soup has the right shape for direct load
         backbone_sd = OrderedDict(
-            (k[len(args.backbone_prefix) + 1:] if k.startswith(args.backbone_prefix + ".")
-             else k, v)
+            (
+                k[len(args.backbone_prefix) + 1 :]
+                if k.startswith(args.backbone_prefix + ".")
+                else k,
+                v,
+            )
             for k, v in backbone_sd.items()
         )
         specs.append(backbone_sd)

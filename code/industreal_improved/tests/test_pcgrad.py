@@ -17,6 +17,7 @@ import torch.nn.functional as F
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def device():
     return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -32,9 +33,7 @@ class SyntheticMTLModel(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
         )
-        self.heads = nn.ModuleList(
-            [nn.Linear(hidden_dim, 1) for _ in range(num_tasks)]
-        )
+        self.heads = nn.ModuleList([nn.Linear(hidden_dim, 1) for _ in range(num_tasks)])
 
     def forward(self, x):
         features = self.backbone(x)
@@ -71,6 +70,7 @@ def four_task_outputs(model, batch):
 # Helper: naive sum gradients
 # ---------------------------------------------------------------------------
 
+
 def _naive_grads(task_losses, shared_params):
     """Compute naive sum-of-losses gradients by calling backward()."""
     # Zero grads
@@ -78,8 +78,7 @@ def _naive_grads(task_losses, shared_params):
         p.grad = None
     combined = sum(task_losses)
     combined.backward(retain_graph=True)
-    return [p.grad.clone() if p.grad is not None else torch.zeros_like(p)
-            for p in shared_params]
+    return [p.grad.clone() if p.grad is not None else torch.zeros_like(p) for p in shared_params]
 
 
 def _cos_sim(a, b):
@@ -96,6 +95,7 @@ def _cos_sim(a, b):
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestMTLBalancerModeNone:
     """mode="none" must be identical to naive sum-of-losses."""
@@ -163,10 +163,10 @@ class TestMTLBalancerPCGrad:
         # Create known-conflicting tasks: task 0 pushes up, task 1 pushes down.
         # Both traverse the same backbone -> guaranteed negative cosine.
         task_losses = [
-            -out[0].mean(),   # wants to increase output 0
-            out[1].mean(),    # wants to decrease output 1
-            out[2].mean(),    # neutral reference
-            out[3].mean(),    # neutral reference
+            -out[0].mean(),  # wants to increase output 0
+            out[1].mean(),  # wants to decrease output 1
+            out[2].mean(),  # neutral reference
+            out[3].mean(),  # neutral reference
         ]
 
         # Compute PCGrad gradients (before hook install)
@@ -177,11 +177,12 @@ class TestMTLBalancerPCGrad:
         task_grads = []
         for loss in task_losses:
             g = torch.autograd.grad(
-                loss, shared_params,
-                retain_graph=True, allow_unused=True,
+                loss,
+                shared_params,
+                retain_graph=True,
+                allow_unused=True,
             )
-            g = tuple(torch.zeros_like(p) if gi is None else gi
-                      for gi, p in zip(g, shared_params))
+            g = tuple(torch.zeros_like(p) if gi is None else gi for gi, p in zip(g, shared_params))
             task_grads.append(g)
 
         # 2. Verify original task 0 and task 1 are conflicting
@@ -190,8 +191,7 @@ class TestMTLBalancerPCGrad:
             torch.cat([g.flatten() for g in task_grads[1]]),
         )
         assert cos_01 < -0.01, (
-            f"Test setup failed: task 0 and 1 should be conflicting "
-            f"(cos={cos_01:.4f})"
+            f"Test setup failed: task 0 and 1 should be conflicting (cos={cos_01:.4f})"
         )
 
         # 3. PCGrad projection
@@ -205,16 +205,19 @@ class TestMTLBalancerPCGrad:
         for i, loss in enumerate(task_losses):
             # Recompute original task grad for this comparison
             g_i = torch.autograd.grad(
-                loss, shared_params, retain_graph=True, allow_unused=True,
+                loss,
+                shared_params,
+                retain_graph=True,
+                allow_unused=True,
             )
-            g_i = tuple(torch.zeros_like(p) if gi is None else gi
-                        for gi, p in zip(g_i, shared_params))
+            g_i = tuple(
+                torch.zeros_like(p) if gi is None else gi for gi, p in zip(g_i, shared_params)
+            )
             g_i_flat = torch.cat([g.flatten() for g in g_i])
             dot = torch.dot(combined_flat, g_i_flat)
             # The combined PCGrad grad should not conflict with ANY task
             assert dot >= -1e-4, (
-                f"Task {i}: PCGrad combined grad conflicts with original "
-                f"task grad (dot={dot:.6f})"
+                f"Task {i}: PCGrad combined grad conflicts with original task grad (dot={dot:.6f})"
             )
 
     def test_pcgrad_projection_direct(self, device):
@@ -241,9 +244,7 @@ class TestMTLBalancerPCGrad:
 
         cos_before = _cos_sim(g_0_base, g_1_base)
         # cos = (-1 + 0) / (1 * sqrt(2)) = -1/1.414 = -0.707
-        assert cos_before < -0.5, (
-            f"Test setup: grads should be conflicting (cos={cos_before:.4f})"
-        )
+        assert cos_before < -0.5, f"Test setup: grads should be conflicting (cos={cos_before:.4f})"
 
         balancer = MTLBalancer([param], mode="pcgrad")
 
@@ -313,9 +314,7 @@ class TestMTLBalancerPCGrad:
 class TestPcgradGradNorm:
     """PCGrad produces smaller grad norm for conflicting tasks vs gradient variance."""
 
-    def test_pcgrad_smaller_norm_than_gradient_variance(
-        self, model, shared_params, batch
-    ):
+    def test_pcgrad_smaller_norm_than_gradient_variance(self, model, shared_params, batch):
         """For opposing-gradient tasks, PCGrad combined norm should not
         be larger than what naive sum produces from destructive interference.
         PCGrad preserves non-conflicting structure while removing cancellation.
@@ -331,7 +330,7 @@ class TestPcgradGradNorm:
         # Tasks 0 and 1 with opposing objectives
         task_losses = [
             -out[0].mean(),  # push up
-            out[1].mean(),   # push down
+            out[1].mean(),  # push down
         ]
 
         # PCGrad grads
@@ -350,12 +349,8 @@ class TestPcgradGradNorm:
         naive_norm = sum(p.grad.norm().item() for p in shared_params)
 
         # Both should be finite and non-NaN
-        assert torch.isfinite(
-            torch.tensor(pcgrad_norm)
-        ), "PCGrad gradient norm should be finite"
-        assert torch.isfinite(
-            torch.tensor(naive_norm)
-        ), "Naive sum gradient norm should be finite"
+        assert torch.isfinite(torch.tensor(pcgrad_norm)), "PCGrad gradient norm should be finite"
+        assert torch.isfinite(torch.tensor(naive_norm)), "Naive sum gradient norm should be finite"
 
         # The PCGrad norm can be larger than naive norm (when naive sum
         # cancels out conflicting components, PCGrad preserves them).
@@ -390,9 +385,7 @@ class TestFourTaskEndToEnd:
         for p in model.parameters():
             assert torch.isfinite(p).all()
 
-    def test_four_task_none_backward(
-        self, model, shared_params, batch
-    ):
+    def test_four_task_none_backward(self, model, shared_params, batch):
         """All 4 tasks with mode='none': equivalent to naive sum."""
         from src.training.mtl_balancer import MTLBalancer
 
@@ -430,9 +423,7 @@ class TestDetectSharedParams:
 
         # All backbone params should be in the shared set
         for bp in backbone_params:
-            assert any(s is bp for s in shared), (
-                f"Backbone param {bp.shape} not detected as shared"
-            )
+            assert any(s is bp for s in shared), f"Backbone param {bp.shape} not detected as shared"
 
     def test_detect_without_losses_returns_all_params(self, model):
         from src.training.mtl_balancer import MTLBalancer

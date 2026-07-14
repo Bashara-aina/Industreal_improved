@@ -31,7 +31,7 @@ export OPENBLAS_NUM_THREADS=4
 export NUMEXPR_NUM_THREADS=4
 export MALLOC_ARENA_MAX=4
 export PYTHONHASHSEED=42
-export CUBLAS_WORKSPACE_CONFIG=4096:8
+export CUBLAS_WORKSPACE_CONFIG=:4096:8
 export CUDA_LAUNCH_BLOCKING=0  # off for speed; we are stable in FP32 per diag_amp_nan
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # Smoke limits: 60 train steps, 15 val batches

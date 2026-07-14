@@ -67,8 +67,6 @@ from src.models.model import POPWMultiTaskModel
 # from evaluate.py, but avoid calling evaluate_all (which has the probe bug).
 sys.path.insert(0, str(_SRC / "evaluation"))
 from evaluate import (
-    compute_detection_map,
-    compute_head_pose_metrics,
     decode_boxes,
     nms_numpy,
     compute_ap_per_class,
@@ -109,22 +107,32 @@ def load_model(ckpt_path: str, device: torch.device) -> tuple[torch.nn.Module, i
     use_headpose_film = bool(cfg.get("USE_HEADPOSE_FILM", getattr(C, "USE_HEADPOSE_FILM", False)))
     use_videomae = bool(cfg.get("USE_VIDEOMAE", getattr(C, "USE_VIDEOMAE", False)))
     train_pose = bool(cfg.get("TRAIN_HEAD_POSE", getattr(C, "TRAIN_HEAD_POSE", True)))
-    use_backbone_checkpoint = bool(cfg.get("USE_BACKBONE_CHECKPOINT", getattr(C, "USE_BACKBONE_CHECKPOINT", False)))
+    use_backbone_checkpoint = bool(
+        cfg.get("USE_BACKBONE_CHECKPOINT", getattr(C, "USE_BACKBONE_CHECKPOINT", False))
+    )
 
-    model = POPWMultiTaskModel(
-        pretrained=True,
-        backbone_type=backbone_type,
-        use_hand_film=use_hand_film,
-        use_headpose_film=use_headpose_film,
-        use_videomae=use_videomae,
-        train_pose=train_pose,
-        use_backbone_checkpoint=use_backbone_checkpoint,
-    ).to(device).eval()
+    model = (
+        POPWMultiTaskModel(
+            pretrained=True,
+            backbone_type=backbone_type,
+            use_hand_film=use_hand_film,
+            use_headpose_film=use_headpose_film,
+            use_videomae=use_videomae,
+            train_pose=train_pose,
+            use_backbone_checkpoint=use_backbone_checkpoint,
+        )
+        .to(device)
+        .eval()
+    )
 
-    model._seq_len = cfg.get(
-        "PSR_SEQUENCE_LENGTH",
-        getattr(C, "PSR_SEQUENCE_LENGTH", 1),
-    ) if cfg.get("USE_PSR_SEQUENCE_MODE", getattr(C, "USE_PSR_SEQUENCE_MODE", False)) else 1
+    model._seq_len = (
+        cfg.get(
+            "PSR_SEQUENCE_LENGTH",
+            getattr(C, "PSR_SEQUENCE_LENGTH", 1),
+        )
+        if cfg.get("USE_PSR_SEQUENCE_MODE", getattr(C, "USE_PSR_SEQUENCE_MODE", False))
+        else 1
+    )
 
     result = model.load_state_dict(state["model"], strict=False)
     if result.missing_keys:
@@ -138,7 +146,9 @@ def load_model(ckpt_path: str, device: torch.device) -> tuple[torch.nn.Module, i
 
 
 def has_nan(metrics: dict) -> list[str]:
-    return [k for k, v in metrics.items() if isinstance(v, float) and (math.isnan(v) or math.isinf(v))]
+    return [
+        k for k, v in metrics.items() if isinstance(v, float) and (math.isnan(v) or math.isinf(v))
+    ]
 
 
 def angular_mae(pred: torch.Tensor, target: torch.Tensor) -> float:
@@ -162,9 +172,7 @@ def prepare_images(images: torch.Tensor, device: torch.device) -> torch.Tensor:
 # ── PSR transition event helpers (175 §7.2 / 174 §3.3) ────────────────────
 
 
-def _compute_tau(
-    pred_tr: np.ndarray, gt_tr: np.ndarray, tol: int = 3
-) -> float:
+def _compute_tau(pred_tr: np.ndarray, gt_tr: np.ndarray, tol: int = 3) -> float:
     """Mean signed delay between matched predicted and GT transition events.
 
     For each component, matches predicted 0->1 frames to GT frames greedily
@@ -225,6 +233,7 @@ def streaming_eval(
         if _status_fd is not None:
             os.write(_status_fd, (msg + "\n").encode())
             os.fsync(_status_fd)
+
     model.eval()
 
     # ── Streaming accumulators ──────────────────────────────────────────────
@@ -301,14 +310,16 @@ def streaming_eval(
             act_mask = act_mask.to(device)
             act_valid = act_mask.bool()
         else:
-            act_valid = (act_gt >= 0)
+            act_valid = act_gt >= 0
 
         act_correct += int((act_pred[act_valid] == act_gt[act_valid]).sum().item())
         act_total += int(act_valid.sum().item())
 
         # Also track valid (non-NA, non-masked) accuracy
         act_valid_non_na = act_valid & (act_gt >= 0) & (act_gt != 0)  # exclude class 0 (NA)
-        act_correct_valid += int((act_pred[act_valid_non_na] == act_gt[act_valid_non_na]).sum().item())
+        act_correct_valid += int(
+            (act_pred[act_valid_non_na] == act_gt[act_valid_non_na]).sum().item()
+        )
         act_total_valid += int(act_valid_non_na.sum().item())
 
         # ═══════════════════════════════════════════════════════════════════
@@ -454,27 +465,38 @@ def streaming_eval(
     else:
         # mAP@0.5
         ap_result = compute_ap_per_class(
-            dp_boxes, dp_scores, dp_labels,
-            dg_boxes, dg_labels,
+            dp_boxes,
+            dp_scores,
+            dp_labels,
+            dg_boxes,
+            dg_labels,
             iou_thresh=0.5,
             num_classes=C.NUM_DET_CLASSES,
         )
         ap_50_95 = compute_ap_per_class(
-            dp_boxes, dp_scores, dp_labels,
-            dg_boxes, dg_labels,
+            dp_boxes,
+            dp_scores,
+            dp_labels,
+            dg_boxes,
+            dg_labels,
             iou_thresh=0.75,
             num_classes=C.NUM_DET_CLASSES,
         )
         results["det_mAP50"] = float(ap_result["mAP"])
         results["det_mAP_50_95"] = float(ap_50_95["mAP"])
-        results["det_per_class_ap"] = {str(k): float(v) for k, v in ap_result["per_class_ap"].items()}
+        results["det_per_class_ap"] = {
+            str(k): float(v) for k, v in ap_result["per_class_ap"].items()
+        }
         n_present = sum(1 for v in ap_result["per_class_ap"].values() if v > 0)
         results["det_n_present_classes"] = n_present
 
         # mAP@0.5 on all frames (including empty)
         ap_all = compute_ap_per_class(
-            dp_boxes, dp_scores, dp_labels,
-            dg_boxes, dg_labels,
+            dp_boxes,
+            dp_scores,
+            dp_labels,
+            dg_boxes,
+            dg_labels,
             iou_thresh=0.5,
             num_classes=C.NUM_DET_CLASSES,
         )
@@ -515,7 +537,14 @@ def streaming_eval(
     # ── PSR transition event F1 (primary metric, comparable to STORM/B3) ────
     try:
         # Load per-component optimal thresholds
-        _opt_path = _SRC / "runs" / "rf_stages" / "checkpoints" / "psr_optimal_thr_38k" / "optimal_thresholds.json"
+        _opt_path = (
+            _SRC
+            / "runs"
+            / "rf_stages"
+            / "checkpoints"
+            / "psr_optimal_thr_38k"
+            / "optimal_thresholds.json"
+        )
         if _opt_path.exists():
             with open(_opt_path) as _f:
                 _opt_data = json.load(_f)
@@ -526,8 +555,8 @@ def streaming_eval(
             _per_comp_thr = np.full(11, 0.10, dtype=np.float32)
 
         # Concatenate stored logits and labels
-        _all_logits = np.concatenate(psr_preds_logits, axis=0)   # [N, 11]
-        _all_labels = np.concatenate(psr_labels_list, axis=0)    # [N, 11]
+        _all_logits = np.concatenate(psr_preds_logits, axis=0)  # [N, 11]
+        _all_labels = np.concatenate(psr_labels_list, axis=0)  # [N, 11]
 
         # Sigmoid -> probabilities (threshold+monotonicity applied per-recording)
         _all_sig = 1.0 / (1.0 + np.exp(-_all_logits))
@@ -548,8 +577,8 @@ def streaming_eval(
         for rid, _arrs in _rec_data.items():
             _frames = np.array(_arrs["frame"], dtype=np.int64)
             _sort = np.argsort(_frames)
-            _vp_prob = np.array(_arrs["pred"])[_sort]   # [T, 11] sigmoid probabilities
-            _vl = np.array(_arrs["label"])[_sort]       # [T, 11]
+            _vp_prob = np.array(_arrs["pred"])[_sort]  # [T, 11] sigmoid probabilities
+            _vl = np.array(_arrs["label"])[_sort]  # [T, 11]
 
             # Keep only valid frames
             _valid = _vl.max(axis=1) >= 0
@@ -584,7 +613,9 @@ def streaming_eval(
             results["psr_pos"] = float(np.mean(_poss)) if _poss else 0.0
             _tau_mean = float(np.nanmean(_taus)) if _taus else float("nan")
             results["psr_tau_frames"] = _tau_mean
-            results["psr_tau_seconds"] = _tau_mean / 30.0 if not np.isnan(_tau_mean) else float("nan")
+            results["psr_tau_seconds"] = (
+                _tau_mean / 30.0 if not np.isnan(_tau_mean) else float("nan")
+            )
         else:
             results["psr_event_f1_at_3"] = 0.0
             results["psr_pos"] = 0.0
@@ -613,11 +644,20 @@ def streaming_eval(
     log_progress("=" * 60)
     log_progress("FULL IN-PROCESS EVAL — Key Metrics")
     log_progress("=" * 60)
-    for name in ["det_mAP50", "det_mAP_50_95", "det_mAP50_all_frames",
-                  "det_n_present_classes", "act_top1", "act_top1_valid_na_excluded",
-                  "forward_angular_MAE_deg", "up_angular_MAE_deg",
-                  "psr_event_f1_at_3", "psr_pos", "psr_tau_seconds",
-                  "psr_macro_f1"]:
+    for name in [
+        "det_mAP50",
+        "det_mAP_50_95",
+        "det_mAP50_all_frames",
+        "det_n_present_classes",
+        "act_top1",
+        "act_top1_valid_na_excluded",
+        "forward_angular_MAE_deg",
+        "up_angular_MAE_deg",
+        "psr_event_f1_at_3",
+        "psr_pos",
+        "psr_tau_seconds",
+        "psr_macro_f1",
+    ]:
         val = results.get(name)
         if isinstance(val, float):
             log_progress(f"  {name:40s} = {val:.6f}")
@@ -641,7 +681,8 @@ def run_multi_seed_subsample(
     """Run 10-seed subsample variance as fallback when full eval produces NaN."""
     logger.info(
         "FALLBACK: Running %d-seed subsample evaluation (%d batches each)...",
-        num_seeds, batches_per_seed,
+        num_seeds,
+        batches_per_seed,
     )
     all_seed_results: list[dict] = []
 
@@ -679,10 +720,14 @@ def run_multi_seed_subsample(
 
     # Aggregate
     key_list = [
-        "det_mAP50", "det_mAP_50_95", "det_mAP50_all_frames",
+        "det_mAP50",
+        "det_mAP_50_95",
+        "det_mAP50_all_frames",
         "det_n_present_classes",
-        "act_top1", "act_top1_valid_na_excluded",
-        "forward_angular_MAE_deg", "up_angular_MAE_deg",
+        "act_top1",
+        "act_top1_valid_na_excluded",
+        "forward_angular_MAE_deg",
+        "up_angular_MAE_deg",
         "psr_macro_f1",
     ]
 
@@ -734,19 +779,20 @@ def main():
     )
     parser.add_argument("--ckpt", type=str, default=None)
     parser.add_argument("--save-dir", type=str, default=None)
-    parser.add_argument("--max-batches", type=int, default=0,
-                        help="0 = full dataset, >0 = limit")
+    parser.add_argument("--max-batches", type=int, default=0, help="0 = full dataset, >0 = limit")
     parser.add_argument("--fallback-seeds", type=int, default=10)
     parser.add_argument("--fallback-batches", type=int, default=2500)
-    parser.add_argument("--device", type=str,
-                        default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
+    )
     args = parser.parse_args()
 
     device = torch.device(args.device)
     logger.info("Device: %s", device)
 
-    base_ckpt_dir = Path(getattr(C, "RUNS", _SRC.parent / "src" / "runs")
-                         ) / "rf_stages" / "checkpoints"
+    base_ckpt_dir = (
+        Path(getattr(C, "RUNS", _SRC.parent / "src" / "runs")) / "rf_stages" / "checkpoints"
+    )
     ckpt_path = Path(args.ckpt) if args.ckpt else base_ckpt_dir / "best.pth"
     if not ckpt_path.exists():
         logger.error("Checkpoint not found: %s", ckpt_path)
@@ -793,8 +839,11 @@ def main():
     metrics = streaming_eval(model, val_loader, device, max_batches=max_batches)
 
     t_elapsed = time.time() - t_start
-    logger.info("Evaluation complete: %.1f seconds (%.2f s/batch)",
-                t_elapsed, t_elapsed / max(len(val_loader), 1))
+    logger.info(
+        "Evaluation complete: %.1f seconds (%.2f s/batch)",
+        t_elapsed,
+        t_elapsed / max(len(val_loader), 1),
+    )
 
     bad_keys = has_nan(metrics)
     verdict = "in-process-works"
@@ -809,7 +858,8 @@ def main():
         logger.warning("=" * 60)
 
         fallback_result = run_multi_seed_subsample(
-            model, device,
+            model,
+            device,
             num_seeds=args.fallback_seeds,
             batches_per_seed=args.fallback_batches,
             save_dir=str(save_dir / "fallback"),

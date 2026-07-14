@@ -8,14 +8,14 @@ This test verifies:
   1. C.LDAM_USE_DRW exists as a defined attribute in config (not via getattr fallback)
   2. LDAMLoss.set_class_counts reads C.LDAM_USE_DRW directly (not via getattr)
 """
-import importlib
+
 import src.config as C
 from src.training.losses import LDAMLoss
 
 
 def test_ldam_use_drw_defined_in_config():
     """LDAM_USE_DRW must be a defined attribute in config.py, not silently defaulted."""
-    assert hasattr(C, 'LDAM_USE_DRW'), (
+    assert hasattr(C, "LDAM_USE_DRW"), (
         "C.LDAM_USE_DRW is not defined in config.py! "
         "The config flag was only a comment, never an actual assignment. "
         "The old getattr(C, 'LDAM_USE_DRW', True) silently masked this."
@@ -31,13 +31,14 @@ def test_ldam_loss_uses_direct_attr_not_getattr():
     condition, the fix hasn't been applied yet.
     """
     import inspect
+
     source = inspect.getsource(LDAMLoss.set_class_counts)
     # The condition should read C.LDAM_USE_DRW directly
-    assert 'C.LDAM_USE_DRW' in source, (
+    assert "C.LDAM_USE_DRW" in source, (
         "LDAMLoss.set_class_counts does not reference C.LDAM_USE_DRW directly!"
     )
     # Must NOT use getattr(C, 'LDAM_USE_DRW', ...) which silently defaults
-    assert 'getattr(C' not in source or 'LDAM_USE_DRW' not in source.split('getattr(C')[1], (
+    assert "getattr(C" not in source or "LDAM_USE_DRW" not in source.split("getattr(C")[1], (
         "LDAMLoss.set_class_counts still uses getattr(C, 'LDAM_USE_DRW', ...) "
         "which silently defaults — fix it to use C.LDAM_USE_DRW directly."
     )
@@ -53,6 +54,7 @@ def test_ldam_drw_toggle():
     # With DRW enabled, set_class_counts should wire cb_weights
     C.LDAM_USE_DRW = True
     import numpy as np
+
     loss.set_class_counts(np.ones(75, dtype=np.float32) * 10.0)
     assert loss.cb_weights is not None, "cb_weights should be set when LDAM_USE_DRW=True"
 

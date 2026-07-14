@@ -6,9 +6,9 @@ random weighting, the gain is not from the weighting scheme.
 
 Single backward pass, O(1) complexity, stateless.
 """
+
 import torch
 import torch.nn.functional as F
-from typing import Dict
 
 
 class RLWWeighter:
@@ -36,8 +36,6 @@ class RLWWeighter:
             z = torch.randn(self.num_tasks, device=device)
             return F.softmax(z / self.temperature, dim=0)
         elif self.distribution == "dirichlet":
-            return torch.distributions.Dirichlet(
-                torch.ones(self.num_tasks, device=device)
-            ).sample()
+            return torch.distributions.Dirichlet(torch.ones(self.num_tasks, device=device)).sample()
         else:
             raise ValueError(f"Unknown distribution: {self.distribution}")

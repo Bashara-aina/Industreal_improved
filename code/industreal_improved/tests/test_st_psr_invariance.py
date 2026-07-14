@@ -15,12 +15,8 @@ Reference:
 
 from __future__ import annotations
 
-import copy
-import json
 import math
-import os
 import sys
-import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -35,8 +31,13 @@ slow = pytest.mark.slow  # mark tests that require building full backbone model
 # ---------------------------------------------------------------------------
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent  # code/industreal_improved/
-for _p in [_ROOT, _ROOT / "src", _ROOT / "src" / "models",
-           _ROOT / "src" / "evaluation", _ROOT / "src" / "training"]:
+for _p in [
+    _ROOT,
+    _ROOT / "src",
+    _ROOT / "src" / "models",
+    _ROOT / "src" / "evaluation",
+    _ROOT / "src" / "training",
+]:
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
@@ -44,6 +45,7 @@ for _p in [_ROOT, _ROOT / "src", _ROOT / "src" / "models",
 # ===================================================================
 # Fixtures
 # ===================================================================
+
 
 @pytest.fixture(scope="session")
 def psr_head():
@@ -110,6 +112,7 @@ def dummy_psr_labels():
 # Test 1: PSR head loads without GELU saturation
 # ===================================================================
 
+
 def test_psr_head_no_gelu_saturation(psr_head, dummy_pyramid):
     """Verify PSR head activations mean > -10 (not -130 from GELU saturation).
 
@@ -160,14 +163,13 @@ def test_psr_head_no_gelu_saturation(psr_head, dummy_pyramid):
 
     # logits should be finite and not all identical
     assert torch.isfinite(psr_logits).all(), "PSR logits contain NaN/inf"
-    assert psr_logits.std() > 1e-6, (
-        "PSR logits are nearly constant — dead head"
-    )
+    assert psr_logits.std() > 1e-6, "PSR logits are nearly constant — dead head"
 
 
 # ===================================================================
 # Test 2: Forward produces logits of shape [B, 11] or [B, T, 11]
 # ===================================================================
+
 
 @slow
 def test_forward_shape_single_frame(st_psr_model, dummy_batch):
@@ -182,9 +184,7 @@ def test_forward_shape_single_frame(st_psr_model, dummy_batch):
 
     B = dummy_batch.shape[0]
     expected_shape = (B, 11)
-    assert logits.shape == expected_shape, (
-        f"Expected shape {expected_shape}, got {logits.shape}"
-    )
+    assert logits.shape == expected_shape, f"Expected shape {expected_shape}, got {logits.shape}"
     assert torch.isfinite(logits).all(), "Logits contain NaN or inf"
 
 
@@ -195,22 +195,21 @@ def test_forward_shape_sequence(st_psr_model, dummy_batch):
     # dummy_batch is [4, 3, 224, 224]; use B=1, T=4 for B*T=4
     B = 1
     T = 4
-    batch = dummy_batch[:B * T]
+    batch = dummy_batch[: B * T]
 
     with torch.no_grad():
         outputs = model(batch, seq_len=T)
 
     logits = outputs["psr_logits"]
     expected_shape = (B, T, 11)
-    assert logits.shape == expected_shape, (
-        f"Expected shape {expected_shape}, got {logits.shape}"
-    )
+    assert logits.shape == expected_shape, f"Expected shape {expected_shape}, got {logits.shape}"
     assert torch.isfinite(logits).all(), "Logits contain NaN or inf"
 
 
 # ===================================================================
 # Test 3: One-epoch training reduces per-component BCE
 # ===================================================================
+
 
 @slow
 def test_one_epoch_reduces_bce(st_psr_model, dummy_batch, dummy_psr_labels):
@@ -270,6 +269,7 @@ def test_one_epoch_reduces_bce(st_psr_model, dummy_batch, dummy_psr_labels):
 # ===================================================================
 # Test 4: event_f1@±3 callable on predictions
 # ===================================================================
+
 
 def test_event_f1_callable():
     """Verify event_f1@±3 can be called on prediction arrays, even if result is 0.0.
@@ -345,9 +345,7 @@ def test_event_f1_on_model_predictions(st_psr_model, dummy_batch, dummy_psr_labe
         gt_tr = np.clip(label_seq[1:] - label_seq[:-1], a_min=0, a_max=None)
 
         ef1 = event_f1(pred_tr, gt_tr, tol=3)
-        assert isinstance(ef1, float), (
-            f"event_f1 returned {type(ef1)}, expected float"
-        )
+        assert isinstance(ef1, float), f"event_f1 returned {type(ef1)}, expected float"
         assert not math.isnan(ef1), "event_f1 returned NaN"
 
     print("\n[test_event_f1_on_model_predictions]")
@@ -358,6 +356,7 @@ def test_event_f1_on_model_predictions(st_psr_model, dummy_batch, dummy_psr_labe
 # Test 5: Verify LeakyReLU is confirmed in the PSR head path
 # ===================================================================
 
+
 def test_leaky_relu_in_output_heads(psr_head):
     """Confirm that every PSR output head uses LeakyReLU (model.py:1604-1607).
 
@@ -365,17 +364,14 @@ def test_leaky_relu_in_output_heads(psr_head):
     head must use LeakyReLU(negative_slope=0.01).
     """
     for i, head in enumerate(psr_head.output_heads):
-        assert len(head) >= 2, (
-            f"output_heads[{i}] has {len(head)} modules, expected >= 2"
-        )
+        assert len(head) >= 2, f"output_heads[{i}] has {len(head)} modules, expected >= 2"
         act = head[1]
         assert isinstance(act, nn.LeakyReLU), (
             f"output_heads[{i}][1] is {type(act).__name__}, "
             f"expected nn.LeakyReLU (model.py:1604-1607)"
         )
         assert act.negative_slope == 0.01, (
-            f"output_heads[{i}][1].negative_slope = {act.negative_slope}, "
-            f"expected 0.01"
+            f"output_heads[{i}][1].negative_slope = {act.negative_slope}, expected 0.01"
         )
 
     print(f"\n[test_leaky_relu_in_output_heads]")

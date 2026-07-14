@@ -1,0 +1,50 @@
+# POPW — Multi-Task Assembly Perception
+# Frozen dependencies for reproducibility.
+# Python >= 3.10 required.
+#
+# Generated from `pip list` (2026-07-14). Pin to exact versions for
+# bit-exact reproducibility; looser bounds in requirements.txt.
+
+torch==2.10.0
+torchvision==0.25.0
+torchaudio==2.10.0
+
+timm==1.0.26
+
+opencv-python==4.12.0.88
+opencv-python-headless==4.13.0.92
+
+numpy==2.2.6
+pandas==3.0.2
+scipy==1.16.2
+scikit-learn==1.8.0
+scikit-image==0.26.0
+
+Pillow==12.1.1
+
+matplotlib==3.10.7
+seaborn==0.13.2
+
+tqdm==4.67.3
+
+PyYAML==6.0.3
+
+safetensors==0.7.0
+transformers==4.47.0
+
+einops==0.8.2
+
+pycocotools==2.0.11
+
+pytest==9.0.2
+pytest-asyncio==1.3.0
+pytest-cov==7.1.0
+pytest-xdist==3.8.0
+
+lion-pytorch==0.2.4
+torchmetrics==1.9.0
+
+# Runtime dependencies (required for training / evaluation)
+psutil>=5.9.0            # Memory monitoring (psutil.Process)
+fvcore>=0.1.5            # GFLOPs / FPS profiling
+tensorboard>=2.16.0      # Training log visualization

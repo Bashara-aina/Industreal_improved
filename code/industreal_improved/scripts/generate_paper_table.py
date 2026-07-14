@@ -12,11 +12,10 @@ Usage:
         --st-runs runs/st_det runs/st_act runs/st_psr \
         --output paper_table.md
 """
+
 import argparse
 import json
-import sys
 from pathlib import Path
-from typing import Optional
 
 
 def load_metrics(run_dir: Path) -> dict:
@@ -59,12 +58,23 @@ def fmt_metric(value: float, format: str = ".3f") -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Generate paper headline table from metrics")
-    parser.add_argument("--mtl-runs", type=str, nargs="+", required=True,
-                        help="Path(s) to MTL run directories (with metrics.json)")
-    parser.add_argument("--st-runs", type=str, nargs="*", default=[],
-                        help="Path(s) to ST run directories (with metrics.json)")
-    parser.add_argument("--sota", type=str, default=None,
-                        help="Path to SOTA numbers JSON (WACV paper)")
+    parser.add_argument(
+        "--mtl-runs",
+        type=str,
+        nargs="+",
+        required=True,
+        help="Path(s) to MTL run directories (with metrics.json)",
+    )
+    parser.add_argument(
+        "--st-runs",
+        type=str,
+        nargs="*",
+        default=[],
+        help="Path(s) to ST run directories (with metrics.json)",
+    )
+    parser.add_argument(
+        "--sota", type=str, default=None, help="Path to SOTA numbers JSON (WACV paper)"
+    )
     parser.add_argument("--output", type=str, default="paper_table.md")
     args = parser.parse_args()
 
@@ -72,10 +82,10 @@ def main():
     # Updated per Opus 192 FC-6: detection should compare to IndustReal-only (0.779 boxed)
     # not synthetic-augmented (0.838).
     SOTA = {
-        "det_mAP50": 0.779,           # WACV: YOLOv8-m on IndustReal-only (boxed)
-        "act_top1": 0.6525,           # WACV: MViTv2-S on AR (Kinetics pretrained, RGB)
-        "psr_event_f1_at_3": 0.901,   # WACV: STORM
-        "pose_fwd_mae": None,         # No SOTA (per Opus 186)
+        "det_mAP50": 0.779,  # WACV: YOLOv8-m on IndustReal-only (boxed)
+        "act_top1": 0.6525,  # WACV: MViTv2-S on AR (Kinetics pretrained, RGB)
+        "psr_event_f1_at_3": 0.901,  # WACV: STORM
+        "pose_fwd_mae": None,  # No SOTA (per Opus 186)
     }
     # 80% bar (low bar; the user-requested target)
     SOTA_80PCT = {k: (0.8 * v if v else None) for k, v in SOTA.items()}
@@ -107,8 +117,12 @@ def main():
     print()
 
     md = ["# Headline Table (auto-generated)", ""]
-    md.append("| Head | Metric | ST (Phase 2) | MTL (Phase 3) | MTL/ST | SOTA | MTL/SOTA | 80% bar |")
-    md.append("|------|--------|---------------|---------------|--------|------|----------|---------|")
+    md.append(
+        "| Head | Metric | ST (Phase 2) | MTL (Phase 3) | MTL/ST | SOTA | MTL/SOTA | 80% bar |"
+    )
+    md.append(
+        "|------|--------|---------------|---------------|--------|------|----------|---------|"
+    )
 
     rows = [
         ("Detection", "mAP@0.5", "det_mAP50"),
@@ -162,9 +176,13 @@ def main():
             sota_str = fmt_metric(sota, ".3f") if sota else "-"
             sota_80_str = fmt_metric(sota_80, ".3f") if sota_80 else "-"
 
-        md.append(f"| {head_name} | {metric_label} | {st_str} | {mtl_str} | {ratio} | {sota_str} | {mtl_sota} | {sota_80_str} |")
-        print(f"  {head_name:12s} {metric_label:18s} | ST: {st_str:>8s} | MTL: {mtl_str:>8s} | "
-              f"SOTA: {sota_str:>8s} | 80% bar: {sota_80_str:>8s}")
+        md.append(
+            f"| {head_name} | {metric_label} | {st_str} | {mtl_str} | {ratio} | {sota_str} | {mtl_sota} | {sota_80_str} |"
+        )
+        print(
+            f"  {head_name:12s} {metric_label:18s} | ST: {st_str:>8s} | MTL: {mtl_str:>8s} | "
+            f"SOTA: {sota_str:>8s} | 80% bar: {sota_80_str:>8s}"
+        )
 
     print()
     md.append("")
@@ -172,7 +190,9 @@ def main():
     md.append("- **MTL/ST ratio** > 1.0 = MTL beats single-task (positive transfer).")
     md.append("- **MTL/SOTA** > 0.8 = MTL clears 80% of SOTA.")
     md.append("- **Pose**: no SOTA exists; reported as MAE (lower is better).")
-    md.append("- **Detection SOTA**: 0.779 is IndustReal-only (boxed); 0.838 is with synthetic-data augmentation. We compare to 0.779 per Opus 192 FC-6.")
+    md.append(
+        "- **Detection SOTA**: 0.779 is IndustReal-only (boxed); 0.838 is with synthetic-data augmentation. We compare to 0.779 per Opus 192 FC-6."
+    )
     md.append("")
 
     with open(args.output, "w") as f:

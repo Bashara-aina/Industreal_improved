@@ -21,6 +21,7 @@ Usage:
     aug = DetectionAugment(p_flip=0.5, p_color=0.5, p_crop=0.3)
     aug_images, aug_targets = aug(images, targets)
 """
+
 import random
 from typing import Tuple
 
@@ -50,7 +51,7 @@ class DetectionAugment:
     def __call__(
         self,
         images: torch.Tensor,  # [B, 3, T, H, W] (after permute)
-        targets: dict,         # contains 'detection' list of {boxes, labels}
+        targets: dict,  # contains 'detection' list of {boxes, labels}
     ) -> Tuple[torch.Tensor, dict]:
         """Apply augmentations to images and detection boxes (other targets unchanged).
 
@@ -113,10 +114,15 @@ class DetectionAugment:
             y_offset = random.randint(0, H - crop_h)
             x_offset = random.randint(0, W - crop_w)
             # Crop
-            cropped = aug_images[:, :, :, y_offset:y_offset + crop_h, x_offset:x_offset + crop_w]
+            cropped = aug_images[
+                :, :, :, y_offset : y_offset + crop_h, x_offset : x_offset + crop_w
+            ]
             # Pad back
-            aug_images = F.pad(cropped, [x_offset, W - x_offset - crop_w,
-                                        y_offset, H - y_offset - crop_h], value=0.5)
+            aug_images = F.pad(
+                cropped,
+                [x_offset, W - x_offset - crop_w, y_offset, H - y_offset - crop_h],
+                value=0.5,
+            )
             # Adjust detection boxes: subtract offset, clip to crop
             new_det = []
             for det in aug_targets.get("detection", []):
@@ -134,8 +140,9 @@ class DetectionAugment:
                 new_boxes[:, 2] = (boxes[:, 2] - x_offset).clamp(0, W)
                 new_boxes[:, 3] = (boxes[:, 3] - y_offset).clamp(0, H)
                 # Filter boxes with area < some threshold (degenerate after crop)
-                areas = (new_boxes[:, 2] - new_boxes[:, 0]).clamp(min=0) * \
-                        (new_boxes[:, 3] - new_boxes[:, 1]).clamp(min=0)
+                areas = (new_boxes[:, 2] - new_boxes[:, 0]).clamp(min=0) * (
+                    new_boxes[:, 3] - new_boxes[:, 1]
+                ).clamp(min=0)
                 valid = areas > 100  # min 100 sq pixels
                 new_boxes = new_boxes[valid]
                 if new_boxes.numel() == 0:

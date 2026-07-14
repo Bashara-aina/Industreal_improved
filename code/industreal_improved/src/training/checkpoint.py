@@ -18,12 +18,12 @@ class BestModelTracker:
         print(tracker.best_score, tracker.best_epoch)
     """
 
-    def __init__(self, mode='max'):
+    def __init__(self, mode="max"):
         """
         Args:
             mode: 'max' (higher score = better) or 'min' (lower score = better)
         """
-        if mode not in ('max', 'min'):
+        if mode not in ("max", "min"):
             raise ValueError(f"mode must be 'max' or 'min', got {mode}")
         self.mode = mode
         self.best_score = None
@@ -49,18 +49,18 @@ class BestModelTracker:
         """
         if self.best_score is None:
             is_best = True
-        elif self.mode == 'max':
+        elif self.mode == "max":
             is_best = score > self.best_score
         else:
             is_best = score < self.best_score
 
         if is_best:
             self.best_score = score
-            self.best_epoch = checkpoint_dict.get('epoch', None)
+            self.best_epoch = checkpoint_dict.get("epoch", None)
             self.best_checkpoint = checkpoint_dict.copy() if checkpoint_dict else None
 
             if self.save_dir is not None:
-                torch.save(checkpoint_dict, self.save_dir / 'best.pth')
+                torch.save(checkpoint_dict, self.save_dir / "best.pth")
             return True
         return False
 

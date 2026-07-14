@@ -24,7 +24,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 
 # Known activity classes from the IndustReal AAIML dataset (69-class taxonomy)
 # Sorted alphabetically — the exact order doesn't matter as long as it's stable.
@@ -151,8 +150,7 @@ def main():
         env = os.environ.copy()
         env["PYTHONHASHSEED"] = seed
         result = subprocess.run(
-            [sys.executable, __file__, "--mode", "hash"],
-            env=env, capture_output=True, text=True
+            [sys.executable, __file__, "--mode", "hash"], env=env, capture_output=True, text=True
         )
         hash_results[seed] = json.loads(result.stdout)
         print(f"  PYTHONHASHSEED={seed}: {hash_results[seed]}")
@@ -170,7 +168,9 @@ def main():
             break
 
     if has_different:
-        print("\n[BUG CONFIRMED] hash-based mapping produces different indices for same class across PYTHONHASHSEED values.")
+        print(
+            "\n[BUG CONFIRMED] hash-based mapping produces different indices for same class across PYTHONHASHSEED values."
+        )
         # Show a concrete example
         for cls_name in CLASS_NAMES:
             vals = {s: hash_results[s][cls_name] for s in seeds_list}
@@ -178,7 +178,9 @@ def main():
                 print(f"  Example: '{cls_name}' maps to {vals}")
                 break
     else:
-        print("\n[NOTE] hash-based mapping happened to be the same across these seeds (unlikely but possible).")
+        print(
+            "\n[NOTE] hash-based mapping happened to be the same across these seeds (unlikely but possible)."
+        )
 
     print()
     print("=" * 70)
@@ -190,8 +192,7 @@ def main():
         env = os.environ.copy()
         env["PYTHONHASHSEED"] = seed
         result = subprocess.run(
-            [sys.executable, __file__, "--mode", "dict"],
-            env=env, capture_output=True, text=True
+            [sys.executable, __file__, "--mode", "dict"], env=env, capture_output=True, text=True
         )
         dict_results[seed] = json.loads(result.stdout)
 
@@ -205,8 +206,12 @@ def main():
 
     if all_identical:
         print(f"  [PASS] All {len(seeds_list)} processes produced identical mapping.")
-        print(f"  First class '{sorted(CLASS_NAMES)[0]}' -> {dict_results[seeds_list[0]][sorted(CLASS_NAMES)[0]]}")
-        print(f"  Last class '{sorted(CLASS_NAMES)[-1]}' -> {dict_results[seeds_list[0]][sorted(CLASS_NAMES)[-1]]}")
+        print(
+            f"  First class '{sorted(CLASS_NAMES)[0]}' -> {dict_results[seeds_list[0]][sorted(CLASS_NAMES)[0]]}"
+        )
+        print(
+            f"  Last class '{sorted(CLASS_NAMES)[-1]}' -> {dict_results[seeds_list[0]][sorted(CLASS_NAMES)[-1]]}"
+        )
     else:
         print("\n  [FAIL] Dict mapping differs across seeds — the fix is broken!")
         return 1
@@ -216,7 +221,9 @@ def main():
     print("SUMMARY")
     print("=" * 70)
     if has_different:
-        print("  BUG CONFIRMED:  hash(cls_str) % num_classes is non-deterministic across processes.")
+        print(
+            "  BUG CONFIRMED:  hash(cls_str) % num_classes is non-deterministic across processes."
+        )
     print("  FIX VERIFIED:    sorted class name -> dict lookup produces stable indices.")
     return 0
 

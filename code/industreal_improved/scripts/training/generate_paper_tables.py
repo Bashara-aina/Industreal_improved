@@ -30,8 +30,6 @@ import argparse
 import json
 import math
 import os
-import sys
-import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -43,18 +41,28 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # Activity Recognition
 ACTIVITY_BASELINES = [
-    {"name": "I3D RGB (WACV 2021)",      "top1": 63.09, "top5": 87.50,  "source": "Ben-Shabat et al. 2021"},
-    {"name": "I3D RGB+Pose (WACV 2021)",  "top1": 64.15, "top5": 88.10,  "source": "Ben-Shabat et al. 2021"},
-    {"name": "MViTv2 RGB (CVPR 2022)",     "top1": 65.25, "top5": 87.93,  "source": "Li et al. 2022"},
-    {"name": "VideoMAE V2 (ICCV 2023)",     "top1": 72.1,  "top5": 91.8,   "source": "Tong et al. 2023"},
-    {"name": "PC3D (IJCNN 2023)",           "top1": 80.20, "top5": 95.60,  "source": "Aganian et al. 2023"},
+    {
+        "name": "I3D RGB (WACV 2021)",
+        "top1": 63.09,
+        "top5": 87.50,
+        "source": "Ben-Shabat et al. 2021",
+    },
+    {
+        "name": "I3D RGB+Pose (WACV 2021)",
+        "top1": 64.15,
+        "top5": 88.10,
+        "source": "Ben-Shabat et al. 2021",
+    },
+    {"name": "MViTv2 RGB (CVPR 2022)", "top1": 65.25, "top5": 87.93, "source": "Li et al. 2022"},
+    {"name": "VideoMAE V2 (ICCV 2023)", "top1": 72.1, "top5": 91.8, "source": "Tong et al. 2023"},
+    {"name": "PC3D (IJCNN 2023)", "top1": 80.20, "top5": 95.60, "source": "Aganian et al. 2023"},
 ]
 
 # Assembly State Detection (ASD) — mAP@0.5 bbox
 ASD_BASELINES = [
-    {"name": "YOLOv8m (Ultralytics 2023)",  "mAP50": 83.80,  "source": "Jocher et al. 2023"},
-    {"name": "Faster R-CNN (NeurIPS 2015)",  "mAP50": 78.50,  "source": "Ren et al. 2015"},
-    {"name": "CASCADE R-CNN (CVPR 2018)",    "mAP50": 81.30,  "source": "Cai & Vasconcelos 2018"},
+    {"name": "YOLOv8m (Ultralytics 2023)", "mAP50": 83.80, "source": "Jocher et al. 2023"},
+    {"name": "Faster R-CNN (NeurIPS 2015)", "mAP50": 78.50, "source": "Ren et al. 2015"},
+    {"name": "CASCADE R-CNN (CVPR 2018)", "mAP50": 81.30, "source": "Cai & Vasconcelos 2018"},
 ]
 
 # Procedure Step Recognition (PSR) — F1 @ ±3 frames
@@ -63,32 +71,45 @@ ASD_BASELINES = [
 PSR_BASELINES = [
     # WACV 2024 Table 4 — "All recordings" / "Recordings with errors"
     # F1 @ ±3 frames; source: Ben-Shabat et al., IndustReal WACV 2024
-    {"name": "B2 F1 (all recordings)",       "f1": 0.860,  "source": "Ben-Shabat et al. 2024, Table 4"},
-    {"name": "B2 F1 (with errors)",          "f1": 0.784,  "source": "Ben-Shabat et al. 2024, Table 4"},
-    {"name": "B3 F1 (all recordings)",       "f1": 0.883,  "source": "Ben-Shabat et al. 2024, Table 4"},
-    {"name": "B3 F1 (with errors)",          "f1": 0.816,  "source": "Ben-Shabat et al. 2024, Table 4"},
+    {"name": "B2 F1 (all recordings)", "f1": 0.860, "source": "Ben-Shabat et al. 2024, Table 4"},
+    {"name": "B2 F1 (with errors)", "f1": 0.784, "source": "Ben-Shabat et al. 2024, Table 4"},
+    {"name": "B3 F1 (all recordings)", "f1": 0.883, "source": "Ben-Shabat et al. 2024, Table 4"},
+    {"name": "B3 F1 (with errors)", "f1": 0.816, "source": "Ben-Shabat et al. 2024, Table 4"},
     # MViTv2+PSR internal baseline — source: Li et al. 2022
-    {"name": "MViTv2+PSR (internal)",         "f1": 0.698,  "source": "Li et al. 2022"},
+    {"name": "MViTv2+PSR (internal)", "f1": 0.698, "source": "Li et al. 2022"},
     # STORM-PSR — arXiv:2510.12385, CVIU 2025, Table 1
-    {"name": "STORM-PSR (dual-stream)",       "f1": 0.506,  "source": "Schoonbeek et al. 2025, Table 1"},
+    {"name": "STORM-PSR (dual-stream)", "f1": 0.506, "source": "Schoonbeek et al. 2025, Table 1"},
 ]
 
 # Head Pose — Angular MAE (degrees)
 POSE_BASELINES = [
-    {"name": "ResNet-50 (CVPR 2016)",     "mae": 6.8,  "source": "He et al. 2016"},
-    {"name": "HRNet (CVPR 2019)",          "mae": 5.2,  "source": "Sun et al. 2019"},
+    {"name": "ResNet-50 (CVPR 2016)", "mae": 6.8, "source": "He et al. 2016"},
+    {"name": "HRNet (CVPR 2019)", "mae": 5.2, "source": "Sun et al. 2019"},
 ]
 
 # Efficiency baselines
 EFFICIENCY_BASELINES = [
-    {"name": "IndustReal v1 (RA-L 2023)", "params": 38.2, "gflops": 18.4, "fps": 41.0, "source": "Ben-Shabat et al. 2023"},
-    {"name": "PTMA (IEEE TMM 2025)",       "params": 12.9, "gflops": 1.96, "fps": 291, "source": "Xie et al. 2025"},
+    {
+        "name": "IndustReal v1 (RA-L 2023)",
+        "params": 38.2,
+        "gflops": 18.4,
+        "fps": 41.0,
+        "source": "Ben-Shabat et al. 2023",
+    },
+    {
+        "name": "PTMA (IEEE TMM 2025)",
+        "params": 12.9,
+        "gflops": 1.96,
+        "fps": 291,
+        "source": "Xie et al. 2025",
+    },
 ]
 
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
+
 
 def fmt_pct(v: float) -> str:
     return f"{v:.2f}\\%"
@@ -119,8 +140,11 @@ def bold_if_best(values: List[float], idx: int, higher_is_better: bool = True) -
     val = values[idx]
     if math.isnan(val):
         return "—"
-    mark = "\\best{}" if (val == best and higher_is_better) or \
-                         (val == best and not higher_is_better) else ""
+    mark = (
+        "\\best{}"
+        if (val == best and higher_is_better) or (val == best and not higher_is_better)
+        else ""
+    )
     return f"{mark}{val:.3f}"
 
 
@@ -131,6 +155,7 @@ def latex_escape(s: str) -> str:
 # ---------------------------------------------------------------------------
 # Table 1: Main Results (Activity, ASD, PSR, Head Pose)
 # ---------------------------------------------------------------------------
+
 
 def build_main_results_table(
     popw_results: Dict[str, Any],
@@ -143,6 +168,7 @@ def build_main_results_table(
       - PSR F1 @ ±3 frames
       - Head Pose Angular MAE
     """
+
     # Extract POPW numbers
     def get(values, key, default=np.nan):
         return values.get(key, default)
@@ -150,7 +176,7 @@ def build_main_results_table(
     # POPW mean ± std from multi-seed results
     def popw(key, fmt_fn=str) -> str:
         mean = get(popw_results, f"{key}_mean", np.nan)
-        std  = get(popw_results, f"{key}_std",  np.nan)
+        std = get(popw_results, f"{key}_std", np.nan)
         if isinstance(mean, float) and math.isnan(mean):
             return "—"
         if isinstance(std, float) and math.isnan(std):
@@ -158,17 +184,17 @@ def build_main_results_table(
         return f"{fmt_fn(mean)}\\pm{fmt_fn(std)}"
 
     # Activity
-    act_top1 = popw("act_accuracy",     fmt_pct)
+    act_top1 = popw("act_accuracy", fmt_pct)
     act_top5 = popw("act_top5_accuracy", fmt_pct)
 
     # ASD
     asd_map = popw("det_mAP50", fmt_pct)
 
     # PSR
-    psr_f1  = popw("psr_f1_at_t", fmt_f1)
+    psr_f1 = popw("psr_f1_at_t", fmt_f1)
 
     # Head Pose
-    hp_mae  = popw("forward_angular_MAE_deg", fmt_mae)
+    hp_mae = popw("forward_angular_MAE_deg", fmt_mae)
 
     table = r"""
 % ============================================================
@@ -216,9 +242,7 @@ HRNet (CVPR 2019)          & —     & —     & —     & 5.20 \\
 """
     # We need to fill in POPW row with actual results
     # Placeholder until results are available:
-    popw_row = (
-        f"{act_top1} & {asd_map} & {psr_f1} & {hp_mae} \\\\"
-    )
+    popw_row = f"{act_top1} & {asd_map} & {psr_f1} & {hp_mae} \\\\"
     table += popw_row
     table += r"""
 \midrule
@@ -238,6 +262,7 @@ HRNet (CVPR 2019)          & —     & —     & —     & 5.20 \\
 # Table 2: PSR Per-Component Breakdown
 # ---------------------------------------------------------------------------
 
+
 def build_psr_detailed_table(
     popw_results: Dict[str, Any],
     per_component: Dict[str, float],
@@ -247,10 +272,7 @@ def build_psr_detailed_table(
         return "% PSR per-component results not available\n"
 
     sorted_comps = sorted(per_component.items(), key=lambda x: x[0])
-    rows = "\n".join(
-        f"  {latex_escape(name)} & {v:.3f} \\\\"
-        for name, v in sorted_comps
-    )
+    rows = "\n".join(f"  {latex_escape(name)} & {v:.3f} \\\\" for name, v in sorted_comps)
     table = f"""
 % ============================================================
 % TABLE II — PSR Per-Component F1@$\\pm$3 frames
@@ -278,6 +300,7 @@ def build_psr_detailed_table(
 # Table 3: Ablation Study
 # ---------------------------------------------------------------------------
 
+
 def build_ablation_table(
     ablation_data: Dict[str, Dict[str, float]],
     metric: str = "act_macro_f1",
@@ -298,15 +321,14 @@ def build_ablation_table(
 
     # Metric columns
     metric_cols = [
-        ("act_macro_f1",      "Activity\nMacro-F1"),
-        ("psr_f1_at_t",      "PSR\nF1@$\\pm$3"),
-        ("det_mAP50",        "ASD\nmAP@0.5"),
+        ("act_macro_f1", "Activity\nMacro-F1"),
+        ("psr_f1_at_t", "PSR\nF1@$\\pm$3"),
+        ("det_mAP50", "ASD\nmAP@0.5"),
         ("forward_angular_MAE_deg", "Pose\nMAE (deg)"),
     ]
 
     # Compute deltas
-    baseline_vals = {m[0]: ablation_data[components[0]].get(m[0], np.nan)
-                     for m in metric_cols}
+    baseline_vals = {m[0]: ablation_data[components[0]].get(m[0], np.nan) for m in metric_cols}
 
     def delta_str(val, base, higher_is_better=True):
         if isinstance(val, float) and (math.isnan(val) or math.isnan(base)):
@@ -322,10 +344,12 @@ def build_ablation_table(
         "forward_angular_MAE_deg": False,  # lower is better
     }
 
-    header = ("\\toprule\n"
-              "\\textbf{Configuration} & " +
-              " & ".join(f"\\textbf{{{m[1]}}}" for m in metric_cols) +
-              " \\\\\n\\midrule")
+    header = (
+        "\\toprule\n"
+        "\\textbf{Configuration} & "
+        + " & ".join(f"\\textbf{{{m[1]}}}" for m in metric_cols)
+        + " \\\\\n\\midrule"
+    )
 
     rows = []
     for comp_name, metrics in ablation_data.items():
@@ -365,6 +389,7 @@ Each row shows the metric value and its delta relative to the baseline configura
 # Table 4: Efficiency Comparison
 # ---------------------------------------------------------------------------
 
+
 def build_efficiency_table(
     popw_results: Dict[str, Any],
 ) -> str:
@@ -374,12 +399,12 @@ def build_efficiency_table(
         val = popw_results.get(key, default)
         return val if not isinstance(val, float) or not math.isnan(val) else default
 
-    p_params  = get("eff_params_m_mean",         get("eff_params_m",         np.nan))
-    p_train   = get("eff_trainable_params_m_mean",get("eff_trainable_params_m",np.nan))
-    p_gflops  = get("eff_gflops_mean",            get("eff_gflops",            np.nan))
-    p_fps     = get("eff_fps_mean",               get("eff_fps",               np.nan))
-    p_stream  = get("eff_fps_streaming_mean",     get("eff_fps_streaming",     np.nan))
-    p_lat_p50 = get("eff_latency_p50_ms_mean",    get("eff_latency_p50_ms",    np.nan))
+    p_params = get("eff_params_m_mean", get("eff_params_m", np.nan))
+    p_train = get("eff_trainable_params_m_mean", get("eff_trainable_params_m", np.nan))
+    p_gflops = get("eff_gflops_mean", get("eff_gflops", np.nan))
+    p_fps = get("eff_fps_mean", get("eff_fps", np.nan))
+    p_stream = get("eff_fps_streaming_mean", get("eff_fps_streaming", np.nan))
+    p_lat_p50 = get("eff_latency_p50_ms_mean", get("eff_latency_p50_ms", np.nan))
 
     def _f(v, fmt=str, nan="—"):
         return nan if (isinstance(v, float) and math.isnan(v)) else fmt(v)
@@ -387,15 +412,17 @@ def build_efficiency_table(
     rows = []
     for bl in EFFICIENCY_BASELINES:
         name = latex_escape(bl["name"])
-        params = _f(bl["params"],  fmt_params)
+        params = _f(bl["params"], fmt_params)
         gflops = _f(bl["gflops"], fmt_gflops)
-        fps    = _f(bl["fps"],    lambda x: f"{x:.0f}")
+        fps = _f(bl["fps"], lambda x: f"{x:.0f}")
         rows.append(f"  {name} & {params} & {gflops} & {fps} \\\\")
 
-    popw_row = (f"  \\textbf{{POPW (Ours)}} & "
-                f"{_f(p_params, fmt_params)} & "
-                f"{_f(p_gflops, fmt_gflops)} & "
-                f"{_f(p_fps, lambda x: f'{x:.0f}')}")
+    popw_row = (
+        f"  \\textbf{{POPW (Ours)}} & "
+        f"{_f(p_params, fmt_params)} & "
+        f"{_f(p_gflops, fmt_gflops)} & "
+        f"{_f(p_fps, lambda x: f'{x:.0f}')}"
+    )
 
     table = f"""
 % ============================================================
@@ -424,21 +451,22 @@ Video resolution 1280$\\times$720. Best FPS in column highlighted.}}
 # Main: collect results and write all tables
 # ---------------------------------------------------------------------------
 
+
 def collect_results(results_dir: str) -> Dict[str, Any]:
     """Scan results directory and build a combined results dict."""
     results_dir = Path(results_dir)
     out = {
         "activity": {},
-        "asd":      {},
-        "psr":      {},
-        "pose":     {},
+        "asd": {},
+        "psr": {},
+        "pose": {},
         "efficiency": {},
     }
 
     # Try to load multiseed summary for each task
     for task in ["activity", "asd", "psr", "pose", "efficiency"]:
         task_dir = results_dir / task
-        ms_path  = task_dir / "multiseed_summary.json"
+        ms_path = task_dir / "multiseed_summary.json"
         if ms_path.exists():
             with open(ms_path) as f:
                 data = json.load(f)
@@ -546,26 +574,36 @@ def generate_all_tables(
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate POPW paper-ready LaTeX tables from evaluation results."
     )
     parser.add_argument(
-        "--results_dir", type=str, default="results/",
-        help="Root results directory (default: results/)"
+        "--results_dir",
+        type=str,
+        default="results/",
+        help="Root results directory (default: results/)",
     )
     parser.add_argument(
-        "--output_dir", type=str, default="results/tables/",
-        help="Where to write .tex files (default: results/tables/)"
+        "--output_dir",
+        type=str,
+        default="results/tables/",
+        help="Where to write .tex files (default: results/tables/)",
     )
     parser.add_argument(
-        "--seeds", type=int, nargs="+", default=[42, 2024, 1337],
-        help="Seeds used in multi-seed evaluation (default: 42 2024 1337)"
+        "--seeds",
+        type=int,
+        nargs="+",
+        default=[42, 2024, 1337],
+        help="Seeds used in multi-seed evaluation (default: 42 2024 1337)",
     )
     parser.add_argument(
-        "--ablation_data", type=str, default=None,
+        "--ablation_data",
+        type=str,
+        default=None,
         help="Path to JSON file with ablation data. "
-             "See example in results/tables/table_ablation.tex header comment."
+        "See example in results/tables/table_ablation.tex header comment.",
     )
     return parser.parse_args()
 
@@ -579,8 +617,8 @@ if __name__ == "__main__":
             ablation_data = json.load(f)
 
     generate_all_tables(
-        results_dir  = args.results_dir,
-        output_dir   = args.output_dir,
-        seeds        = args.seeds,
-        ablation_data = ablation_data,
+        results_dir=args.results_dir,
+        output_dir=args.output_dir,
+        seeds=args.seeds,
+        ablation_data=ablation_data,
     )

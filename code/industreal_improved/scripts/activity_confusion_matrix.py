@@ -46,8 +46,14 @@ STD = torch.tensor([0.225, 0.225, 0.225])
 class TestClipDataset(torch.utils.data.Dataset):
     """16-frame clip dataset built from AR_labels.csv on the test split."""
 
-    def __init__(self, split: str = "test", clip_len: int = 16, stride: int = 8,
-                 max_recordings: int = None, max_clips: int = None):
+    def __init__(
+        self,
+        split: str = "test",
+        clip_len: int = 16,
+        stride: int = 8,
+        max_recordings: int | None = None,
+        max_clips: int | None = None,
+    ):
         self.clip_len = clip_len
         self.clips = []  # (recording_id, clip_start_frame, action_label)
         self._build(split, max_recordings, max_clips)
@@ -56,8 +62,7 @@ class TestClipDataset(torch.utils.data.Dataset):
         split_dir = C.RECORDINGS_ROOT / split
         if not split_dir.exists():
             raise FileNotFoundError(
-                f"Split directory not found: {split_dir}\n"
-                f"Check RECORDINGS_ROOT in src/config.py"
+                f"Split directory not found: {split_dir}\nCheck RECORDINGS_ROOT in src/config.py"
             )
         rec_dirs = sorted(split_dir.iterdir())
         rec_count = 0
@@ -105,6 +110,7 @@ class TestClipDataset(torch.utils.data.Dataset):
             try:
                 from PIL import Image
                 from torchvision.transforms import functional as TF
+
                 img = Image.open(img_path).convert("RGB")
                 img = TF.resize(img, [256], antialias=True)
                 img = TF.center_crop(img, [224, 224])
@@ -127,12 +133,15 @@ def run_inference(model, dataset, device, batch_size: int = 4):
     Returns (all_preds, all_labels, all_logits) as numpy arrays.
     """
     loader = torch.utils.data.DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, num_workers=0,
+        dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
     )
     all_preds, all_labels, all_logits = [], [], []
 
     for clip, label in loader:
-        clip = clip.to(device, non_blocking=True)   # [B, 16, 3, 224, 224]
+        clip = clip.to(device, non_blocking=True)  # [B, 16, 3, 224, 224]
         label = label.to(device, non_blocking=True)
         # Model expects [B, 3, 16, H, W] — rearrange
         clip = clip.permute(0, 2, 1, 3, 4).contiguous()
@@ -160,19 +169,21 @@ def run_inference(model, dataset, device, batch_size: int = 4):
 # ---------------------------------------------------------------------------
 # Confusion matrix
 # ---------------------------------------------------------------------------
-def compute_confusion_matrix(all_labels: np.ndarray, all_preds: np.ndarray,
-                             num_classes: int = NUM_CLASSES) -> np.ndarray:
+def compute_confusion_matrix(
+    all_labels: np.ndarray, all_preds: np.ndarray, num_classes: int = NUM_CLASSES
+) -> np.ndarray:
     """Compute the full confusion matrix."""
     from sklearn.metrics import confusion_matrix
+
     valid = all_labels >= 0
     return confusion_matrix(
-        all_labels[valid], all_preds[valid],
+        all_labels[valid],
+        all_preds[valid],
         labels=list(range(num_classes)),
     )
 
 
-def find_top_confusions(cm: np.ndarray, class_names: list[str],
-                        top_k: int = 10) -> list[dict]:
+def find_top_confusions(cm: np.ndarray, class_names: list[str], top_k: int = 10) -> list[dict]:
     """Find top-K most confused off-diagonal class pairs."""
     n = cm.shape[0]
     pairs = []
@@ -185,14 +196,16 @@ def find_top_confusions(cm: np.ndarray, class_names: list[str],
                 continue
             count = int(cm[i, j])
             if count > 0:
-                pairs.append({
-                    "true_class_id": i,
-                    "true_class_name": class_names[i] if i < len(class_names) else str(i),
-                    "pred_class_id": j,
-                    "pred_class_name": class_names[j] if j < len(class_names) else str(j),
-                    "count": count,
-                    "pct_of_true": round(100.0 * count / true_total, 1),
-                })
+                pairs.append(
+                    {
+                        "true_class_id": i,
+                        "true_class_name": class_names[i] if i < len(class_names) else str(i),
+                        "pred_class_id": j,
+                        "pred_class_name": class_names[j] if j < len(class_names) else str(j),
+                        "count": count,
+                        "pct_of_true": round(100.0 * count / true_total, 1),
+                    }
+                )
     pairs.sort(key=lambda x: x["count"], reverse=True)
     return pairs[:top_k]
 
@@ -226,10 +239,12 @@ def compute_per_class_stats(cm: np.ndarray, class_names: list[str]) -> dict:
 # ---------------------------------------------------------------------------
 # Visualization
 # ---------------------------------------------------------------------------
-def plot_confusion_matrix(cm: np.ndarray, class_names: list[str],
-                          save_path: Path, figsize: tuple = (48, 40)):
+def plot_confusion_matrix(
+    cm: np.ndarray, class_names: list[str], save_path: Path, figsize: tuple = (48, 40)
+):
     """Render a full 75x75 confusion matrix heatmap."""
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import seaborn as sns
@@ -240,9 +255,14 @@ def plot_confusion_matrix(cm: np.ndarray, class_names: list[str],
 
     fig, ax = plt.subplots(figsize=figsize)
     sns.heatmap(
-        cm_norm, annot=False, fmt=".2f", cmap="Blues",
-        xticklabels=class_names, yticklabels=class_names,
-        ax=ax, cbar_kws={"shrink": 0.8},
+        cm_norm,
+        annot=False,
+        fmt=".2f",
+        cmap="Blues",
+        xticklabels=class_names,
+        yticklabels=class_names,
+        ax=ax,
+        cbar_kws={"shrink": 0.8},
     )
     ax.set_xlabel("Predicted Class", fontsize=24)
     ax.set_ylabel("True Class", fontsize=24)
@@ -259,22 +279,32 @@ def plot_confusion_matrix(cm: np.ndarray, class_names: list[str],
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser(
-        description="75x75 confusion matrix on test set"
+    parser = argparse.ArgumentParser(description="75x75 confusion matrix on test set")
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to checkpoint .pth. If omitted, searches default locations.",
     )
-    parser.add_argument("--checkpoint", type=str, default=None,
-                        help="Path to checkpoint .pth. If omitted, searches default locations.")
-    parser.add_argument("--save-dir", type=str, default="/tmp/confusion_analysis",
-                        help="Output directory for JSON + PNG")
-    parser.add_argument("--split", type=str, default="test",
-                        help="Dataset split (test, val)")
+    parser.add_argument(
+        "--save-dir",
+        type=str,
+        default="/tmp/confusion_analysis",
+        help="Output directory for JSON + PNG",
+    )
+    parser.add_argument("--split", type=str, default="test", help="Dataset split (test, val)")
     parser.add_argument("--clip-length", type=int, default=16)
     parser.add_argument("--stride", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--max-recordings", type=int, default=None,
-                        help="Cap number of recordings for fast debugging")
-    parser.add_argument("--max-clips", type=int, default=None,
-                        help="Cap total clips for fast debugging")
+    parser.add_argument(
+        "--max-recordings",
+        type=int,
+        default=None,
+        help="Cap number of recordings for fast debugging",
+    )
+    parser.add_argument(
+        "--max-clips", type=int, default=None, help="Cap total clips for fast debugging"
+    )
     parser.add_argument("--cpu", action="store_true")
     args = parser.parse_args()
 
@@ -283,9 +313,7 @@ def main():
         format="%(asctime)s [%(levelname)s] %(message)s",
     )
 
-    device = torch.device(
-        "cpu" if args.cpu or not torch.cuda.is_available() else "cuda"
-    )
+    device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
     logger.info("Device: %s", device)
     logger.info("Args: %s", vars(args))
 
@@ -317,7 +345,8 @@ def main():
 
     # Determine activity head output dimension
     act_weight_key = [
-        k for k in ckpt["model"].keys()
+        k
+        for k in ckpt["model"].keys()
         if "act" in k.lower() and "weight" in k.lower() and "classifier" in k.lower()
     ]
     num_act_outputs = NUM_CLASSES
@@ -337,8 +366,7 @@ def main():
         num_act_classes=num_act_outputs,
     )
     state_dict = {
-        k: v for k, v in ckpt["model"].items()
-        if "total_ops" not in k and "total_params" not in k
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
     }
     model.load_state_dict(state_dict, strict=False)
     model = model.to(device).eval()
@@ -364,7 +392,8 @@ def main():
     if len(class_names) != NUM_CLASSES:
         logger.warning(
             "ACT_CLASS_NAMES has %d entries (expected %d); using generic names.",
-            len(class_names), NUM_CLASSES,
+            len(class_names),
+            NUM_CLASSES,
         )
         class_names = [f"class_{i}" for i in range(NUM_CLASSES)]
 
@@ -372,7 +401,10 @@ def main():
     logger.info("Running inference ...")
     t0 = time.time()
     all_preds, all_labels, all_logits = run_inference(
-        model, dataset, device, batch_size=args.batch_size,
+        model,
+        dataset,
+        device,
+        batch_size=args.batch_size,
     )
     infer_time = time.time() - t0
     logger.info("Inference done: %d clips in %.1fs", len(all_preds), infer_time)
@@ -382,11 +414,10 @@ def main():
         logger.info("Remapping 69-group predictions to 75-class space ...")
         probs = F.softmax(torch.from_numpy(all_logits), dim=-1).numpy()
         # Load class mapping
-        mapping_path = (
-            _PROJECT_ROOT / "config" / "class_maps" / "class_69_to_75.json"
-        )
+        mapping_path = _PROJECT_ROOT / "config" / "class_maps" / "class_69_to_75.json"
         if mapping_path.exists():
             import json as _json
+
             class_map = _json.loads(mapping_path.read_text())
             mapping = class_map["mapping"]
             n = probs.shape[0]

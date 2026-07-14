@@ -5,6 +5,7 @@ Uses per-component optimal thresholds (from val sweep) combined with the
 
 Sequence-aware: requires consecutive frames per recording (sequence_mode=True).
 """
+
 import json
 import sys
 from collections import defaultdict
@@ -37,7 +38,7 @@ def decode_with_per_comp_thresholds(probs, thresholds, sustain_min=3):
         # Per-component threshold check (different threshold per component)
         above_thresh = (probs[t] > thresholds).float()  # [C]
         counter = counter * above_thresh + above_thresh
-        sustained = (counter >= sustain_min)
+        sustained = counter >= sustain_min
         # Must not already be active
         transition = sustained & (current == 0)
         current = (current + transition.float()).clamp(max=1.0)
@@ -61,7 +62,9 @@ def event_f1(pred_states, gt_states, tol=3):
         for pf in p_frames:
             for gi, gf in enumerate(g_frames):
                 if gi not in matched and abs(pf - gf) <= tol:
-                    matched.add(gi); tp += 1; break
+                    matched.add(gi)
+                    tp += 1
+                    break
             else:
                 fp += 1
         fn_tot += len(g_frames) - len(matched)
@@ -71,8 +74,8 @@ def event_f1(pred_states, gt_states, tol=3):
 
 
 def ordered_pair_fraction(pred_states, gt_states):
-    pred_pairs = (pred_states[1:] - pred_states[:-1])
-    gt_pairs = (gt_states[1:] - gt_states[:-1])
+    pred_pairs = pred_states[1:] - pred_states[:-1]
+    gt_pairs = gt_states[1:] - gt_states[:-1]
     return float((torch.sign(pred_pairs) == torch.sign(gt_pairs)).float().mean())
 
 
@@ -82,16 +85,18 @@ def main():
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
 
     from src.models.model import POPWMultiTaskModel
+
     model = POPWMultiTaskModel(
         pretrained=True,
-        backbone_type='convnext_tiny',
+        backbone_type="convnext_tiny",
         use_hand_film=True,
         use_headpose_film=True,
         use_videomae=False,
         train_pose=False,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict)
     model._seq_len = 1
     model = model.cuda().eval()
@@ -99,9 +104,11 @@ def main():
     # Load val dataset — SEQUENCE mode for consecutive frames
     from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn_sequences
     from torch.utils.data import DataLoader
+
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=True, sequence_length=8)
-    val_loader = DataLoader(val_ds, batch_size=1, num_workers=0,
-                            collate_fn=collate_fn_sequences, shuffle=False)
+    val_loader = DataLoader(
+        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn_sequences, shuffle=False
+    )
 
     # Collect per-recording logits and labels
     rec_logits = defaultdict(list)
@@ -123,7 +130,7 @@ def main():
             outputs = model(images)
 
         psr_logits = outputs.get("psr_logits", None)  # [B*T, 11]
-        psr_labels = targets.get("psr_labels", None)   # [B, T, 11]
+        psr_labels = targets.get("psr_labels", None)  # [B, T, 11]
         if psr_logits is None or psr_labels is None:
             continue
 
@@ -139,7 +146,9 @@ def main():
 
         n_batches += 1
         if n_batches % 50 == 0:
-            print(f"  processed {n_batches} batches ({sum(v[0].shape[0] for v in rec_logits.values())} frames)...")
+            print(
+                f"  processed {n_batches} batches ({sum(v[0].shape[0] for v in rec_logits.values())} frames)..."
+            )
 
     # Concatenate per-recording
     for rec_id in list(rec_logits.keys()):
@@ -166,7 +175,9 @@ def main():
             if logits.shape[0] < 2:
                 continue
             probs = torch.sigmoid(logits)
-            pred_states = decode_with_per_comp_thresholds(probs, thresholds, sustain_min=sustain_min)
+            pred_states = decode_with_per_comp_thresholds(
+                probs, thresholds, sustain_min=sustain_min
+            )
             f1s.append(event_f1(pred_states, labels))
             poss.append(ordered_pair_fraction(pred_states, labels))
         avg_f1 = float(np.mean(f1s)) if f1s else 0.0
@@ -179,17 +190,18 @@ def main():
 
     # Save
     out_path = Path("src/runs/rf_stages/checkpoints/psr_calibrated_decode.json")
-    json.dump({
-        "model": ckpt_path,
-        "total_frames": total_frames,
-        "n_recordings": n_recs,
-        "thresholds": thresholds.tolist(),
-        "results": [
-            {"sustain_min": sm, "f1": f1, "pos": pos}
-            for sm, f1, pos in results
-        ],
-        "best": {"sustain_min": best[0], "f1": best[1], "pos": best[2]},
-    }, open(out_path, "w"), indent=2)
+    json.dump(
+        {
+            "model": ckpt_path,
+            "total_frames": total_frames,
+            "n_recordings": n_recs,
+            "thresholds": thresholds.tolist(),
+            "results": [{"sustain_min": sm, "f1": f1, "pos": pos} for sm, f1, pos in results],
+            "best": {"sustain_min": best[0], "f1": best[1], "pos": best[2]},
+        },
+        open(out_path, "w"),
+        indent=2,
+    )
     print(f"Saved to {out_path}")
 
 

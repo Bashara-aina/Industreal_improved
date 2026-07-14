@@ -8,12 +8,11 @@ post-Opus-192 checkpoints.
 Usage:
     python scripts/compare_checkpoints.py --a best.pt --b latest.pt
 """
+
 import argparse
-import json
 import sys
 from pathlib import Path
 
-import numpy as np
 import torch
 
 
@@ -50,9 +49,11 @@ def compare_states(sd_a: dict, sd_b: dict, name_a: str, name_b: str) -> dict:
         a, b = sd_a[k].float(), sd_b[k].float()
         l2 = (a - b).norm().item()
         rel_l2 = l2 / max(a.norm().item(), 1e-9)
-        cos = float(torch.nn.functional.cosine_similarity(
-            a.flatten().unsqueeze(0), b.flatten().unsqueeze(0)
-        ).item())
+        cos = float(
+            torch.nn.functional.cosine_similarity(
+                a.flatten().unsqueeze(0), b.flatten().unsqueeze(0)
+            ).item()
+        )
         diffs[k] = {"l2": l2, "rel_l2": rel_l2, "cosine": cos}
 
     n_changed = sum(1 for d in diffs.values() if d.get("rel_l2", 0) > 0.01)
@@ -74,8 +75,9 @@ def main():
     parser = argparse.ArgumentParser(description="Compare two checkpoints")
     parser.add_argument("--a", type=str, required=True, help="First checkpoint")
     parser.add_argument("--b", type=str, required=True, help="Second checkpoint")
-    parser.add_argument("--top-keys", type=int, default=10,
-                        help="Show top N keys with largest L2 distance")
+    parser.add_argument(
+        "--top-keys", type=int, default=10, help="Show top N keys with largest L2 distance"
+    )
     args = parser.parse_args()
 
     a_path = Path(args.a)
@@ -110,8 +112,12 @@ def main():
     # EMA
     ema_cmp = compare_states(a["ema_state"], b["ema_state"], "A ema", "B ema")
     print(f"  EMA model:")
-    print(f"    Common: {ema_cmp['common']}, Only A: {ema_cmp['only_a']}, Only B: {ema_cmp['only_b']}")
-    print(f"    Changed: {ema_cmp['n_changed']}/{ema_cmp['common']}, Identical: {ema_cmp['n_identical']}")
+    print(
+        f"    Common: {ema_cmp['common']}, Only A: {ema_cmp['only_a']}, Only B: {ema_cmp['only_b']}"
+    )
+    print(
+        f"    Changed: {ema_cmp['n_changed']}/{ema_cmp['common']}, Identical: {ema_cmp['n_identical']}"
+    )
 
     # Log vars
     print()
@@ -126,10 +132,9 @@ def main():
     print()
     print(f"  Top {args.top_keys} keys with largest L2 distance:")
     sorted_keys = sorted(
-        [(k, d.get("l2", 0)) for k, d in raw_cmp["per_key"].items()
-         if "l2" in d],
-        key=lambda x: -x[1]
-    )[:args.top_keys]
+        [(k, d.get("l2", 0)) for k, d in raw_cmp["per_key"].items() if "l2" in d],
+        key=lambda x: -x[1],
+    )[: args.top_keys]
     for k, l2 in sorted_keys:
         d = raw_cmp["per_key"][k]
         if "cosine" in d:

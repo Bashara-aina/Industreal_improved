@@ -86,7 +86,7 @@ class VideoBackboneWrapper(nn.Module):
 
     def __init__(
         self,
-        backbone_name: str = 'mvit_v2_s',
+        backbone_name: str = "mvit_v2_s",
         pretrained: bool = True,
         freeze_backbone: bool = True,
         use_checkpoint: bool = True,
@@ -97,22 +97,22 @@ class VideoBackboneWrapper(nn.Module):
         self.clip_frames = clip_frames
         self.use_checkpoint = use_checkpoint
 
-        if backbone_name == 'mvit_v2_s':
+        if backbone_name == "mvit_v2_s":
             self._build_mvit_v2_s(pretrained)
-        elif backbone_name == 'videomae_s':
+        elif backbone_name == "videomae_s":
             self._build_videomae_s(pretrained)
         else:
-            raise ValueError(f'Unknown video backbone: {backbone_name}')
+            raise ValueError(f"Unknown video backbone: {backbone_name}")
 
         if freeze_backbone:
             for p in self.encoder.parameters():
                 p.requires_grad = False
-            logger.info('VideoBackboneWrapper: backbone frozen (pretrained)')
+            logger.info("VideoBackboneWrapper: backbone frozen (pretrained)")
         else:
-            logger.info('VideoBackboneWrapper: backbone trainable (fine-tune)')
+            logger.info("VideoBackboneWrapper: backbone trainable (fine-tune)")
 
         if use_checkpoint:
-            logger.info('VideoBackboneWrapper: gradient checkpointing enabled')
+            logger.info("VideoBackboneWrapper: gradient checkpointing enabled")
 
     def _build_mvit_v2_s(self, pretrained: bool):
         """Build MViTv2-Small backbone from torchvision."""
@@ -127,7 +127,7 @@ class VideoBackboneWrapper(nn.Module):
         #   conv_proj:   96ch, thw=(8, 56, 56)   -- stride 4
         #   block 3:    384ch, thw=(8, 14, 14)   -- stride 16
         #   block 15+:  768ch, thw=(8, 7, 7)     -- stride 32
-        self.feature_dims = {'c2': 96, 'c3': 384, 'c4': 384, 'c5': 768}
+        self.feature_dims = {"c2": 96, "c3": 384, "c4": 384, "c5": 768}
 
     def _build_videomae_s(self, pretrained: bool):
         """Build VideoMAE-Small backbone from HuggingFace transformers."""
@@ -149,23 +149,25 @@ class VideoBackboneWrapper(nn.Module):
             model = VideoMAEModel(config)
             if pretrained:
                 _cache = (
-                    '~/.cache/huggingface/hub/'
-                    'models--MCG-NJU--videomae-small-finetuned-kinetics/'
-                    'snapshots/240e9734611173accbbf74cbdf4b641e4c431264/model.safetensors'
+                    "~/.cache/huggingface/hub/"
+                    "models--MCG-NJU--videomae-small-finetuned-kinetics/"
+                    "snapshots/240e9734611173accbbf74cbdf4b641e4c431264/model.safetensors"
                 )
                 import os
+
                 _cache = os.path.expanduser(_cache)
                 if os.path.exists(_cache):
                     from safetensors.torch import load_file as _load_sf
+
                     sd = _load_sf(_cache)
                     model.load_state_dict(sd, strict=False)
-                    logger.info('VideoMAE-S: loaded K400-pretrained weights')
+                    logger.info("VideoMAE-S: loaded K400-pretrained weights")
 
             self.encoder = model
             self.hidden_size = 384
-            self.feature_dims = {'c2': 384, 'c3': 384, 'c4': 384, 'c5': 384}
+            self.feature_dims = {"c2": 384, "c3": 384, "c4": 384, "c5": 384}
         except Exception as ex:
-            logger.error(f'VideoMAE-S build failed: {ex}')
+            logger.error(f"VideoMAE-S build failed: {ex}")
             raise
 
     # ------------------------------------------------------------------
@@ -185,12 +187,12 @@ class VideoBackboneWrapper(nn.Module):
         if clip.dim() == 5 and clip.shape[1] != 3:
             clip = clip.permute(0, 2, 1, 3, 4).contiguous()
 
-        if self.backbone_name == 'mvit_v2_s':
+        if self.backbone_name == "mvit_v2_s":
             return self._forward_mvit(clip)
-        elif self.backbone_name == 'videomae_s':
+        elif self.backbone_name == "videomae_s":
             return self._forward_videomae(clip)
 
-        raise RuntimeError(f'Unknown backbone: {self.backbone_name}')
+        raise RuntimeError(f"Unknown backbone: {self.backbone_name}")
 
     def _forward_mvit(self, clip: torch.Tensor) -> Dict[str, torch.Tensor]:
         """MViTv2-S forward with intermediate feature extraction.
@@ -217,6 +219,7 @@ class VideoBackboneWrapper(nn.Module):
         for i, block in enumerate(self.encoder.blocks):
             if self.use_checkpoint and self.training:
                 from torch.utils.checkpoint import checkpoint
+
                 x, thw = checkpoint(block, x, thw, use_reentrant=False)
             else:
                 x, thw = block(x, thw)
@@ -230,9 +233,11 @@ class VideoBackboneWrapper(nn.Module):
         clip_embed = x.mean(dim=1)  # [B, 768]
 
         return {
-            'clip_embed': clip_embed,
-            'stage_features': {'c2': c2, 'c3': c3, 'c5': c5},
-            'c2': c2, 'c3': c3, 'c5': c5,
+            "clip_embed": clip_embed,
+            "stage_features": {"c2": c2, "c3": c3, "c5": c5},
+            "c2": c2,
+            "c3": c3,
+            "c5": c5,
         }
 
     def _forward_videomae(self, clip: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -251,9 +256,11 @@ class VideoBackboneWrapper(nn.Module):
         spatial_feat = patches.reshape(-1, H_sp, W_sp, 384).permute(0, 3, 1, 2)
 
         return {
-            'clip_embed': clip_embed,
-            'stage_features': {'c2': spatial_feat, 'c3': spatial_feat, 'c5': spatial_feat},
-            'c2': spatial_feat, 'c3': spatial_feat, 'c5': spatial_feat,
+            "clip_embed": clip_embed,
+            "stage_features": {"c2": spatial_feat, "c3": spatial_feat, "c5": spatial_feat},
+            "c2": spatial_feat,
+            "c3": spatial_feat,
+            "c5": spatial_feat,
         }
 
     @staticmethod
@@ -285,8 +292,7 @@ class SpatialFeatureAdapter(nn.Module):
     the existing POPWMultiTaskModel interface.
     """
 
-    def __init__(self, c3_channels: int = 384, c4_channels: int = 384,
-                 c5_channels: int = 768):
+    def __init__(self, c3_channels: int = 384, c4_channels: int = 384, c5_channels: int = 768):
         super().__init__()
         self.c3_to_c4 = nn.Conv2d(c3_channels, c4_channels, 3, stride=2, padding=1)
         nn.init.kaiming_uniform_(self.c3_to_c4.weight, a=1)
@@ -295,8 +301,8 @@ class SpatialFeatureAdapter(nn.Module):
     def forward(
         self, stage_features: Dict[str, torch.Tensor]
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        c3 = stage_features['c3']
-        c5 = stage_features['c5']
+        c3 = stage_features["c3"]
+        c5 = stage_features["c5"]
         if c3.shape[-2:] != c5.shape[-2:]:
             c4 = self.c3_to_c4(c3)
         else:
@@ -312,8 +318,9 @@ class VideoFPN(nn.Module):
     FPN in model.py but accepts per-level channel dims instead of a list.
     """
 
-    def __init__(self, c3_channels: int, c4_channels: int, c5_channels: int,
-                 out_channels: int = 256):
+    def __init__(
+        self, c3_channels: int, c4_channels: int, c5_channels: int, out_channels: int = 256
+    ):
         super().__init__()
         self.lateral_c3 = nn.Conv2d(c3_channels, out_channels, 1)
         self.lateral_c4 = nn.Conv2d(c4_channels, out_channels, 1)
@@ -336,8 +343,8 @@ class VideoFPN(nn.Module):
 
     def forward(self, c3, c4, c5):
         p5 = self.lateral_c5(c5)
-        p4 = self.lateral_c4(c4) + F.interpolate(p5, size=c4.shape[2:], mode='nearest')
-        p3 = self.lateral_c3(c3) + F.interpolate(p4, size=c3.shape[2:], mode='nearest')
+        p4 = self.lateral_c4(c4) + F.interpolate(p5, size=c4.shape[2:], mode="nearest")
+        p3 = self.lateral_c3(c3) + F.interpolate(p4, size=c3.shape[2:], mode="nearest")
 
         p3 = self.smooth_p3(p3)
         p4 = self.smooth_p4(p4)
@@ -345,7 +352,7 @@ class VideoFPN(nn.Module):
 
         p6 = self.p6_conv(c5)
         p7 = self.p7_conv(F.relu(p6))
-        return {'p3': p3, 'p4': p4, 'p5': p5, 'p6': p6, 'p7': p7}
+        return {"p3": p3, "p4": p4, "p5": p5, "p6": p6, "p7": p7}
 
 
 # ===========================================================================
@@ -363,7 +370,7 @@ class VideoMultiTaskModel(nn.Module):
 
     def __init__(
         self,
-        backbone_name: str = 'mvit_v2_s',
+        backbone_name: str = "mvit_v2_s",
         pretrained: bool = True,
         freeze_backbone: bool = True,
         use_checkpoint: bool = True,
@@ -391,98 +398,128 @@ class VideoMultiTaskModel(nn.Module):
             clip_frames=clip_frames,
         )
         feat = self.video_backbone.feature_dims
-        self.c2_ch = feat['c2']
-        self.c3_ch = feat['c3']
-        self.c4_ch = feat['c4']
-        self.c5_ch = feat['c5']
+        self.c2_ch = feat["c2"]
+        self.c3_ch = feat["c3"]
+        self.c4_ch = feat["c4"]
+        self.c5_ch = feat["c5"]
 
         # -- Spatial Feature Adapter --
         self.spatial_adapter = SpatialFeatureAdapter(
-            c3_channels=feat['c3'], c4_channels=feat['c4'], c5_channels=feat['c5'],
+            c3_channels=feat["c3"],
+            c4_channels=feat["c4"],
+            c5_channels=feat["c5"],
         )
 
         # -- FPN --
         self.fpn = VideoFPN(
-            c3_channels=feat['c3'], c4_channels=feat['c4'],
-            c5_channels=feat['c5'], out_channels=256,
+            c3_channels=feat["c3"],
+            c4_channels=feat["c4"],
+            c5_channels=feat["c5"],
+            out_channels=256,
         )
 
         # -- Detection Head (RetinaNet-style) --
         from src.models.model import DetectionHead, AnchorGenerator
+
         self.detection_head = DetectionHead(
-            in_channels=256, num_classes=num_classes_detection,
-            detach_reg_fpn=getattr(C, 'DETACH_REG_FPN', False),
+            in_channels=256,
+            num_classes=num_classes_detection,
+            detach_reg_fpn=getattr(C, "DETACH_REG_FPN", False),
         )
         self.anchor_gen = AnchorGenerator()
 
         # -- Pose Head (17 keypoints) --
         from src.models.model import PoseHead
+
         self.pose_head = PoseHead(
-            in_channels=256, num_keypoints=num_keypoints,
-            temperature=getattr(C, 'SOFT_ARGMAX_TEMPERATURE', 0.1),
-            training_temperature=getattr(C, 'SOFT_ARGMAX_TEMP_TRAIN', 1.0),
+            in_channels=256,
+            num_keypoints=num_keypoints,
+            temperature=getattr(C, "SOFT_ARGMAX_TEMPERATURE", 0.1),
+            training_temperature=getattr(C, "SOFT_ARGMAX_TEMP_TRAIN", 1.0),
         )
 
         # -- PoseFiLM (keypoint-conditioned FiLM on C5) --
         from src.models.model import PoseFiLMModule
+
         if use_hand_film:
             self.pose_film = PoseFiLMModule(
-                num_keypoints=num_keypoints, c5_channels=feat['c5'],
+                num_keypoints=num_keypoints,
+                c5_channels=feat["c5"],
                 hidden_channels=512,
             )
 
         # -- HeadPoseFiLM --
         from src.models.model import HeadPoseFiLMModule
+
         if use_headpose_film:
             self.headpose_film = HeadPoseFiLMModule(
-                c5_channels=feat['c5'], hidden_channels=256,
+                c5_channels=feat["c5"],
+                hidden_channels=256,
             )
 
         # -- Head Pose Head (9-DoF) --
-        if getattr(C, 'USE_GEO_HEAD_POSE', False):
+        if getattr(C, "USE_GEO_HEAD_POSE", False):
             from src.models.head_pose_geo import GeometryAwareHeadPose
+
             self.head_pose_head = GeometryAwareHeadPose(
-                in_channels_c4=feat['c4'], in_channels_c5=feat['c5'], hidden_dim=512,
+                in_channels_c4=feat["c4"],
+                in_channels_c5=feat["c5"],
+                hidden_dim=512,
             )
         else:
             from src.models.model import HeadPoseHead
+
             self.head_pose_head = HeadPoseHead(
-                c4_channels=feat['c4'], c5_channels=feat['c5'], hidden_dim=128,
+                c4_channels=feat["c4"],
+                c5_channels=feat["c5"],
+                hidden_dim=128,
             )
 
         # -- Activity Head --
         from src.models.model import ActivityHead
+
         self.activity_head = ActivityHead(
-            c5_channels=feat['c5'], p4_channels=256,
-            det_conf_size=num_classes_detection, embed_dim=512,
-            num_classes=num_classes_activity, dropout=0.1,
-            window_size=16, use_vit=True,
-            use_videomae=feat['c5'] != self.video_backbone.hidden_size,
+            c5_channels=feat["c5"],
+            p4_channels=256,
+            det_conf_size=num_classes_detection,
+            embed_dim=512,
+            num_classes=num_classes_activity,
+            dropout=0.1,
+            window_size=16,
+            use_vit=True,
+            use_videomae=feat["c5"] != self.video_backbone.hidden_size,
         )
 
         # -- PSR Head --
         from src.models.model import PSRHead
+
         self.psr_head = PSRHead(
-            in_channels=256, hidden_dim=128,
-            num_components=num_components_psr, dropout=0.2,
+            in_channels=256,
+            hidden_dim=128,
+            num_components=num_components_psr,
+            dropout=0.2,
         )
 
         # -- Feature Bank (temporal, for activity head) --
         from src.models.model import FeatureBank
+
         self.feature_bank = FeatureBank(embed_dim=512, window_size=16)
 
         logger.info(
-            'VideoMultiTaskModel: backbone=%s, hidden=%d, clip_frames=%d, '
-            'freeze=%s, checkpoint=%s',
-            backbone_name, self.video_backbone.hidden_size, clip_frames,
-            freeze_backbone, use_checkpoint,
+            "VideoMultiTaskModel: backbone=%s, hidden=%d, clip_frames=%d, freeze=%s, checkpoint=%s",
+            backbone_name,
+            self.video_backbone.hidden_size,
+            clip_frames,
+            freeze_backbone,
+            use_checkpoint,
         )
 
     # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
     def forward(
-        self, clip: torch.Tensor,
+        self,
+        clip: torch.Tensor,
         video_ids: Optional[List[str]] = None,
     ) -> Dict[str, torch.Tensor]:
         """Full forward pass.
@@ -495,12 +532,12 @@ class VideoMultiTaskModel(nn.Module):
         """
         # -- 1. Video backbone --
         backbone_out = self.video_backbone(clip)
-        clip_embed = backbone_out['clip_embed']              # [B, D]
-        stage = backbone_out['stage_features']               # {c2, c3, c5}
-        c2, c3, c5 = stage['c2'], stage['c3'], stage['c5']
+        clip_embed = backbone_out["clip_embed"]  # [B, D]
+        stage = backbone_out["stage_features"]  # {c2, c3, c5}
+        c2, c3, c5 = stage["c2"], stage["c3"], stage["c5"]
 
         # -- 2. SpatialFeatureAdapter + FPN --
-        c3, c4, c5 = self.spatial_adapter({'c3': c3, 'c5': c5})
+        c3, c4, c5 = self.spatial_adapter({"c3": c3, "c5": c5})
         pyramid = self.fpn(c3, c4, c5)
 
         # -- 3. Detection Head --
@@ -508,10 +545,10 @@ class VideoMultiTaskModel(nn.Module):
         anchors = self.anchor_gen(pyramid)
 
         # -- 4. Pose Head (on P3) --
-        heatmaps, keypoints, pose_confidence = self.pose_head(pyramid['p3'])
+        heatmaps, keypoints, pose_confidence = self.pose_head(pyramid["p3"])
 
         # -- 5. PoseFiLM (keypoint-conditioned modulation of C5) --
-        if self.use_hand_film and hasattr(self, 'pose_film'):
+        if self.use_hand_film and hasattr(self, "pose_film"):
             c5_mod = self.pose_film(c5, keypoints.detach(), pose_confidence)
         else:
             c5_mod = c5
@@ -524,31 +561,36 @@ class VideoMultiTaskModel(nn.Module):
                 _forward = _rot_mat[:, :, 0]
                 _up = _rot_mat[:, :, 2]
                 head_pose = torch.cat([_forward, _pos, _up], dim=1)
-            if self.use_headpose_film and hasattr(self, 'headpose_film'):
+            if self.use_headpose_film and hasattr(self, "headpose_film"):
                 c5_mod = self.headpose_film(c5_mod, head_pose.detach())
         else:
             head_pose = None
 
         # -- 7. Activity Head --
         det_conf = torch.sigmoid(cls_preds.max(dim=1)[0])
-        activity_proj = torch.cat([
-            det_conf,
-            F.adaptive_avg_pool2d(c5_mod, 1).flatten(1),
-            F.adaptive_avg_pool2d(pyramid['p4'].detach(), 1).flatten(1),
-        ], dim=1)
+        activity_proj = torch.cat(
+            [
+                det_conf,
+                F.adaptive_avg_pool2d(c5_mod, 1).flatten(1),
+                F.adaptive_avg_pool2d(pyramid["p4"].detach(), 1).flatten(1),
+            ],
+            dim=1,
+        )
         proj_feat = self.activity_head.proj_features(activity_proj)
 
-        _staging_enabled = bool(getattr(C, 'STAGED_TRAINING', False))
+        _staging_enabled = bool(getattr(C, "STAGED_TRAINING", False))
         bank_output = self.feature_bank(proj_feat, video_ids, None) if _staging_enabled else None
 
         # Pass clip_embed as videomae_feat if activity head expects fusion
-        videomae_feat = clip_embed if (
-            hasattr(self.activity_head, 'use_videomae')
-            and self.activity_head.use_videomae
-        ) else None
+        videomae_feat = (
+            clip_embed
+            if (hasattr(self.activity_head, "use_videomae") and self.activity_head.use_videomae)
+            else None
+        )
 
         act_logits = self.activity_head(
-            proj_feat=proj_feat, temporal_bank=bank_output,
+            proj_feat=proj_feat,
+            temporal_bank=bank_output,
             videomae_feat=videomae_feat,
         )
 
@@ -561,27 +603,28 @@ class VideoMultiTaskModel(nn.Module):
         if self.train_pose:
             _, _, grid_h, grid_w = heatmaps.shape
             kp_scale = torch.tensor(
-                [grid_w, grid_h], device=keypoints.device, dtype=keypoints.dtype)
+                [grid_w, grid_h], device=keypoints.device, dtype=keypoints.dtype
+            )
             keypoints = keypoints / kp_scale.view(1, 1, 2)
 
         # -- Output dict (matches POPWMultiTaskModel keys) --
         return {
-            'cls_preds': cls_preds,
-            'reg_preds': reg_preds,
-            'anchors': anchors,
-            'heatmaps': heatmaps,
-            'keypoints': keypoints,
-            'pose_confidence': pose_confidence,
-            'head_pose': head_pose,
-            'c5_mod': c5_mod,
-            'det_conf': det_conf,
-            'act_logits': act_logits,
-            'psr_logits': psr_logits,
-            'psr_confidence': psr_confidence if not self.training else None,
-            'clip_embed': clip_embed,
-            'c5_raw': c5,
-            'proj_feat': proj_feat,
-            'p4': pyramid['p4'],
+            "cls_preds": cls_preds,
+            "reg_preds": reg_preds,
+            "anchors": anchors,
+            "heatmaps": heatmaps,
+            "keypoints": keypoints,
+            "pose_confidence": pose_confidence,
+            "head_pose": head_pose,
+            "c5_mod": c5_mod,
+            "det_conf": det_conf,
+            "act_logits": act_logits,
+            "psr_logits": psr_logits,
+            "psr_confidence": psr_confidence if not self.training else None,
+            "clip_embed": clip_embed,
+            "c5_raw": c5,
+            "proj_feat": proj_feat,
+            "p4": pyramid["p4"],
         }
 
 
@@ -591,30 +634,32 @@ class VideoMultiTaskModel(nn.Module):
 def count_parameters(model: VideoMultiTaskModel) -> Dict[str, int]:
     """Count trainable and total parameters per component."""
     components = {
-        'video_backbone': [model.video_backbone],
-        'spatial_adapter': [model.spatial_adapter],
-        'fpn': [model.fpn],
-        'detection': [model.detection_head],
-        'pose_head': [model.pose_head],
+        "video_backbone": [model.video_backbone],
+        "spatial_adapter": [model.spatial_adapter],
+        "fpn": [model.fpn],
+        "detection": [model.detection_head],
+        "pose_head": [model.pose_head],
     }
-    if hasattr(model, 'pose_film'):
-        components['pose_film'] = [model.pose_film]
-    if hasattr(model, 'headpose_film'):
-        components['headpose_film'] = [model.headpose_film]
-    components.update({
-        'activity_head': [model.activity_head],
-        'psr_head': [model.psr_head],
-        'head_pose_head': [model.head_pose_head],
-        'feature_bank': [model.feature_bank],
-    })
+    if hasattr(model, "pose_film"):
+        components["pose_film"] = [model.pose_film]
+    if hasattr(model, "headpose_film"):
+        components["headpose_film"] = [model.headpose_film]
+    components.update(
+        {
+            "activity_head": [model.activity_head],
+            "psr_head": [model.psr_head],
+            "head_pose_head": [model.head_pose_head],
+            "feature_bank": [model.feature_bank],
+        }
+    )
     result = {}
     total = 0
     for name, modules in components.items():
         count = sum(p.numel() for m in modules for p in m.parameters() if p.requires_grad)
         result[name] = count
         total += count
-    result['total_trainable'] = total
-    result['total_all'] = sum(p.numel() for p in model.parameters())
+    result["total_trainable"] = total
+    result["total_all"] = sum(p.numel() for p in model.parameters())
     return result
 
 
@@ -631,10 +676,10 @@ def get_trainable_param_groups(
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        (backbone_params if 'video_backbone' in name else head_params).append(param)
+        (backbone_params if "video_backbone" in name else head_params).append(param)
     return [
-        {'params': backbone_params, 'lr': backbone_lr, 'name': 'backbone'},
-        {'params': head_params, 'lr': head_lr, 'name': 'heads'},
+        {"params": backbone_params, "lr": backbone_lr, "name": "backbone"},
+        {"params": head_params, "lr": head_lr, "name": "heads"},
     ]
 
 
@@ -650,4 +695,4 @@ def unfreeze_backbone_stages(model: VideoMultiTaskModel, num_stages: int = 1):
         for i in range(start, end):
             for p in blocks[i].parameters():
                 p.requires_grad = True
-        logger.info('Unfroze backbone stage %d (blocks %d-%d)', stage_idx, start, end - 1)
+        logger.info("Unfroze backbone stage %d (blocks %d-%d)", stage_idx, start, end - 1)

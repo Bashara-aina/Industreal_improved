@@ -1,4 +1,5 @@
 """Clip-level activity eval — groups frames by recording, builds 16-frame windows."""
+
 import json
 import sys
 from collections import defaultdict
@@ -15,6 +16,7 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="src/runs/rf_stages/checkpoints/best.pth")
     parser.add_argument("--save-dir", default="/tmp/activity_clip_eval")
@@ -30,25 +32,29 @@ def main():
     print(f"Epoch: {ckpt.get('epoch')}")
 
     from src.models.model import POPWMultiTaskModel
+
     model = POPWMultiTaskModel(
         pretrained=True,
-        backbone_type='convnext_tiny',
+        backbone_type="convnext_tiny",
         use_hand_film=True,
         use_headpose_film=True,
         use_videomae=False,
         train_pose=False,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = args.clip_length
     model = model.cuda().eval()
 
     from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
     from torch.utils.data import DataLoader
+
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
-    val_loader = DataLoader(val_ds, batch_size=1, num_workers=0,
-                            collate_fn=collate_fn, shuffle=False)
+    val_loader = DataLoader(
+        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False
+    )
 
     rec_preds = defaultdict(list)
     rec_labels = defaultdict(list)
@@ -93,9 +99,17 @@ def main():
             # Save intermediate checkpoint
             ckpt_path = Path(args.save_dir) / f"checkpoint_{n}frames.pkl"
             import pickle
+
             with open(ckpt_path, "wb") as f:
-                pickle.dump({"rec_preds": dict(rec_preds), "rec_labels": dict(rec_labels),
-                             "rec_frame_nums": dict(rec_frame_nums), "n": n}, f)
+                pickle.dump(
+                    {
+                        "rec_preds": dict(rec_preds),
+                        "rec_labels": dict(rec_labels),
+                        "rec_frame_nums": dict(rec_frame_nums),
+                        "n": n,
+                    },
+                    f,
+                )
             print(f"  [CHECKPOINT] saved {ckpt_path} ({n} frames)", flush=True)
 
     print(f"\nCollected {n} frames across {len(rec_preds)} recordings")
@@ -112,8 +126,12 @@ def main():
 
         # Apply verb-group remap if applicable
         from src import config as C
-        remap_fn = getattr(C, 'remap_activity_label', None)
-        if remap_fn is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() in ('verb', 'hybrid'):
+
+        remap_fn = getattr(C, "remap_activity_label", None)
+        if remap_fn is not None and str(getattr(C, "ACT_CLASS_GROUPING", "none")).lower() in (
+            "verb",
+            "hybrid",
+        ):
             labels_sorted = np.array([remap_fn(int(l)) if l >= 0 else l for l in labels_sorted])
 
         # Build clips with stride
@@ -128,6 +146,7 @@ def main():
             if len(valid_l) == 0:
                 continue
             from collections import Counter
+
             label_majority = Counter(valid_l.tolist()).most_common(1)[0][0]
             pred_majority = Counter(clip_p.tolist()).most_common(1)[0][0]
             clip_preds.append(pred_majority)
@@ -164,15 +183,21 @@ def main():
     # Save
     out_path = Path(args.save_dir) / "activity_clip.json"
     with open(out_path, "w") as f:
-        json.dump({
-            "checkpoint": args.checkpoint,
-            "n_clips": int(len(clip_preds)),
-            "n_valid_clips": int(valid.sum()),
-            "clip_top1": float(clip_acc),
-            "clip_length": args.clip_length,
-            "stride": args.stride,
-            "per_class": {str(k): {"acc": float(np.mean(v)), "n": len(v)} for k, v in by_class.items()},
-        }, f, indent=2)
+        json.dump(
+            {
+                "checkpoint": args.checkpoint,
+                "n_clips": int(len(clip_preds)),
+                "n_valid_clips": int(valid.sum()),
+                "clip_top1": float(clip_acc),
+                "clip_length": args.clip_length,
+                "stride": args.stride,
+                "per_class": {
+                    str(k): {"acc": float(np.mean(v)), "n": len(v)} for k, v in by_class.items()
+                },
+            },
+            f,
+            indent=2,
+        )
     print(f"\nSaved to {out_path}")
 
 

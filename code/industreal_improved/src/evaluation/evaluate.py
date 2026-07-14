@@ -1,5 +1,4 @@
 import sys
-import os
 import signal
 from collections import defaultdict
 from pathlib import Path
@@ -27,10 +26,11 @@ def _nan_guard_fire(location: str) -> None:
     """Called by every guard when it fires. Increments the per-location counter."""
     _NAN_GUARD_COUNTERS[location] += 1
 
+
 # Match train.py's path setup so all imports resolve identically
 # src/evaluation/evaluate.py → parent.parent = src/ → parent = project root
 _SRC = Path(__file__).resolve().parent.parent  # src/
-for _sub in ['models', 'training', 'evaluation', 'data', str(_SRC)]:
+for _sub in ["models", "training", "evaluation", "data", str(_SRC)]:
     _p = _SRC / _sub if _sub != str(_SRC) else _SRC
     _p = str(_p)
     if _p not in sys.path:
@@ -58,7 +58,6 @@ Date: April 2026
 import gc
 import logging
 import math
-import os
 import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, cast
@@ -68,8 +67,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.metrics import (
-    accuracy_score, f1_score, recall_score,
-    confusion_matrix, classification_report,
+    accuracy_score,
+    f1_score,
+    recall_score,
+    confusion_matrix,
+    classification_report,
 )
 from scipy import stats
 
@@ -77,12 +79,14 @@ import pandas as pd
 
 try:
     from numba import njit
+
     _NUMBA_AVAILABLE = True
 except ImportError:
     _NUMBA_AVAILABLE = False
     njit = lambda *a, **k: lambda f: f  # no-op decorator when numba unavailable
 
 from src import config as C
+
 
 # =============================================================================
 # Detection Collapse Probe (drop-in diagnostic)
@@ -114,9 +118,15 @@ def _probe_box_iou_xyxy(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def probe_detection_batch(
-    cls_preds: np.ndarray, reg_preds: np.ndarray, anchors: np.ndarray,
-    gt_boxes_per_img: list, probe_thresh: float = 0.01, iou_match: float = 0.5,
-    tag: str = "", max_batches: int = 5, _state: dict = None,
+    cls_preds: np.ndarray,
+    reg_preds: np.ndarray,
+    anchors: np.ndarray,
+    gt_boxes_per_img: list,
+    probe_thresh: float = 0.01,
+    iou_match: float = 0.5,
+    tag: str = "",
+    max_batches: int = 5,
+    _state: dict | None = None,
 ) -> dict:
     if _state is None:
         _state = {}
@@ -147,14 +157,23 @@ def probe_detection_batch(
         n_pred_050 += int((max_scores > 0.50).sum())
     max_scores_cat = np.concatenate(all_max_scores) if all_max_scores else np.zeros(0)
     best_ious = np.concatenate(best_ious_all) if best_ious_all else np.zeros(0)
-    def pct(a, q): return float(np.percentile(a, q)) if a.size else 0.0
+
+    def pct(a, q):
+        return float(np.percentile(a, q)) if a.size else 0.0
+
     n_matched = int((best_ious > iou_match).sum())
     summary = {
-        "tag": tag, "imgs": B, "imgs_with_gt": imgs_with_gt, "n_gt": n_gt_total,
-        "score_p50": pct(max_scores_cat, 50), "score_p99": pct(max_scores_cat, 99),
+        "tag": tag,
+        "imgs": B,
+        "imgs_with_gt": imgs_with_gt,
+        "n_gt": n_gt_total,
+        "score_p50": pct(max_scores_cat, 50),
+        "score_p99": pct(max_scores_cat, 99),
         "score_max": float(max_scores_cat.max()) if max_scores_cat.size else 0.0,
-        "preds>0.01": n_pred_001, "preds>0.05": n_pred_005,
-        "preds>0.30": n_pred_030, "preds>0.50": n_pred_050,
+        "preds>0.01": n_pred_001,
+        "preds>0.05": n_pred_005,
+        "preds>0.30": n_pred_030,
+        "preds>0.50": n_pred_050,
         "bestIoU>0": int((best_ious > 1e-6).sum()),
         "bestIoU>0.1": int((best_ious > 0.1).sum()),
         "bestIoU>0.3": int((best_ious > 0.3).sum()),
@@ -165,17 +184,23 @@ def probe_detection_batch(
     if n_matched == 0 and summary["bestIoU_max"] < iou_match:
         verdict = f"TOTAL COLLAPSE (0 preds at IoU>{iou_match}, max={summary['bestIoU_max']:.2f})"
     elif n_matched == 0:
-        verdict = f"NEAR-COLLAPSE (no match at {iou_match} but max IoU {summary['bestIoU_max']:.2f})"
+        verdict = (
+            f"NEAR-COLLAPSE (no match at {iou_match} but max IoU {summary['bestIoU_max']:.2f})"
+        )
     else:
         verdict = f"LOCALIZING ({n_matched} preds at IoU>{iou_match})"
     msg = f"[DET_PROBE {tag}] {summary} | verdict: {verdict}"
-    import logging; logging.getLogger("det_probe").info(msg)
+    import logging
+
+    logging.getLogger("det_probe").info(msg)
     print(msg, flush=True)
     return summary
+
 
 # =============================================================================
 # Detection mAP Computation (CHECKLIST ITEM 41)
 # =============================================================================
+
 
 def compute_detection_map(
     cls_logits: torch.Tensor,
@@ -215,7 +240,6 @@ def compute_detection_map(
     # Get anchors from config if not provided
     if anchors is None:
         try:
-            import config as _C
             anchors_np = C.ANCHOR_BOXES  # type: ignore[attr-defined]
         except Exception:
             # Fallback: unit anchors on [0, img_width] x [0, img_height] grid
@@ -247,10 +271,10 @@ def compute_detection_map(
         else:
             keep_np = keep_mask.cpu().numpy()
             kept_cls = scores_i[keep_mask].float().cpu().numpy()  # [K, 24]
-            kept_reg = reg_preds[i][keep_mask].cpu().numpy()       # [K, 4]
-            kept_anc = anchors_np[keep_np]                         # [K, 4]
+            kept_reg = reg_preds[i][keep_mask].cpu().numpy()  # [K, 4]
+            kept_anc = anchors_np[keep_np]  # [K, 4]
 
-            ms = kept_cls.max(axis=1)   # [K] max score per anchor
+            ms = kept_cls.max(axis=1)  # [K] max score per anchor
             ml = kept_cls.argmax(axis=1)  # [K] class id per anchor
             pb = decode_boxes(kept_anc, kept_reg)
             pb[:, 0] = np.clip(pb[:, 0], 0, img_width)
@@ -278,22 +302,30 @@ def compute_detection_map(
 
         # Ground truth for this image
         img_gt = gt[i] if i < len(gt) else []
-        gt_boxes_i = np.array(
-            [g['box'] for g in img_gt], dtype=np.float32
-        ) if img_gt else np.zeros((0, 4), dtype=np.float32)
-        gt_labels_i = np.array(
-            [g['class'] for g in img_gt], dtype=np.int64
-        ) if img_gt else np.zeros(0, dtype=np.int64)
+        gt_boxes_i = (
+            np.array([g["box"] for g in img_gt], dtype=np.float32)
+            if img_gt
+            else np.zeros((0, 4), dtype=np.float32)
+        )
+        gt_labels_i = (
+            np.array([g["class"] for g in img_gt], dtype=np.int64)
+            if img_gt
+            else np.zeros(0, dtype=np.int64)
+        )
         dg_boxes.append(gt_boxes_i)
         dg_labels.append(gt_labels_i)
 
     result = compute_ap_per_class(
-        dp_boxes, dp_scores, dp_labels,
-        dg_boxes, dg_labels,
-        iou_thresh=0.5, num_classes=num_classes,
-        interpolation_mode='coco',
+        dp_boxes,
+        dp_scores,
+        dp_labels,
+        dg_boxes,
+        dg_labels,
+        iou_thresh=0.5,
+        num_classes=num_classes,
+        interpolation_mode="coco",
     )
-    return result['per_class_ap'], result['mAP']
+    return result["per_class_ap"], result["mAP"]
 
 
 # Backward-compatible alias
@@ -305,6 +337,7 @@ def evaluate_detection(*args, **kwargs):
 # =============================================================================
 # Activity Top-1 / Top-5 Accuracy Computation (CHECKLIST ITEM 42)
 # =============================================================================
+
 
 def compute_activity_accuracy(
     logits: torch.Tensor,
@@ -321,10 +354,10 @@ def compute_activity_accuracy(
         (top1_accuracy, top5_accuracy, top1_correct, total)
     """
     if logits.numel() == 0:
-        return float('nan'), float('nan'), 0, 0
+        return float("nan"), float("nan"), 0, 0
 
     B, C = logits.shape
-    top1_pred = logits.argmax(dim=1)          # [B]
+    top1_pred = logits.argmax(dim=1)  # [B]
     top5_pred = logits.topk(min(5, C), dim=1)[1]  # [B, 5]
 
     top1_correct = (top1_pred == labels).sum().item()
@@ -343,8 +376,8 @@ logger = logging.getLogger(__name__)
 # [GAP-A2] PSR Transition Decode + Score — MonotonicDecoder at eval
 # =============================================================================
 
-def _group_psr_by_recording(psr_preds_logits, psr_labels, psr_rec_ids,
-                            psr_frame_nums=None):
+
+def _group_psr_by_recording(psr_preds_logits, psr_labels, psr_rec_ids, psr_frame_nums=None):
     """[F22 2026-07-03 Fable consult round 6] Build {rec: Tensor[T,11]} inputs
     for decode_and_score_psr from the eval loop's raw collections.
 
@@ -366,6 +399,7 @@ def _group_psr_by_recording(psr_preds_logits, psr_labels, psr_rec_ids,
     index units, not raw video frames. Report as such.
     """
     import numpy as np
+
     by_rec_logits, by_rec_gt, by_rec_fn = {}, {}, {}
     flat_i = 0
     for batch_logits, batch_labels in zip(psr_preds_logits, psr_labels):
@@ -376,13 +410,14 @@ def _group_psr_by_recording(psr_preds_logits, psr_labels, psr_rec_ids,
         if lb.ndim == 1:
             lb = lb[None, :]
         for row in range(bl.shape[0]):
-            rec = psr_rec_ids[flat_i] if flat_i < len(psr_rec_ids) else f'rec_{flat_i}'
-            fn = (psr_frame_nums[flat_i]
-                  if psr_frame_nums is not None and flat_i < len(psr_frame_nums)
-                  else flat_i)
+            rec = psr_rec_ids[flat_i] if flat_i < len(psr_rec_ids) else f"rec_{flat_i}"
+            fn = (
+                psr_frame_nums[flat_i]
+                if psr_frame_nums is not None and flat_i < len(psr_frame_nums)
+                else flat_i
+            )
             by_rec_logits.setdefault(rec, []).append(bl[row, :11])
-            by_rec_gt.setdefault(rec, []).append(
-                lb[row, :11] if row < lb.shape[0] else None)
+            by_rec_gt.setdefault(rec, []).append(lb[row, :11] if row < lb.shape[0] else None)
             by_rec_fn.setdefault(rec, []).append(fn)
             flat_i += 1
     psr_rec_tensors, gt_rec_tensors = {}, {}
@@ -390,11 +425,11 @@ def _group_psr_by_recording(psr_preds_logits, psr_labels, psr_rec_ids,
         gts = by_rec_gt[rec]
         if any(g is None for g in gts) or len(rows) < 2:
             continue
-        order = np.argsort(np.asarray(by_rec_fn[rec], dtype=np.int64), kind='stable')
+        order = np.argsort(np.asarray(by_rec_fn[rec], dtype=np.int64), kind="stable")
         psr_rec_tensors[rec] = torch.as_tensor(
-            np.stack([rows[k] for k in order]).astype(np.float32))
-        gt_rec_tensors[rec] = torch.as_tensor(
-            np.stack([gts[k] for k in order]).astype(np.float32))
+            np.stack([rows[k] for k in order]).astype(np.float32)
+        )
+        gt_rec_tensors[rec] = torch.as_tensor(np.stack([gts[k] for k in order]).astype(np.float32))
     return psr_rec_tensors, gt_rec_tensors
 
 
@@ -413,11 +448,13 @@ def decode_and_score_psr(psr_logits_by_rec, gt_states_by_rec, tol_frames=3):
         dict with psr_f1, psr_pos, psr_edit (all finite, full test set)
     """
     import numpy as np
+
     try:
         from src.models.psr_transition import MonotonicDecoder
+
         _decoder = MonotonicDecoder(num_components=11)
     except ImportError:
-        logger.warning('[GAP-A2] MonotonicDecoder not available — falling back to raw logit PSR')
+        logger.warning("[GAP-A2] MonotonicDecoder not available — falling back to raw logit PSR")
         return {}
     f1s, poss, edits = [], [], []
     for rec, logits in psr_logits_by_rec.items():
@@ -426,7 +463,7 @@ def decode_and_score_psr(psr_logits_by_rec, gt_states_by_rec, tol_frames=3):
             continue
         # Convert logits to event probabilities, decode to monotone states
         events = torch.sigmoid(torch.as_tensor(logits)).unsqueeze(0)  # [1,T,11]
-        pred_states = _decoder(events).squeeze(0)                     # [T,11]
+        pred_states = _decoder(events).squeeze(0)  # [T,11]
         # Transition frames = where state flips 0→1
         pred_tr = (pred_states[1:] - pred_states[:-1]).clamp(min=0).cpu().numpy()
         gt_tr = (gt[1:] - gt[:-1]).clamp(min=0).cpu().numpy()
@@ -435,11 +472,11 @@ def decode_and_score_psr(psr_logits_by_rec, gt_states_by_rec, tol_frames=3):
         poss.append(_ordered_pair_fraction(pred_states.cpu().numpy(), gt.cpu().numpy()))
         edits.append(_psr_edit_score(pred_states.cpu().numpy(), gt.cpu().numpy()))
     if not f1s:
-        return {'psr_f1': 0.0, 'psr_pos': 0.0, 'psr_edit': 0.0}
+        return {"psr_f1": 0.0, "psr_pos": 0.0, "psr_edit": 0.0}
     return {
-        'psr_f1': float(np.mean(f1s)),
-        'psr_pos': float(np.mean(poss)),
-        'psr_edit': float(np.mean(edits)),
+        "psr_f1": float(np.mean(f1s)),
+        "psr_pos": float(np.mean(poss)),
+        "psr_edit": float(np.mean(edits)),
     }
 
 
@@ -458,7 +495,9 @@ def _event_f1(pred_tr, gt_tr, tol=3):
         for pf in p_frames:
             for gi, gf in enumerate(g_frames):
                 if gi not in matched and abs(pf - gf) <= tol:
-                    matched.add(gi); tp += 1; break
+                    matched.add(gi)
+                    tp += 1
+                    break
             else:
                 fp += 1
         fn_tot += len(g_frames) - len(matched)
@@ -472,34 +511,42 @@ def _event_f1(pred_tr, gt_tr, tol=3):
 
 def _ordered_pair_fraction(pred_states, gt_states):
     """PSRT POS: fraction of correctly ordered adjacent pairs."""
-    pred_pairs = (pred_states[1:] - pred_states[:-1])
-    gt_pairs = (gt_states[1:] - gt_states[:-1])
+    pred_pairs = pred_states[1:] - pred_states[:-1]
+    gt_pairs = gt_states[1:] - gt_states[:-1]
     return float((np.sign(pred_pairs) == np.sign(gt_pairs)).mean())
 
 
 def _psr_edit_score(pred_states, gt_states):
     """Damerau-Levenshtein on state-change sequences, GT-normalized."""
     import numpy as np
+
     # Convert to state-change event strings
-    pred_events = ''.join(str(int(b)) for b in (pred_states[1:] != pred_states[:-1]).any(axis=1).astype(int))
-    gt_events = ''.join(str(int(b)) for b in (gt_states[1:] != gt_states[:-1]).any(axis=1).astype(int))
+    pred_events = "".join(
+        str(int(b)) for b in (pred_states[1:] != pred_states[:-1]).any(axis=1).astype(int)
+    )
+    gt_events = "".join(
+        str(int(b)) for b in (gt_states[1:] != gt_states[:-1]).any(axis=1).astype(int)
+    )
     if not gt_events:
         return 1.0 if not pred_events else 0.0
     # Simple edit distance on binary event strings
     m, n = len(pred_events), len(gt_events)
-    dp = np.zeros((m+1, n+1))
-    for i in range(m+1): dp[i, 0] = i
-    for j in range(n+1): dp[0, j] = j
-    for i in range(1, m+1):
-        for j in range(1, n+1):
-            cost = 0 if pred_events[i-1] == gt_events[j-1] else 1
-            dp[i, j] = min(dp[i-1, j] + 1, dp[i, j-1] + 1, dp[i-1, j-1] + cost)
+    dp = np.zeros((m + 1, n + 1))
+    for i in range(m + 1):
+        dp[i, 0] = i
+    for j in range(n + 1):
+        dp[0, j] = j
+    for i in range(1, m + 1):
+        for j in range(1, n + 1):
+            cost = 0 if pred_events[i - 1] == gt_events[j - 1] else 1
+            dp[i, j] = min(dp[i - 1, j] + 1, dp[i, j - 1] + 1, dp[i - 1, j - 1] + cost)
     return 1.0 - dp[m, n] / max(m, n, 1)
 
 
 # =============================================================================
 # CHECKLIST ITEM 43 — PSR Accuracy Computation
 # =============================================================================
+
 
 def compute_psr_accuracy(
     step_logits: torch.Tensor,
@@ -523,19 +570,20 @@ def compute_psr_accuracy(
     Returns:
         dict with psr_step_acc (float) and psr_comp_acc (float)
     """
-    step_pred = step_logits.argmax(dim=1)          # [B]
+    step_pred = step_logits.argmax(dim=1)  # [B]
     B = step_labels.size(0)
     step_acc = (step_pred == step_labels).float().mean().item() if B > 0 else 0.0
 
     comp_pred = (torch.sigmoid(comp_logits) > 0.5).long()  # [B, 11] binary
     comp_acc = (comp_pred == comp_labels).float().mean().item() if B > 0 else 0.0
 
-    return {'psr_step_acc': step_acc, 'psr_comp_acc': comp_acc}
+    return {"psr_step_acc": step_acc, "psr_comp_acc": comp_acc}
 
 
 # =============================================================================
 # CHECKLIST ITEM 44 — Per-Task Metric Tracking Class
 # =============================================================================
+
 
 class EvaluationMetrics:
     """
@@ -601,7 +649,7 @@ class EvaluationMetrics:
         """Return all current metric values as a flat dict."""
         result = {}
         for attr in dir(self):
-            if attr.startswith('_'):
+            if attr.startswith("_"):
                 continue
             val = getattr(self, attr)
             if isinstance(val, (float, int)):
@@ -612,6 +660,7 @@ class EvaluationMetrics:
 # =============================================================================
 # Multi-Seed Evaluation & Ablation Support (Doc 03 C)
 # =============================================================================
+
 
 def run_multi_seed_evaluation(
     model: nn.Module,
@@ -643,78 +692,104 @@ def run_multi_seed_evaluation(
         np.random.seed(seed)
 
         loader = base_loader_fn(seed=seed)
-        logger.info(f'  Seed {seed} ({seed_idx + 1}/{len(seeds)}) starting evaluation...')
+        logger.info(f"  Seed {seed} ({seed_idx + 1}/{len(seeds)}) starting evaluation...")
 
         results = evaluate_all(
-            model, criterion, loader, device,
+            model,
+            criterion,
+            loader,
+            device,
             max_batches=max_batches,
-            save_dir=str(Path(save_dir) / f'seed_{seed}'),
+            save_dir=str(Path(save_dir) / f"seed_{seed}"),
             use_flip_tta=use_flip_tta,
             use_crop_tta=use_crop_tta,
         )
-        results['_seed'] = seed
+        results["_seed"] = seed
         all_seed_results.append(results)
 
     # Aggregate: mean ± std per metric
     metric_keys = [
         # Activity
-        'act_accuracy', 'act_macro_f1', 'act_clip_accuracy',
-        'act_frame_accuracy', 'act_top1', 'act_top5_accuracy',  # [Add 1 / Add 5]
+        "act_accuracy",
+        "act_macro_f1",
+        "act_clip_accuracy",
+        "act_frame_accuracy",
+        "act_top1",
+        "act_top5_accuracy",  # [Add 1 / Add 5]
         # Head pose (paper headline = angular deg + position mm)
-        'forward_angular_MAE_deg', 'up_angular_MAE_deg', 'position_MAE_mm',
-        'head_pose_MAE',
+        "forward_angular_MAE_deg",
+        "up_angular_MAE_deg",
+        "position_MAE_mm",
+        "head_pose_MAE",
         # PSR (overall + transition-boundary P/R at both tolerances)
-        'psr_overall_f1', 'psr_f1_at_t',
-        'psr_precision_at_t', 'psr_recall_at_t',
-        'psr_overall_f1_at5', 'psr_f1_at_t5',
-        'psr_precision_at_t5', 'psr_recall_at_t5',
-        'psr_edit_score', 'psr_pos',
-        'psr_tau', 'psr_pos_blind',  # [Add 3 / Q44] [Add 4 / Q43]
-        'psr_f1_calibrated', 'psr_f1_calibrated_t5',  # [Add 2 / Q18]
+        "psr_overall_f1",
+        "psr_f1_at_t",
+        "psr_precision_at_t",
+        "psr_recall_at_t",
+        "psr_overall_f1_at5",
+        "psr_f1_at_t5",
+        "psr_precision_at_t5",
+        "psr_recall_at_t5",
+        "psr_edit_score",
+        "psr_pos",
+        "psr_tau",
+        "psr_pos_blind",  # [Add 3 / Q44] [Add 4 / Q43]
+        "psr_f1_calibrated",
+        "psr_f1_calibrated_t5",  # [Add 2 / Q18]
         # Assembly State Detection
-        'det_mAP50', 'det_mAP_50_95',
-        'as_f1', 'as_map_at_r',
+        "det_mAP50",
+        "det_mAP_50_95",
+        "as_f1",
+        "as_map_at_r",
         # Error Verification (threshold=0.5)
-        'ev_ap', 'ev_f1', 'ev_precision', 'ev_recall',
+        "ev_ap",
+        "ev_f1",
+        "ev_precision",
+        "ev_recall",
         # Efficiency (batched + streaming + multi-model pipeline)
-        'eff_fps', 'eff_fps_streaming',
-        'pipeline_params_m', 'pipeline_gflops', 'pipeline_fps',
+        "eff_fps",
+        "eff_fps_streaming",
+        "pipeline_params_m",
+        "pipeline_gflops",
+        "pipeline_fps",
     ]
 
-    summary: Dict[str, Any] = {'_per_seed': []}
+    summary: Dict[str, Any] = {"_per_seed": []}
     for key in metric_keys:
-        values = [float(r.get(key, float('nan'))) for r in all_seed_results]
+        values = [float(r.get(key, float("nan"))) for r in all_seed_results]
         clean = [v for v in values if not np.isnan(v)]
         if clean:
-            summary[f'{key}_mean'] = float(np.mean(clean))
-            summary[f'{key}_std'] = float(np.std(clean))
+            summary[f"{key}_mean"] = float(np.mean(clean))
+            summary[f"{key}_std"] = float(np.std(clean))
         else:
-            summary[f'{key}_mean'] = float('nan')
-            summary[f'{key}_std'] = float('nan')
+            summary[f"{key}_mean"] = float("nan")
+            summary[f"{key}_std"] = float("nan")
 
-    summary['_seeds'] = seeds
-    summary['_num_seeds'] = len(seeds)
+    summary["_seeds"] = seeds
+    summary["_num_seeds"] = len(seeds)
     for r in all_seed_results:
-        r_copy = {k: v for k, v in r.items() if not k.startswith('_')}
-        r_copy['_seed'] = r['_seed']
-        summary['_per_seed'].append(r_copy)
+        r_copy = {k: v for k, v in r.items() if not k.startswith("_")}
+        r_copy["_seed"] = r["_seed"]
+        summary["_per_seed"].append(r_copy)
 
     # Machine-readable multi-seed summary
     if save_dir:
         import json
         import os
+
         os.makedirs(save_dir, exist_ok=True)
-        safe_summary = _serialize_for_json({k: v for k, v in summary.items()
-                                            if not k.startswith('_')})
+        safe_summary = _serialize_for_json(
+            {k: v for k, v in summary.items() if not k.startswith("_")}
+        )
         # Also save per-seed rows
-        ps_path = os.path.join(save_dir, 'multiseed_per_seed.json')
-        with open(ps_path, 'w') as f:
-            json.dump(safe_summary.get('_per_seed', []), f, indent=2)
-        agg_path = os.path.join(save_dir, 'multiseed_summary.json')
-        with open(agg_path, 'w') as f:
+        ps_path = os.path.join(save_dir, "multiseed_per_seed.json")
+        with open(ps_path, "w") as f:
+            json.dump(safe_summary.get("_per_seed", []), f, indent=2)
+        agg_path = os.path.join(save_dir, "multiseed_summary.json")
+        with open(agg_path, "w") as f:
             json.dump(safe_summary, f, indent=2)
-        logger.info(f'  [RESULTS] Multi-seed per-seed JSON: {ps_path}')
-        logger.info(f'  [RESULTS] Multi-seed summary JSON: {agg_path}')
+        logger.info(f"  [RESULTS] Multi-seed per-seed JSON: {ps_path}")
+        logger.info(f"  [RESULTS] Multi-seed summary JSON: {agg_path}")
 
     return summary
 
@@ -722,7 +797,7 @@ def run_multi_seed_evaluation(
 def print_ablation_table(
     baseline_results: Dict[str, Any],
     full_results: Dict[str, Any],
-    metric: str = 'act_macro_f1',
+    metric: str = "act_macro_f1",
 ) -> str:
     """
     Print an ablation table comparing baseline vs full model.
@@ -744,41 +819,41 @@ def print_ablation_table(
       | Full model       | 0.7641    | +3.00% |
     """
     components = [
-        ('Baseline', baseline_results),
-        ('+ RandAugment', _ablate_component(full_results, 'rand_augment')),
-        ('+ CutMix', _ablate_component(full_results, 'cutmix')),
-        ('+ LDAM-DRW', _ablate_component(full_results, 'ldam_drw')),
-        ('+ GIoU', _ablate_component(full_results, 'giou')),
-        ('+ Focal PSR', _ablate_component(full_results, 'focal_psr')),
-        ('Full model', full_results),
+        ("Baseline", baseline_results),
+        ("+ RandAugment", _ablate_component(full_results, "rand_augment")),
+        ("+ CutMix", _ablate_component(full_results, "cutmix")),
+        ("+ LDAM-DRW", _ablate_component(full_results, "ldam_drw")),
+        ("+ GIoU", _ablate_component(full_results, "giou")),
+        ("+ Focal PSR", _ablate_component(full_results, "focal_psr")),
+        ("Full model", full_results),
     ]
 
     lines = [
-        '',
-        '=' * 60,
-        'ABLATION TABLE (Doc 03 C)',
-        '=' * 60,
-        f'  Metric: {metric}',
-        '-' * 60,
-        f'  {"Component":<20} {metric:<12} {"Delta":>8}',
-        '-' * 60,
+        "",
+        "=" * 60,
+        "ABLATION TABLE (Doc 03 C)",
+        "=" * 60,
+        f"  Metric: {metric}",
+        "-" * 60,
+        f"  {'Component':<20} {metric:<12} {'Delta':>8}",
+        "-" * 60,
     ]
 
     baseline_val = None
     for name, results in components:
-        val = results.get(metric, float('nan'))
+        val = results.get(metric, float("nan"))
         if baseline_val is None:
             baseline_val = val
-            delta_str = '—'
+            delta_str = "—"
         else:
             delta = val - baseline_val
-            delta_str = f'{delta:+.4f}'
-        lines.append(f'  {name:<20} {val:<12.4f} {delta_str:>8}')
-        if name == 'Baseline':
+            delta_str = f"{delta:+.4f}"
+        lines.append(f"  {name:<20} {val:<12.4f} {delta_str:>8}")
+        if name == "Baseline":
             baseline_val = val
 
-    lines += ['-' * 60, '=' * 60, '']
-    return '\n'.join(lines)
+    lines += ["-" * 60, "=" * 60, ""]
+    return "\n".join(lines)
 
 
 def _ablate_component(full_results: Dict[str, Any], component: str) -> Dict[str, Any]:
@@ -795,6 +870,7 @@ def _ablate_component(full_results: Dict[str, Any], component: str) -> Dict[str,
 # Image Helpers
 # =============================================================================
 
+
 def _prepare_images(images: torch.Tensor, device: torch.device) -> torch.Tensor:
     images = images.to(device, non_blocking=True)
     if images.dtype == torch.uint8:
@@ -808,6 +884,7 @@ def _prepare_images(images: torch.Tensor, device: torch.device) -> torch.Tensor:
 # =============================================================================
 # Activity Recognition (AR) — 74 classes
 # =============================================================================
+
 
 def _compute_clip_level_accuracy(
     all_gt: np.ndarray,
@@ -849,10 +926,10 @@ def _compute_clip_level_accuracy(
     _n = min(_lens)
     if max(_lens) != _n:
         logger.warning(
-            f'  [CLIP_EVAL] activity array length mismatch '
-            f'gt={len(all_gt)} pred={len(all_pred)} clip_ids={len(clip_ids)} '
-            f'fnums={len(clip_frame_nums) if clip_frame_nums is not None else None} '
-            f'— truncating all to {_n} to avoid crash (clip-level number may be approximate)'
+            f"  [CLIP_EVAL] activity array length mismatch "
+            f"gt={len(all_gt)} pred={len(all_pred)} clip_ids={len(clip_ids)} "
+            f"fnums={len(clip_frame_nums) if clip_frame_nums is not None else None} "
+            f"— truncating all to {_n} to avoid crash (clip-level number may be approximate)"
         )
         all_gt = all_gt[:_n]
         all_pred = all_pred[:_n]
@@ -879,8 +956,7 @@ def _compute_clip_level_accuracy(
             # Sample 16 uniform frame indices
             if total_frames >= 16:
                 sample_indices = [
-                    fn_min + int(round(k * (total_frames - 1) / 15))
-                    for k in range(16)
+                    fn_min + int(round(k * (total_frames - 1) / 15)) for k in range(16)
                 ]
             else:
                 # Not enough frames: repeat to get 16
@@ -928,6 +1004,7 @@ def _compute_clip_level_accuracy(
 
     return float(correct / max(total, 1))
 
+
 # [GAP-B] Segment-level activity metric — one prediction per ACTION SEGMENT, NA excluded.
 # Replaces the per-recording majority-vote evaluation for MViTv2-comparable Top-1/5.
 def compute_activity_segment_metrics(model, dataset, device, T=16):
@@ -938,8 +1015,8 @@ def compute_activity_segment_metrics(model, dataset, device, T=16):
     """
     segs = dataset.build_activity_segments()
     if not segs:
-        logger.warning('[GAP-B] No activity segments found — returning zeros')
-        return {'act_top1': 0.0, 'act_top5': 0.0, 'n_segments': 0}
+        logger.warning("[GAP-B] No activity segments found — returning zeros")
+        return {"act_top1": 0.0, "act_top5": 0.0, "n_segments": 0}
     top1, top5 = 0, 0
     model.eval()
     for seg in segs:
@@ -954,14 +1031,17 @@ def compute_activity_segment_metrics(model, dataset, device, T=16):
             # making act_seg_top1/top5 meaningless — the exact MViTv2-comparable
             # number reported in the paper. Remap the label to group space so both
             # sides share an index space.
-            _remap = getattr(C, 'remap_activity_label', None)
-            if _remap is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() != 'none':
+            _remap = getattr(C, "remap_activity_label", None)
+            if (
+                _remap is not None
+                and str(getattr(C, "ACT_CLASS_GROUPING", "none")).lower() != "none"
+            ):
                 label = _remap(int(label))
             clip = clip.unsqueeze(0).to(device)  # [1,T,3,H,W]
             with torch.no_grad():
                 out = model(clip)
-            _n_out = int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_CLASSES_ACT))
-            logits = out.get('act_logits', torch.zeros(1, _n_out))
+            _n_out = int(getattr(C, "NUM_ACT_OUTPUTS", C.NUM_CLASSES_ACT))
+            logits = out.get("act_logits", torch.zeros(1, _n_out))
             if logits.dim() > 2:
                 logits = logits.mean(dim=1)  # pool temporal dim
             pred = logits.argmax(dim=-1).item()
@@ -969,11 +1049,13 @@ def compute_activity_segment_metrics(model, dataset, device, T=16):
             top5_items = logits.topk(5, dim=-1).indices.squeeze(0).tolist()
             top5 += int(label in top5_items)
         except Exception as e:
-            logger.debug(f'[GAP-B] segment eval error: {e}')
+            logger.debug(f"[GAP-B] segment eval error: {e}")
             continue
     n = max(len(segs), 1)
-    logger.info(f'  [GAP-B] Activity segment eval: top1={top1}/{n}={top1/n:.4f} top5={top5}/{n}={top5/n:.4f}')
-    return {'act_top1': top1/n, 'act_top5': top5/n, 'n_segments': len(segs)}
+    logger.info(
+        f"  [GAP-B] Activity segment eval: top1={top1}/{n}={top1 / n:.4f} top5={top5}/{n}={top5 / n:.4f}"
+    )
+    return {"act_top1": top1 / n, "act_top5": top5 / n, "n_segments": len(segs)}
 
 
 def compute_activity_metrics(
@@ -1020,21 +1102,21 @@ def compute_activity_metrics(
     if all_gt.size == 0 or all_pred.size == 0:
         num_classes = len(class_names) if class_names else C.NUM_CLASSES_ACT
         return {
-            'act_accuracy': 0.0,
-            'act_frame_accuracy': 0.0,
-            'act_top1': 0.0,  # [NEW] Per-frame Top-1 accuracy (alias for act_frame_accuracy)
-            'act_accuracy_no_na': 0.0,
-            'act_macro_f1': 0.0,
-            'act_macro_f1_present': 0.0,
-            'act_weighted_f1': 0.0,
-            'act_macro_recall': 0.0,
-            'act_mean_per_class_acc': 0.0,
-            'act_top5_accuracy': 0.0,
-            'act_per_class_acc': [0.0] * num_classes,
-            'act_per_class_report': {},
-            'act_confusion_matrix': np.zeros((num_classes, num_classes)).tolist(),
-            'act_clip_accuracy': 0.0,
-            '_ar_baseline_protocol': 'clip_level_majority_vote',
+            "act_accuracy": 0.0,
+            "act_frame_accuracy": 0.0,
+            "act_top1": 0.0,  # [NEW] Per-frame Top-1 accuracy (alias for act_frame_accuracy)
+            "act_accuracy_no_na": 0.0,
+            "act_macro_f1": 0.0,
+            "act_macro_f1_present": 0.0,
+            "act_weighted_f1": 0.0,
+            "act_macro_recall": 0.0,
+            "act_mean_per_class_acc": 0.0,
+            "act_top5_accuracy": 0.0,
+            "act_per_class_acc": [0.0] * num_classes,
+            "act_per_class_report": {},
+            "act_confusion_matrix": np.zeros((num_classes, num_classes)).tolist(),
+            "act_clip_accuracy": 0.0,
+            "_ar_baseline_protocol": "clip_level_majority_vote",
         }
 
     num_classes = len(class_names) if class_names else C.NUM_CLASSES_ACT
@@ -1045,22 +1127,27 @@ def compute_activity_metrics(
 
     # 2. Frame accuracy excluding NA (class 0)
     mask_no_na = all_gt != 0
-    fa_no_na = float(accuracy_score(all_gt[mask_no_na], all_pred[mask_no_na])) if mask_no_na.sum() > 0 else 0.0
+    fa_no_na = (
+        float(accuracy_score(all_gt[mask_no_na], all_pred[mask_no_na]))
+        if mask_no_na.sum() > 0
+        else 0.0
+    )
 
     # 3. Macro-F1 (excluding NA class 0 — present_labels filters to seen GT classes)
     present_labels = [i for i in labels if np.sum(all_gt == i) > 0]
-    macro_f1 = float(f1_score(all_gt, all_pred, average='macro',
-                               zero_division=0, labels=present_labels))
+    macro_f1 = float(
+        f1_score(all_gt, all_pred, average="macro", zero_division=0, labels=present_labels)
+    )
     macro_f1_present = macro_f1  # alias for clarity
 
     # 4. Weighted-F1
-    weighted_f1 = float(f1_score(all_gt, all_pred, average='weighted',
-                                  zero_division=0))
+    weighted_f1 = float(f1_score(all_gt, all_pred, average="weighted", zero_division=0))
 
     # 5. Macro-Recall (excluding NA class 0 — same filtering as macro_f1_present)
     present_labels = [i for i in labels if np.sum(all_gt == i) > 0]
-    macro_recall = float(recall_score(all_gt, all_pred, average='macro',
-                                       zero_division=0, labels=present_labels))
+    macro_recall = float(
+        recall_score(all_gt, all_pred, average="macro", zero_division=0, labels=present_labels)
+    )
 
     # 6. Mean per-class accuracy
     cm = confusion_matrix(all_gt, all_pred, labels=labels)
@@ -1083,7 +1170,8 @@ def compute_activity_metrics(
     report = {}
     if class_names is not None:
         report = classification_report(
-            all_gt, all_pred,
+            all_gt,
+            all_pred,
             target_names=class_names,
             labels=labels,
             zero_division=0,
@@ -1097,10 +1185,17 @@ def compute_activity_metrics(
     # Doc 03 B (updated): Clip-level activity recognition via 16 uniform frames
     clip_ids_arr = np.asarray(clip_ids) if clip_ids is not None else None
     clip_fn_arr = np.asarray(clip_frame_nums) if clip_frame_nums is not None else None
-    act_clip_acc = _compute_clip_level_accuracy(
-        all_gt, all_pred, clip_ids_arr, exclude_na=True,
-        clip_frame_nums=clip_fn_arr,
-    ) if clip_ids_arr is not None and len(clip_ids_arr) > 0 else None
+    act_clip_acc = (
+        _compute_clip_level_accuracy(
+            all_gt,
+            all_pred,
+            clip_ids_arr,
+            exclude_na=True,
+            clip_frame_nums=clip_fn_arr,
+        )
+        if clip_ids_arr is not None and len(clip_ids_arr) > 0
+        else None
+    )
 
     # [NEW METRIC Add 1 / Q42] act_top1: Per-frame Top-1 accuracy.
     # This is the argmax of per-frame logits compared to per-frame GT label.
@@ -1110,24 +1205,24 @@ def compute_activity_metrics(
     act_top1 = fa_all
 
     return {
-        'act_accuracy': act_clip_acc if act_clip_acc is not None else fa_all,
-        'act_frame_accuracy': fa_all,
-        'act_top1': act_top1,  # [NEW] Per-frame Top-1 accuracy (Add 1 / Q42 T4)
-        'act_accuracy_no_na': fa_no_na,
-        'act_macro_f1': macro_f1,
-        'act_macro_f1_present': macro_f1_present,
-        'act_weighted_f1': weighted_f1,
-        'act_macro_recall': macro_recall,
-        'act_mean_per_class_acc': mean_per_class_acc,
-        'act_top5_accuracy': top5_acc,
-        'act_per_class_acc': per_class_acc.tolist(),
-        'act_per_class_report': report,
-        'act_confusion_matrix': cm.tolist(),
-        'act_clip_accuracy': act_clip_acc,
-        '_ar_baseline_protocol': (
-            'clip_level_majority_vote'
-            '; baseline MViTv2 uses RGB+VL+stereo multi-modal; '
-            'POPW uses RGB-only — comparison is modality-not-model'
+        "act_accuracy": act_clip_acc if act_clip_acc is not None else fa_all,
+        "act_frame_accuracy": fa_all,
+        "act_top1": act_top1,  # [NEW] Per-frame Top-1 accuracy (Add 1 / Q42 T4)
+        "act_accuracy_no_na": fa_no_na,
+        "act_macro_f1": macro_f1,
+        "act_macro_f1_present": macro_f1_present,
+        "act_weighted_f1": weighted_f1,
+        "act_macro_recall": macro_recall,
+        "act_mean_per_class_acc": mean_per_class_acc,
+        "act_top5_accuracy": top5_acc,
+        "act_per_class_acc": per_class_acc.tolist(),
+        "act_per_class_report": report,
+        "act_confusion_matrix": cm.tolist(),
+        "act_clip_accuracy": act_clip_acc,
+        "_ar_baseline_protocol": (
+            "clip_level_majority_vote"
+            "; baseline MViTv2 uses RGB+VL+stereo multi-modal; "
+            "POPW uses RGB-only — comparison is modality-not-model"
         ),
     }
 
@@ -1136,30 +1231,34 @@ def report_per_class_accuracy(cm_list, class_names=None, k: int = 5):
     """Log top-k worst and best per-class activity accuracy."""
     cm = np.asarray(cm_list, dtype=np.float64)
     if cm.size == 0:
-        logger.info('Per-class activity report skipped: empty confusion matrix.')
+        logger.info("Per-class activity report skipped: empty confusion matrix.")
         return
 
     row_sums = cm.sum(axis=1).clip(min=1.0)
     per_class_acc = cm.diagonal() / row_sums
-    names = class_names if class_names is not None else [f'class_{i}' for i in range(len(per_class_acc))]
+    names = (
+        class_names
+        if class_names is not None
+        else [f"class_{i}" for i in range(len(per_class_acc))]
+    )
 
     sorted_idx = np.argsort(per_class_acc)
     worst_idx = sorted_idx[:k]
     best_idx = sorted_idx[-k:][::-1]
 
-    logger.info('  📉 %d Worst Classes:', k)
+    logger.info("  📉 %d Worst Classes:", k)
     for idx in worst_idx:
-        logger.info(f'    {names[idx]:30s}: {per_class_acc[idx]:.1%}')
+        logger.info(f"    {names[idx]:30s}: {per_class_acc[idx]:.1%}")
 
-    logger.info('  📈 %d Best Classes:', k)
+    logger.info("  📈 %d Best Classes:", k)
     for idx in best_idx:
-        logger.info(f'    {names[idx]:30s}: {per_class_acc[idx]:.1%}')
+        logger.info(f"    {names[idx]:30s}: {per_class_acc[idx]:.1%}")
 
     logger.info(
-        f'  Per-class accuracy summary: '
-        f'macro={per_class_acc.mean():.1%} '
-        f'min={per_class_acc.min():.1%} '
-        f'max={per_class_acc.max():.1%}'
+        f"  Per-class accuracy summary: "
+        f"macro={per_class_acc.mean():.1%} "
+        f"min={per_class_acc.min():.1%} "
+        f"max={per_class_acc.max():.1%}"
     )
 
 
@@ -1167,39 +1266,48 @@ def _save_confusion_matrix(cm, class_names, save_dir):
     """Save confusion matrix as PNG. Fails silently if matplotlib unavailable."""
     try:
         import matplotlib
-        matplotlib.use('Agg')
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import seaborn as sns
     except ImportError:
-        logger.warning('matplotlib/seaborn not available, skipping confusion matrix plot')
+        logger.warning("matplotlib/seaborn not available, skipping confusion matrix plot")
         return
 
     save_dir = Path(save_dir)
     save_dir.mkdir(parents=True, exist_ok=True)
 
     fig, ax = plt.subplots(figsize=(20, 18))
-    sns.heatmap(cm, annot=False, fmt='d', cmap='Blues',
-                xticklabels=class_names, yticklabels=class_names, ax=ax)
-    ax.set_xlabel('Predicted')
-    ax.set_ylabel('Ground Truth')
-    ax.set_title('Activity Confusion Matrix')
-    plt.xticks(rotation=45, ha='right', fontsize=7)
+    sns.heatmap(
+        cm,
+        annot=False,
+        fmt="d",
+        cmap="Blues",
+        xticklabels=class_names,
+        yticklabels=class_names,
+        ax=ax,
+    )
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("Ground Truth")
+    ax.set_title("Activity Confusion Matrix")
+    plt.xticks(rotation=45, ha="right", fontsize=7)
     plt.yticks(fontsize=7)
     plt.tight_layout()
-    plt.savefig(save_dir / 'confusion_matrix.png', dpi=150)
+    plt.savefig(save_dir / "confusion_matrix.png", dpi=150)
     plt.close()
-    logger.info(f'  Saved confusion matrix to {save_dir / "confusion_matrix.png"}')
+    logger.info(f"  Saved confusion matrix to {save_dir / 'confusion_matrix.png'}")
 
 
 def _save_det_confusion_matrix(cm, class_names, save_dir):
     """Save detection confusion matrix (24×24) as PNG."""
     try:
         import matplotlib
-        matplotlib.use('Agg')
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import seaborn as sns
     except ImportError:
-        logger.warning('matplotlib/seaborn not available, skipping detection confusion matrix')
+        logger.warning("matplotlib/seaborn not available, skipping detection confusion matrix")
         return
 
     save_dir = Path(save_dir)
@@ -1221,17 +1329,24 @@ def _save_det_confusion_matrix(cm, class_names, save_dir):
 
     fig_height = max(6, min(20, n_keep * 0.6))
     fig, ax = plt.subplots(figsize=(fig_height + 2, fig_height))
-    sns.heatmap(cm_filtered, annot=n_keep <= 16, fmt='d', cmap='Blues',
-                xticklabels=labels_filtered, yticklabels=labels_filtered, ax=ax)
-    ax.set_xlabel('Predicted')
-    ax.set_ylabel('Ground Truth')
-    ax.set_title(f'Detection Confusion Matrix ({n_keep}/{len(class_names)} classes with data)')
-    plt.xticks(rotation=45, ha='right', fontsize=8)
+    sns.heatmap(
+        cm_filtered,
+        annot=n_keep <= 16,
+        fmt="d",
+        cmap="Blues",
+        xticklabels=labels_filtered,
+        yticklabels=labels_filtered,
+        ax=ax,
+    )
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("Ground Truth")
+    ax.set_title(f"Detection Confusion Matrix ({n_keep}/{len(class_names)} classes with data)")
+    plt.xticks(rotation=45, ha="right", fontsize=8)
     plt.yticks(fontsize=8)
     plt.tight_layout()
-    plt.savefig(save_dir / 'det_confusion_matrix.png', dpi=150)
+    plt.savefig(save_dir / "det_confusion_matrix.png", dpi=150)
     plt.close()
-    logger.info(f'  Saved detection confusion matrix to {save_dir / "det_confusion_matrix.png"}')
+    logger.info(f"  Saved detection confusion matrix to {save_dir / 'det_confusion_matrix.png'}")
 
 
 def _save_per_class_f1_csv(
@@ -1239,7 +1354,7 @@ def _save_per_class_f1_csv(
     per_class_acc: List[float],
     class_names: List[str],
     save_dir: Path,
-    split: str = 'val',
+    split: str = "val",
 ) -> None:
     """
     Doc 03 A.3 / Phase 3: Export per-class F1/precision/recall to CSV.
@@ -1254,30 +1369,34 @@ def _save_per_class_f1_csv(
     for i, name in enumerate(class_names):
         if name in per_class_report:
             r = per_class_report[name]
-            acc = per_class_acc[i] if i < len(per_class_acc) else float('nan')
-            rows.append({
-                'class_name': name,
-                'precision': r.get('precision', float('nan')),
-                'recall': r.get('recall', float('nan')),
-                'f1-score': r.get('f1-score', float('nan')),
-                'support': r.get('support', 0),
-                'accuracy': acc,
-            })
+            acc = per_class_acc[i] if i < len(per_class_acc) else float("nan")
+            rows.append(
+                {
+                    "class_name": name,
+                    "precision": r.get("precision", float("nan")),
+                    "recall": r.get("recall", float("nan")),
+                    "f1-score": r.get("f1-score", float("nan")),
+                    "support": r.get("support", 0),
+                    "accuracy": acc,
+                }
+            )
         else:
-            rows.append({
-                'class_name': name,
-                'precision': float('nan'),
-                'recall': float('nan'),
-                'f1-score': float('nan'),
-                'support': 0,
-                'accuracy': per_class_acc[i] if i < len(per_class_acc) else float('nan'),
-            })
+            rows.append(
+                {
+                    "class_name": name,
+                    "precision": float("nan"),
+                    "recall": float("nan"),
+                    "f1-score": float("nan"),
+                    "support": 0,
+                    "accuracy": per_class_acc[i] if i < len(per_class_acc) else float("nan"),
+                }
+            )
 
     df = pd.DataFrame(rows)
-    df_sorted = df.sort_values('f1-score', ascending=True)
-    csv_path = save_dir / f'per_class_f1_{split}.csv'
+    df_sorted = df.sort_values("f1-score", ascending=True)
+    csv_path = save_dir / f"per_class_f1_{split}.csv"
     df_sorted.to_csv(csv_path, index=False)
-    logger.info(f'  Saved per-class F1 CSV to {csv_path}')
+    logger.info(f"  Saved per-class F1 CSV to {csv_path}")
     return csv_path
 
 
@@ -1296,10 +1415,11 @@ def _plot_topk_bottomk_classes(
     """
     try:
         import matplotlib
-        matplotlib.use('Agg')
+
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
     except ImportError:
-        logger.warning('matplotlib not available, skipping topk/bottomk plot')
+        logger.warning("matplotlib not available, skipping topk/bottomk plot")
         return
 
     save_dir = Path(save_dir)
@@ -1308,7 +1428,7 @@ def _plot_topk_bottomk_classes(
     # Guard NaN/Inf in per_class_values before plotting
     per_class_values = np.nan_to_num(per_class_values, nan=0.0, posinf=0.0, neginf=0.0)
     if per_class_values.size == 0 or per_class_values.max() == 0:
-        logger.warning('  Skipping top-k/bottom-k plot: all values are zero or empty')
+        logger.warning("  Skipping top-k/bottom-k plot: all values are zero or empty")
         plt.close()
         return
 
@@ -1321,14 +1441,19 @@ def _plot_topk_bottomk_classes(
     # Bottom-k (worst) in red
     for rank, idx in enumerate(worst_idx):
         ax.barh(
-            rank, per_class_values[idx],
-            color='#e74c3c', height=0.6,
+            rank,
+            per_class_values[idx],
+            color="#e74c3c",
+            height=0.6,
         )
         ax.text(
-            0.01, rank,
-            f' {class_names[idx]} ({per_class_values[idx]:.3f})',
-            va='center', ha='left', fontsize=9,
-            color='#c0392b',
+            0.01,
+            rank,
+            f" {class_names[idx]} ({per_class_values[idx]:.3f})",
+            va="center",
+            ha="left",
+            fontsize=9,
+            color="#c0392b",
         )
 
     # Top-k (best) in green — offset by k + 1
@@ -1336,31 +1461,37 @@ def _plot_topk_bottomk_classes(
     for rank, idx in enumerate(best_idx):
         bar_rank = offset + rank
         ax.barh(
-            bar_rank, per_class_values[idx],
-            color='#27ae60', height=0.6,
+            bar_rank,
+            per_class_values[idx],
+            color="#27ae60",
+            height=0.6,
         )
         ax.text(
-            0.01, bar_rank,
-            f' {class_names[idx]} ({per_class_values[idx]:.3f})',
-            va='center', ha='left', fontsize=9,
-            color='#1e8449',
+            0.01,
+            bar_rank,
+            f" {class_names[idx]} ({per_class_values[idx]:.3f})",
+            va="center",
+            ha="left",
+            fontsize=9,
+            color="#1e8449",
         )
 
     ax.set_xlim(0, max(per_class_values.max(), 0.01) * 1.2)
     ax.set_yticks([])
     ax.set_xlabel(metric_name)
-    ax.set_title(f'{metric_name}: Top-{k} (green) vs Bottom-{k} (red)')
+    ax.set_title(f"{metric_name}: Top-{k} (green) vs Bottom-{k} (red)")
     plt.tight_layout()
 
-    fname = f'{metric_name}_top{k}_bottom{k}.png'
+    fname = f"{metric_name}_top{k}_bottom{k}.png"
     plt.savefig(save_dir / fname, dpi=150)
     plt.close()
-    logger.info(f'  Saved {metric_name} top-{k}/bottom-{k} plot to {save_dir / fname}')
+    logger.info(f"  Saved {metric_name} top-{k}/bottom-{k} plot to {save_dir / fname}")
 
 
 # =============================================================================
 # Assembly State Detection (ASD) — COCO-format detection, 24 classes
 # =============================================================================
+
 
 def compute_iou_matrix(a, b):
     x1 = np.maximum(a[:, None, 0], b[None, :, 0])
@@ -1410,11 +1541,14 @@ def nms_numpy(boxes, scores, iou_thresh=0.5):
 
 
 def compute_ap_per_class(
-    pred_boxes, pred_scores, pred_labels,
-    gt_boxes, gt_labels,
+    pred_boxes,
+    pred_scores,
+    pred_labels,
+    gt_boxes,
+    gt_labels,
     iou_thresh=0.5,
     num_classes=C.NUM_DET_CLASSES,
-    interpolation_mode='coco',
+    interpolation_mode="coco",
 ):
     """
     Per-class AP with selectable interpolation.
@@ -1459,13 +1593,17 @@ def compute_ap_per_class(
         rec = tc / total_gt
         denom = tc + fc
         prec = np.where(denom > 0, tc / denom, 0.0)
-        if interpolation_mode == 'coco':
+        if interpolation_mode == "coco":
             ap = _coco_ap(rec, prec)
         else:
-            ap = sum(prec[rec >= t].max() if (rec >= t).any() else 0.0
-                     for t in np.linspace(0, 1, 11)) / 11
+            ap = (
+                sum(
+                    prec[rec >= t].max() if (rec >= t).any() else 0.0 for t in np.linspace(0, 1, 11)
+                )
+                / 11
+            )
         aps[cls] = float(ap)
-    return {'mAP': float(np.mean(list(aps.values()))) if aps else 0.0, 'per_class_ap': aps}
+    return {"mAP": float(np.mean(list(aps.values()))) if aps else 0.0, "per_class_ap": aps}
 
 
 def _coco_ap(recall: np.ndarray, precision: np.ndarray) -> float:
@@ -1483,11 +1621,14 @@ def _coco_ap(recall: np.ndarray, precision: np.ndarray) -> float:
 
 
 def compute_ap_per_class_all_frames(
-    pred_boxes, pred_scores, pred_labels,
-    gt_boxes, gt_labels,
+    pred_boxes,
+    pred_scores,
+    pred_labels,
+    gt_boxes,
+    gt_labels,
     iou_thresh=0.5,
     num_classes=C.NUM_DET_CLASSES,
-    interpolation_mode='coco',
+    interpolation_mode="coco",
 ):
     """
     Per-class AP on ALL frames (full-video protocol, Doc 03 §A.1).
@@ -1539,13 +1680,17 @@ def compute_ap_per_class_all_frames(
         rec = tc / max(total_gt, 1)
         denom = tc + fc
         prec = np.where(denom > 0, tc / denom, 0.0)
-        if interpolation_mode == 'coco':
+        if interpolation_mode == "coco":
             ap = _coco_ap(rec, prec)
         else:
-            ap = sum(prec[rec >= t].max() if (rec >= t).any() else 0.0
-                     for t in np.linspace(0, 1, 11)) / 11
+            ap = (
+                sum(
+                    prec[rec >= t].max() if (rec >= t).any() else 0.0 for t in np.linspace(0, 1, 11)
+                )
+                / 11
+            )
         aps[cls] = float(ap)
-    return {'mAP': float(np.mean(list(aps.values()))) if aps else 0.0, 'per_class_ap': aps}
+    return {"mAP": float(np.mean(list(aps.values()))) if aps else 0.0, "per_class_ap": aps}
 
 
 # =============================================================================
@@ -1555,12 +1700,16 @@ def compute_ap_per_class_all_frames(
 # the greedy match for all 10 thresholds, giving ~9× speedup.
 # =============================================================================
 
+
 def compute_ap_multi_thresh(
-    pred_boxes, pred_scores, pred_labels,
-    gt_boxes, gt_labels,
+    pred_boxes,
+    pred_scores,
+    pred_labels,
+    gt_boxes,
+    gt_labels,
     iou_thresholds,  # array of threshold values to evaluate
     num_classes=C.NUM_DET_CLASSES,
-    interpolation_mode='coco',
+    interpolation_mode="coco",
 ):
     """
     Vectorized per-class AP with all IoU thresholds computed in a single pass.
@@ -1578,7 +1727,7 @@ def compute_ap_multi_thresh(
     # Per-class accumulator: list of (tp_mask, score) per threshold
     # tp_mask: binary array of length matched predictions (1=TP, 0=FP)
     # score: confidence of each matched prediction
-    all_results = {}   # cls -> {iou_thresh -> (tp_arr, score_arr)}
+    all_results = {}  # cls -> {iou_thresh -> (tp_arr, score_arr)}
 
     for cls in range(num_classes):
         all_results[cls] = {}
@@ -1594,16 +1743,18 @@ def compute_ap_multi_thresh(
         pb = pred_boxes[idx]
 
         for cls in range(num_classes):
-            gm = (gtl == cls)
+            gm = gtl == cls
             gb = gtb[gm]
-            pm = (pl == cls)
+            pm = pl == cls
             pb_cls = pb[pm]
             ps_cls = ps[pm]
 
             if len(ps_cls) == 0:
                 # No predictions for this class in this frame
                 for iou_t in iou_thresholds:
-                    all_results[cls][float(iou_t)][0].extend([0] * len(ps_cls) if len(ps_cls) > 0 else [])
+                    all_results[cls][float(iou_t)][0].extend(
+                        [0] * len(ps_cls) if len(ps_cls) > 0 else []
+                    )
                     if len(ps_cls) == 0:
                         pass  # nothing to add
                 continue
@@ -1669,11 +1820,16 @@ def compute_ap_multi_thresh(
             rec = tc / total_gt
             denom = tc + fc
             prec = np.where(denom > 0, tc / denom, 0.0)
-            if interpolation_mode == 'coco':
+            if interpolation_mode == "coco":
                 ap = _coco_ap(rec, prec)
             else:
-                ap = sum(prec[rec >= t].max() if (rec >= t).any() else 0.0
-                         for t in np.linspace(0, 1, 11)) / 11
+                ap = (
+                    sum(
+                        prec[rec >= t].max() if (rec >= t).any() else 0.0
+                        for t in np.linspace(0, 1, 11)
+                    )
+                    / 11
+                )
             aps[cls][float(iou_t)] = float(ap)
 
     # Compute mAP per threshold.
@@ -1687,26 +1843,30 @@ def compute_ap_multi_thresh(
     for iou_t in iou_thresholds:
         all_vals = [aps[cls][float(iou_t)] for cls in range(num_classes) if cls in aps]
         present_vals = [
-            aps[cls][float(iou_t)] for cls in range(num_classes)
+            aps[cls][float(iou_t)]
+            for cls in range(num_classes)
             if cls in aps and present_class_gt.get(cls, 0) > 0
         ]
         map_per_thresh[float(iou_t)] = float(np.mean(all_vals)) if all_vals else 0.0
         map_per_thresh_pc[float(iou_t)] = float(np.mean(present_vals)) if present_vals else 0.0
 
     return {
-        'mAP_per_thresh': map_per_thresh,
-        'mAP_per_thresh_pc': map_per_thresh_pc,
-        'per_class_ap': aps,
-        'present_class_gt': present_class_gt,
-        'iou_thresholds': [float(t) for t in iou_thresholds],
+        "mAP_per_thresh": map_per_thresh,
+        "mAP_per_thresh_pc": map_per_thresh_pc,
+        "per_class_ap": aps,
+        "present_class_gt": present_class_gt,
+        "iou_thresholds": [float(t) for t in iou_thresholds],
     }
 
 
 def compute_det_metrics_extended(
-    pred_boxes, pred_scores, pred_labels,
-    gt_boxes, gt_labels,
+    pred_boxes,
+    pred_scores,
+    pred_labels,
+    gt_boxes,
+    gt_labels,
     num_classes=C.NUM_DET_CLASSES,
-    interpolation_mode='coco',
+    interpolation_mode="coco",
 ):
     """
     Extended detection metrics: mAP@0.5 and mAP@[0.5:0.95].
@@ -1724,17 +1884,20 @@ def compute_det_metrics_extended(
     # [FIX] Use single-pass multi-threshold computation — ~9× faster than 11× nested loops
     iou_thresholds = np.arange(0.5, 1.0, 0.05)
     result = compute_ap_multi_thresh(
-        pred_boxes, pred_scores, pred_labels,
-        gt_boxes, gt_labels,
+        pred_boxes,
+        pred_scores,
+        pred_labels,
+        gt_boxes,
+        gt_labels,
         iou_thresholds=iou_thresholds,
         num_classes=num_classes,
         interpolation_mode=interpolation_mode,
     )
 
-    mAP_per_thresh = result['mAP_per_thresh']
-    mAP_per_thresh_pc = result.get('mAP_per_thresh_pc', {})
-    per_class_ap_50 = result.get('per_class_ap', {})
-    present_class_gt = result.get('present_class_gt', {})
+    mAP_per_thresh = result["mAP_per_thresh"]
+    mAP_per_thresh_pc = result.get("mAP_per_thresh_pc", {})
+    per_class_ap_50 = result.get("per_class_ap", {})
+    present_class_gt = result.get("present_class_gt", {})
     n_present = sum(1 for v in present_class_gt.values() if v > 0)
     per_class_ap = {cls: per_class_ap_50.get(cls, {}).get(0.5, 0.0) for cls in range(num_classes)}
     per_class_gt = {cls: int(present_class_gt.get(cls, 0)) for cls in range(num_classes)}
@@ -1746,45 +1909,50 @@ def compute_det_metrics_extended(
     # name, gt, ap} record kills the channel-vs-category provenance confusion that made
     # the v11 §5 table read "class 6 = 1739 GT" (a 20× index/source error). 'background'
     # is channel 0 (category 1) — flagged so it can be excluded from honest mAP.
-    _names = getattr(C, 'DET_CLASS_NAMES', {})
+    _names = getattr(C, "DET_CLASS_NAMES", {})
     det_per_class = [
         {
-            'channel': cls,
-            'category_id': cls + 1,
-            'name': _names.get(cls + 1, f'ch{cls}'),
-            'gt': per_class_gt[cls],
-            'ap': per_class_ap[cls],
-            'is_background': (cls == 0),
+            "channel": cls,
+            "category_id": cls + 1,
+            "name": _names.get(cls + 1, f"ch{cls}"),
+            "gt": per_class_gt[cls],
+            "ap": per_class_ap[cls],
+            "is_background": (cls == 0),
         }
         for cls in range(num_classes)
     ]
     return {
-        'det_mAP50': mAP_per_thresh.get(0.5, 0.0),
-        'det_mAP_50_95': float(np.mean(list(mAP_per_thresh.values()))) if mAP_per_thresh else 0.0,
+        "det_mAP50": mAP_per_thresh.get(0.5, 0.0),
+        "det_mAP_50_95": float(np.mean(list(mAP_per_thresh.values()))) if mAP_per_thresh else 0.0,
         # [FIX 2026-06-04] Per-class-present mAP: averages only classes with GT>0
         # in this eval. When val batches cover only a few classes, this reveals
         # learning on those classes instead of being diluted to ~0 by 20 empty
         # classes. Complements (not replaces) the COCO-style 24-class det_mAP50.
-        'det_mAP50_pc': mAP_per_thresh_pc.get(0.5, 0.0),
-        'det_mAP_50_95_pc': float(np.mean([v for k, v in mAP_per_thresh_pc.items()])) if mAP_per_thresh_pc else 0.0,
-        'det_n_present_classes': n_present,
+        "det_mAP50_pc": mAP_per_thresh_pc.get(0.5, 0.0),
+        "det_mAP_50_95_pc": float(np.mean([v for k, v in mAP_per_thresh_pc.items()]))
+        if mAP_per_thresh_pc
+        else 0.0,
+        "det_n_present_classes": n_present,
         # [FIX 2026-06-04] Use per-class AP at IoU=0.5 (was: every class got the same global mAP@0.5).
         # The nested per_class_ap dict from compute_ap_multi_thresh has shape
         # {class_id: {iou_thresh: ap}}. The old code flattened this incorrectly, masking
         # which classes have any AP at all.
-        'det_per_class_ap': per_class_ap,
-        'det_per_class_gt': per_class_gt,
+        "det_per_class_ap": per_class_ap,
+        "det_per_class_gt": per_class_gt,
         # [FIX 2026-06-21 Opus v11] Unambiguous name-labeled view of the two dicts above.
-        'det_per_class': det_per_class,
-        '_det_ap_protocol': 'coco' if interpolation_mode == 'coco' else 'voc',
+        "det_per_class": det_per_class,
+        "_det_ap_protocol": "coco" if interpolation_mode == "coco" else "voc",
     }
 
 
 def compute_det_metrics_all_frames(
-    pred_boxes, pred_scores, pred_labels,
-    gt_boxes, gt_labels,
+    pred_boxes,
+    pred_scores,
+    pred_labels,
+    gt_boxes,
+    gt_labels,
     num_classes=C.NUM_DET_CLASSES,
-    interpolation_mode='coco',
+    interpolation_mode="coco",
 ):
     """
     Doc 03 §A.1: Full-video detection metrics.
@@ -1796,20 +1964,30 @@ def compute_det_metrics_all_frames(
     Uses COCO-style interpolation by default.
     """
     r50 = compute_ap_per_class_all_frames(
-        pred_boxes, pred_scores, pred_labels,
-        gt_boxes, gt_labels, 0.5, num_classes,
+        pred_boxes,
+        pred_scores,
+        pred_labels,
+        gt_boxes,
+        gt_labels,
+        0.5,
+        num_classes,
         interpolation_mode=interpolation_mode,
     )
     return {
-        'det_mAP50_all_frames': r50['mAP'],
-        'det_per_class_ap_all_frames': r50['per_class_ap'],
-        '_det_allframes_protocol': 'coco_with_cr' if interpolation_mode == 'coco' else 'voc_with_cr',
+        "det_mAP50_all_frames": r50["mAP"],
+        "det_per_class_ap_all_frames": r50["per_class_ap"],
+        "_det_allframes_protocol": "coco_with_cr"
+        if interpolation_mode == "coco"
+        else "voc_with_cr",
     }
 
 
 def compute_det_confusion_matrix(
-    pred_boxes, pred_scores, pred_labels,
-    gt_boxes, gt_labels,
+    pred_boxes,
+    pred_scores,
+    pred_labels,
+    gt_boxes,
+    gt_labels,
     num_classes=C.NUM_DET_CLASSES,
     iou_thresh=0.5,
 ):
@@ -1845,7 +2023,7 @@ def compute_det_confusion_matrix(
                 continue
 
             # Compute IoU between this GT box and all predictions
-            gt_box = gb[j:j + 1]
+            gt_box = gb[j : j + 1]
             ious = compute_iou_matrix(pb, gt_box)  # [N_pred, 1]
             best_iou_idx = ious.argmax()
             best_iou = ious[best_iou_idx, 0]
@@ -1862,6 +2040,7 @@ def compute_det_confusion_matrix(
 # =============================================================================
 # Head Pose Metrics — 9-DoF (forward[3] + pos[3] + up[3])
 # =============================================================================
+
 
 def compute_head_pose_metrics(
     pred: np.ndarray,
@@ -1886,29 +2065,47 @@ def compute_head_pose_metrics(
     gt = np.asarray(gt)
 
     if pred.shape[0] == 0:
-        return {k: float('nan') for k in [
-            'head_pose_MAE', 'head_pose_MAE_std',
-            'forward_x_MAE', 'forward_y_MAE', 'forward_z_MAE',
-            'pos_x_MAE', 'pos_y_MAE', 'pos_z_MAE',
-            'up_x_MAE', 'up_y_MAE', 'up_z_MAE',
-            'forward_angular_MAE_deg', 'up_angular_MAE_deg', 'position_MAE_mm',
-        ]}
+        return {
+            k: float("nan")
+            for k in [
+                "head_pose_MAE",
+                "head_pose_MAE_std",
+                "forward_x_MAE",
+                "forward_y_MAE",
+                "forward_z_MAE",
+                "pos_x_MAE",
+                "pos_y_MAE",
+                "pos_z_MAE",
+                "up_x_MAE",
+                "up_y_MAE",
+                "up_z_MAE",
+                "forward_angular_MAE_deg",
+                "up_angular_MAE_deg",
+                "position_MAE_mm",
+            ]
+        }
 
     abs_err = np.abs(pred - gt)  # [N, 9]
 
     dof_names = [
-        'forward_x', 'forward_y', 'forward_z',
-        'pos_x', 'pos_y', 'pos_z',
-        'up_x', 'up_y', 'up_z',
+        "forward_x",
+        "forward_y",
+        "forward_z",
+        "pos_x",
+        "pos_y",
+        "pos_z",
+        "up_x",
+        "up_y",
+        "up_z",
     ]
 
     result = {}
     for i, name in enumerate(dof_names):
-        result[f'{name}_MAE'] = float(abs_err[:, i].mean())
+        result[f"{name}_MAE"] = float(abs_err[:, i].mean())
 
-    result['head_pose_MAE'] = float(abs_err.mean())
-    result['head_pose_MAE_std'] = float(abs_err.std())
-    result['n_samples'] = int(pred.shape[0])
+    result["head_pose_MAE"] = float(abs_err.mean())
+    result["head_pose_MAE_std"] = float(abs_err.std())
+    result["n_samples"] = int(pred.shape[0])
 
     # Doc 03 A.4: Angular MAE in degrees for directional vectors (normalize first — raw MLP outputs are not unit vectors)
     # Fix (Bashara 2026-05-23): Distinguish unit-direction DoFs (0-2, 6-8) from raw-Euler/position DoFs (3-5).
@@ -1947,19 +2144,19 @@ def compute_head_pose_metrics(
         # Both pred and gt forward/up are unit-norm; report true angular error in degrees.
         forward_angular = _angular_err(pred[:, :3], gt[:, :3])
         up_angular = _angular_err(pred[:, 6:9], gt[:, 6:9])
-        result['head_pose_angular_MAE_deg'] = (forward_angular + up_angular) / 2.0
-        result['forward_angular_MAE_deg'] = forward_angular
-        result['up_angular_MAE_deg'] = up_angular
-        result['head_pose_status'] = 'unit_vectors_ok'
+        result["head_pose_angular_MAE_deg"] = (forward_angular + up_angular) / 2.0
+        result["forward_angular_MAE_deg"] = forward_angular
+        result["up_angular_MAE_deg"] = up_angular
+        result["head_pose_status"] = "unit_vectors_ok"
     else:
         # Bug G fix — vectors not yet unit-norm (early training, uninitialized head).
         # Raw MAE under a "_deg" key is meaningless; surface separately and emit nan.
-        result['head_pose_angular_MAE_deg'] = float('nan')
-        result['forward_angular_MAE_deg']   = float('nan')
-        result['up_angular_MAE_deg']        = float('nan')
-        result['forward_raw_MAE']           = _mse_err_deg(pred[:, :3], gt[:, :3])
-        result['up_raw_MAE']                = _mse_err_deg(pred[:, 6:9], gt[:, 6:9])
-        result['head_pose_status']          = 'non_unit_vectors'
+        result["head_pose_angular_MAE_deg"] = float("nan")
+        result["forward_angular_MAE_deg"] = float("nan")
+        result["up_angular_MAE_deg"] = float("nan")
+        result["forward_raw_MAE"] = _mse_err_deg(pred[:, :3], gt[:, :3])
+        result["up_raw_MAE"] = _mse_err_deg(pred[:, 6:9], gt[:, 6:9])
+        result["head_pose_status"] = "non_unit_vectors"
 
     # Position MAE in mm. pose.csv position columns (4-6) contain values like
     # ~110, ~-53, ~8 which are NOT in metres (110m is absurd for head-camera
@@ -1969,7 +2166,7 @@ def compute_head_pose_metrics(
     # Until confirmed, position_MAE_mm is unreliable — do not use for reporting.
     pos_err_m = np.linalg.norm(pred[:, 3:6] - gt[:, 3:6], axis=1)
     pos_err_mm = pos_err_m * 1000.0  # may produce meaningless values
-    result['position_MAE_mm'] = float(pos_err_mm.mean())
+    result["position_MAE_mm"] = float(pos_err_mm.mean())
 
     return result
 
@@ -1977,6 +2174,7 @@ def compute_head_pose_metrics(
 # =============================================================================
 # Procedure Step Recognition (PSR) — Multi-label binary
 # =============================================================================
+
 
 def _damerau_levenshtein(a: str, b: str) -> int:
     """
@@ -2000,13 +2198,11 @@ def _damerau_levenshtein(a: str, b: str) -> int:
         for j in range(1, n + 1):
             cost = 0 if a[i - 1] == b[j - 1] else 1
             dp[i][j] = min(
-                dp[i - 1][j] + 1,          # deletion
-                dp[i][j - 1] + 1,          # insertion
+                dp[i - 1][j] + 1,  # deletion
+                dp[i][j - 1] + 1,  # insertion
                 dp[i - 1][j - 1] + cost,  # substitution
             )
-            if (i > 1 and j > 1 and
-                    a[i - 1] == b[j - 2] and
-                    a[i - 2] == b[j - 1]):
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
                 dp[i][j] = min(dp[i][j], dp[i - 2][j - 2] + cost)
     return dp[m][n]
 
@@ -2111,7 +2307,9 @@ def _symmetric_prf_at_t(
     # GT changes and predicted changes within ±T window
     matched_gt = set()
     matched_pred = set()
-    for tg_int in sorted(tg_to_admissible.keys(), key=lambda x: -len(tg_to_admissible.get(x, set()))):
+    for tg_int in sorted(
+        tg_to_admissible.keys(), key=lambda x: -len(tg_to_admissible.get(x, set()))
+    ):
         admissible = tg_to_admissible.get(tg_int, set()) - matched_pred
         if admissible:
             best_pg = min(admissible)  # pick earliest predicted change
@@ -2177,8 +2375,8 @@ def _get_dl_osa_numba():
             for j in range(1, n + 1):
                 bj = b[j - 1]
                 cost = 0 if ai == bj else 1
-                d = prev1[j] + 1          # deletion
-                d2 = curr[j - 1] + 1      # insertion
+                d = prev1[j] + 1  # deletion
+                d2 = curr[j - 1] + 1  # insertion
                 d3 = prev1[j - 1] + cost  # substitution
                 if d2 < d:
                     d = d2
@@ -2225,7 +2423,7 @@ def _levenshtein_on_intarrays(a: np.ndarray, b: np.ndarray) -> int:
         for j in range(1, n + 1):
             cost = 0 if shorter[i - 1] == longer[j - 1] else 1
             curr[j] = min(
-                prev[j] + 1,      # deletion
+                prev[j] + 1,  # deletion
                 curr[j - 1] + 1,  # insertion
                 prev[j - 1] + cost,  # substitution
             )
@@ -2247,8 +2445,9 @@ def _damerau_levenshtein_on_intarrays_osa(a: np.ndarray, b: np.ndarray) -> int:
     if _NUMBA_AVAILABLE and max(m, n) >= 5000:
         numba_dl = _get_dl_osa_numba()
         if numba_dl is not None:
-            return numba_dl(np.ascontiguousarray(a, dtype=np.int8),
-                            np.ascontiguousarray(b, dtype=np.int8))
+            return numba_dl(
+                np.ascontiguousarray(a, dtype=np.int8), np.ascontiguousarray(b, dtype=np.int8)
+            )
     # [FIX B] Use _levenshtein_on_intarrays (O(min(m,n)) space) instead of
     # slow O(m×n) pure-numpy OSA nested loop that hangs on sequences ≥5000.
     return _levenshtein_on_intarrays(a, b)
@@ -2274,7 +2473,7 @@ def _compute_psr_edit_score_vectorized(
     for c in range(num_components):
         vm = valid_mask[:, c]
         if not vm.any():
-            _nan_guard_fire('psr_tau.no_valid_components')
+            _nan_guard_fire("psr_tau.no_valid_components")
             continue
         # Guard: if gt_safe has 0 rows but vm selects rows, handle separately
         # (empty GT + non-empty pred = worst case = 1.0, empty GT + empty pred = 0.0)
@@ -2399,8 +2598,12 @@ def _compute_psr_f1_at_t_fused_cuda(
             continue
         if n_gt == 0 or n_pred == 0:
             # One side has no transitions → 0.0 F1
-            f1_t3.append(0.0); prec_t3.append(0.0); rec_t3.append(0.0)
-            f1_t5.append(0.0); prec_t5.append(0.0); rec_t5.append(0.0)
+            f1_t3.append(0.0)
+            prec_t3.append(0.0)
+            rec_t3.append(0.0)
+            f1_t5.append(0.0)
+            prec_t5.append(0.0)
+            rec_t5.append(0.0)
             continue
 
         # Build adjacency on GPU for both tolerances simultaneously
@@ -2429,14 +2632,24 @@ def _compute_psr_f1_at_t_fused_cuda(
             rec = tp / (tp + fn) if tp + fn > 0 else 0.0
             f1 = 2 * prec * rec / (prec + rec) if prec + rec > 0 else 0.0
             if t == t3:
-                f1_t3.append(f1); prec_t3.append(prec); rec_t3.append(rec)
+                f1_t3.append(f1)
+                prec_t3.append(prec)
+                rec_t3.append(rec)
             else:
-                f1_t5.append(f1); prec_t5.append(prec); rec_t5.append(rec)
+                f1_t5.append(f1)
+                prec_t5.append(prec)
+                rec_t5.append(rec)
 
-    def mean(lst): return float(np.nanmean(lst)) if lst else 0.0
+    def mean(lst):
+        return float(np.nanmean(lst)) if lst else 0.0
+
     return {
-        'f1_t3': mean(f1_t3), 'prec_t3': mean(prec_t3), 'rec_t3': mean(rec_t3),
-        'f1_t5': mean(f1_t5), 'prec_t5': mean(prec_t5), 'rec_t5': mean(rec_t5),
+        "f1_t3": mean(f1_t3),
+        "prec_t3": mean(prec_t3),
+        "rec_t3": mean(rec_t3),
+        "f1_t5": mean(f1_t5),
+        "prec_t5": mean(prec_t5),
+        "rec_t5": mean(rec_t5),
     }
 
 
@@ -2528,7 +2741,11 @@ def _compute_psr_pos_vectorized(
 
         pos_vals.append(correct_pairs / total_pairs if total_pairs > 0 else 0.0)
 
-    return float(np.mean(pos_vals)) if pos_vals else (_nan_guard_fire('psr_pos_vectorized.empty'), 0.0)[1]
+    return (
+        float(np.mean(pos_vals))
+        if pos_vals
+        else (_nan_guard_fire("psr_pos_vectorized.empty"), 0.0)[1]
+    )
 
 
 # Backward-compatible alias
@@ -2540,6 +2757,7 @@ def _symmetric_f1_at_t(gt_changes, pred_changes, tolerance):
 # =============================================================================
 # [NEW METRIC Add 3 / E2 Q44] PSR tau — per-frame transition delay
 # =============================================================================
+
 
 def _compute_psr_tau(
     pred_binary: np.ndarray,
@@ -2582,7 +2800,7 @@ def _compute_psr_tau(
         pred_changes = np.where(np.diff(pred_c) != 0)[0]
 
         if len(gt_changes) == 0 or len(pred_changes) == 0:
-            _nan_guard_fire('psr_tau.no_transitions')
+            _nan_guard_fire("psr_tau.no_transitions")
             # No transitions in either — perfect temporal alignment (tau=0)
             # Only one side has transitions — cannot compute meaningful delay
             continue
@@ -2602,6 +2820,7 @@ def _compute_psr_tau(
 # =============================================================================
 # [NEW METRIC Add 2 / Q18] Per-component PSR threshold calibration
 # =============================================================================
+
 
 def _calibrate_psr_thresholds(
     gt_safe: np.ndarray,
@@ -2684,12 +2903,14 @@ def _compute_psr_metrics_with_thresholds(
     cuda_available = torch.cuda.is_available()
     if cuda_available:
         fused = _compute_psr_f1_at_t_fused_cuda(
-            pred_binary_cal, gt_safe, valid_mask,
+            pred_binary_cal,
+            gt_safe,
+            valid_mask,
             tolerances=(tolerance_frames, 5),
-            device=torch.device('cuda')
+            device=torch.device("cuda"),
         )
-        psr_f1_cal = fused['f1_t3'] if tolerance_frames == 3 else fused['f1_t5']
-        psr_f1_cal_t5 = fused['f1_t5'] if tolerance_frames == 3 else fused['f1_t3']
+        psr_f1_cal = fused["f1_t3"] if tolerance_frames == 3 else fused["f1_t5"]
+        psr_f1_cal_t5 = fused["f1_t5"] if tolerance_frames == 3 else fused["f1_t3"]
     else:
         psr_f1_cal, _, _ = _compute_psr_f1_at_t_vectorized(
             pred_binary_cal, gt_safe, valid_mask, tolerance_frames
@@ -2699,14 +2920,15 @@ def _compute_psr_metrics_with_thresholds(
         )
 
     return {
-        'psr_f1_calibrated': psr_f1_cal,
-        'psr_f1_calibrated_t5': psr_f1_cal_t5,
+        "psr_f1_calibrated": psr_f1_cal,
+        "psr_f1_calibrated_t5": psr_f1_cal_t5,
     }
 
 
 # =============================================================================
 # [NEW METRIC Add 4 / Q43] Canonical-order POS baseline
 # =============================================================================
+
 
 def _compute_psr_pos_canonical(
     gt_safe: np.ndarray,
@@ -2738,7 +2960,7 @@ def _compute_psr_pos_canonical(
     """
     N, C = gt_safe.shape
     if N == 0 or C == 0:
-        _nan_guard_fire('psr_pos_canonical.empty')
+        _nan_guard_fire("psr_pos_canonical.empty")
         return 0.0
     if canonical_order is None:
         canonical_order = list(range(C))
@@ -2808,12 +3030,12 @@ def compute_psr_metrics(
 
     # --- Per-component F1 (vectorized across components) ---
     per_component_f1 = {}
-    component_names = [f'comp{i}' for i in range(num_components)]
+    component_names = [f"comp{i}" for i in range(num_components)]
 
     for c in range(num_components):
         vm = valid_mask[:, c]
         if vm.sum() == 0:
-            per_component_f1[component_names[c]] = float('nan')
+            per_component_f1[component_names[c]] = float("nan")
             continue
         tp = int(((pred_binary[vm, c] == 1) & (gt_safe[vm, c] == 1)).sum())
         fp = int(((pred_binary[vm, c] == 1) & (gt_safe[vm, c] == 0)).sum())
@@ -2828,33 +3050,37 @@ def compute_psr_metrics(
             else:
                 per_component_f1[component_names[c]] = 2 * prec * rec / (prec + rec)
 
-    valid_components = [c for c in range(num_components) if not np.isnan(per_component_f1[component_names[c]])]
-    overall_f1 = float(np.nanmean([per_component_f1[component_names[c]] for c in valid_components])) if valid_components else float('nan')
+    valid_components = [
+        c for c in range(num_components) if not np.isnan(per_component_f1[component_names[c]])
+    ]
+    overall_f1 = (
+        float(np.nanmean([per_component_f1[component_names[c]] for c in valid_components]))
+        if valid_components
+        else float("nan")
+    )
 
     # --- F1@T: GPU-fused for both tolerances in a SINGLE pass ---
     # Uses CUDA adjacency matrix for speed; falls back to numpy if no GPU
     cuda_available = torch.cuda.is_available()
     if cuda_available:
         fused = _compute_psr_f1_at_t_fused_cuda(
-            pred_binary, gt_safe, valid_mask,
-            tolerances=(3, 5),
-            device=torch.device('cuda')
+            pred_binary, gt_safe, valid_mask, tolerances=(3, 5), device=torch.device("cuda")
         )
         # Use whichever tolerance was requested as primary
         if tolerance_frames == 3:
-            psr_f1_at_t = fused['f1_t3']
-            psr_precision_at_t = fused['prec_t3']
-            psr_recall_at_t = fused['rec_t3']
-            psr_f1_at_t5 = fused['f1_t5']
-            psr_precision_at_t5 = fused['prec_t5']
-            psr_recall_at_t5 = fused['rec_t5']
+            psr_f1_at_t = fused["f1_t3"]
+            psr_precision_at_t = fused["prec_t3"]
+            psr_recall_at_t = fused["rec_t3"]
+            psr_f1_at_t5 = fused["f1_t5"]
+            psr_precision_at_t5 = fused["prec_t5"]
+            psr_recall_at_t5 = fused["rec_t5"]
         else:
-            psr_f1_at_t = fused['f1_t5']
-            psr_precision_at_t = fused['prec_t5']
-            psr_recall_at_t = fused['rec_t5']
-            psr_f1_at_t5 = fused['f1_t3']
-            psr_precision_at_t5 = fused['prec_t3']
-            psr_recall_at_t5 = fused['rec_t3']
+            psr_f1_at_t = fused["f1_t5"]
+            psr_precision_at_t = fused["prec_t5"]
+            psr_recall_at_t = fused["rec_t5"]
+            psr_f1_at_t5 = fused["f1_t3"]
+            psr_precision_at_t5 = fused["prec_t3"]
+            psr_recall_at_t5 = fused["rec_t3"]
     else:
         # Fallback: numpy-based computation (still fast after vectorization)
         psr_f1_at_t, psr_precision_at_t, psr_recall_at_t = _compute_psr_f1_at_t_vectorized(
@@ -2932,8 +3158,8 @@ def compute_psr_metrics(
     # on a held-out portion of val, then compute F1@T with calibrated thresholds.
     psr_calibrated_metrics = {}
     try:
-        if getattr(C, 'PSR_PER_COMPONENT_THRESHOLDS', False):
-            tune_frac = getattr(C, 'PSR_THRESHOLD_TUNE_FRAC', 0.5)
+        if getattr(C, "PSR_PER_COMPONENT_THRESHOLDS", False):
+            tune_frac = getattr(C, "PSR_THRESHOLD_TUNE_FRAC", 0.5)
             # Calibrate on first half of data
             per_comp_thresholds = _calibrate_psr_thresholds(
                 gt_safe, valid_mask, tune_frac=tune_frac, base_threshold=0.5
@@ -2944,50 +3170,58 @@ def compute_psr_metrics(
             gt_safe_holdout = gt_safe[holdout_start:]
             valid_mask_holdout = valid_mask[holdout_start:]
             psr_calibrated_metrics = _compute_psr_metrics_with_thresholds(
-                pred_probs_holdout, gt_safe_holdout, valid_mask_holdout,
-                per_comp_thresholds, tolerance_frames=tolerance_frames,
+                pred_probs_holdout,
+                gt_safe_holdout,
+                valid_mask_holdout,
+                per_comp_thresholds,
+                tolerance_frames=tolerance_frames,
             )
     except Exception:
         psr_calibrated_metrics = {
-            'psr_f1_calibrated': 0.0,
-            'psr_f1_calibrated_t5': 0.0,
+            "psr_f1_calibrated": 0.0,
+            "psr_f1_calibrated_t5": 0.0,
         }
 
     return {
-        'psr_overall_f1': overall_f1,
-        'psr_f1_at_t': psr_f1_at_t,
-        'psr_precision_at_t': psr_precision_at_t,
-        'psr_recall_at_t': psr_recall_at_t,
-        'psr_f1_at_t5': psr_f1_at_t5,
-        'psr_precision_at_t5': psr_precision_at_t5,
-        'psr_recall_at_t5': psr_recall_at_t5,
-        'psr_edit_score': edit_score,
+        "psr_overall_f1": overall_f1,
+        "psr_f1_at_t": psr_f1_at_t,
+        "psr_precision_at_t": psr_precision_at_t,
+        "psr_recall_at_t": psr_recall_at_t,
+        "psr_f1_at_t5": psr_f1_at_t5,
+        "psr_precision_at_t5": psr_precision_at_t5,
+        "psr_recall_at_t5": psr_recall_at_t5,
+        "psr_edit_score": edit_score,
         # [FIX 2026-07-05] Companion metric: number of unique binary prediction patterns.
         # If this is <=5, the model is collapsed (producing all-ones or near-all-ones).
         # Critical for honest fair-comparison disclosure.
-        'psr_n_unique_binary_patterns': int(_unique_binary.shape[0]) if _unique_binary.size > 0 else 0,
-        'psr_pos': psr_pos,
-        'psr_tau': psr_tau,                              # [Add 3 / Q44]
-        'psr_pos_blind': psr_pos_blind,                   # [Add 4 / Q43]
-        'psr_f1_calibrated': psr_calibrated_metrics.get('psr_f1_calibrated', 0.0),       # [Add 2 / Q18]
-        'psr_f1_calibrated_t5': psr_calibrated_metrics.get('psr_f1_calibrated_t5', 0.0), # [Add 2 / Q18]
-        'psr_pos_raw_t05': psr_pos_raw,               # [FAIR COMPARE] per-frame binary at 0.5, no decoder
-        'psr_f1_raw_t05': f1_raw,                      # [FAIR COMPARE] per-frame binary at 0.5, no decoder
-        'psr_edit_raw_t05': edit_raw,                  # [FAIR COMPARE] per-frame binary at 0.5, no decoder
-        'psr_pos_raw_t03': psr_pos_t03,                # [FAIR COMPARE] per-frame binary at 0.3, no decoder
-        'psr_f1_raw_t03': f1_t03,                      # [FAIR COMPARE] per-frame binary at 0.3, no decoder
-        'psr_per_component_f1': per_component_f1,
-        'psr_num_valid_components': len(valid_components),
-        'psr_num_samples': int(pred_logits.shape[0]),
-        '_psr_edit_protocol': 'normalized_damerau_levenshtein_osa_on_binary_sequences',
-        '_psr_f1_at_t_protocol': 'symmetric_bidirectional_greedy_per_stepid',
-        '_psr_pos_protocol': 'runs_based_adjacent_pairs_maxpos_ordering',
+        "psr_n_unique_binary_patterns": int(_unique_binary.shape[0])
+        if _unique_binary.size > 0
+        else 0,
+        "psr_pos": psr_pos,
+        "psr_tau": psr_tau,  # [Add 3 / Q44]
+        "psr_pos_blind": psr_pos_blind,  # [Add 4 / Q43]
+        "psr_f1_calibrated": psr_calibrated_metrics.get("psr_f1_calibrated", 0.0),  # [Add 2 / Q18]
+        "psr_f1_calibrated_t5": psr_calibrated_metrics.get(
+            "psr_f1_calibrated_t5", 0.0
+        ),  # [Add 2 / Q18]
+        "psr_pos_raw_t05": psr_pos_raw,  # [FAIR COMPARE] per-frame binary at 0.5, no decoder
+        "psr_f1_raw_t05": f1_raw,  # [FAIR COMPARE] per-frame binary at 0.5, no decoder
+        "psr_edit_raw_t05": edit_raw,  # [FAIR COMPARE] per-frame binary at 0.5, no decoder
+        "psr_pos_raw_t03": psr_pos_t03,  # [FAIR COMPARE] per-frame binary at 0.3, no decoder
+        "psr_f1_raw_t03": f1_t03,  # [FAIR COMPARE] per-frame binary at 0.3, no decoder
+        "psr_per_component_f1": per_component_f1,
+        "psr_num_valid_components": len(valid_components),
+        "psr_num_samples": int(pred_logits.shape[0]),
+        "_psr_edit_protocol": "normalized_damerau_levenshtein_osa_on_binary_sequences",
+        "_psr_f1_at_t_protocol": "symmetric_bidirectional_greedy_per_stepid",
+        "_psr_pos_protocol": "runs_based_adjacent_pairs_maxpos_ordering",
     }
 
 
 # =============================================================================
 # Assembly State Recognition (Paper 8 — IEEE RAL 2024)
 # =============================================================================
+
 
 def _psr_to_state_id(vec: np.ndarray, vocab: dict) -> int:
     """
@@ -3067,11 +3301,11 @@ def compute_assembly_state_metrics(
 
     if pred_logits.shape[0] == 0:
         return {
-            'as_top1_accuracy': 0.0,
-            'as_f1': 0.0,
-            'as_num_states': 0,
-            'as_map_at_r': 0.0,
-            'as_num_transitions': 0,
+            "as_top1_accuracy": 0.0,
+            "as_f1": 0.0,
+            "as_num_states": 0,
+            "as_map_at_r": 0.0,
+            "as_num_transitions": 0,
         }
 
     vocab = _build_state_vocabulary(gt_labels)
@@ -3091,16 +3325,16 @@ def compute_assembly_state_metrics(
 
     if len(gt_valid) == 0:
         return {
-            'as_top1_accuracy': 0.0,
-            'as_f1': 0.0,
-            'as_num_states': K,
-            'as_map_at_r': 0.0,
-            'as_num_transitions': 0,
+            "as_top1_accuracy": 0.0,
+            "as_f1": 0.0,
+            "as_num_states": K,
+            "as_map_at_r": 0.0,
+            "as_num_transitions": 0,
         }
 
     top1_acc = float((gt_valid == pred_valid).mean())
 
-    all_f1 = f1_score(gt_valid, pred_valid, average='macro', zero_division=0)
+    all_f1 = f1_score(gt_valid, pred_valid, average="macro", zero_division=0)
 
     gt_rle = np.r_[0, np.diff(gt_valid.astype(np.int32))]
     transition_frames = np.where(gt_rle != 0)[0]
@@ -3130,24 +3364,27 @@ def compute_assembly_state_metrics(
         fp = int((window != target_state).sum())
 
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        recall = tp / len(window) if tp > 0 else 0.0  # FIX: target found in window = recalled (1.0), not found = missed (0.0)
+        recall = (
+            tp / len(window) if tp > 0 else 0.0
+        )  # FIX: target found in window = recalled (1.0), not found = missed (0.0)
         ap = precision * recall / max(precision + recall, 1e-8)
         ap_values.append(ap)
 
     map_at_r = float(np.mean(ap_values)) if ap_values else 0.0
 
     return {
-        'as_top1_accuracy': top1_acc,
-        'as_f1': float(all_f1),
-        'as_num_states': K,
-        'as_map_at_r': map_at_r,
-        'as_num_transitions': num_transitions,
+        "as_top1_accuracy": top1_acc,
+        "as_f1": float(all_f1),
+        "as_num_states": K,
+        "as_map_at_r": map_at_r,
+        "as_num_transitions": num_transitions,
     }
 
 
 # =============================================================================
 # Error Verification (Paper 9 — ECCV VISION 2024)
 # =============================================================================
+
 
 def compute_error_verification_metrics(
     psr_logits: np.ndarray,
@@ -3181,10 +3418,10 @@ def compute_error_verification_metrics(
 
     if psr_logits.shape[0] == 0 or gt_labels.shape[0] == 0:
         return {
-            'ev_ap': 0.0,
-            'ev_f1': 0.0,
-            'ev_precision': 0.0,
-            'ev_recall': 0.0,
+            "ev_ap": 0.0,
+            "ev_f1": 0.0,
+            "ev_precision": 0.0,
+            "ev_recall": 0.0,
         }
 
     N = psr_logits.shape[0]  # noqa: F841 — used on lines 1763-1765
@@ -3199,10 +3436,10 @@ def compute_error_verification_metrics(
 
     if valid_mask.sum() == 0:
         return {
-            'ev_ap': 0.0,
-            'ev_f1': 0.0,
-            'ev_precision': 0.0,
-            'ev_recall': 0.0,
+            "ev_ap": 0.0,
+            "ev_f1": 0.0,
+            "ev_precision": 0.0,
+            "ev_recall": 0.0,
         }
 
     gt_valid = gt_error[valid_mask]
@@ -3211,10 +3448,10 @@ def compute_error_verification_metrics(
     total_pos = int(gt_valid.sum())
     if total_pos == 0:
         return {
-            'ev_ap': 0.0,  # [FIX] No positive GT → AP=0 (not 1.0). Same phantom bug
-            'ev_f1': 0.0,
-            'ev_precision': 0.0,
-            'ev_recall': 0.0,
+            "ev_ap": 0.0,  # [FIX] No positive GT → AP=0 (not 1.0). Same phantom bug
+            "ev_f1": 0.0,
+            "ev_precision": 0.0,
+            "ev_recall": 0.0,
         }
 
     sorted_idx = np.argsort(-score_valid)
@@ -3244,13 +3481,17 @@ def compute_error_verification_metrics(
 
     precision_at_05 = tp / (tp + fp) if (tp + fp) > 0 else 0.0
     recall_at_05 = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1_at_05 = 2 * precision_at_05 * recall_at_05 / (precision_at_05 + recall_at_05) if (precision_at_05 + recall_at_05) > 0 else 0.0
+    f1_at_05 = (
+        2 * precision_at_05 * recall_at_05 / (precision_at_05 + recall_at_05)
+        if (precision_at_05 + recall_at_05) > 0
+        else 0.0
+    )
 
     return {
-        'ev_ap': float(ap),
-        'ev_f1': float(f1_at_05),
-        'ev_precision': float(precision_at_05),
-        'ev_recall': float(recall_at_05),
+        "ev_ap": float(ap),
+        "ev_f1": float(f1_at_05),
+        "ev_precision": float(precision_at_05),
+        "ev_recall": float(recall_at_05),
     }
 
 
@@ -3262,6 +3503,7 @@ import time as time_module
 
 try:
     import thop
+
     _THOP_AVAILABLE = True
 except ImportError:
     _THOP_AVAILABLE = False
@@ -3308,34 +3550,36 @@ def compute_efficiency_metrics(
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-    gflops = float('nan')
+    gflops = float("nan")
     if _THOP_AVAILABLE:
         try:
             # THOP needs the correct forward signature; use video_ids so FeatureBank activates
             dummy_img = torch.randn(batch_size, 3, img_size[0], img_size[1], device=device)
-            dummy_video_ids = [f' eff_{i}' for i in range(batch_size)]
+            dummy_video_ids = [f" eff_{i}" for i in range(batch_size)]
             with torch.no_grad():
                 gflops, _ = thop.profile(
-                    model, inputs=(dummy_img, dummy_video_ids, None), verbose=False,
+                    model,
+                    inputs=(dummy_img, dummy_video_ids, None),
+                    verbose=False,
                 )
             gflops = gflops / 1e9
             del dummy_img
         except Exception:
-            gflops = float('nan')
+            gflops = float("nan")
 
     # --- Batched FPS (cold: no FeatureBank cache) ---
     dummy_img = torch.randn(batch_size, 3, img_size[0], img_size[1], device=device)
-    dummy_video_ids = [f'batched_{i}' for i in range(batch_size)]
+    dummy_video_ids = [f"batched_{i}" for i in range(batch_size)]
 
     with torch.no_grad():
         for _ in range(warmup_runs):
             _ = model(dummy_img, video_ids=dummy_video_ids, clip_rgb=None)
-        if device_obj.type == 'cuda':
+        if device_obj.type == "cuda":
             torch.cuda.synchronize()
         t0 = time_module.perf_counter()
         for _ in range(timed_runs):
             _ = model(dummy_img, video_ids=dummy_video_ids, clip_rgb=None)
-        if device_obj.type == 'cuda':
+        if device_obj.type == "cuda":
             torch.cuda.synchronize()
         t1 = time_module.perf_counter()
 
@@ -3343,25 +3587,25 @@ def compute_efficiency_metrics(
     fps = timed_runs / elapsed if elapsed > 0 else 0.0
 
     del dummy_img, dummy_video_ids
-    if device_obj.type == 'cuda':
+    if device_obj.type == "cuda":
         torch.cuda.empty_cache()
 
     # --- Streaming FPS (warm: FeatureBank cache hit after first frame) ---
     # Simulate a streaming sequence: first frame populates bank, next N frames hit cache
     streaming_frames = timed_runs
     stream_dummy_img = torch.randn(1, 3, img_size[0], img_size[1], device=device_obj)
-    stream_video_id = ['streaming_seq']
+    stream_video_id = ["streaming_seq"]
 
     with torch.no_grad():
         # First frame — cold start, populates FeatureBank
         _ = model(stream_dummy_img, video_ids=stream_video_id, clip_rgb=None)
-        if device_obj.type == 'cuda':
+        if device_obj.type == "cuda":
             torch.cuda.synchronize()
         t0 = time_module.perf_counter()
         # Remaining frames — warm, use cached temporal features
         for _ in range(streaming_frames - 1):
             _ = model(stream_dummy_img, video_ids=stream_video_id, clip_rgb=None)
-        if device_obj.type == 'cuda':
+        if device_obj.type == "cuda":
             torch.cuda.synchronize()
         t1 = time_module.perf_counter()
 
@@ -3369,7 +3613,7 @@ def compute_efficiency_metrics(
     fps_streaming = (streaming_frames - 1) / elapsed_stream if elapsed_stream > 0 else 0.0
 
     del stream_dummy_img, stream_video_id
-    if device_obj.type == 'cuda':
+    if device_obj.type == "cuda":
         torch.cuda.empty_cache()
 
     # --- Multi-model pipeline estimates (IndustReal: YOLOv8m + MViTv2 + STORM-PSR) ---
@@ -3377,29 +3621,30 @@ def compute_efficiency_metrics(
     # YOLOv8m: ~25M params (m variant), GFLOPs varies by resolution
     # MViTv2-B: ~34M params, ~78GFLOPs at 224x224 (from paper)
     # STORM-PSR: lightweight temporal model, ~5M params estimated
-    pipeline_params_m = 25.0 + 34.0 + 5.0          # YOLOv8m + MViTv2 + STORM-PSR
-    pipeline_gflops = 150.0 + 78.0 + 10.0         # conservative estimates per model
+    pipeline_params_m = 25.0 + 34.0 + 5.0  # YOLOv8m + MViTv2 + STORM-PSR
+    pipeline_gflops = 150.0 + 78.0 + 10.0  # conservative estimates per model
     # Throughput is bounded by the slowest stage; STORM-PSR runs at ~30 FPS estimated
-    pipeline_fps = 15.0                            # conservative minimum
+    pipeline_fps = 15.0  # conservative minimum
 
     return {
-        'eff_params_m': total_params / 1e6,
-        'eff_trainable_params_m': trainable_params / 1e6,
-        'eff_gflops': gflops,
-        'eff_fps': fps,
-        'eff_fps_streaming': fps_streaming,
-        'eff_batch_size': batch_size,
-        'eff_resolution': f'{img_size[0]}x{img_size[1]}',
+        "eff_params_m": total_params / 1e6,
+        "eff_trainable_params_m": trainable_params / 1e6,
+        "eff_gflops": gflops,
+        "eff_fps": fps,
+        "eff_fps_streaming": fps_streaming,
+        "eff_batch_size": batch_size,
+        "eff_resolution": f"{img_size[0]}x{img_size[1]}",
         # Multi-model pipeline (for tab:multi-model comparison)
-        'pipeline_params_m': pipeline_params_m,
-        'pipeline_gflops': pipeline_gflops,
-        'pipeline_fps': pipeline_fps,
+        "pipeline_params_m": pipeline_params_m,
+        "pipeline_gflops": pipeline_gflops,
+        "pipeline_fps": pipeline_fps,
     }
 
 
 # =============================================================================
 # Main Evaluation Loop
 # =============================================================================
+
 
 @torch.no_grad()
 def evaluate_all(
@@ -3456,7 +3701,7 @@ def evaluate_all(
         except Exception:
             return False
 
-    def _save_eval_crash_recovery(save_dir: Optional[str], tag: str = '') -> None:
+    def _save_eval_crash_recovery(save_dir: Optional[str], tag: str = "") -> None:
         """Save minimal recovery state. Never blocks >5s. CPU-fallback if CUDA bad."""
         if save_dir is None:
             return
@@ -3464,48 +3709,51 @@ def evaluate_all(
         def _do_save() -> None:
             try:
                 import os as _os
-                recovery_path = _os.path.join(save_dir, 'eval_crash_recovery.pth')
+
+                recovery_path = _os.path.join(save_dir, "eval_crash_recovery.pth")
                 cuda_healthy = _cuda_is_healthy()
 
                 # Build save_dict with CPU fallback for GPU tensors when CUDA is unhealthy
                 save_dict = {
-                    'tag': tag,
-                    'batch_idx': bi,
-                    'max_batches': max_batches,
-                    'device': str(device),
+                    "tag": tag,
+                    "batch_idx": bi,
+                    "max_batches": max_batches,
+                    "device": str(device),
                 }
 
                 # Try to include model state if model is available and CUDA is healthy
                 try:
                     if cuda_healthy:
-                        save_dict['model'] = model.state_dict()
+                        save_dict["model"] = model.state_dict()
                 except Exception:
                     pass
 
                 torch.save(save_dict, recovery_path)
                 if cuda_healthy:
                     torch.cuda.synchronize()
-                logger.info(f'  [EVAL_CRASH] Saved crash checkpoint: {tag}')
+                logger.info(f"  [EVAL_CRASH] Saved crash checkpoint: {tag}")
             except Exception as exc:
-                logger.warning(f'  [EVAL_CRASH] Failed to save crash checkpoint: {exc}')
+                logger.warning(f"  [EVAL_CRASH] Failed to save crash checkpoint: {exc}")
 
         # Run with 5-second timeout — never block the signal handler indefinitely
         t = threading.Thread(target=_do_save, daemon=True)
         t.start()
         t.join(timeout=5.0)
         if t.is_alive():
-            logger.warning('  [EVAL_CRASH] Save timed out after 5s — continuing without save')
+            logger.warning("  [EVAL_CRASH] Save timed out after 5s — continuing without save")
 
     # --- GPU + CPU memory snapshot at eval start (Bashara 2026-05-09) ---
     _gpu_alloc_gb = torch.cuda.memory_allocated(device) / 1024**3
     _gpu_reserved_gb = torch.cuda.memory_reserved(device) / 1024**3
-    logger.info(f'  [EVAL START] GPU alloc={_gpu_alloc_gb:.2f}GB  reserved={_gpu_reserved_gb:.2f}GB')
+    logger.info(
+        f"  [EVAL START] GPU alloc={_gpu_alloc_gb:.2f}GB  reserved={_gpu_reserved_gb:.2f}GB"
+    )
     try:
-        with open('/proc/meminfo', 'r') as f:
+        with open("/proc/meminfo", "r") as f:
             for line in f:
-                if line.startswith('MemAvailable'):
+                if line.startswith("MemAvailable"):
                     avail_kb = int(line.split()[1])
-                    logger.info(f'  [EVAL START] CPU avail={avail_kb/1024/1024:.1f}GB')
+                    logger.info(f"  [EVAL START] CPU avail={avail_kb / 1024 / 1024:.1f}GB")
                     break
     except Exception:
         pass
@@ -3533,53 +3781,58 @@ def evaluate_all(
         if bi % 10 == 0:
             _b_alloc = torch.cuda.memory_allocated(device) / 1024**3
             _b_res = torch.cuda.memory_reserved(device) / 1024**3
-            logger.info(f'  [EVAL batch {bi}/{max_batches}] GPU alloc={_b_alloc:.2f}GB  reserved={_b_res:.2f}GB')
-
-
+            logger.info(
+                f"  [EVAL batch {bi}/{max_batches}] GPU alloc={_b_alloc:.2f}GB  reserved={_b_res:.2f}GB"
+            )
 
         images = _prepare_images(images, device)
 
         # Doc 2 §C.4: PSR cache reset at recording boundaries.
         # Detect recording transitions within the batch and reset the PSR cache
         # to prevent cross-recording contamination in the causal transformer.
-        metadata_batch = targets.get('metadata', [])
+        metadata_batch = targets.get("metadata", [])
         batch_recording_ids: List[str] = [
-            str(item.get('recording_id', item.get('rec_id', 'unknown'))) if item else 'unknown'
+            str(item.get("recording_id", item.get("rec_id", "unknown"))) if item else "unknown"
             for item in metadata_batch
         ]
-        if hasattr(model, 'psr_head') and batch_recording_ids and _prev_recording_ids:
+        if hasattr(model, "psr_head") and batch_recording_ids and _prev_recording_ids:
             for i, rec_id in enumerate(batch_recording_ids):
                 prev_rec_id = _prev_recording_ids[i] if i < len(_prev_recording_ids) else None
-                camera_view = str(metadata_batch[i].get('camera_view', 'default')) if metadata_batch[i] else 'default'
+                camera_view = (
+                    str(metadata_batch[i].get("camera_view", "default"))
+                    if metadata_batch[i]
+                    else "default"
+                )
                 if prev_rec_id is not None and rec_id != prev_rec_id:
                     model.psr_head.reset_sequence(rec_id, camera_view)
-                    logger.debug('PSR cache reset: %s -> %s', prev_rec_id, rec_id)
+                    logger.debug("PSR cache reset: %s -> %s", prev_rec_id, rec_id)
         _prev_recording_ids = batch_recording_ids
 
         # Move targets to device
-        detection_list = targets['detection']
+        detection_list = targets["detection"]
         for i in range(len(detection_list)):
-            detection_list[i]['boxes'] = detection_list[i]['boxes'].to(device)
-            detection_list[i]['labels'] = detection_list[i]['labels'].to(device)
-        targets['head_pose'] = targets['head_pose'].to(device)
-        targets['psr_labels'] = targets['psr_labels'].to(device)
-        targets['activity'] = targets['activity'].to(device)
-        if 'activity_mask' in targets:
-            targets['activity_mask'] = targets['activity_mask'].to(device)
-        if 'keypoints' in targets:
-            targets['keypoints'] = targets['keypoints'].to(device)
-        if 'pose_confidence' in targets:
-            targets['pose_confidence'] = targets['pose_confidence'].to(device)
-        clip_rgb = targets.get('clip_rgb')
+            detection_list[i]["boxes"] = detection_list[i]["boxes"].to(device)
+            detection_list[i]["labels"] = detection_list[i]["labels"].to(device)
+        targets["head_pose"] = targets["head_pose"].to(device)
+        targets["psr_labels"] = targets["psr_labels"].to(device)
+        targets["activity"] = targets["activity"].to(device)
+        if "activity_mask" in targets:
+            targets["activity_mask"] = targets["activity_mask"].to(device)
+        if "keypoints" in targets:
+            targets["keypoints"] = targets["keypoints"].to(device)
+        if "pose_confidence" in targets:
+            targets["pose_confidence"] = targets["pose_confidence"].to(device)
+        clip_rgb = targets.get("clip_rgb")
         if clip_rgb is not None:
             clip_rgb = clip_rgb.to(device)
 
         B, C_img, H_img, W_img = images.shape
 
-        def run_model(inp: torch.Tensor,
-                      clip: Optional[torch.Tensor] = None,
-                      vid_ids: Optional[List[str]] = None,
-                      ) -> Dict[str, torch.Tensor]:
+        def run_model(
+            inp: torch.Tensor,
+            clip: Optional[torch.Tensor] = None,
+            vid_ids: Optional[List[str]] = None,
+        ) -> Dict[str, torch.Tensor]:
             out = model(inp, video_ids=vid_ids, clip_rgb=clip)
             for _k in out:
                 if isinstance(out[_k], torch.Tensor):
@@ -3592,24 +3845,29 @@ def evaluate_all(
         if use_flip_tta:
             flip_images = torch.flip(images, dims=[3])
             out_flip = run_model(flip_images, clip_rgb, batch_recording_ids)
-            for key in ['act_logits', 'psr_logits']:
+            for key in ["act_logits", "psr_logits"]:
                 if key in out_flip:
-                    outputs_raw[key] = 0.5 * (outputs_raw[key] + torch.flip(out_flip[key], dims=[2]))
+                    outputs_raw[key] = 0.5 * (
+                        outputs_raw[key] + torch.flip(out_flip[key], dims=[2])
+                    )
 
         # Doc 2 F.2: 5-Crop TTA (center + 4 corners → averaged per batch element)
         if use_crop_tta:
             crop_h, crop_w = 224, 224
             crop_list = [
-                images[:, :, :crop_h, :crop_w],                        # top-left
-                images[:, :, :crop_h, W_img - crop_w:],              # top-right
-                images[:, :, H_img - crop_h:, :crop_w],               # bottom-left
-                images[:, :, H_img - crop_h:, W_img - crop_w:],       # bottom-right
-                F.interpolate(images, size=(crop_h, crop_w),
-                              mode='bilinear', align_corners=False),  # center
+                images[:, :, :crop_h, :crop_w],  # top-left
+                images[:, :, :crop_h, W_img - crop_w :],  # top-right
+                images[:, :, H_img - crop_h :, :crop_w],  # bottom-left
+                images[:, :, H_img - crop_h :, W_img - crop_w :],  # bottom-right
+                F.interpolate(
+                    images, size=(crop_h, crop_w), mode="bilinear", align_corners=False
+                ),  # center
             ]
-            crop_logits_acc = {k: torch.zeros_like(outputs_raw[k])
-                               for k in ['act_logits', 'psr_logits', 'head_pose']
-                               if k in outputs_raw}
+            crop_logits_acc = {
+                k: torch.zeros_like(outputs_raw[k])
+                for k in ["act_logits", "psr_logits", "head_pose"]
+                if k in outputs_raw
+            }
             for crop in crop_list:
                 out_crop = run_model(crop, None)
                 for k in crop_logits_acc:
@@ -3633,35 +3891,35 @@ def evaluate_all(
             # [FIX 2026-07-04 Opus 111 SS3.2] Accumulate unweighted per-head losses
             # for Val: line so loss-vs-quality trends are not confounded by Kendall.
             if lc == 1:
-                _per_head_sums = {k: 0.0 for k in ('det', 'pose', 'head_pose', 'activity', 'psr')}
+                _per_head_sums = {k: 0.0 for k in ("det", "pose", "head_pose", "activity", "psr")}
             for _k in _per_head_sums:
                 _per_head_sums[_k] += float(_loss_dict.get(_k, 0.0))
         elif loss is None:
             # criterion is None (inference-only mode): skip per-head accumulation
-            _per_head_sums = {k: 0.0 for k in ('det', 'pose', 'head_pose', 'activity', 'psr')}
+            _per_head_sums = {k: 0.0 for k in ("det", "pose", "head_pose", "activity", "psr")}
 
         # --- Activity ---
-        act_logits_batch = outputs['act_logits'].cpu().numpy()
+        act_logits_batch = outputs["act_logits"].cpu().numpy()
         if act_logits_all is not None:
             act_logits_all.append(act_logits_batch)
         act_pred_batch = act_logits_batch.argmax(axis=1)
         # BASHARA 2026-05-22: Debug logging — track every batch's act_preds shape
         if (bi % 50 == 0) or act_pred_batch.size == 0:
             logger.info(
-                f'  [EVAL batch {bi}] act_logits shape={act_logits_batch.shape}, '
-                f'act_pred shape={act_pred_batch.shape}, B={B}'
+                f"  [EVAL batch {bi}] act_logits shape={act_logits_batch.shape}, "
+                f"act_pred shape={act_pred_batch.shape}, B={B}"
             )
         # [OPUS v5 AUDIT] Dataset returns raw action IDs 0-74. Class 0 = NA/background.
         # Frames without AR annotation have label=-1 (sentinel, excluded via activity_mask).
         # activity_mask: True = labeled (incl. NA), False = -1 sentinel (excluded).
         # For MViTv2-comparable metric, NA must be excluded from Top-1/5 scoring.
-        act_labels_batch = targets['activity'].cpu().numpy()
-        act_mask_batch = targets.get('activity_mask')
+        act_labels_batch = targets["activity"].cpu().numpy()
+        act_mask_batch = targets.get("activity_mask")
         if act_mask_batch is not None:
             act_mask_batch = act_mask_batch.cpu().numpy().astype(bool)
             act_valid = act_mask_batch
         else:
-            act_valid = (act_labels_batch >= 0)
+            act_valid = act_labels_batch >= 0
         act_preds.append(act_pred_batch[act_valid])
         act_labels.append(act_labels_batch[act_valid])
         # [FIX 2026-06-15] act_clip_ids / act_clip_frame_nums MUST be filtered by the
@@ -3675,15 +3933,15 @@ def evaluate_all(
         for i in range(B):
             if not act_valid[i]:
                 continue
-            metadata_item = targets['metadata'][i] if i < len(targets['metadata']) else {}
-            rec_id = metadata_item.get('recording_id', metadata_item.get('rec_id', None))
+            metadata_item = targets["metadata"][i] if i < len(targets["metadata"]) else {}
+            rec_id = metadata_item.get("recording_id", metadata_item.get("rec_id", None))
             if rec_id is not None:
                 rec_id = rec_id.item() if isinstance(rec_id, torch.Tensor) else str(rec_id)
             else:
-                rec_id = f'batch{bi}_i{i}'
+                rec_id = f"batch{bi}_i{i}"
             _batch_rec_ids.append(rec_id)
             # Collect frame_num for 16-uniform-frame evaluation protocol
-            frame_num = metadata_item.get('frame_num', 0)
+            frame_num = metadata_item.get("frame_num", 0)
             if isinstance(frame_num, torch.Tensor):
                 frame_num = frame_num.item()
             _batch_frame_nums.append(int(frame_num))
@@ -3701,26 +3959,26 @@ def evaluate_all(
         # Fix (Bashara 2026-05-18): guard against None if model.train_pose=False during eval
         # (model.py now computes head_pose during eval regardless of train_pose, but guard
         # is kept as defensive fallback in case model checkpoint has train_pose=False in eval.)
-        if outputs['head_pose'] is not None:
-            head_pose_preds.append(outputs['head_pose'].cpu().numpy())
-            head_pose_gts.append(targets['head_pose'].cpu().numpy())
+        if outputs["head_pose"] is not None:
+            head_pose_preds.append(outputs["head_pose"].cpu().numpy())
+            head_pose_gts.append(targets["head_pose"].cpu().numpy())
         else:
             # Defensive fallback: zeros when head_pose is None (e.g., from older checkpoint)
             _B = images.shape[0]
             head_pose_preds.append(np.zeros((_B, 9), dtype=np.float32))
-            head_pose_gts.append(targets['head_pose'].cpu().numpy())
+            head_pose_gts.append(targets["head_pose"].cpu().numpy())
 
         # --- PSR ---
-        psr_preds_logits.append(outputs['psr_logits'].cpu().numpy())
-        psr_labels.append(targets['psr_labels'].cpu().numpy())
+        psr_preds_logits.append(outputs["psr_logits"].cpu().numpy())
+        psr_labels.append(targets["psr_labels"].cpu().numpy())
         # [GAP-A2] Collect recording IDs for per-recording PSR decoder grouping
-        for i in range(min(B, outputs['psr_logits'].shape[0])):
-            _meta = targets['metadata'][i] if i < len(targets['metadata']) else {}
-            _r = _meta.get('recording_id', _meta.get('rec_id', f'rec_{bi}_{i}'))
+        for i in range(min(B, outputs["psr_logits"].shape[0])):
+            _meta = targets["metadata"][i] if i < len(targets["metadata"]) else {}
+            _r = _meta.get("recording_id", _meta.get("rec_id", f"rec_{bi}_{i}"))
             psr_rec_ids.append(str(_r.item()) if isinstance(_r, torch.Tensor) else str(_r))
             # [F22] frame_num enables temporal sort inside each recording —
             # transition F1 is meaningless on unsorted sampler order.
-            _fn = _meta.get('frame_num', _meta.get('frame_idx', len(psr_frame_nums)))
+            _fn = _meta.get("frame_num", _meta.get("frame_idx", len(psr_frame_nums)))
             try:
                 _fn = int(_fn.item()) if isinstance(_fn, torch.Tensor) else int(_fn)
             except (TypeError, ValueError):
@@ -3729,27 +3987,27 @@ def evaluate_all(
 
         # --- Detection ---
         if _cached_anchors_np is None:
-            _cached_anchors_np = outputs['anchors'].cpu().numpy()
+            _cached_anchors_np = outputs["anchors"].cpu().numpy()
 
-        cls_sigmoid = torch.sigmoid(outputs['cls_preds'])  # [B, N, 24] on GPU
+        cls_sigmoid = torch.sigmoid(outputs["cls_preds"])  # [B, N, 24] on GPU
         B = images.shape[0]
 
         # --- DETECTION COLLAPSE PROBE (first 5 batches only, self-throttling) ---
         probe_detection_batch(
-            outputs['cls_preds'].cpu().numpy(),
-            outputs['reg_preds'].cpu().numpy(),
+            outputs["cls_preds"].cpu().numpy(),
+            outputs["reg_preds"].cpu().numpy(),
             _cached_anchors_np,
-            [detection_list[i]['boxes'].cpu().numpy() for i in range(B)],
+            [detection_list[i]["boxes"].cpu().numpy() for i in range(B)],
             tag=f"b{bi}",
         )
 
         for i in range(B):
             scores_i = cls_sigmoid[i]  # [N, 24] on GPU
             max_scores = scores_i.max(dim=1).values  # [N] on GPU
-            score_thresh = float(getattr(C, 'DET_EVAL_SCORE_THRESH', 0.5))
+            score_thresh = float(getattr(C, "DET_EVAL_SCORE_THRESH", 0.5))
             keep_mask = max_scores > score_thresh  # [N] bool on GPU
 
-            max_keep = int(getattr(C, 'DET_EVAL_MAX_PER_IMAGE', 300))
+            max_keep = int(getattr(C, "DET_EVAL_MAX_PER_IMAGE", 300))
             if max_keep > 0 and keep_mask.sum().item() > max_keep:
                 topk_idx = torch.topk(max_scores, k=max_keep, largest=True, sorted=False).indices
                 topk_mask = torch.zeros_like(keep_mask)
@@ -3763,7 +4021,7 @@ def evaluate_all(
             else:
                 keep_np = keep_mask.cpu().numpy()
                 kept_cls = scores_i[keep_mask].cpu().numpy()
-                kept_reg = outputs['reg_preds'][i][keep_mask].cpu().numpy()
+                kept_reg = outputs["reg_preds"][i][keep_mask].cpu().numpy()
                 kept_anc = _cached_anchors_np[keep_np]
 
                 ms = kept_cls.max(axis=1)
@@ -3792,8 +4050,8 @@ def evaluate_all(
                     dp_scores.append(np.zeros(0))
                     dp_labels.append(np.zeros(0, dtype=np.int64))
 
-            dg_boxes.append(detection_list[i]['boxes'].cpu().numpy())
-            dg_labels.append(detection_list[i]['labels'].cpu().numpy())
+            dg_boxes.append(detection_list[i]["boxes"].cpu().numpy())
+            dg_labels.append(detection_list[i]["labels"].cpu().numpy())
 
             # Release GPU memory after per-image detection processing.
             # This prevents OOM during validation by clearing intermediate tensors
@@ -3809,22 +4067,24 @@ def evaluate_all(
 
         # --- CRASH CHECKPOINT every 5 eval batches (Bashara 2026-05-09) ---
         if (bi + 1) % 5 == 0:
-            _save_eval_crash_recovery(save_dir, f'batch_{bi + 1}')
+            _save_eval_crash_recovery(save_dir, f"batch_{bi + 1}")
             torch.cuda.synchronize()
             _b_alloc = torch.cuda.memory_allocated(device) / 1024**3
             _b_res = torch.cuda.memory_reserved(device) / 1024**3
-            logger.info(f'  [EVAL batch {bi + 1}] GPU alloc={_b_alloc:.2f}GB  reserved={_b_res:.2f}GB')
+            logger.info(
+                f"  [EVAL batch {bi + 1}] GPU alloc={_b_alloc:.2f}GB  reserved={_b_res:.2f}GB"
+            )
 
     # --- GPU + CPU memory snapshot at eval END (Bashara 2026-05-09) ---
     _gpu_alloc_gb = torch.cuda.memory_allocated(device) / 1024**3
     _gpu_reserved_gb = torch.cuda.memory_reserved(device) / 1024**3
-    logger.info(f'  [EVAL END] GPU alloc={_gpu_alloc_gb:.2f}GB  reserved={_gpu_reserved_gb:.2f}GB')
+    logger.info(f"  [EVAL END] GPU alloc={_gpu_alloc_gb:.2f}GB  reserved={_gpu_reserved_gb:.2f}GB")
     try:
-        with open('/proc/meminfo', 'r') as f:
+        with open("/proc/meminfo", "r") as f:
             for line in f:
-                if line.startswith('MemAvailable'):
+                if line.startswith("MemAvailable"):
                     avail_kb = int(line.split()[1])
-                    logger.info(f'  [EVAL END] CPU avail={avail_kb/1024/1024:.1f}GB')
+                    logger.info(f"  [EVAL END] CPU avail={avail_kb / 1024 / 1024:.1f}GB")
                     break
     except Exception:
         pass
@@ -3848,39 +4108,52 @@ def evaluate_all(
                 empty_guard_failed = True
 
         if empty_guard_failed:
-            dataset_len = len(loader.dataset) if hasattr(loader, 'dataset') else -1
+            dataset_len = len(loader.dataset) if hasattr(loader, "dataset") else -1
             batch_count = len(act_preds)
             logger.error(
-                f'All activity prediction batches empty. act_preds len={batch_count}, '
-                f'dataset_len={dataset_len}. Returning safe fallback metrics (non-NaN, non-zero).'
+                f"All activity prediction batches empty. act_preds len={batch_count}, "
+                f"dataset_len={dataset_len}. Returning safe fallback metrics (non-NaN, non-zero)."
             )
             # [FIX] Return safe fallback results instead of raising — prevents infinite val loop.
             # Activity metrics will be 0.0 (not NaN) so training can continue, checkpointing works.
             return {
-                'loss': 1e-4,
-                'det_mAP50': 0.0, 'det_mAP_50_95': 0.0, 'det_mAP50_all_frames': 0.0,
-                'act_accuracy': 0.0, 'act_macro_f1': 0.0, 'act_weighted_f1': 0.0,
-                'act_top5_accuracy': 0.0, 'act_frame_accuracy': 0.0, 'act_accuracy_no_na': 0.0,
-                'act_macro_recall': 0.0, 'act_clip_accuracy': 0.0,
-                'head_pose_MAE': 1e-4, 'forward_angular_MAE_deg': 1e-4,
-                'up_angular_MAE_deg': 1e-4, 'position_MAE_mm': 1e-4,
-                'psr_overall_f1': 0.0, 'psr_overall_f1_at5': 0.0,
-                'psr_macro_f1': 0.0, 'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
-                'assembly_state_f1': 0.0, 'error_detection_f1': 0.0,
+                "loss": 1e-4,
+                "det_mAP50": 0.0,
+                "det_mAP_50_95": 0.0,
+                "det_mAP50_all_frames": 0.0,
+                "act_accuracy": 0.0,
+                "act_macro_f1": 0.0,
+                "act_weighted_f1": 0.0,
+                "act_top5_accuracy": 0.0,
+                "act_frame_accuracy": 0.0,
+                "act_accuracy_no_na": 0.0,
+                "act_macro_recall": 0.0,
+                "act_clip_accuracy": 0.0,
+                "head_pose_MAE": 1e-4,
+                "forward_angular_MAE_deg": 1e-4,
+                "up_angular_MAE_deg": 1e-4,
+                "position_MAE_mm": 1e-4,
+                "psr_overall_f1": 0.0,
+                "psr_overall_f1_at5": 0.0,
+                "psr_macro_f1": 0.0,
+                "psr_precision_at_t": 0.0,
+                "psr_recall_at_t": 0.0,
+                "assembly_state_f1": 0.0,
+                "error_detection_f1": 0.0,
             }
         if empty_batch_indices:
             # Some batches empty, some not — log warning but continue
             logger.warning(
-                f'WARNING: {len(empty_batch_indices)}/{len(act_preds)} batches have empty act_preds. '
-                f'First few empty indices: {empty_batch_indices[:5]}. '
-                f'Proceeding with {non_empty_count} valid batches.'
+                f"WARNING: {len(empty_batch_indices)}/{len(act_preds)} batches have empty act_preds. "
+                f"First few empty indices: {empty_batch_indices[:5]}. "
+                f"Proceeding with {non_empty_count} valid batches."
             )
-        results: Dict[str, Any] = {'loss': total_loss / max(lc, 1)}
+        results: Dict[str, Any] = {"loss": total_loss / max(lc, 1)}
         # [FIX 2026-07-04 Opus 111 SS3.2] Add unweighted per-head val losses
         # so Val: line can show them alongside Kendall-weighted combined metric.
         if lc > 0:
             for _k, _v in _per_head_sums.items():
-                results[f'val_loss_{_k}'] = _v / lc
+                results[f"val_loss_{_k}"] = _v / lc
 
     # -------------------------------------------------------------------------
     # Activity Metrics
@@ -3888,7 +4161,7 @@ def evaluate_all(
     # Safe concatenate: if act_preds is list of empty arrays, concatenate on first non-empty dim
     def _safe_concat(lst):
         if not lst:
-            raise ValueError(f'Cannot concatenate empty list.')
+            raise ValueError(f"Cannot concatenate empty list.")
         # If all arrays are 1D empty, return empty with right dtype
         non_empty = [arr for arr in lst if arr.size > 0]
         if not non_empty:
@@ -3902,29 +4175,40 @@ def evaluate_all(
 
     # [DEBUG] Print activity GT/pred statistics before compute
     # Guard: numpy arrays cannot be used in boolean context directly
-    if all_act_gt is not None and all_act_pred is not None and len(all_act_gt) > 0 and len(all_act_pred) > 0:
+    if (
+        all_act_gt is not None
+        and all_act_pred is not None
+        and len(all_act_gt) > 0
+        and len(all_act_pred) > 0
+    ):
         _ag = np.asarray(all_act_gt)
         _ap = np.asarray(all_act_pred)
         _n = _ag.shape[0]
         _correct = int((_ap == _ag).sum()) if _ap.shape[0] == _n else -1
-        _na_gt = int((_ag == 0).sum())          # class 0 == NA
+        _na_gt = int((_ag == 0).sum())  # class 0 == NA
         _na_pred = int((_ap == 0).sum())
-        num_cls = int(getattr(C, 'NUM_ACT_OUTPUTS', getattr(C, 'NUM_CLASSES_ACT', max(int(_ag.max()), int(_ap.max())) + 1)))
+        num_cls = int(
+            getattr(
+                C,
+                "NUM_ACT_OUTPUTS",
+                getattr(C, "NUM_CLASSES_ACT", max(int(_ag.max()), int(_ap.max())) + 1),
+            )
+        )
         logger.info(
-            f'  [DEBUG] activity: n={_n}  '
-            f'frame_acc={_correct}/{_n}={_correct/max(_n,1):.4f}  '
-            f'gt_range=[{_ag.min()}, {_ag.max()}]  pred_range=[{_ap.min()}, {_ap.max()}]  '
-            f'NA_gt={_na_gt}  NA_pred={_na_pred}'
+            f"  [DEBUG] activity: n={_n}  "
+            f"frame_acc={_correct}/{_n}={_correct / max(_n, 1):.4f}  "
+            f"gt_range=[{_ag.min()}, {_ag.max()}]  pred_range=[{_ap.min()}, {_ap.max()}]  "
+            f"NA_gt={_na_gt}  NA_pred={_na_pred}"
         )
         _gt_hist = np.bincount(_ag, minlength=num_cls)
         _pr_hist = np.bincount(_ap, minlength=num_cls)
         _gt_missing = int((_gt_hist == 0).sum())
         _pr_missing = int((_pr_hist == 0).sum())
         logger.info(
-            f'  [DEBUG] activity classes: gt_seen={num_cls - _gt_missing}/{num_cls}  '
-            f'pred_seen={num_cls - _pr_missing}/{num_cls}  '
-            f'gt_top5={np.argsort(_gt_hist)[::-1][:5].tolist()}  '
-            f'pred_top5={np.argsort(_pr_hist)[::-1][:5].tolist()}'
+            f"  [DEBUG] activity classes: gt_seen={num_cls - _gt_missing}/{num_cls}  "
+            f"pred_seen={num_cls - _pr_missing}/{num_cls}  "
+            f"gt_top5={np.argsort(_gt_hist)[::-1][:5].tolist()}  "
+            f"pred_top5={np.argsort(_pr_hist)[::-1][:5].tolist()}"
         )
         # [FIX 2026-06-04] Surface activity-head collapse so metric=0 is not misinterpreted as eval bug.
         _pred_seen = num_cls - _pr_missing
@@ -3932,9 +4216,9 @@ def evaluate_all(
             _top1 = int(np.argmax(_pr_hist))
             _top1_freq = float(_pr_hist[_top1] / max(_n, 1))
             logger.warning(
-                f'  [EVAL COLLAPSE] activity head predicts only {_pred_seen}/{num_cls} classes '
-                f'(top-1 class={_top1} with {_top1_freq*100:.1f}% of frames). '
-                f'act_macro_f1=0 is a model collapse, not an eval bug.'
+                f"  [EVAL COLLAPSE] activity head predicts only {_pred_seen}/{num_cls} classes "
+                f"(top-1 class={_top1} with {_top1_freq * 100:.1f}% of frames). "
+                f"act_macro_f1=0 is a model collapse, not an eval bug."
             )
         # [OPUS DECISION 2] Diversity/entropy instrumentation for simple head go/no-go.
         # Logged every epoch so the user/monitor can track prediction diversity as an
@@ -3944,20 +4228,20 @@ def evaluate_all(
         _pred_probs = _pr_hist.astype(np.float64) / max(_n, 1)
         _entropy = -float(np.sum(_pred_probs * np.ma.log(_pred_probs).filled(0)))
         logger.info(
-            f'  [DIVERSITY] pred_distinct={_distinct_classes}/{num_cls}  '
-            f'entropy={_entropy:.3f} nats  '
-            f'gt_distinct={num_cls - _gt_missing}/{num_cls}'
+            f"  [DIVERSITY] pred_distinct={_distinct_classes}/{num_cls}  "
+            f"entropy={_entropy:.3f} nats  "
+            f"gt_distinct={num_cls - _gt_missing}/{num_cls}"
         )
-    if getattr(C, 'TRAIN_ACT', True):
+    if getattr(C, "TRAIN_ACT", True):
         # [OPUS V5 FIX] Validate act_clip_ids vs all_act_gt length before passing
         # to compute_activity_metrics. Mismatch causes IndexError that kills eval.
         _n_pred = len(all_act_gt) if all_act_gt is not None else 0
         _n_clip = len(act_clip_ids) if act_clip_ids else 0
         if _n_pred > 0 and _n_clip > 0 and _n_pred != _n_clip:
             logger.warning(
-                f'  [EVAL_GUARD] act_clip_ids len={_n_clip} != all_act_gt len={_n_pred} — '
-                f'truncating to shorter and continuing. This indicates a masking bug '
-                f'where activity_mask filtering produced inconsistent counts.'
+                f"  [EVAL_GUARD] act_clip_ids len={_n_clip} != all_act_gt len={_n_pred} — "
+                f"truncating to shorter and continuing. This indicates a masking bug "
+                f"where activity_mask filtering produced inconsistent counts."
             )
             _min_len = min(_n_pred, _n_clip)
             all_act_gt = all_act_gt[:_min_len]
@@ -3967,8 +4251,12 @@ def evaluate_all(
             act_clip_ids = act_clip_ids[:_min_len]
         try:
             act_metrics = compute_activity_metrics(
-                all_act_gt, all_act_pred, all_act_logits,
-                class_names=getattr(C, 'ACT_OUTPUT_NAMES', C.ACT_CLASS_NAMES),  # verb-grouping aware (file 75)
+                all_act_gt,
+                all_act_pred,
+                all_act_logits,
+                class_names=getattr(
+                    C, "ACT_OUTPUT_NAMES", C.ACT_CLASS_NAMES
+                ),  # verb-grouping aware (file 75)
                 save_dir=save_dir,
                 clip_ids=np.asarray(act_clip_ids) if act_clip_ids else None,
                 # [FIX 2026-06-15] pass frame indices so the 16-uniform-frame clip protocol
@@ -3977,41 +4265,53 @@ def evaluate_all(
                 clip_frame_nums=np.asarray(act_clip_frame_nums) if act_clip_frame_nums else None,
             )
         except Exception as _act_exc:
-            logger.error(f'  Activity metrics FAILED: {_act_exc} -- using safe defaults')
+            logger.error(f"  Activity metrics FAILED: {_act_exc} -- using safe defaults")
             act_metrics = {
-                'act_macro_f1': 0.0, 'act_top5_accuracy': 0.0, 'act_frame_accuracy': 0.0,
-                'act_top1': 0.0,  # [NEW] Per-frame Top-1 accuracy (Add 1 / Q42)
-                'act_accuracy': 0.0, 'act_clip_accuracy': 0.0, 'act_weighted_f1': 0.0,
-                'act_accuracy_no_na': 0.0, 'act_macro_recall': 0.0,
-                'act_mean_per_class_acc': 0.0,
+                "act_macro_f1": 0.0,
+                "act_top5_accuracy": 0.0,
+                "act_frame_accuracy": 0.0,
+                "act_top1": 0.0,  # [NEW] Per-frame Top-1 accuracy (Add 1 / Q42)
+                "act_accuracy": 0.0,
+                "act_clip_accuracy": 0.0,
+                "act_weighted_f1": 0.0,
+                "act_accuracy_no_na": 0.0,
+                "act_macro_recall": 0.0,
+                "act_mean_per_class_acc": 0.0,
             }  # [OPUS v5] Include all Val-line keys to avoid cosmetic NaN
     else:
         act_metrics = {
-            'act_macro_f1': 0.0, 'act_top5_accuracy': 0.0, 'act_frame_accuracy': 0.0,
-            'act_top1': 0.0,  # [NEW] Per-frame Top-1 accuracy (Add 1 / Q42)
-            'act_accuracy': 0.0, 'act_clip_accuracy': 0.0, 'act_weighted_f1': 0.0,
-            'act_accuracy_no_na': 0.0, 'act_macro_recall': 0.0,
-            'act_mean_per_class_acc': 0.0,
+            "act_macro_f1": 0.0,
+            "act_top5_accuracy": 0.0,
+            "act_frame_accuracy": 0.0,
+            "act_top1": 0.0,  # [NEW] Per-frame Top-1 accuracy (Add 1 / Q42)
+            "act_accuracy": 0.0,
+            "act_clip_accuracy": 0.0,
+            "act_weighted_f1": 0.0,
+            "act_accuracy_no_na": 0.0,
+            "act_macro_recall": 0.0,
+            "act_mean_per_class_acc": 0.0,
         }  # [OPUS v5] Include all Val-line keys to avoid cosmetic NaN
     results.update(act_metrics)
-    if getattr(C, 'TRAIN_ACT', True):
+    if getattr(C, "TRAIN_ACT", True):
         try:
             report_per_class_accuracy(
-                act_metrics.get('act_confusion_matrix', []),
-                class_names=getattr(C, 'ACT_OUTPUT_NAMES', C.ACT_CLASS_NAMES),  # verb-grouping aware (file 75)
+                act_metrics.get("act_confusion_matrix", []),
+                class_names=getattr(
+                    C, "ACT_OUTPUT_NAMES", C.ACT_CLASS_NAMES
+                ),  # verb-grouping aware (file 75)
                 k=5,
             )
         except Exception as _rpca_exc:
-            logger.warning(f'  Per-class accuracy FAILED: {_rpca_exc} -- skipping')
-    if getattr(C, 'TRAIN_ACT', True):
+            logger.warning(f"  Per-class accuracy FAILED: {_rpca_exc} -- skipping")
+    if getattr(C, "TRAIN_ACT", True):
         logger.info(
-            f'  Activity — Acc: {results["act_accuracy"]:.4f}  '
-            f'Macro-F1: {results["act_macro_f1"]:.4f}  '
-            f'Weighted-F1: {results["act_weighted_f1"]:.4f}  '
-            f'Top-5: {results["act_top5_accuracy"]:.4f}  '
-            f'Frame Acc (all): {results["act_frame_accuracy"]:.4f}  '
-            f'Frame Acc (no NA): {results["act_accuracy_no_na"]:.4f}  '
-            f'Macro-Recall: {results["act_macro_recall"]:.4f}'
+            f"  Activity — Acc: {results['act_accuracy']:.4f}  "
+            f"Macro-F1: {results['act_macro_f1']:.4f}  "
+            f"Weighted-F1: {results['act_weighted_f1']:.4f}  "
+            f"Top-5: {results['act_top5_accuracy']:.4f}  "
+            f"Frame Acc (all): {results['act_frame_accuracy']:.4f}  "
+            f"Frame Acc (no NA): {results['act_accuracy_no_na']:.4f}  "
+            f"Macro-Recall: {results['act_macro_recall']:.4f}"
         )
 
     # [GAP-B] Per-action-segment activity evaluation (MViTv2-comparable protocol)
@@ -4027,20 +4327,26 @@ def evaluate_all(
     # return to the Python eval loop — so this is a best-effort safety net.
     # The real fix is the config split-brain correction (from src import config).
     _run_seg_metrics = True
-    if not getattr(C, 'TRAIN_ACT', False):
-        logger.info('[GAP-B] TRAIN_ACT=False — skipping segment metrics (detection-only stage)')
+    if not getattr(C, "TRAIN_ACT", False):
+        logger.info("[GAP-B] TRAIN_ACT=False — skipping segment metrics (detection-only stage)")
         _run_seg_metrics = False
-    elif getattr(C, 'DET_GT_FRAME_FRACTION', 0.0) >= 0.9:
-        logger.info('[GAP-B] DET_GT_FRAME_FRACTION>=0.9 — detection-dominant stage, skipping segment metrics')
+    elif getattr(C, "DET_GT_FRAME_FRACTION", 0.0) >= 0.9:
+        logger.info(
+            "[GAP-B] DET_GT_FRAME_FRACTION>=0.9 — detection-dominant stage, skipping segment metrics"
+        )
         _run_seg_metrics = False
     if _run_seg_metrics:
+
         class _SegTimeoutExc(Exception):
             """Raised by SIGALRM handler when segment metrics exceed timeout."""
+
         _seg_timeout = 240  # 4 minutes — must be < probe timeout and < subprocess eval timeout
+
         def _seg_alarm(s, f):
             raise _SegTimeoutExc(
-                f'[GAP-B] Segment metrics timed out after {_seg_timeout}s (CUDA kernel hang)'
+                f"[GAP-B] Segment metrics timed out after {_seg_timeout}s (CUDA kernel hang)"
             )
+
         # [THREAD FIX 2026-06-29] signal.signal() fails from non-main thread
         # (e.g., when evaluate_all runs inside ThreadPoolExecutor for the
         # training-loop validation timeout). Catch ValueError and skip alarm.
@@ -4050,37 +4356,42 @@ def evaluate_all(
             signal.alarm(_seg_timeout)
             _seg_have_alarm = True
         except ValueError:
-            logger.warning('[GAP-B] Cannot set SIGALRM timeout (not in main thread) — skipping segment metrics to avoid CUDA hang')
+            logger.warning(
+                "[GAP-B] Cannot set SIGALRM timeout (not in main thread) — skipping segment metrics to avoid CUDA hang"
+            )
             _run_seg_metrics = False
         if _seg_have_alarm:
             try:
                 seg_metrics = compute_activity_segment_metrics(
-                    model, loader.dataset, device, T=16,
+                    model,
+                    loader.dataset,
+                    device,
+                    T=16,
                 )
-                results['act_seg_top1'] = seg_metrics['act_top1']
-                results['act_seg_top5'] = seg_metrics['act_top5']
-                results['act_seg_n'] = seg_metrics['n_segments']
+                results["act_seg_top1"] = seg_metrics["act_top1"]
+                results["act_seg_top5"] = seg_metrics["act_top5"]
+                results["act_seg_n"] = seg_metrics["n_segments"]
                 logger.info(
-                    f'  [GAP-B] Activity Segment — Top-1: {seg_metrics["act_top1"]:.4f}  '
-                    f'Top-5: {seg_metrics["act_top5"]:.4f}  '
-                    f'Segments: {seg_metrics["n_segments"]}'
+                    f"  [GAP-B] Activity Segment — Top-1: {seg_metrics['act_top1']:.4f}  "
+                    f"Top-5: {seg_metrics['act_top5']:.4f}  "
+                    f"Segments: {seg_metrics['n_segments']}"
                 )
             except Exception as e:
-                logger.error(f'  [GAP-B] Segment eval FAILED: {e} — skipping segment metrics')
-                results['act_seg_top1'] = 0.0
-                results['act_seg_top5'] = 0.0
-                results['act_seg_n'] = 0
+                logger.error(f"  [GAP-B] Segment eval FAILED: {e} — skipping segment metrics")
+                results["act_seg_top1"] = 0.0
+                results["act_seg_top5"] = 0.0
+                results["act_seg_n"] = 0
             finally:
                 signal.alarm(0)
                 signal.signal(signal.SIGALRM, _old_handler)
         else:
-            results['act_seg_top1'] = 0.0
-            results['act_seg_top5'] = 0.0
-            results['act_seg_n'] = 0
+            results["act_seg_top1"] = 0.0
+            results["act_seg_top5"] = 0.0
+            results["act_seg_n"] = 0
     else:
-        results['act_seg_top1'] = 0.0
-        results['act_seg_top5'] = 0.0
-        results['act_seg_n'] = 0
+        results["act_seg_top1"] = 0.0
+        results["act_seg_top5"] = 0.0
+        results["act_seg_n"] = 0
 
     # -------------------------------------------------------------------------
     if torch.cuda.is_available():
@@ -4095,15 +4406,19 @@ def evaluate_all(
     results.update(hp_metrics)
 
     def _fmt(v, unit):
-        return f'n/a ({unit})' if (v is None or (isinstance(v, float) and not math.isfinite(v))) else f'{v:.4f} {unit}'
+        return (
+            f"n/a ({unit})"
+            if (v is None or (isinstance(v, float) and not math.isfinite(v)))
+            else f"{v:.4f} {unit}"
+        )
 
     logger.info(
-        f'  Head Pose [{results.get("head_pose_status", "?")}] — '
-        f'Forward angular: {_fmt(results.get("forward_angular_MAE_deg"), "deg")}  '
-        f'Up angular: {_fmt(results.get("up_angular_MAE_deg"), "deg")}  '
-        f'Position: {_fmt(results.get("position_MAE_mm"), "mm")}  '
-        f'fwd_raw: {_fmt(results.get("forward_raw_MAE"), "L1")}  '
-        f'Overall raw: {results.get("head_pose_MAE", 0.0):.4f}'
+        f"  Head Pose [{results.get('head_pose_status', '?')}] — "
+        f"Forward angular: {_fmt(results.get('forward_angular_MAE_deg'), 'deg')}  "
+        f"Up angular: {_fmt(results.get('up_angular_MAE_deg'), 'deg')}  "
+        f"Position: {_fmt(results.get('position_MAE_mm'), 'mm')}  "
+        f"fwd_raw: {_fmt(results.get('forward_raw_MAE'), 'L1')}  "
+        f"Overall raw: {results.get('head_pose_MAE', 0.0):.4f}"
     )
 
     # -------------------------------------------------------------------------
@@ -4117,7 +4432,7 @@ def evaluate_all(
     # [DEBUG] Print raw psr_logits statistics to diagnose assembly_state collapse
     _psr = all_psr_logits
     if _psr.ndim < 2 or _psr.shape[0] == 0:
-        logger.info('  [DEBUG] psr_logits empty — skipping PSR debug print')
+        logger.info("  [DEBUG] psr_logits empty — skipping PSR debug print")
         _unique_binary = np.zeros((0, 0), dtype=np.int32)
         _sigmoid = np.array([])
         _binary = np.zeros((0, 0), dtype=np.int32)
@@ -4125,33 +4440,35 @@ def evaluate_all(
         _sigmoid = 1 / (1 + np.exp(-_psr))
         _binary = (_sigmoid > 0.5).astype(np.int32)
         _unique_binary = np.unique(_binary, axis=0)
-    _sigmoid_min_str = f'{_sigmoid.min():.3f}' if _sigmoid.size > 0 else '0.000'
-    _sigmoid_max_str = f'{_sigmoid.max():.3f}' if _sigmoid.size > 0 else '0.000'
+    _sigmoid_min_str = f"{_sigmoid.min():.3f}" if _sigmoid.size > 0 else "0.000"
+    _sigmoid_max_str = f"{_sigmoid.max():.3f}" if _sigmoid.size > 0 else "0.000"
     logger.info(
-        f'  [DEBUG] psr_logits range=[{_psr.min():.3f}, {_psr.max():.3f}]  '
-        f'sigmoid range=[{_sigmoid_min_str}, {_sigmoid_max_str}]  '
-        f'unique_binary_patterns={_unique_binary.shape[0]}  '
-        f'total_frames={_psr.shape[0]}'
+        f"  [DEBUG] psr_logits range=[{_psr.min():.3f}, {_psr.max():.3f}]  "
+        f"sigmoid range=[{_sigmoid_min_str}, {_sigmoid_max_str}]  "
+        f"unique_binary_patterns={_unique_binary.shape[0]}  "
+        f"total_frames={_psr.shape[0]}"
     )
     if _unique_binary.shape[0] <= 5:
         for _idx, _pat in enumerate(_unique_binary):
-            logger.info(f'    pattern[{_idx}] = {list(_pat)}')
+            logger.info(f"    pattern[{_idx}] = {list(_pat)}")
     # Print first-frame raw logits (first 11 dims)
     if _psr.shape[0] > 0:
-        logger.info(f'  [DEBUG] first frame raw logits: {_psr[0,:11].round(3)}  sigmoid: {_sigmoid[0,:11].round(3)}  binary: {_binary[0].tolist()}')
+        logger.info(
+            f"  [DEBUG] first frame raw logits: {_psr[0, :11].round(3)}  sigmoid: {_sigmoid[0, :11].round(3)}  binary: {_binary[0].tolist()}"
+        )
     # [FIX 2026-06-04] Surface PSR-head collapse (degenerate binary patterns ⇒ F1=0 is not an eval bug).
     if _unique_binary.shape[0] < 3 and _psr.shape[0] > 0:
         logger.warning(
-            f'  [EVAL COLLAPSE] PSR head produces only {_unique_binary.shape[0]} unique binary '
-            f'pattern(s) across {_psr.shape[0]} frames. psr_overall_f1=0 is a model collapse, not an eval bug.'
+            f"  [EVAL COLLAPSE] PSR head produces only {_unique_binary.shape[0]} unique binary "
+            f"pattern(s) across {_psr.shape[0]} frames. psr_overall_f1=0 is a model collapse, not an eval bug."
         )
 
     # [GAP-A2] When transition objective is active, decode via MonotonicDecoder
     # before scoring. Raw per-frame sigmoid logits don't reflect the monotone
     # state constraint — the decoder enforces fill-forward + procedure order.
     try:
-        if getattr(C, 'USE_PSR_TRANSITION', False):
-            logger.info('  [GAP-A2] Decoding PSR via MonotonicDecoder for transition F1/POS/Edit')
+        if getattr(C, "USE_PSR_TRANSITION", False):
+            logger.info("  [GAP-A2] Decoding PSR via MonotonicDecoder for transition F1/POS/Edit")
             # [F22 2026-07-03 Fable consult round 6] The old inline grouping
             # enumerated PER-BATCH logit arrays against PER-FRAME rec ids —
             # every eval crashed in the decoder path ("only 0-dimensional
@@ -4159,81 +4476,116 @@ def evaluate_all(
             # _group_psr_by_recording flattens per-frame, aligns ids, and
             # sorts each recording temporally by frame_num.
             _psr_rec_tensors, _gt_rec_tensors = _group_psr_by_recording(
-                psr_preds_logits, psr_labels, psr_rec_ids, psr_frame_nums,
+                psr_preds_logits,
+                psr_labels,
+                psr_rec_ids,
+                psr_frame_nums,
             )
             logger.info(
-                f'  [GAP-A2] Grouped PSR into {len(_psr_rec_tensors)} recordings '
-                f'(frames per rec: '
-                f'{[v.shape[0] for v in list(_psr_rec_tensors.values())[:5]]}...)'
+                f"  [GAP-A2] Grouped PSR into {len(_psr_rec_tensors)} recordings "
+                f"(frames per rec: "
+                f"{[v.shape[0] for v in list(_psr_rec_tensors.values())[:5]]}...)"
             )
             _decoded = decode_and_score_psr(_psr_rec_tensors, _gt_rec_tensors)
             if _decoded:
                 psr_metrics = {
-                    'psr_f1': _decoded['psr_f1'], 'psr_pos': _decoded['psr_pos'],
-                    'psr_edit': _decoded['psr_edit'],
-                    'psr_f1_at_t': _decoded['psr_f1'], 'psr_f1_at_t5': _decoded['psr_f1'],
-                    'psr_edit_score': _decoded['psr_edit'],
-                    'psr_overall_f1': _decoded['psr_f1'],
-                    'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
-                    'psr_precision_at_t5': 0.0, 'psr_recall_at_t5': 0.0,
-                    'psr_overall_f1_at5': _decoded['psr_f1'],
+                    "psr_f1": _decoded["psr_f1"],
+                    "psr_pos": _decoded["psr_pos"],
+                    "psr_edit": _decoded["psr_edit"],
+                    "psr_f1_at_t": _decoded["psr_f1"],
+                    "psr_f1_at_t5": _decoded["psr_f1"],
+                    "psr_edit_score": _decoded["psr_edit"],
+                    "psr_overall_f1": _decoded["psr_f1"],
+                    "psr_precision_at_t": 0.0,
+                    "psr_recall_at_t": 0.0,
+                    "psr_precision_at_t5": 0.0,
+                    "psr_recall_at_t5": 0.0,
+                    "psr_overall_f1_at5": _decoded["psr_f1"],
                     # [NEW METRICS Add 2-4] Decoded path — compute separately if needed
-                    'psr_tau': 0.0, 'psr_pos_blind': 0.0,
-                    'psr_f1_calibrated': 0.0, 'psr_f1_calibrated_t5': 0.0,
+                    "psr_tau": 0.0,
+                    "psr_pos_blind": 0.0,
+                    "psr_f1_calibrated": 0.0,
+                    "psr_f1_calibrated_t5": 0.0,
                 }
             else:
-                psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
-        elif getattr(C, 'TRAIN_PSR', True):
+                psr_metrics = compute_psr_metrics(
+                    all_psr_logits, all_psr_labels, tolerance_frames=3
+                )
+        elif getattr(C, "TRAIN_PSR", True):
             psr_metrics = compute_psr_metrics(all_psr_logits, all_psr_labels, tolerance_frames=3)
         else:
             psr_metrics = {
-                'psr_f1': 0.0, 'psr_edit': 0.0, 'psr_pos': 0.0,
-                'psr_f1_at_t': 0.0, 'psr_f1_at_t5': 0.0, 'psr_edit_score': 0.0,
-                'psr_overall_f1': 0.0, 'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
-                'psr_precision_at_t5': 0.0, 'psr_recall_at_t5': 0.0, 'psr_overall_f1_at5': 0.0,
+                "psr_f1": 0.0,
+                "psr_edit": 0.0,
+                "psr_pos": 0.0,
+                "psr_f1_at_t": 0.0,
+                "psr_f1_at_t5": 0.0,
+                "psr_edit_score": 0.0,
+                "psr_overall_f1": 0.0,
+                "psr_precision_at_t": 0.0,
+                "psr_recall_at_t": 0.0,
+                "psr_precision_at_t5": 0.0,
+                "psr_recall_at_t5": 0.0,
+                "psr_overall_f1_at5": 0.0,
                 # [NEW METRICS Add 2-4] Safe defaults
-                'psr_tau': 0.0, 'psr_pos_blind': 0.0,
-                'psr_f1_calibrated': 0.0, 'psr_f1_calibrated_t5': 0.0,
+                "psr_tau": 0.0,
+                "psr_pos_blind": 0.0,
+                "psr_f1_calibrated": 0.0,
+                "psr_f1_calibrated_t5": 0.0,
             }  # [OPUS v5] Include all Val-line keys to avoid cosmetic NaN
     except Exception as _psr_exc:
-        logger.error(f'  [PSR METRICS] Failed: {_psr_exc} -- using safe defaults')
+        logger.error(f"  [PSR METRICS] Failed: {_psr_exc} -- using safe defaults")
         psr_metrics = {
-            'psr_f1': 0.0, 'psr_edit': 0.0, 'psr_pos': 0.0,
-            'psr_f1_at_t': 0.0, 'psr_f1_at_t5': 0.0, 'psr_edit_score': 0.0,
-            'psr_overall_f1': 0.0, 'psr_precision_at_t': 0.0, 'psr_recall_at_t': 0.0,
-            'psr_precision_at_t5': 0.0, 'psr_recall_at_t5': 0.0, 'psr_overall_f1_at5': 0.0,
+            "psr_f1": 0.0,
+            "psr_edit": 0.0,
+            "psr_pos": 0.0,
+            "psr_f1_at_t": 0.0,
+            "psr_f1_at_t5": 0.0,
+            "psr_edit_score": 0.0,
+            "psr_overall_f1": 0.0,
+            "psr_precision_at_t": 0.0,
+            "psr_recall_at_t": 0.0,
+            "psr_precision_at_t5": 0.0,
+            "psr_recall_at_t5": 0.0,
+            "psr_overall_f1_at5": 0.0,
             # [NEW METRICS Add 2-4] Safe defaults
-            'psr_tau': 0.0, 'psr_pos_blind': 0.0,
-            'psr_f1_calibrated': 0.0, 'psr_f1_calibrated_t5': 0.0,
+            "psr_tau": 0.0,
+            "psr_pos_blind": 0.0,
+            "psr_f1_calibrated": 0.0,
+            "psr_f1_calibrated_t5": 0.0,
         }
     results.update(psr_metrics)
-    if getattr(C, 'TRAIN_PSR', True):
-        results['psr_macro_f1'] = results.get('psr_overall_f1', 0.0)
-        results['psr_overall_f1_at5'] = results.get('psr_overall_f1', 0.0)
+    if getattr(C, "TRAIN_PSR", True):
+        results["psr_macro_f1"] = results.get("psr_overall_f1", 0.0)
+        results["psr_overall_f1_at5"] = results.get("psr_overall_f1", 0.0)
         # [NEW METRIC Add 3 / Q44] Log tau when available
-        _psr_tau = results.get('psr_tau', 0.0)
-        _tau_str = f'tau={_psr_tau:.2f}f' if not (isinstance(_psr_tau, float) and (np.isnan(_psr_tau) or np.isinf(_psr_tau))) else ''
+        _psr_tau = results.get("psr_tau", 0.0)
+        _tau_str = (
+            f"tau={_psr_tau:.2f}f"
+            if not (isinstance(_psr_tau, float) and (np.isnan(_psr_tau) or np.isinf(_psr_tau)))
+            else ""
+        )
         logger.info(
-            f'  PSR — Overall F1: {results["psr_overall_f1"]:.4f}  '
-            f'F1@±3: {results["psr_f1_at_t"]:.4f}  '
-            f'P@±3: {results["psr_precision_at_t"]:.4f}  '
-            f'R@±3: {results["psr_recall_at_t"]:.4f}  '
-            f'F1@±5: {results["psr_f1_at_t5"]:.4f}  '
-            f'P@±5: {results["psr_precision_at_t5"]:.4f}  '
-            f'R@±5: {results["psr_recall_at_t5"]:.4f}  '
-            f'Edit: {results["psr_edit_score"]:.4f}  '
-            f'POS: {results["psr_pos"]:.4f}  '
-            f'POS_blind: {results.get("psr_pos_blind", 0.0):.4f}'  # [Add 4 / Q43]
-            + (f'  {_tau_str}' if _tau_str else '')  # [Add 3 / Q44]
+            f"  PSR — Overall F1: {results['psr_overall_f1']:.4f}  "
+            f"F1@±3: {results['psr_f1_at_t']:.4f}  "
+            f"P@±3: {results['psr_precision_at_t']:.4f}  "
+            f"R@±3: {results['psr_recall_at_t']:.4f}  "
+            f"F1@±5: {results['psr_f1_at_t5']:.4f}  "
+            f"P@±5: {results['psr_precision_at_t5']:.4f}  "
+            f"R@±5: {results['psr_recall_at_t5']:.4f}  "
+            f"Edit: {results['psr_edit_score']:.4f}  "
+            f"POS: {results['psr_pos']:.4f}  "
+            f"POS_blind: {results.get('psr_pos_blind', 0.0):.4f}"  # [Add 4 / Q43]
+            + (f"  {_tau_str}" if _tau_str else "")  # [Add 3 / Q44]
         )
         # [FIX 2026-07-01 agent audit] Add per-component binary accuracy for go/no-go monitoring.
         try:
             _psr_pred_bin = (1.0 / (1.0 + np.exp(-all_psr_logits[..., :11]))) > 0.5
             _psr_comp_acc = (_psr_pred_bin == all_psr_labels).mean()
-            results['psr_comp_acc'] = float(_psr_comp_acc)
-            logger.info(f'  PSR — Component Binary Accuracy: {_psr_comp_acc:.4f}')
+            results["psr_comp_acc"] = float(_psr_comp_acc)
+            logger.info(f"  PSR — Component Binary Accuracy: {_psr_comp_acc:.4f}")
         except Exception:
-            results['psr_comp_acc'] = 0.0
+            results["psr_comp_acc"] = 0.0
 
     # -------------------------------------------------------------------------
     if torch.cuda.is_available():
@@ -4250,31 +4602,40 @@ def evaluate_all(
         _key = tuple(int(_v) if _v >= 0 else 0 for _v in _vec)
         if _key not in _seen_debug:
             _seen_debug[_key] = len(_seen_debug)
-    logger.info(f'  [DEBUG] as_vocab size (K)={len(_seen_debug)}  unique patterns={list(_seen_debug.values())[:10]}')
+    logger.info(
+        f"  [DEBUG] as_vocab size (K)={len(_seen_debug)}  unique patterns={list(_seen_debug.values())[:10]}"
+    )
     # Show first few GT state IDs
     _gt_state_ids_debug = np.array([_psr_to_state_id(_vec, _seen_debug) for _vec in _gt_safe_debug])
     _valid_mask_debug = _gt_state_ids_debug >= 0
     if _valid_mask_debug.sum() > 0:
-        logger.info(f'  [DEBUG] first 20 GT state IDs: {_gt_state_ids_debug[:20].tolist()}')
-        logger.info(f'  [DEBUG] unique GT state IDs: {np.unique(_gt_state_ids_debug[_valid_mask_debug])[:20].tolist()}')
+        logger.info(f"  [DEBUG] first 20 GT state IDs: {_gt_state_ids_debug[:20].tolist()}")
+        logger.info(
+            f"  [DEBUG] unique GT state IDs: {np.unique(_gt_state_ids_debug[_valid_mask_debug])[:20].tolist()}"
+        )
         _gt_rle_debug = np.r_[0, np.diff(_gt_state_ids_debug[_valid_mask_debug].astype(np.int32))]
         _trans_frames_debug = np.where(_gt_rle_debug != 0)[0]
-        logger.info(f'  [DEBUG] GT transitions at frames: {_trans_frames_debug[:20].tolist()}')
+        logger.info(f"  [DEBUG] GT transitions at frames: {_trans_frames_debug[:20].tolist()}")
     # Now compute metrics
     try:
         as_metrics = compute_assembly_state_metrics(all_psr_logits, all_psr_labels)
     except Exception as _as_exc:
-        logger.error(f'  Assembly state metrics FAILED: {_as_exc} — skipping')
-        as_metrics = {'as_f1': 0.0, 'as_top1_accuracy': 0.0, 'as_map_at_r': 0.0,
-                       'as_num_states': 0, 'as_num_transitions': 0}
+        logger.error(f"  Assembly state metrics FAILED: {_as_exc} — skipping")
+        as_metrics = {
+            "as_f1": 0.0,
+            "as_top1_accuracy": 0.0,
+            "as_map_at_r": 0.0,
+            "as_num_states": 0,
+            "as_num_transitions": 0,
+        }
     results.update(as_metrics)
 
     logger.info(
-        f'  Assembly State — F1@1: {results.get("as_f1", 0.0):.4f}  '
-        f'Top-1 Acc: {results.get("as_top1_accuracy", 0.0):.4f}  '
-        f'MAP@R(+): {results.get("as_map_at_r", 0.0):.4f}  '
-        f'K={results.get("as_num_states", 0)}  '
-        f'Transitions={results.get("as_num_transitions", 0)}'
+        f"  Assembly State — F1@1: {results.get('as_f1', 0.0):.4f}  "
+        f"Top-1 Acc: {results.get('as_top1_accuracy', 0.0):.4f}  "
+        f"MAP@R(+): {results.get('as_map_at_r', 0.0):.4f}  "
+        f"K={results.get('as_num_states', 0)}  "
+        f"Transitions={results.get('as_num_transitions', 0)}"
     )
 
     # -------------------------------------------------------------------------
@@ -4285,15 +4646,15 @@ def evaluate_all(
     try:
         ev_metrics = compute_error_verification_metrics(all_psr_logits, all_psr_labels)
     except Exception as _ev_exc:
-        logger.error(f'  Error verification metrics FAILED: {_ev_exc} — skipping')
-        ev_metrics = {'ev_ap': 0.0, 'ev_f1': 0.0, 'ev_precision': 0.0, 'ev_recall': 0.0}
+        logger.error(f"  Error verification metrics FAILED: {_ev_exc} — skipping")
+        ev_metrics = {"ev_ap": 0.0, "ev_f1": 0.0, "ev_precision": 0.0, "ev_recall": 0.0}
     results.update(ev_metrics)
 
     logger.info(
-        f'  Error Verification — AP: {results["ev_ap"]:.4f}  '
-        f'F1: {results["ev_f1"]:.4f}  '
-        f'Precision: {results["ev_precision"]:.4f}  '
-        f'Recall: {results["ev_recall"]:.4f}'
+        f"  Error Verification — AP: {results['ev_ap']:.4f}  "
+        f"F1: {results['ev_f1']:.4f}  "
+        f"Precision: {results['ev_precision']:.4f}  "
+        f"Recall: {results['ev_recall']:.4f}"
     )
 
     # -------------------------------------------------------------------------
@@ -4306,86 +4667,109 @@ def evaluate_all(
     # -------------------------------------------------------------------------
     gt_box_total = int(sum(len(x) for x in dg_boxes))
     if gt_box_total == 0:
-        logger.warning('Detection evaluation skipped: no GT boxes found in this split.')
+        logger.warning("Detection evaluation skipped: no GT boxes found in this split.")
         det_metrics = {
-            'det_mAP50': 0.0,
-            'det_mAP_50_95': 0.0,
-            'det_mAP50_pc': 0.0,
-            'det_mAP_50_95_pc': 0.0,
-            'det_n_present_classes': 0,
-            'det_per_class_ap': {},
-            'det_per_class_gt': {},
-            'det_per_class': [],
-            'det_mAP50_all_frames': 0.0,
-            'det_per_class_ap_all_frames': {},
-            '_det_ap_protocol': 'coco',
+            "det_mAP50": 0.0,
+            "det_mAP_50_95": 0.0,
+            "det_mAP50_pc": 0.0,
+            "det_mAP_50_95_pc": 0.0,
+            "det_n_present_classes": 0,
+            "det_per_class_ap": {},
+            "det_per_class_gt": {},
+            "det_per_class": [],
+            "det_mAP50_all_frames": 0.0,
+            "det_per_class_ap_all_frames": {},
+            "_det_ap_protocol": "coco",
         }
-    elif getattr(C, 'SKIP_DET_METRICS_EVAL', False):
-        logger.info('  [SKIP_DET] SKIP_DET_METRICS_EVAL=True — detection metrics skipped')
+    elif getattr(C, "SKIP_DET_METRICS_EVAL", False):
+        logger.info("  [SKIP_DET] SKIP_DET_METRICS_EVAL=True — detection metrics skipped")
         det_metrics = {
-            'det_mAP50': float('nan'),
-            'det_mAP_50_95': float('nan'),
-            'det_mAP50_pc': float('nan'),
-            'det_mAP_50_95_pc': float('nan'),
-            'det_n_present_classes': 0,
-            'det_per_class_ap': {},
-            'det_per_class_gt': {},
-            'det_per_class': [],
-            'det_mAP50_all_frames': float('nan'),
-            'det_per_class_ap_all_frames': {},
-            '_det_ap_protocol': 'coco',
+            "det_mAP50": float("nan"),
+            "det_mAP_50_95": float("nan"),
+            "det_mAP50_pc": float("nan"),
+            "det_mAP_50_95_pc": float("nan"),
+            "det_n_present_classes": 0,
+            "det_per_class_ap": {},
+            "det_per_class_gt": {},
+            "det_per_class": [],
+            "det_mAP50_all_frames": float("nan"),
+            "det_per_class_ap_all_frames": {},
+            "_det_ap_protocol": "coco",
         }
-    elif epoch is not None and epoch >= 0 and getattr(C, 'DET_METRICS_EVERY_N', 0) > 0 and (epoch + 1) % C.DET_METRICS_EVERY_N != 0:
+    elif (
+        epoch is not None
+        and epoch >= 0
+        and getattr(C, "DET_METRICS_EVERY_N", 0) > 0
+        and (epoch + 1) % C.DET_METRICS_EVERY_N != 0
+    ):
         # [OPUS v5] Eval cadence: full detection mAP only every N epochs.
         # On other epochs, run gate-only eval (mAP@0.5 b-boxed, capped batches).
-        logger.info(f'  [SKIP_DET] DET_METRICS_EVERY_N={C.DET_METRICS_EVERY_N} — skipping full mAP (epoch {epoch})')
+        logger.info(
+            f"  [SKIP_DET] DET_METRICS_EVERY_N={C.DET_METRICS_EVERY_N} — skipping full mAP (epoch {epoch})"
+        )
         det_metrics = {
-            'det_mAP50': float('nan'),
-            'det_mAP_50_95': float('nan'),
-            'det_mAP50_pc': float('nan'),
-            'det_mAP_50_95_pc': float('nan'),
-            'det_n_present_classes': 0,
-            'det_per_class_ap': {},
-            'det_per_class_gt': {},
-            'det_per_class': [],
-            'det_mAP50_all_frames': float('nan'),
-            'det_per_class_ap_all_frames': {},
-            '_det_ap_protocol': 'coco',
+            "det_mAP50": float("nan"),
+            "det_mAP_50_95": float("nan"),
+            "det_mAP50_pc": float("nan"),
+            "det_mAP_50_95_pc": float("nan"),
+            "det_n_present_classes": 0,
+            "det_per_class_ap": {},
+            "det_per_class_gt": {},
+            "det_per_class": [],
+            "det_mAP50_all_frames": float("nan"),
+            "det_per_class_ap_all_frames": {},
+            "_det_ap_protocol": "coco",
         }
     else:
         # [DEBUG] Print detection boxes/scores statistics
         _dp_total = sum(len(b) for b in dp_boxes) if dp_boxes else 0
         _dg_total = gt_box_total
-        _dp_scores_flat = np.concatenate(dp_scores) if dp_scores and any(len(b) > 0 for b in dp_scores) else np.array([])
-        logger.info(f'  [DEBUG] det: dp_boxes={len(dp_boxes)} imgs, total_preds={_dp_total}, dg_total={_dg_total}')
+        _dp_scores_flat = (
+            np.concatenate(dp_scores)
+            if dp_scores and any(len(b) > 0 for b in dp_scores)
+            else np.array([])
+        )
+        logger.info(
+            f"  [DEBUG] det: dp_boxes={len(dp_boxes)} imgs, total_preds={_dp_total}, dg_total={_dg_total}"
+        )
         if _dp_scores_flat.shape[0] > 0:
-            logger.info(f'  [DEBUG] det: dp_scores range=[{_dp_scores_flat.min():.3f}, {_dp_scores_flat.max():.3f}] mean={_dp_scores_flat.mean():.3f}')
-            if hasattr(C, 'DET_EVAL_SCORE_THRESH'):
+            logger.info(
+                f"  [DEBUG] det: dp_scores range=[{_dp_scores_flat.min():.3f}, {_dp_scores_flat.max():.3f}] mean={_dp_scores_flat.mean():.3f}"
+            )
+            if hasattr(C, "DET_EVAL_SCORE_THRESH"):
                 _above_thresh = int((_dp_scores_flat > C.DET_EVAL_SCORE_THRESH).sum())
-                logger.info(f'  [DEBUG] det: scores above thresh {C.DET_EVAL_SCORE_THRESH}: {_above_thresh}/{_dp_scores_flat.shape[0]}')
+                logger.info(
+                    f"  [DEBUG] det: scores above thresh {C.DET_EVAL_SCORE_THRESH}: {_above_thresh}/{_dp_scores_flat.shape[0]}"
+                )
             # [FIX 2026-06-04] Surface detection-head collapse (flat scores ⇒ mAP=0 is not an eval bug).
             _score_std = float(_dp_scores_flat.std())
             if _score_std < 0.01:
                 logger.warning(
-                    f'  [EVAL COLLAPSE] detection head produces flat scores '
-                    f'(std={_score_std:.4f} < 0.01, all ≈ {_dp_scores_flat.mean():.3f}). '
-                    f'det_mAP50=0 is a model collapse, not an eval bug.'
+                    f"  [EVAL COLLAPSE] detection head produces flat scores "
+                    f"(std={_score_std:.4f} < 0.01, all ≈ {_dp_scores_flat.mean():.3f}). "
+                    f"det_mAP50=0 is a model collapse, not an eval bug."
                 )
             if _dg_total > 0 and _dp_total / max(_dg_total, 1) > 100:
                 logger.warning(
-                    f'  [EVAL COLLAPSE] excessive prediction count: {_dp_total} preds '
-                    f'across {_dg_total} GT boxes (ratio={_dp_total / max(_dg_total, 1):.0f}x). '
-                    f'DET_EVAL_SCORE_THRESH may be too low for current model state.'
+                    f"  [EVAL COLLAPSE] excessive prediction count: {_dp_total} preds "
+                    f"across {_dg_total} GT boxes (ratio={_dp_total / max(_dg_total, 1):.0f}x). "
+                    f"DET_EVAL_SCORE_THRESH may be too low for current model state."
                 )
         det_metrics = compute_det_metrics_extended(
-            dp_boxes, dp_scores, dp_labels,
-            dg_boxes, dg_labels,
+            dp_boxes,
+            dp_scores,
+            dp_labels,
+            dg_boxes,
+            dg_labels,
         )
         results.update(det_metrics)
 
         det_av_metrics = compute_det_metrics_all_frames(
-            dp_boxes, dp_scores, dp_labels,
-            dg_boxes, dg_labels,
+            dp_boxes,
+            dp_scores,
+            dp_labels,
+            dg_boxes,
+            dg_labels,
         )
         results.update(det_av_metrics)
 
@@ -4393,48 +4777,53 @@ def evaluate_all(
         # (n_present == 0) == (mAP50_pc is NaN/0) has been violated through 2+ code
         # paths (train.py _s() filtering ints; subprocess epoch-gating). Asserting
         # it here prevents the third class of bug from shipping silently.
-        _n_present = det_metrics.get('det_n_present_classes', 0)
-        _mAP50_pc = det_metrics.get('det_mAP50_pc', 0.0)
-        _mAP50_pc_is_finite = (not (isinstance(_mAP50_pc, float) and (_mAP50_pc != _mAP50_pc)))  # not NaN
+        _n_present = det_metrics.get("det_n_present_classes", 0)
+        _mAP50_pc = det_metrics.get("det_mAP50_pc", 0.0)
+        _mAP50_pc_is_finite = not (
+            isinstance(_mAP50_pc, float) and (_mAP50_pc != _mAP50_pc)
+        )  # not NaN
         _invariant_holds = (_n_present == 0) == (not _mAP50_pc_is_finite or _mAP50_pc == 0.0)
         if not _invariant_holds:
             logger.error(
-                f'  [EVAL_INVARIANT_VIOLATION] n_present={_n_present} but mAP50_pc={_mAP50_pc} '
-                f'(expected: n_present==0 ↔ mAP50_pc NaN/0). This is the same class of bug '
-                f'that caused the D3 NaN. Investigate compute_det_metrics_extended.'
+                f"  [EVAL_INVARIANT_VIOLATION] n_present={_n_present} but mAP50_pc={_mAP50_pc} "
+                f"(expected: n_present==0 ↔ mAP50_pc NaN/0). This is the same class of bug "
+                f"that caused the D3 NaN. Investigate compute_det_metrics_extended."
             )
 
         # Detection confusion matrix: 24×24 (GT class × predicted class at IoU≥0.5)
         det_cm, det_cm_gt, det_cm_miss = compute_det_confusion_matrix(
-            dp_boxes, dp_scores, dp_labels,
-            dg_boxes, dg_labels,
+            dp_boxes,
+            dp_scores,
+            dp_labels,
+            dg_boxes,
+            dg_labels,
         )
-        results['det_confusion_matrix'] = det_cm
-        results['det_cm_gt'] = det_cm_gt
-        results['det_cm_miss'] = det_cm_miss
+        results["det_confusion_matrix"] = det_cm
+        results["det_cm_gt"] = det_cm_gt
+        results["det_cm_miss"] = det_cm_miss
 
     # [FIX 2026-07-05] Always merge det_metrics into results, regardless of which branch ran
     # The 3 early-return branches above (gt_box_total==0, SKIP_DET_METRICS_EVAL, DET_METRICS_EVERY_N)
     # define det_metrics but never call results.update() — leaving all det_* keys missing
     # from metrics.json. This call ensures all 4 branches contribute their det_metrics.
-    if 'det_metrics' in dir() and det_metrics:
+    if "det_metrics" in dir() and det_metrics:
         for k, v in det_metrics.items():
             if k not in results:
                 results[k] = v
 
         # Save confusion matrix PNG if save_dir is set
-        if save_dir is not None and not getattr(C, 'SKIP_DET_CONFUSION_PLOT', False):
-            det_names = getattr(C, 'DET_CLASS_NAMES', {})
-            det_class_names = [det_names.get(c + 1, f'ch{c}') for c in range(C.NUM_DET_CLASSES)]
+        if save_dir is not None and not getattr(C, "SKIP_DET_CONFUSION_PLOT", False):
+            det_names = getattr(C, "DET_CLASS_NAMES", {})
+            det_class_names = [det_names.get(c + 1, f"ch{c}") for c in range(C.NUM_DET_CLASSES)]
             try:
                 _save_det_confusion_matrix(det_cm, det_class_names, save_dir)
             except Exception as _exc:
-                logger.warning(f'  [DET_CM] Failed to save confusion matrix: {_exc}')
+                logger.warning(f"  [DET_CM] Failed to save confusion matrix: {_exc}")
 
     logger.info(
-        f'  ASD — mAP@0.5: {results.get("det_mAP50", float("nan")):.4f}  '
-        f'mAP@[0.5:0.95]: {results.get("det_mAP_50_95", float("nan")):.4f}  '
-        f'mAP@0.5 (all frames): {results.get("det_mAP50_all_frames", float("nan")):.4f}'
+        f"  ASD — mAP@0.5: {results.get('det_mAP50', float('nan')):.4f}  "
+        f"mAP@[0.5:0.95]: {results.get('det_mAP_50_95', float('nan')):.4f}  "
+        f"mAP@0.5 (all frames): {results.get('det_mAP50_all_frames', float('nan')):.4f}"
     )
 
     # -------------------------------------------------------------------------
@@ -4443,24 +4832,24 @@ def evaluate_all(
     # compute_efficiency_metrics does 5 warmup + 30 timed forward passes per epoch.
     # Respects LOG_EFFICIENCY_EVERY config (currently 10 epochs).
     # -------------------------------------------------------------------------
-    _do_eff = getattr(C, 'SKIP_EFFICIENCY_METRICS', True)
-    _log_every = getattr(C, 'LOG_EFFICIENCY_EVERY', 10)
-    _epoch_num = getattr(C, '_CURRENT_EPOCH', 0)
+    _do_eff = getattr(C, "SKIP_EFFICIENCY_METRICS", True)
+    _log_every = getattr(C, "LOG_EFFICIENCY_EVERY", 10)
+    _epoch_num = getattr(C, "_CURRENT_EPOCH", 0)
     if _do_eff and (_log_every <= 0 or (_epoch_num + 1) % _log_every != 0):
         logger.info(
-            f'  [SKIP_EFF] SKIP_EFFICIENCY_METRICS=True and (epoch {_epoch_num+1} '
-            f'% {_log_every} != 0) — efficiency metrics skipped'
+            f"  [SKIP_EFF] SKIP_EFFICIENCY_METRICS=True and (epoch {_epoch_num + 1} "
+            f"% {_log_every} != 0) — efficiency metrics skipped"
         )
         eff_metrics = {
-            'eff_params_m': float('nan'),
-            'eff_gflops': float('nan'),
-            'eff_fps': float('nan'),
-            'eff_fps_streaming': float('nan'),
-            'pipeline_params_m': float('nan'),
-            'pipeline_gflops': float('nan'),
-            'pipeline_fps': float('nan'),
-            'eff_trainable_params_m': float('nan'),
-            'eff_resolution': 'N/A',
+            "eff_params_m": float("nan"),
+            "eff_gflops": float("nan"),
+            "eff_fps": float("nan"),
+            "eff_fps_streaming": float("nan"),
+            "pipeline_params_m": float("nan"),
+            "pipeline_gflops": float("nan"),
+            "pipeline_fps": float("nan"),
+            "eff_trainable_params_m": float("nan"),
+            "eff_resolution": "N/A",
         }
     else:
         eff_metrics = compute_efficiency_metrics(
@@ -4475,34 +4864,39 @@ def evaluate_all(
     results.update(eff_metrics)
 
     logger.info(
-        f'  Efficiency — Params: {results["eff_params_m"]:.2f}M  '
-        f'GFLOPs: {results["eff_gflops"]:.2f}G  '
-        f'FPS (batched): {results["eff_fps"]:.1f}  '
-        f'FPS (streaming): {results["eff_fps_streaming"]:.1f}  '
-        f'Pipeline (YOLOv8m+MViTv2+STORM): {results["pipeline_params_m"]:.1f}M, '
-        f'{results["pipeline_gflops"]:.0f}GFLOPs, ~{results["pipeline_fps"]:.0f} FPS'
+        f"  Efficiency — Params: {results['eff_params_m']:.2f}M  "
+        f"GFLOPs: {results['eff_gflops']:.2f}G  "
+        f"FPS (batched): {results['eff_fps']:.1f}  "
+        f"FPS (streaming): {results['eff_fps_streaming']:.1f}  "
+        f"Pipeline (YOLOv8m+MViTv2+STORM): {results['pipeline_params_m']:.1f}M, "
+        f"{results['pipeline_gflops']:.0f}GFLOPs, ~{results['pipeline_fps']:.0f} FPS"
     )
 
     model.train()
 
     # --- Aliases for config compatibility (Item 45) ---
     # assembly_state_f1 = as_f1 (Paper 8 POS benchmark)
-    if 'as_f1' in results:
-        results['assembly_state_f1'] = results['as_f1']
+    if "as_f1" in results:
+        results["assembly_state_f1"] = results["as_f1"]
     # error_detection_f1 = ev_f1 (Paper 9 error verification F1)
-    if 'ev_f1' in results:
-        results['error_detection_f1'] = results['ev_f1']
+    if "ev_f1" in results:
+        results["error_detection_f1"] = results["ev_f1"]
 
     # [NaN Guard] Final pass — log NaN/Inf metrics but PRESERVE them so the
     # trainer (train.py:_task_nan check) can detect genuine eval bugs. Silently
     # converting NaN→0.0 would mask bugs that look identical to a bad model.
     import math as _math
+
     for _k in list(results.keys()):
         _v = results[_k]
         if isinstance(_v, float) and (_math.isnan(_v) or _math.isinf(_v)):
-            logger.warning(f'  [EVAL NaN/Inf] metric={_k} value={_v} — preserved for downstream detection')
+            logger.warning(
+                f"  [EVAL NaN/Inf] metric={_k} value={_v} — preserved for downstream detection"
+            )
         elif isinstance(_v, np.floating) and (_math.isnan(float(_v)) or _math.isinf(float(_v))):
-            logger.warning(f'  [EVAL NaN/Inf] metric={_k} value={float(_v)} — preserved for downstream detection')
+            logger.warning(
+                f"  [EVAL NaN/Inf] metric={_k} value={float(_v)} — preserved for downstream detection"
+            )
 
     # --- Machine-readable logging (JSON + CSV) --------------------------------
     if save_dir:
@@ -4514,13 +4908,17 @@ def evaluate_all(
         try:
             _save_predictions_file(
                 predictions_path,
-                dp_boxes, dp_scores, dp_labels,
-                dg_boxes, dg_labels,
-                all_act_pred, all_act_gt,
+                dp_boxes,
+                dp_scores,
+                dp_labels,
+                dg_boxes,
+                dg_labels,
+                all_act_pred,
+                all_act_gt,
                 all_psr_logits,
             )
         except Exception as _pred_exc:
-            logger.warning(f'  [PRED_SAVE] Failed to save per-frame predictions: {_pred_exc}')
+            logger.warning(f"  [PRED_SAVE] Failed to save per-frame predictions: {_pred_exc}")
 
     return results
 
@@ -4528,6 +4926,7 @@ def evaluate_all(
 # =============================================================================
 # Machine-Readable Result Logging
 # =============================================================================
+
 
 def _serialize_for_json(obj: Any) -> Any:
     """Convert numpy / torch types to JSON-serializable Python types."""
@@ -4549,22 +4948,26 @@ def _save_results_json(results: Dict[str, Any], save_dir: str) -> None:
     import json
     import time
     import os
+
     os.makedirs(save_dir, exist_ok=True)
-    safe = _serialize_for_json({k: v for k, v in results.items()
-                                 if not k.startswith('_')})
-    fname = os.path.join(save_dir, f'eval_results_{int(time.time())}.json')
-    with open(fname, 'w') as f:
+    safe = _serialize_for_json({k: v for k, v in results.items() if not k.startswith("_")})
+    fname = os.path.join(save_dir, f"eval_results_{int(time.time())}.json")
+    with open(fname, "w") as f:
         json.dump(safe, f, indent=2)
-    logger.info(f'  [RESULTS] JSON saved: {fname}')
+    logger.info(f"  [RESULTS] JSON saved: {fname}")
 
     # [2% AUDIT] Also write metrics.jsonl for machine-readable consumption
     import json as _json
-    metrics_path = os.path.join(save_dir, 'metrics.jsonl')
-    metrics_to_write = {k: v for k, v in safe.items()
-                        if isinstance(v, (int, float, str, bool)) and not k.startswith('_')}
-    with open(metrics_path, 'a') as f:
-        f.write(_json.dumps(metrics_to_write) + '\n')
-    logger.info(f'  [2pct] metrics.jsonl appended: {metrics_path}')
+
+    metrics_path = os.path.join(save_dir, "metrics.jsonl")
+    metrics_to_write = {
+        k: v
+        for k, v in safe.items()
+        if isinstance(v, (int, float, str, bool)) and not k.startswith("_")
+    }
+    with open(metrics_path, "a") as f:
+        f.write(_json.dumps(metrics_to_write) + "\n")
+    logger.info(f"  [2pct] metrics.jsonl appended: {metrics_path}")
 
 
 def _save_results_csv(results: Dict[str, Any], save_dir: str) -> None:
@@ -4572,45 +4975,80 @@ def _save_results_csv(results: Dict[str, Any], save_dir: str) -> None:
     import csv
     import time
     import os
+
     os.makedirs(save_dir, exist_ok=True)
     # Top-level scalar metrics only (no nested dicts/lists)
     METRIC_COLS = [
         # Activity
-        'act_accuracy', 'act_top5_accuracy', 'act_mean_per_class_acc',
-        'act_macro_f1', 'act_weighted_f1', 'act_macro_recall', 'act_clip_accuracy',
-        'act_seg_top1', 'act_seg_top5', 'act_seg_n',
+        "act_accuracy",
+        "act_top5_accuracy",
+        "act_mean_per_class_acc",
+        "act_macro_f1",
+        "act_weighted_f1",
+        "act_macro_recall",
+        "act_clip_accuracy",
+        "act_seg_top1",
+        "act_seg_top5",
+        "act_seg_n",
         # Head pose
-        'forward_angular_MAE_deg', 'up_angular_MAE_deg', 'position_MAE_mm',
-        'head_pose_MAE', 'head_pose_MAE_std',
+        "forward_angular_MAE_deg",
+        "up_angular_MAE_deg",
+        "position_MAE_mm",
+        "head_pose_MAE",
+        "head_pose_MAE_std",
         # PSR
-        'psr_overall_f1', 'psr_f1_at_t', 'psr_precision_at_t', 'psr_recall_at_t',
-        'psr_overall_f1_at5', 'psr_f1_at_t5', 'psr_precision_at_t5', 'psr_recall_at_t5',
-        'psr_edit_score', 'psr_pos', 'psr_num_samples', 'psr_num_valid_components',
+        "psr_overall_f1",
+        "psr_f1_at_t",
+        "psr_precision_at_t",
+        "psr_recall_at_t",
+        "psr_overall_f1_at5",
+        "psr_f1_at_t5",
+        "psr_precision_at_t5",
+        "psr_recall_at_t5",
+        "psr_edit_score",
+        "psr_pos",
+        "psr_num_samples",
+        "psr_num_valid_components",
         # ASD
-        'det_mAP50', 'det_mAP_50_95',
+        "det_mAP50",
+        "det_mAP_50_95",
         # Assembly State Recognition
-        'as_f1', 'as_top1_accuracy', 'as_map_at_r',
+        "as_f1",
+        "as_top1_accuracy",
+        "as_map_at_r",
         # Error Verification
-        'ev_ap', 'ev_f1', 'ev_precision', 'ev_recall',
+        "ev_ap",
+        "ev_f1",
+        "ev_precision",
+        "ev_recall",
         # Efficiency
-        'eff_params_m', 'eff_trainable_params_m', 'eff_gflops',
-        'eff_fps', 'eff_fps_streaming', 'eff_latency_p50_ms',
-        'eff_latency_p95_ms', 'eff_latency_p99_ms',
-        'eff_peak_gpu_mem_mb', 'eff_resolution',
-        'pipeline_params_m', 'pipeline_gflops', 'pipeline_fps',
+        "eff_params_m",
+        "eff_trainable_params_m",
+        "eff_gflops",
+        "eff_fps",
+        "eff_fps_streaming",
+        "eff_latency_p50_ms",
+        "eff_latency_p95_ms",
+        "eff_latency_p99_ms",
+        "eff_peak_gpu_mem_mb",
+        "eff_resolution",
+        "pipeline_params_m",
+        "pipeline_gflops",
+        "pipeline_fps",
         # Run info
-        '_seed', 'timestamp',
+        "_seed",
+        "timestamp",
     ]
-    row = {col: _serialize_for_json(results.get(col, '')) for col in METRIC_COLS}
-    row['timestamp'] = time.strftime('%Y-%m-%d %H:%M:%S')
-    csv_path = os.path.join(save_dir, 'eval_results.csv')
+    row = {col: _serialize_for_json(results.get(col, "")) for col in METRIC_COLS}
+    row["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    csv_path = os.path.join(save_dir, "eval_results.csv")
     write_header = not os.path.exists(csv_path)
-    with open(csv_path, 'a', newline='') as f:
-        w = csv.DictWriter(f, fieldnames=METRIC_COLS + ['timestamp'])
+    with open(csv_path, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=METRIC_COLS + ["timestamp"])
         if write_header:
             w.writeheader()
         w.writerow(row)
-    logger.info(f'  [RESULTS] CSV appended: {csv_path}')
+    logger.info(f"  [RESULTS] CSV appended: {csv_path}")
 
 
 def _save_predictions_file(
@@ -4649,28 +5087,29 @@ def _save_predictions_file(
     import json as _json
 
     payload: dict = {
-        'num_images': len(dp_boxes),
-        'num_det_classes': C.NUM_DET_CLASSES,
-        'timestamp': _time.strftime('%Y-%m-%d %H:%M:%S'),
-        'det_pred_boxes': [_arr_to_list(b) for b in dp_boxes],
-        'det_pred_scores': [_arr_to_list(s) for s in dp_scores],
-        'det_pred_labels': [_arr_to_list(l) for l in dp_labels],
-        'det_gt_boxes': [_arr_to_list(b) for b in dg_boxes],
-        'det_gt_labels': [_arr_to_list(l) for l in dg_labels],
+        "num_images": len(dp_boxes),
+        "num_det_classes": C.NUM_DET_CLASSES,
+        "timestamp": _time.strftime("%Y-%m-%d %H:%M:%S"),
+        "det_pred_boxes": [_arr_to_list(b) for b in dp_boxes],
+        "det_pred_scores": [_arr_to_list(s) for s in dp_scores],
+        "det_pred_labels": [_arr_to_list(l) for l in dp_labels],
+        "det_gt_boxes": [_arr_to_list(b) for b in dg_boxes],
+        "det_gt_labels": [_arr_to_list(l) for l in dg_labels],
     }
     if all_act_pred is not None:
-        payload['act_pred'] = _arr_to_list(all_act_pred)
+        payload["act_pred"] = _arr_to_list(all_act_pred)
     if all_act_gt is not None:
-        payload['act_gt'] = _arr_to_list(all_act_gt)
+        payload["act_gt"] = _arr_to_list(all_act_gt)
     if all_psr_logits is not None:
-        payload['psr_logits'] = _arr_to_list(all_psr_logits)
+        payload["psr_logits"] = _arr_to_list(all_psr_logits)
 
     Path(predictions_path).parent.mkdir(parents=True, exist_ok=True)
-    with open(predictions_path, 'w') as f:
+    with open(predictions_path, "w") as f:
         _json.dump(payload, f, default=str)
     logger.info(
-        '  [PRED_SAVE] Per-frame predictions written to %s (%d images, %.1f MB)',
-        predictions_path, len(dp_boxes),
+        "  [PRED_SAVE] Per-frame predictions written to %s (%d images, %.1f MB)",
+        predictions_path,
+        len(dp_boxes),
         Path(predictions_path).stat().st_size / 1024 / 1024,
     )
 
@@ -4679,79 +5118,80 @@ def _save_predictions_file(
 # Standalone CLI
 # =============================================================================
 
+
 def _print_multi_seed_summary(summary: Dict[str, Any]) -> None:
     """Print formatted multi-seed evaluation summary."""
-    seeds = summary['_seeds']
-    print('\n' + '=' * 60)
-    print(f'MULTI-SEED EVALUATION ({len(seeds)} seeds: {seeds})')
-    print('=' * 60)
+    seeds = summary["_seeds"]
+    print("\n" + "=" * 60)
+    print(f"MULTI-SEED EVALUATION ({len(seeds)} seeds: {seeds})")
+    print("=" * 60)
 
     metric_keys = [
         # Activity
-        ('act_accuracy', 'Activity Frame Acc'),
-        ('act_macro_f1', 'Activity Macro-F1'),
-        ('act_clip_accuracy', 'Activity Clip Acc'),
+        ("act_accuracy", "Activity Frame Acc"),
+        ("act_macro_f1", "Activity Macro-F1"),
+        ("act_clip_accuracy", "Activity Clip Acc"),
         # Head pose (paper units)
-        ('forward_angular_MAE_deg', 'Forward Angular MAE (deg)'),
-        ('up_angular_MAE_deg', 'Up Angular MAE (deg)'),
-        ('position_MAE_mm', 'Position MAE (mm)'),
-        ('head_pose_MAE', 'Head Pose MAE (raw)'),
+        ("forward_angular_MAE_deg", "Forward Angular MAE (deg)"),
+        ("up_angular_MAE_deg", "Up Angular MAE (deg)"),
+        ("position_MAE_mm", "Position MAE (mm)"),
+        ("head_pose_MAE", "Head Pose MAE (raw)"),
         # PSR
-        ('psr_overall_f1', 'PSR Overall F1'),
-        ('psr_f1_at_t', 'PSR F1@T (±3)'),
-        ('psr_precision_at_t', 'PSR Prec@±3'),
-        ('psr_recall_at_t', 'PSR Rec@±3'),
-        ('psr_overall_f1_at5', 'PSR Overall F1@±5'),
-        ('psr_f1_at_t5', 'PSR F1@T (±5)'),
-        ('psr_precision_at_t5', 'PSR Prec@±5'),
-        ('psr_recall_at_t5', 'PSR Rec@±5'),
-        ('psr_edit_score', 'PSR Edit Score'),
-        ('psr_pos', 'PSR POS'),
+        ("psr_overall_f1", "PSR Overall F1"),
+        ("psr_f1_at_t", "PSR F1@T (±3)"),
+        ("psr_precision_at_t", "PSR Prec@±3"),
+        ("psr_recall_at_t", "PSR Rec@±3"),
+        ("psr_overall_f1_at5", "PSR Overall F1@±5"),
+        ("psr_f1_at_t5", "PSR F1@T (±5)"),
+        ("psr_precision_at_t5", "PSR Prec@±5"),
+        ("psr_recall_at_t5", "PSR Rec@±5"),
+        ("psr_edit_score", "PSR Edit Score"),
+        ("psr_pos", "PSR POS"),
         # Assembly State Detection
-        ('det_mAP50', 'ASD mAP@0.5'),
-        ('det_mAP_50_95', 'ASD mAP@[0.5:0.95]'),
-        ('as_f1', 'AS F1@1'),
-        ('as_map_at_r', 'AS MAP@R(+)'),
+        ("det_mAP50", "ASD mAP@0.5"),
+        ("det_mAP_50_95", "ASD mAP@[0.5:0.95]"),
+        ("as_f1", "AS F1@1"),
+        ("as_map_at_r", "AS MAP@R(+)"),
         # Error Verification
-        ('ev_ap', 'EV AP'),
-        ('ev_f1', 'EV F1@0.5'),
-        ('ev_precision', 'EV Prec@0.5'),
-        ('ev_recall', 'EV Rec@0.5'),
+        ("ev_ap", "EV AP"),
+        ("ev_f1", "EV F1@0.5"),
+        ("ev_precision", "EV Prec@0.5"),
+        ("ev_recall", "EV Rec@0.5"),
         # Efficiency
-        ('eff_fps', 'FPS (batched)'),
-        ('eff_fps_streaming', 'FPS (streaming)'),
-        ('pipeline_params_m', 'Pipeline Params (M)'),
-        ('pipeline_gflops', 'Pipeline GFLOPs'),
-        ('pipeline_fps', 'Pipeline FPS (min)'),
+        ("eff_fps", "FPS (batched)"),
+        ("eff_fps_streaming", "FPS (streaming)"),
+        ("pipeline_params_m", "Pipeline Params (M)"),
+        ("pipeline_gflops", "Pipeline GFLOPs"),
+        ("pipeline_fps", "Pipeline FPS (min)"),
     ]
 
-    print(f'\n  {"Metric":<25} {"Mean":>8} {"Std":>8}  Seeds')
-    print('  ' + '-' * 50)
+    print(f"\n  {'Metric':<25} {'Mean':>8} {'Std':>8}  Seeds")
+    print("  " + "-" * 50)
     for key, label in metric_keys:
-        mean = summary.get(f'{key}_mean', float('nan'))
-        std = summary.get(f'{key}_std', float('nan'))
+        mean = summary.get(f"{key}_mean", float("nan"))
+        std = summary.get(f"{key}_std", float("nan"))
         if not (isinstance(mean, float) and np.isnan(mean)):
-            print(f'  {label:<25} {mean:>8.4f} {std:>8.4f}')
+            print(f"  {label:<25} {mean:>8.4f} {std:>8.4f}")
 
-    print('\n  Per-seed results:')
-    for r in summary['_per_seed']:
-        seed = r.get('_seed', '?')
-        act_f1 = r.get('act_macro_f1', float('nan'))
-        psr_f1 = r.get('psr_overall_f1', float('nan'))
-        psr_t3_prec = r.get('psr_precision_at_t', float('nan'))
-        psr_t3_rec = r.get('psr_recall_at_t', float('nan'))
-        head_fwd = r.get('forward_angular_MAE_deg', float('nan'))
-        det_map = r.get('det_mAP50', float('nan'))
-        ev_f1 = r.get('ev_f1', float('nan'))
-        fps = r.get('eff_fps', float('nan'))
+    print("\n  Per-seed results:")
+    for r in summary["_per_seed"]:
+        seed = r.get("_seed", "?")
+        act_f1 = r.get("act_macro_f1", float("nan"))
+        psr_f1 = r.get("psr_overall_f1", float("nan"))
+        psr_t3_prec = r.get("psr_precision_at_t", float("nan"))
+        psr_t3_rec = r.get("psr_recall_at_t", float("nan"))
+        head_fwd = r.get("forward_angular_MAE_deg", float("nan"))
+        det_map = r.get("det_mAP50", float("nan"))
+        ev_f1 = r.get("ev_f1", float("nan"))
+        fps = r.get("eff_fps", float("nan"))
         print(
-            f'    Seed {seed}: Activity={act_f1:.4f}  PSR={psr_f1:.4f}  '
-            f'PSR±3[P,R]=[{psr_t3_prec:.3f},{psr_t3_rec:.3f}]  '
-            f'HeadFwd={head_fwd:.3f}deg  ASD={det_map:.4f}  '
-            f'EV={ev_f1:.4f}  FPS={fps:.1f}'
+            f"    Seed {seed}: Activity={act_f1:.4f}  PSR={psr_f1:.4f}  "
+            f"PSR±3[P,R]=[{psr_t3_prec:.3f},{psr_t3_rec:.3f}]  "
+            f"HeadFwd={head_fwd:.3f}deg  ASD={det_map:.4f}  "
+            f"EV={ev_f1:.4f}  FPS={fps:.1f}"
         )
 
-    print('  ' + '=' * 50 + '\n')
+    print("  " + "=" * 50 + "\n")
 
 
 def _print_single_run_results(results: Dict[str, Any], split: str) -> None:
@@ -4764,117 +5204,117 @@ def _print_single_run_results(results: Dict[str, Any], split: str) -> None:
       4. Assembly state recognition / error verification
       5. Head pose (9-DoF)
     """
-    print('\n' + '=' * 60)
-    print(f'IndustReal Evaluation Results ({split})')
-    print('=' * 60)
+    print("\n" + "=" * 60)
+    print(f"IndustReal Evaluation Results ({split})")
+    print("=" * 60)
 
     # ── 1. Assembly State Detection (ASD) ──────────────────────────────────
-    print('\nASSEMBLY STATE DETECTION (ASD)')
-    print('-' * 40)
-    print(f'  mAP@0.5                : {results["det_mAP50"]:.4f}')
-    print(f'  mAP@[0.5:0.95]         : {results["det_mAP_50_95"]:.4f}')
+    print("\nASSEMBLY STATE DETECTION (ASD)")
+    print("-" * 40)
+    print(f"  mAP@0.5                : {results['det_mAP50']:.4f}")
+    print(f"  mAP@[0.5:0.95]         : {results['det_mAP_50_95']:.4f}")
 
-    det_per_class = cast(Dict[int, float], results.get('det_per_class_ap', {}))
+    det_per_class = cast(Dict[int, float], results.get("det_per_class_ap", {}))
     if det_per_class:
-        print('\n  Per-class AP@0.5:')
+        print("\n  Per-class AP@0.5:")
         for cls_id, ap in sorted(det_per_class.items()):
-            name = C.DET_CLASS_NAMES.get(cls_id + 1, f'class_{cls_id}')
-            print(f'    {name:20s}: {ap:.4f}')
+            name = C.DET_CLASS_NAMES.get(cls_id + 1, f"class_{cls_id}")
+            print(f"    {name:20s}: {ap:.4f}")
 
     # ── 2. Activity Recognition ───────────────────────────────────────────
-    print('\nACTIVITY RECOGNITION')
-    print('-' * 40)
-    print(f'  Top-1 (frame)          : {results["act_accuracy"]:.4f}')
-    print(f'  Top-5 (frame)          : {results["act_top5_accuracy"]:.4f}')
-    print(f'  mcAP (mean per-class) : {results["act_mean_per_class_acc"]:.4f}')
-    print(f'  Macro-F1               : {results["act_macro_f1"]:.4f}')
-    print(f'  Frame Accuracy (all)  : {results["act_accuracy"]:.4f}')
-    print(f'  Frame Accuracy (no NA): {results["act_accuracy_no_na"]:.4f}')
-    print(f'  Clip Accuracy (majority): {results.get("act_clip_accuracy", float("nan")):.4f}')
-    print(f'  Weighted-F1            : {results["act_weighted_f1"]:.4f}')
-    print(f'  Macro-Recall          : {results["act_macro_recall"]:.4f}')
+    print("\nACTIVITY RECOGNITION")
+    print("-" * 40)
+    print(f"  Top-1 (frame)          : {results['act_accuracy']:.4f}")
+    print(f"  Top-5 (frame)          : {results['act_top5_accuracy']:.4f}")
+    print(f"  mcAP (mean per-class) : {results['act_mean_per_class_acc']:.4f}")
+    print(f"  Macro-F1               : {results['act_macro_f1']:.4f}")
+    print(f"  Frame Accuracy (all)  : {results['act_accuracy']:.4f}")
+    print(f"  Frame Accuracy (no NA): {results['act_accuracy_no_na']:.4f}")
+    print(f"  Clip Accuracy (majority): {results.get('act_clip_accuracy', float('nan')):.4f}")
+    print(f"  Weighted-F1            : {results['act_weighted_f1']:.4f}")
+    print(f"  Macro-Recall          : {results['act_macro_recall']:.4f}")
 
     # ── 3. Procedure Step Recognition (PSR) ─────────────────────────────────
-    print('\nPROCEDURE STEP RECOGNITION (PSR)')
-    print('-' * 40)
-    print(f'  Overall F1 (thresh)    : {results["psr_overall_f1"]:.4f}')
-    print(f'  F1@T (±3 frames)       : {results["psr_f1_at_t"]:.4f}')
-    print(f'  Precision@±3           : {results["psr_precision_at_t"]:.4f}')
-    print(f'  Recall@±3             : {results["psr_recall_at_t"]:.4f}')
-    print(f'  F1@T (±5 frames)      : {results["psr_f1_at_t5"]:.4f}')
-    print(f'  Precision@±5           : {results["psr_precision_at_t5"]:.4f}')
-    print(f'  Recall@±5             : {results["psr_recall_at_t5"]:.4f}')
-    print(f'  Edit Score            : {results["psr_edit_score"]:.4f}')
-    print(f'  PSR POS               : {results["psr_pos"]:.4f}')
-    print(f'  Valid components      : {results["psr_num_valid_components"]}/11')
-    print(f'  N samples             : {results["psr_num_samples"]}')
+    print("\nPROCEDURE STEP RECOGNITION (PSR)")
+    print("-" * 40)
+    print(f"  Overall F1 (thresh)    : {results['psr_overall_f1']:.4f}")
+    print(f"  F1@T (±3 frames)       : {results['psr_f1_at_t']:.4f}")
+    print(f"  Precision@±3           : {results['psr_precision_at_t']:.4f}")
+    print(f"  Recall@±3             : {results['psr_recall_at_t']:.4f}")
+    print(f"  F1@T (±5 frames)      : {results['psr_f1_at_t5']:.4f}")
+    print(f"  Precision@±5           : {results['psr_precision_at_t5']:.4f}")
+    print(f"  Recall@±5             : {results['psr_recall_at_t5']:.4f}")
+    print(f"  Edit Score            : {results['psr_edit_score']:.4f}")
+    print(f"  PSR POS               : {results['psr_pos']:.4f}")
+    print(f"  Valid components      : {results['psr_num_valid_components']}/11")
+    print(f"  N samples             : {results['psr_num_samples']}")
 
-    psr_per_comp = cast(Dict[str, float], results.get('psr_per_component_f1', {}))
-    print('  Per-component F1:')
+    psr_per_comp = cast(Dict[str, float], results.get("psr_per_component_f1", {}))
+    print("  Per-component F1:")
     for comp_name in sorted(psr_per_comp.keys()):
         val = psr_per_comp[comp_name]
-        print(f'    {comp_name:12s}: {val:.4f}')
+        print(f"    {comp_name:12s}: {val:.4f}")
 
     # ── 4. Assembly State Recognition / Error Verification ──────────────────
-    print('\nASSEMBLY STATE RECOGNITION (IEEE RAL 2024)')
-    print('-' * 50)
-    print(f'  F1@1 (frame-level)     : {results["as_f1"]:.4f}')
-    print(f'  Top-1 Accuracy         : {results["as_top1_accuracy"]:.4f}')
-    print(f'  MAP@R(+) (±5 frames)   : {results["as_map_at_r"]:.4f}')
-    print(f'  Num States (K)         : {results["as_num_states"]}')
-    print(f'  Num Transitions        : {results["as_num_transitions"]}')
+    print("\nASSEMBLY STATE RECOGNITION (IEEE RAL 2024)")
+    print("-" * 50)
+    print(f"  F1@1 (frame-level)     : {results['as_f1']:.4f}")
+    print(f"  Top-1 Accuracy         : {results['as_top1_accuracy']:.4f}")
+    print(f"  MAP@R(+) (±5 frames)   : {results['as_map_at_r']:.4f}")
+    print(f"  Num States (K)         : {results['as_num_states']}")
+    print(f"  Num Transitions        : {results['as_num_transitions']}")
 
-    print('\nERROR VERIFICATION (ECCV VISION 2024)')
-    print('-' * 50)
-    print(f'  Average Precision (AP) : {results["ev_ap"]:.4f}')
-    print(f'  F1 (threshold=0.5)     : {results["ev_f1"]:.4f}')
-    print(f'  Precision (threshold=0.5): {results["ev_precision"]:.4f}')
-    print(f'  Recall (threshold=0.5)   : {results["ev_recall"]:.4f}')
+    print("\nERROR VERIFICATION (ECCV VISION 2024)")
+    print("-" * 50)
+    print(f"  Average Precision (AP) : {results['ev_ap']:.4f}")
+    print(f"  F1 (threshold=0.5)     : {results['ev_f1']:.4f}")
+    print(f"  Precision (threshold=0.5): {results['ev_precision']:.4f}")
+    print(f"  Recall (threshold=0.5)   : {results['ev_recall']:.4f}")
 
     # ── 5. Head Pose (9-DoF) ───────────────────────────────────────────────
-    print('\nHEAD POSE (9-DoF)')
-    print('-' * 40)
+    print("\nHEAD POSE (9-DoF)")
+    print("-" * 40)
     # Paper headline metrics (angular MAE in degrees + position MAE in mm)
-    print(f'  Forward angular MAE (deg): {results["forward_angular_MAE_deg"]:.4f}')
-    print(f'  Up angular MAE (deg)     : {results["up_angular_MAE_deg"]:.4f}')
-    print(f'  Position MAE (mm)        : {results["position_MAE_mm"]:.4f}')
-    print('  --- Detail ---')
-    print(f'  Overall MAE (raw)         : {results["head_pose_MAE"]:.4f}')
-    print(f'  MAE Std                  : {results["head_pose_MAE_std"]:.4f}')
-    print(f'  forward_x MAE (raw)     : {results["forward_x_MAE"]:.4f}')
-    print(f'  forward_y MAE (raw)     : {results["forward_y_MAE"]:.4f}')
-    print(f'  forward_z MAE (raw)     : {results["forward_z_MAE"]:.4f}')
-    print(f'  pos_x MAE (raw)          : {results["pos_x_MAE"]:.4f}')
-    print(f'  pos_y MAE (raw)         : {results["pos_y_MAE"]:.4f}')
-    print(f'  pos_z MAE (raw)         : {results["pos_z_MAE"]:.4f}')
-    print(f'  up_x MAE (raw)           : {results["up_x_MAE"]:.4f}')
-    print(f'  up_y MAE (raw)           : {results["up_y_MAE"]:.4f}')
-    print(f'  up_z MAE (raw)           : {results["up_z_MAE"]:.4f}')
-    print(f'  N samples               : {results.get("n_samples", "N/A")}')
+    print(f"  Forward angular MAE (deg): {results['forward_angular_MAE_deg']:.4f}")
+    print(f"  Up angular MAE (deg)     : {results['up_angular_MAE_deg']:.4f}")
+    print(f"  Position MAE (mm)        : {results['position_MAE_mm']:.4f}")
+    print("  --- Detail ---")
+    print(f"  Overall MAE (raw)         : {results['head_pose_MAE']:.4f}")
+    print(f"  MAE Std                  : {results['head_pose_MAE_std']:.4f}")
+    print(f"  forward_x MAE (raw)     : {results['forward_x_MAE']:.4f}")
+    print(f"  forward_y MAE (raw)     : {results['forward_y_MAE']:.4f}")
+    print(f"  forward_z MAE (raw)     : {results['forward_z_MAE']:.4f}")
+    print(f"  pos_x MAE (raw)          : {results['pos_x_MAE']:.4f}")
+    print(f"  pos_y MAE (raw)         : {results['pos_y_MAE']:.4f}")
+    print(f"  pos_z MAE (raw)         : {results['pos_z_MAE']:.4f}")
+    print(f"  up_x MAE (raw)           : {results['up_x_MAE']:.4f}")
+    print(f"  up_y MAE (raw)           : {results['up_y_MAE']:.4f}")
+    print(f"  up_z MAE (raw)           : {results['up_z_MAE']:.4f}")
+    print(f"  N samples               : {results.get('n_samples', 'N/A')}")
 
     # ── Efficiency (always last) ────────────────────────────────────────────
-    print('\nEFFICIENCY METRICS')
-    print('-' * 50)
-    print(f'  Parameters (M)         : {results["eff_params_m"]:.2f}M')
-    print(f'  Trainable Params (M)   : {results["eff_trainable_params_m"]:.2f}M')
-    print(f'  GFLOPs                : {results["eff_gflops"]:.2f}G')
-    print(f'  FPS (batched, bs=1)  : {results["eff_fps"]:.2f}')
-    print(f'  FPS (streaming)       : {results["eff_fps_streaming"]:.2f}')
-    print(f'  Resolution            : {results["eff_resolution"]}')
-    print('  --- Sequential pipeline (YOLOv8m+MViTv2+STORM-PSR) ---')
-    print(f'  Pipeline Params (M)    : {results["pipeline_params_m"]:.1f}M')
-    print(f'  Pipeline GFLOPs       : {results["pipeline_gflops"]:.0f}G')
-    print(f'  Pipeline FPS (min)     : ~{results["pipeline_fps"]:.0f}')
+    print("\nEFFICIENCY METRICS")
+    print("-" * 50)
+    print(f"  Parameters (M)         : {results['eff_params_m']:.2f}M")
+    print(f"  Trainable Params (M)   : {results['eff_trainable_params_m']:.2f}M")
+    print(f"  GFLOPs                : {results['eff_gflops']:.2f}G")
+    print(f"  FPS (batched, bs=1)  : {results['eff_fps']:.2f}")
+    print(f"  FPS (streaming)       : {results['eff_fps_streaming']:.2f}")
+    print(f"  Resolution            : {results['eff_resolution']}")
+    print("  --- Sequential pipeline (YOLOv8m+MViTv2+STORM-PSR) ---")
+    print(f"  Pipeline Params (M)    : {results['pipeline_params_m']:.1f}M")
+    print(f"  Pipeline GFLOPs       : {results['pipeline_gflops']:.0f}G")
+    print(f"  Pipeline FPS (min)     : ~{results['pipeline_fps']:.0f}")
 
-    print('\n' + '=' * 60)
+    print("\n" + "=" * 60)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     import argparse
     from torch.utils.data import DataLoader
 
     parser = argparse.ArgumentParser(
-        description='Evaluate Multi-Task IndustReal Model',
+        description="Evaluate Multi-Task IndustReal Model",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -4883,50 +5323,53 @@ Examples:
   python evaluate.py --checkpoint model.pt --split val
 
   python evaluate.py --checkpoint model.pt --max-batches 100
-        """
+        """,
+    )
+    parser.add_argument("--checkpoint", type=str, required=True, help="Path to model checkpoint")
+    parser.add_argument(
+        "--split",
+        type=str,
+        default="val",
+        choices=["train", "val", "test"],
+        help="Dataset split to evaluate on",
     )
     parser.add_argument(
-        '--checkpoint', type=str, required=True,
-        help='Path to model checkpoint'
+        "--save-dir", type=str, default=None, help="Output directory for evaluation results"
     )
     parser.add_argument(
-        '--split', type=str, default='val',
-        choices=['train', 'val', 'test'],
-        help='Dataset split to evaluate on'
+        "--max-batches", type=int, default=9999, help="Maximum number of batches to evaluate"
     )
     parser.add_argument(
-        '--save-dir', type=str, default=None,
-        help='Output directory for evaluation results'
+        "--profile-efficiency-only",
+        action="store_true",
+        help="Only profile efficiency (params, GFLOPs, FPS) without full evaluation",
     )
     parser.add_argument(
-        '--max-batches', type=int, default=9999,
-        help='Maximum number of batches to evaluate'
+        "--seeds",
+        type=str,
+        default="42,2024,777",
+        help="Comma-separated list of seeds for multi-seed evaluation (Doc 03 C). "
+        "Default: 42,2024,777",
     )
     parser.add_argument(
-        '--profile-efficiency-only', action='store_true',
-        help='Only profile efficiency (params, GFLOPs, FPS) without full evaluation'
+        "--ablation",
+        action="store_true",
+        help="Run ablation table: evaluate with and without each improvement component "
+        "(Doc 03 C: RandAugment, CutMix, LDAM-DRW, GIoU, focal PSR). "
+        "Each ablation run uses seed=42.",
     )
     parser.add_argument(
-        '--seeds', type=str, default='42,2024,777',
-        help='Comma-separated list of seeds for multi-seed evaluation (Doc 03 C). '
-             'Default: 42,2024,777'
+        "--flip-tta",
+        action="store_true",
+        help="Enable horizontal-flip TTA at evaluation time (Doc 2 F.1). "
+        "Averages logits from original and horizontally-flipped images.",
     )
     parser.add_argument(
-        '--ablation', action='store_true',
-        help='Run ablation table: evaluate with and without each improvement component '
-             '(Doc 03 C: RandAugment, CutMix, LDAM-DRW, GIoU, focal PSR). '
-             'Each ablation run uses seed=42.'
-    )
-    parser.add_argument(
-        '--flip-tta', action='store_true',
-        help='Enable horizontal-flip TTA at evaluation time (Doc 2 F.1). '
-             'Averages logits from original and horizontally-flipped images.'
-    )
-    parser.add_argument(
-        '--crop-tta', action='store_true',
-        help='Enable 5-crop TTA at evaluation time (Doc 2 F.2). '
-             'Averages logits from 4 corner crops + center crop (224×224). '
-             'WARNING: 5× inference overhead per frame.'
+        "--crop-tta",
+        action="store_true",
+        help="Enable 5-crop TTA at evaluation time (Doc 2 F.2). "
+        "Averages logits from 4 corner crops + center crop (224×224). "
+        "WARNING: 5× inference overhead per frame.",
     )
 
     def _make_loader(split: str, seed: int):
@@ -4953,7 +5396,7 @@ Examples:
         # Set up sys.path identically to train.py so all imports resolve
         # src/evaluation/evaluate.py → parent.parent = src/ → parent = project root
         _src = Path(__file__).resolve().parent.parent
-        for _sub in ['models', 'training', 'evaluation', 'data', str(_src)]:
+        for _sub in ["models", "training", "evaluation", "data", str(_src)]:
             _p = _src / _sub if _sub != str(_src) else _src
             _p = str(_p)
             if _p not in sys.path:
@@ -4964,17 +5407,17 @@ Examples:
         args = parser.parse_args()
 
         logging.basicConfig(level=logging.INFO)
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         from model import POPWMultiTaskModel  # noqa: E402
         from losses import MultiTaskLoss  # noqa: E402
-        from industreal_dataset import IndustRealMultiTaskDataset, collate_fn  # noqa: E402
+        from industreal_dataset import IndustRealMultiTaskDataset  # noqa: E402
 
         model = POPWMultiTaskModel(
             pretrained=False,
-            backbone_type=str(getattr(C, 'BACKBONE', 'resnet50')),
-            use_headpose_film=bool(getattr(C, 'USE_HEADPOSE_FILM', False)),
-            use_videomae=bool(getattr(C, 'USE_VIDEOMAE', False)),
+            backbone_type=str(getattr(C, "BACKBONE", "resnet50")),
+            use_headpose_film=bool(getattr(C, "USE_HEADPOSE_FILM", False)),
+            use_videomae=bool(getattr(C, "USE_VIDEOMAE", False)),
         ).to(device)
 
         if args.profile_efficiency_only:
@@ -4984,42 +5427,44 @@ Examples:
                 device=device,
                 num_hand_coords=52,
             )
-            print('\n' + '=' * 60)
-            print('Efficiency Profile — IndustReal Multi-Task Model')
-            print('=' * 60)
-            print(f'  Parameters (M)       : {eff["eff_params_m"]:.2f}M')
-            print(f'  Trainable Params (M) : {eff["eff_trainable_params_m"]:.2f}M')
-            print(f'  GFLOPs               : {eff["eff_gflops"]:.2f}G')
-            print(f'  FPS (batched, bs=1)  : {eff["eff_fps"]:.2f}')
-            print(f'  FPS (streaming)       : {eff["eff_fps_streaming"]:.2f}')
-            print(f'  Resolution           : {eff["eff_resolution"]}')
-            print('  --- Sequential pipeline (YOLOv8m+MViTv2+STORM-PSR) ---')
-            print(f'  Pipeline Params (M)  : {eff["pipeline_params_m"]:.1f}M')
-            print(f'  Pipeline GFLOPs      : {eff["pipeline_gflops"]:.0f}G')
-            print(f'  Pipeline FPS (min)   : ~{eff["pipeline_fps"]:.0f}')
-            print('\n  Benchmark comparison targets:')
-            print('    PTMA (IKEA):  12.9M params, 1.96G FLOPs, 291 FPS')
-            print('    MiniROAD (IKEA): 10.5M params, 1.08G FLOPs, 325 FPS')
-            print('    ActionFormer (IKEA): 27.70M params, 83.28G FLOPs, ~21 FPS')
-            print('=' * 60)
+            print("\n" + "=" * 60)
+            print("Efficiency Profile — IndustReal Multi-Task Model")
+            print("=" * 60)
+            print(f"  Parameters (M)       : {eff['eff_params_m']:.2f}M")
+            print(f"  Trainable Params (M) : {eff['eff_trainable_params_m']:.2f}M")
+            print(f"  GFLOPs               : {eff['eff_gflops']:.2f}G")
+            print(f"  FPS (batched, bs=1)  : {eff['eff_fps']:.2f}")
+            print(f"  FPS (streaming)       : {eff['eff_fps_streaming']:.2f}")
+            print(f"  Resolution           : {eff['eff_resolution']}")
+            print("  --- Sequential pipeline (YOLOv8m+MViTv2+STORM-PSR) ---")
+            print(f"  Pipeline Params (M)  : {eff['pipeline_params_m']:.1f}M")
+            print(f"  Pipeline GFLOPs      : {eff['pipeline_gflops']:.0f}G")
+            print(f"  Pipeline FPS (min)   : ~{eff['pipeline_fps']:.0f}")
+            print("\n  Benchmark comparison targets:")
+            print("    PTMA (IKEA):  12.9M params, 1.96G FLOPs, 291 FPS")
+            print("    MiniROAD (IKEA): 10.5M params, 1.08G FLOPs, 325 FPS")
+            print("    ActionFormer (IKEA): 27.70M params, 83.28G FLOPs, ~21 FPS")
+            print("=" * 60)
         else:
             save_dir = args.save_dir or str(C.EVAL_SAVE_DIR)
             Path(save_dir).mkdir(parents=True, exist_ok=True)
 
             criterion = MultiTaskLoss(
-                num_classes_act=int(getattr(C, 'NUM_ACT_OUTPUTS', C.NUM_CLASSES_ACT)),  # verb-grouping aware (file 75)
+                num_classes_act=int(
+                    getattr(C, "NUM_ACT_OUTPUTS", C.NUM_CLASSES_ACT)
+                ),  # verb-grouping aware (file 75)
                 num_psr_components=C.NUM_PSR_COMPONENTS,
             ).to(device)
 
             if args.checkpoint:
                 ckpt = torch.load(args.checkpoint, map_location=device)
-                if 'model' in ckpt:
-                    model.load_state_dict(ckpt['model'], strict=False)
+                if "model" in ckpt:
+                    model.load_state_dict(ckpt["model"], strict=False)
                 else:
                     model.load_state_dict(ckpt, strict=False)
 
             # Doc 03 C: Multi-seed evaluation
-            seed_list = [int(s.strip()) for s in args.seeds.split(',')]
+            seed_list = [int(s.strip()) for s in args.seeds.split(",")]
 
             if len(seed_list) > 1:
                 summary = run_multi_seed_evaluation(
@@ -5038,14 +5483,20 @@ Examples:
                     print(print_ablation_table(summary, summary))
             else:
                 ds = IndustRealMultiTaskDataset(
-                    split=args.split, img_size=C.IMG_SIZE,
-                    augment=False, seed=seed_list[0],
+                    split=args.split,
+                    img_size=C.IMG_SIZE,
+                    augment=False,
+                    seed=seed_list[0],
                 )
                 loader = _make_loader(args.split, seed_list[0])
                 criterion.set_class_counts(ds.class_counts)
                 results = evaluate_all(
-                    model, criterion, loader, device,
-                    max_batches=args.max_batches, save_dir=save_dir,
+                    model,
+                    criterion,
+                    loader,
+                    device,
+                    max_batches=args.max_batches,
+                    save_dir=save_dir,
                     use_flip_tta=args.flip_tta,
                     use_crop_tta=args.crop_tta,
                 )
@@ -5054,54 +5505,68 @@ Examples:
                     print(print_ablation_table(results, results))
 
                 # Doc 03 Phase 3: Per-class F1 CSV + top-k/bottom-k plots
-                if 'act_per_class_report' in results and 'act_per_class_acc' in results:
-                    _act_names = getattr(C, 'ACT_OUTPUT_NAMES', C.ACT_CLASS_NAMES)  # verb-grouping aware (file 75)
+                if "act_per_class_report" in results and "act_per_class_acc" in results:
+                    _act_names = getattr(
+                        C, "ACT_OUTPUT_NAMES", C.ACT_CLASS_NAMES
+                    )  # verb-grouping aware (file 75)
                     _save_per_class_f1_csv(
-                        results['act_per_class_report'],
-                        results['act_per_class_acc'],
+                        results["act_per_class_report"],
+                        results["act_per_class_acc"],
                         _act_names,
                         Path(save_dir),
                         split=args.split,
                     )
-                    act_f1 = np.array([
-                        results['act_per_class_report'].get(_act_names[i], {}).get('f1-score', float('nan'))
-                        for i in range(len(_act_names))
-                    ])
+                    act_f1 = np.array(
+                        [
+                            results["act_per_class_report"]
+                            .get(_act_names[i], {})
+                            .get("f1-score", float("nan"))
+                            for i in range(len(_act_names))
+                        ]
+                    )
                     if not np.all(np.isnan(act_f1)):
                         _plot_topk_bottomk_classes(
                             act_f1,
                             _act_names,
-                            'Activity_F1',
+                            "Activity_F1",
                             Path(save_dir),
                             k=5,
                         )
 
-                if 'det_per_class_ap' in results and results['det_per_class_ap']:
-                    asd_names = C.ASD_CLASS_NAMES if hasattr(C, 'ASD_CLASS_NAMES') else [f'asd_{i}' for i in range(24)]
-                    det_ap = np.array([
-                        results['det_per_class_ap'].get(i, float('nan'))
-                        for i in range(len(asd_names))
-                    ])
+                if "det_per_class_ap" in results and results["det_per_class_ap"]:
+                    asd_names = (
+                        C.ASD_CLASS_NAMES
+                        if hasattr(C, "ASD_CLASS_NAMES")
+                        else [f"asd_{i}" for i in range(24)]
+                    )
+                    det_ap = np.array(
+                        [
+                            results["det_per_class_ap"].get(i, float("nan"))
+                            for i in range(len(asd_names))
+                        ]
+                    )
                     if not np.all(np.isnan(det_ap)):
                         _plot_topk_bottomk_classes(
                             det_ap,
                             asd_names,
-                            'ASD_mAP',
+                            "ASD_mAP",
                             Path(save_dir),
                             k=5,
                         )
 
-                if 'psr_per_component_f1' in results and results['psr_per_component_f1']:
-                    psr_comp_f1 = np.array([
-                        results['psr_per_component_f1'].get(f'comp{i}', float('nan'))
-                        for i in range(11)
-                    ])
-                    psr_comp_names = [f'comp{i}' for i in range(11)]
+                if "psr_per_component_f1" in results and results["psr_per_component_f1"]:
+                    psr_comp_f1 = np.array(
+                        [
+                            results["psr_per_component_f1"].get(f"comp{i}", float("nan"))
+                            for i in range(11)
+                        ]
+                    )
+                    psr_comp_names = [f"comp{i}" for i in range(11)]
                     if not np.all(np.isnan(psr_comp_f1)):
                         _plot_topk_bottomk_classes(
                             psr_comp_f1,
                             psr_comp_names,
-                            'PSR_Component_F1',
+                            "PSR_Component_F1",
                             Path(save_dir),
                             k=3,
                         )

@@ -4,6 +4,7 @@ For each of 16 recordings: compute optimal thresholds on the other 15,
 evaluate on the held-out one. If the held-out improvement matches the
 in-sample improvement, threshold is real.
 """
+
 import json
 import sys
 from collections import defaultdict
@@ -20,6 +21,7 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="src/runs/rf_stages/checkpoints/best.pth")
     parser.add_argument("--max-batches", type=int, default=5000)
@@ -35,19 +37,27 @@ def main():
     from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
 
     model = POPWMultiTaskModel(
-        pretrained=True, backbone_type='convnext_tiny',
-        use_hand_film=True, use_headpose_film=True,
-        use_videomae=False, train_pose=False,
+        pretrained=True,
+        backbone_type="convnext_tiny",
+        use_hand_film=True,
+        use_headpose_film=True,
+        use_videomae=False,
+        train_pose=False,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = 1
     model = model.cuda().eval()
 
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False,
+        val_ds,
+        batch_size=1,
+        num_workers=0,
+        collate_fn=collate_fn,
+        shuffle=False,
     )
 
     # Collect per-recording per-component sigmoid scores and labels
@@ -242,12 +252,14 @@ def main():
     print(f"\nResults saved to {out}")
     print(f"Full-data global F1: {summary['full_data_global_f1']:.4f}")
     print(f"Full-data optimal F1: {summary['full_data_optimal_f1_macro']:.4f}")
-    print(f"Full-data improvement: {summary['full_data_optimal_f1_macro'] - summary['full_data_global_f1']:.4f}")
+    print(
+        f"Full-data improvement: {summary['full_data_optimal_f1_macro'] - summary['full_data_global_f1']:.4f}"
+    )
     print(f"LOO-CV global F1: {summary['loo_global_f1_mean']:.4f}")
     print(f"LOO-CV optimal F1: {summary['loo_optimal_f1_mean']:.4f}")
     print(f"LOO-CV improvement (mean): {summary['loo_improvement_mean']:.4f}")
     print(f"LOO-CV improvement (std): {summary['loo_improvement_std']:.4f}")
-    if summary['loo_improvement_mean'] < 0.005:
+    if summary["loo_improvement_mean"] < 0.005:
         print(">>> WARNING: LOO-CV improvement < 0.005 — threshold is likely val overfit")
     else:
         print(">>> LOO-CV improvement persists — threshold is real")

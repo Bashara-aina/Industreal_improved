@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Standalone validation: loads checkpoint, runs eval, prints metrics."""
+
 import sys, os, gc
 
 # Fix sys.path the same way train.py does
@@ -7,11 +8,11 @@ _SRCDIR = os.path.dirname(os.path.abspath(__file__))  # .../src
 _SRCPARENT = os.path.dirname(_SRCDIR)  # .../industreal_improved_to_archive
 
 for _p in [
-    _SRCDIR,                          # src/ (IMPORTANT: must come first)
-    os.path.join(_SRCDIR, 'models'),
-    os.path.join(_SRCDIR, 'training'),
-    os.path.join(_SRCDIR, 'evaluation'),
-    os.path.join(_SRCDIR, 'data'),
+    _SRCDIR,  # src/ (IMPORTANT: must come first)
+    os.path.join(_SRCDIR, "models"),
+    os.path.join(_SRCDIR, "training"),
+    os.path.join(_SRCDIR, "evaluation"),
+    os.path.join(_SRCDIR, "data"),
 ]:
     if _p not in sys.path:
         sys.path.insert(0, _p)
@@ -25,12 +26,11 @@ from models.model import POPWMultiTaskModel
 from training.losses import MultiTaskLoss
 from evaluation.evaluate import evaluate_all
 from data.dataset import get_train_loader
-from torch.utils.data import DataLoader
 
 # Constants
 VAL_BATCH_SIZE = 2
-CKPT_PATH = '/home/newadmin/swarm-bot/project/popw/working/code/industreal_improved_to_archive/src/runs/full_multi_task_tma_tbank_benchmark/checkpoints/crash_recovery.pth'
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+CKPT_PATH = "/home/newadmin/swarm-bot/project/popw/working/code/industreal_improved_to_archive/src/runs/full_multi_task_tma_tbank_benchmark/checkpoints/crash_recovery.pth"
+DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 print(f"Device: {DEVICE}")
 print(f"Loading checkpoint from {CKPT_PATH}...")
@@ -48,12 +48,12 @@ model = POPWMultiTaskModel(
 ).to(DEVICE)
 
 # Load weights from checkpoint
-ema_state = ckpt.get('ema_shadow', {})
+ema_state = ckpt.get("ema_shadow", {})
 if ema_state:
     model.load_state_dict(ema_state, strict=False)
     print(f"Loaded EMA shadow weights ({len(ema_state)} tensors)")
 else:
-    model.load_state_dict(ckpt.get('model', ckpt), strict=False)
+    model.load_state_dict(ckpt.get("model", ckpt), strict=False)
     print("Loaded model weights")
 
 model.eval()
@@ -70,8 +70,8 @@ criterion = MultiTaskLoss(
     train_psr=True,
     use_kendall=True,
 ).to(DEVICE)
-if 'criterion' in ckpt:
-    criterion.load_state_dict(ckpt['criterion'], strict=False)
+if "criterion" in ckpt:
+    criterion.load_state_dict(ckpt["criterion"], strict=False)
     print("Loaded criterion state")
 criterion.set_epoch(0)
 criterion.eval()
@@ -80,9 +80,9 @@ for p in criterion.parameters():
 
 print("Building val dataset (2% subset)...")
 val_loader = get_train_loader(
-    max_recordings=None,     # full val split
+    max_recordings=None,  # full val split
     batch_size=VAL_BATCH_SIZE,
-    num_workers=0,          # stability on RTX 3060
+    num_workers=0,  # stability on RTX 3060
     augment=False,
     sequence_mode=False,
 )
@@ -95,12 +95,14 @@ gc.collect()
 print("Running evaluation (max 15 batches)...")
 try:
     val_metrics = evaluate_all(model, criterion, val_loader, DEVICE, max_batches=15)
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("VALIDATION RESULTS")
-    print("="*60)
+    print("=" * 60)
     for k, v in val_metrics.items():
         print(f"  {k:30s}: {v}")
-    print("="*60)
+    print("=" * 60)
 except Exception as e:
     print(f"Evaluation error: {e}")
-    import traceback; traceback.print_exc()
+    import traceback
+
+    traceback.print_exc()

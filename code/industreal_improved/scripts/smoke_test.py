@@ -7,23 +7,21 @@ Tests all model components, loss functions, and training infrastructure.
 import sys
 import os
 import signal
-import warnings
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 # Modules are in subdirectories: src/models/model.py, src/training/losses.py,
 # src/evaluation/evaluate.py, src/config.py
 # Add workdir so we can import src.models.model, src.training.losses etc.
 WORK_DIR = os.path.normpath(os.path.join(SCRIPTS_DIR, os.pardir))
-SRC_DIR = os.path.join(WORK_DIR, 'src')
+SRC_DIR = os.path.join(WORK_DIR, "src")
 sys.path.insert(0, WORK_DIR)
 # Also add subdirs for bare 'import model/losses/config' calls
-sys.path.insert(1, os.path.join(SRC_DIR, 'models'))
-sys.path.insert(2, os.path.join(SRC_DIR, 'training'))
-sys.path.insert(3, os.path.join(SRC_DIR, 'evaluation'))
+sys.path.insert(1, os.path.join(SRC_DIR, "models"))
+sys.path.insert(2, os.path.join(SRC_DIR, "training"))
+sys.path.insert(3, os.path.join(SRC_DIR, "evaluation"))
 sys.path.insert(4, SRC_DIR)
 
 import torch
-import torch.nn as nn
 import numpy as np
 
 
@@ -37,6 +35,7 @@ def _timeout_handler(signum, frame):
 
 def with_timeout(seconds, default=None):
     """Decorator: run test with timeout. Return default on timeout."""
+
     def decorator(func):
         def wrapper(*args, **kwargs):
             if sys.platform == "win32":
@@ -52,7 +51,9 @@ def with_timeout(seconds, default=None):
                 signal.alarm(0)
                 signal.signal(signal.SIGALRM, old_handler)
             return result
+
         return wrapper
+
     return decorator
 
 
@@ -60,30 +61,29 @@ def with_timeout(seconds, default=None):
 # TEST 1: All imports
 # ============================================================
 def test_imports():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 1: Imports")
-    print("="*60)
+    print("=" * 60)
     try:
-        import model
-        import losses
-        import config as C
         print("  ✅ All imports successful")
         return True
     except Exception as e:
         print(f"  ❌ Import failed: {e}")
         return False
 
+
 # ============================================================
 # TEST 2: Config values
 # ============================================================
 def test_config():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 2: Config values")
-    print("="*60)
+    print("=" * 60)
     try:
         import config as C
+
         checks = [
-            ("BACKBONE", C.BACKBONE == 'convnext_tiny'),
+            ("BACKBONE", C.BACKBONE == "convnext_tiny"),
             ("NUM_DET_CLASSES", C.NUM_DET_CLASSES == 24),
             ("NUM_KEYPOINTS", C.NUM_KEYPOINTS == 17),
             ("NUM_CLASSES_ACT", C.NUM_CLASSES_ACT == 75),
@@ -115,17 +115,19 @@ def test_config():
     except Exception as e:
         print(f"  ❌ Config test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # ============================================================
 # TEST 3: Model creation and tensor shapes
 # ============================================================
 @with_timeout(30, False)
 def test_model_shapes():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 3: Model tensor shapes")
-    print("="*60)
+    print("=" * 60)
     try:
         import model as model_module
         import config as C
@@ -146,8 +148,16 @@ def test_model_shapes():
             outputs = m(images)
 
         # Check output keys
-        expected_keys = ['cls_preds', 'reg_preds', 'heatmaps', 'keypoints',
-                        'pose_confidence', 'head_pose', 'act_logits', 'psr_logits']
+        expected_keys = [
+            "cls_preds",
+            "reg_preds",
+            "heatmaps",
+            "keypoints",
+            "pose_confidence",
+            "head_pose",
+            "act_logits",
+            "psr_logits",
+        ]
 
         passed = 0
         failed = 0
@@ -164,14 +174,23 @@ def test_model_shapes():
         # Check specific shapes
         print("\n  Shape validation:")
         checks = [
-            ("cls_preds B,N,24", outputs['cls_preds'].shape[0] == B and outputs['cls_preds'].shape[2] == 24),
-            ("reg_preds B,N,4", outputs['reg_preds'].shape[0] == B and outputs['reg_preds'].shape[2] == 4),
-            ("heatmaps B,17,H,W", len(outputs['heatmaps'].shape) == 4 and outputs['heatmaps'].shape[1] == 17),
-            ("keypoints B,17,2", outputs['keypoints'].shape == (B, 17, 2)),
-            ("pose_confidence B,17", outputs['pose_confidence'].shape == (B, 17)),
-            ("head_pose B,9", outputs['head_pose'].shape == (B, 9)),
-            ("act_logits B,74or75", outputs['act_logits'].shape[1] in [74, 75]),
-            ("psr_logits B,11", outputs['psr_logits'].shape == (B, 11)),
+            (
+                "cls_preds B,N,24",
+                outputs["cls_preds"].shape[0] == B and outputs["cls_preds"].shape[2] == 24,
+            ),
+            (
+                "reg_preds B,N,4",
+                outputs["reg_preds"].shape[0] == B and outputs["reg_preds"].shape[2] == 4,
+            ),
+            (
+                "heatmaps B,17,H,W",
+                len(outputs["heatmaps"].shape) == 4 and outputs["heatmaps"].shape[1] == 17,
+            ),
+            ("keypoints B,17,2", outputs["keypoints"].shape == (B, 17, 2)),
+            ("pose_confidence B,17", outputs["pose_confidence"].shape == (B, 17)),
+            ("head_pose B,9", outputs["head_pose"].shape == (B, 9)),
+            ("act_logits B,74or75", outputs["act_logits"].shape[1] in [74, 75]),
+            ("psr_logits B,11", outputs["psr_logits"].shape == (B, 11)),
         ]
 
         for name, result in checks:
@@ -182,21 +201,23 @@ def test_model_shapes():
             else:
                 failed += 1
 
-        print(f"\n  Result: {passed}/{passed+failed} passed")
+        print(f"\n  Result: {passed}/{passed + failed} passed")
         return failed == 0
     except Exception as e:
         print(f"  ❌ Model test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # ============================================================
 # TEST 4: Kendall logvar initialization
 # ============================================================
 def test_kendall_init():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 4: Kendall logvar initialization")
-    print("="*60)
+    print("=" * 60)
     try:
         import losses as losses_module
         import config as C
@@ -225,22 +246,24 @@ def test_kendall_init():
             else:
                 failed += 1
 
-        print(f"\n  Result: {passed}/{passed+failed} passed")
+        print(f"\n  Result: {passed}/{passed + failed} passed")
         return failed == 0
     except Exception as e:
         print(f"  ❌ Kendall init test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # ============================================================
 # TEST 5: Loss function values
 # ============================================================
 @with_timeout(30, False)
 def test_loss_values():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 5: Loss function sanity")
-    print("="*60)
+    print("=" * 60)
     try:
         import losses as losses_module
         import model as model_module
@@ -268,16 +291,18 @@ def test_loss_values():
 
         # Create detection targets per image (list of dicts, one per image in batch)
         targets = {
-            'detection': [
-                {'boxes': torch.tensor([[100.0, 100.0, 300.0, 300.0]], dtype=torch.float32),
-                 'labels': torch.tensor([2], dtype=torch.long)}
+            "detection": [
+                {
+                    "boxes": torch.tensor([[100.0, 100.0, 300.0, 300.0]], dtype=torch.float32),
+                    "labels": torch.tensor([2], dtype=torch.long),
+                }
                 for _ in range(B)
             ],
-            'keypoints': torch.randn(B, 17, 2),
-            'pose_confidence': torch.rand(B, 17),
-            'head_pose': torch.randn(B, 9),
-            'activity': torch.randint(0, C.NUM_CLASSES_ACT, (B,)),
-            'psr_labels': torch.randint(0, 2, (B, C.NUM_PSR_COMPONENTS)).float(),
+            "keypoints": torch.randn(B, 17, 2),
+            "pose_confidence": torch.rand(B, 17),
+            "head_pose": torch.randn(B, 9),
+            "activity": torch.randint(0, C.NUM_CLASSES_ACT, (B,)),
+            "psr_labels": torch.randint(0, 2, (B, C.NUM_PSR_COMPONENTS)).float(),
         }
 
         # Set epoch to trigger staged loss
@@ -291,7 +316,7 @@ def test_loss_values():
 
         # Check loss dict has expected keys
         # Note: loss_dict values may be floats (not tensors) after Kendall division
-        expected_loss_keys = ['det', 'pose', 'head_pose', 'activity', 'psr']
+        expected_loss_keys = ["det", "pose", "head_pose", "activity", "psr"]
         passed = 0
         failed = 0
         for key in expected_loss_keys:
@@ -325,22 +350,24 @@ def test_loss_values():
             print(f"  ❌ Total loss is NaN/Inf")
             failed += 1
 
-        print(f"\n  Result: {passed}/{passed+failed} passed")
+        print(f"\n  Result: {passed}/{passed + failed} passed")
         return failed == 0
     except Exception as e:
         print(f"  ❌ Loss test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # ============================================================
 # TEST 6: Backward pass and gradient flow
 # ============================================================
 @with_timeout(120, False)
 def test_backward():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 6: Backward pass and gradient flow")
-    print("="*60)
+    print("=" * 60)
     try:
         import model as model_module
         import losses as losses_module
@@ -365,16 +392,18 @@ def test_backward():
 
         # Dummy targets — detection targets must be a list of dicts, one per image
         targets = {
-            'detection': [
-                {'boxes': torch.tensor([[100.0, 100.0, 300.0, 300.0]], dtype=torch.float32),
-                 'labels': torch.tensor([2], dtype=torch.long)}
+            "detection": [
+                {
+                    "boxes": torch.tensor([[100.0, 100.0, 300.0, 300.0]], dtype=torch.float32),
+                    "labels": torch.tensor([2], dtype=torch.long),
+                }
                 for _ in range(B)
             ],
-            'keypoints': torch.randn(B, 17, 2),
-            'pose_confidence': torch.rand(B, 17),
-            'head_pose': torch.randn(B, 9),
-            'activity': torch.randint(0, C.NUM_CLASSES_ACT, (B,)),
-            'psr_labels': torch.randint(0, 2, (B, C.NUM_PSR_COMPONENTS)).float(),
+            "keypoints": torch.randn(B, 17, 2),
+            "pose_confidence": torch.rand(B, 17),
+            "head_pose": torch.randn(B, 9),
+            "activity": torch.randint(0, C.NUM_CLASSES_ACT, (B,)),
+            "psr_labels": torch.randint(0, 2, (B, C.NUM_PSR_COMPONENTS)).float(),
         }
 
         # Forward pass (real model gives us anchors + all outputs)
@@ -411,8 +440,14 @@ def test_backward():
         # because Kendall prec_pose=0 in stage 1 (epochs 1-5).
         # Only backbone/fpn/detection/pose/activity/psr heads are guaranteed
         # to have gradients in epoch 0. Check headpose_film separately (Test 7).
-        modules_to_check = ['backbone', 'fpn', 'detection_head', 'pose_head',
-                          'activity_head', 'psr_head']
+        modules_to_check = [
+            "backbone",
+            "fpn",
+            "detection_head",
+            "pose_head",
+            "activity_head",
+            "psr_head",
+        ]
         for mod_name in modules_to_check:
             mod = getattr(m, mod_name, None)
             if mod is not None:
@@ -424,13 +459,15 @@ def test_backward():
                 else:
                     failed += 1
 
-        print(f"\n  Result: {passed}/{passed+failed} passed")
+        print(f"\n  Result: {passed}/{passed + failed} passed")
         return failed == 0
     except Exception as e:
         print(f"  ❌ Backward test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # ============================================================
 # TEST 7: headpose_film gradient isolation
@@ -446,9 +483,9 @@ def test_headpose_film_detach():
 
     Verification: Run model forward + backward, then check which params get gradients.
     """
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 7: headpose_film gradient isolation")
-    print("="*60)
+    print("=" * 60)
     try:
         import model as model_module
         import losses as losses_module
@@ -473,16 +510,18 @@ def test_headpose_film_detach():
             outputs_for_targets = m(images)
 
         targets = {
-            'detection': [
-                {'boxes': torch.tensor([[100.0, 100.0, 300.0, 300.0]], dtype=torch.float32),
-                 'labels': torch.tensor([2], dtype=torch.long)}
+            "detection": [
+                {
+                    "boxes": torch.tensor([[100.0, 100.0, 300.0, 300.0]], dtype=torch.float32),
+                    "labels": torch.tensor([2], dtype=torch.long),
+                }
                 for _ in range(B)
             ],
-            'keypoints': torch.randn(B, 17, 2),
-            'pose_confidence': torch.rand(B, 17),
-            'head_pose': torch.randn(B, 9),
-            'activity': torch.randint(0, C.NUM_CLASSES_ACT, (B,)),
-            'psr_labels': torch.randint(0, 2, (B, C.NUM_PSR_COMPONENTS)).float(),
+            "keypoints": torch.randn(B, 17, 2),
+            "pose_confidence": torch.rand(B, 17),
+            "head_pose": torch.randn(B, 9),
+            "activity": torch.randint(0, C.NUM_CLASSES_ACT, (B,)),
+            "psr_labels": torch.randint(0, 2, (B, C.NUM_PSR_COMPONENTS)).float(),
         }
 
         # Epoch 0 = no Kendall staging, all modules get gradient signals
@@ -503,12 +542,14 @@ def test_headpose_film_detach():
         hp_params = hp_gamma_params + hp_beta_params
 
         hp_film_has_grad = any(p.grad is not None for p in hp_params)
-        head_pose_head_has_grad = any(
-            p.grad is not None for p in m.head_pose_head.parameters()
-        )
+        head_pose_head_has_grad = any(p.grad is not None for p in m.head_pose_head.parameters())
 
-        print(f"  {'✅' if hp_film_has_grad else '❌'} headpose_film params have gradients (gamma/beta nets)")
-        print(f"  {'✅' if not head_pose_head_has_grad else '❌'} head_pose_head params isolated from activity path (via detach)")
+        print(
+            f"  {'✅' if hp_film_has_grad else '❌'} headpose_film params have gradients (gamma/beta nets)"
+        )
+        print(
+            f"  {'✅' if not head_pose_head_has_grad else '❌'} head_pose_head params isolated from activity path (via detach)"
+        )
 
         # Also verify backbone/other heads get gradients
         backbone_has_grad = any(p.grad is not None for p in m.backbone.parameters())
@@ -530,29 +571,31 @@ def test_headpose_film_detach():
         else:
             failed += 1
 
-        print(f"\n  Result: {passed}/{passed+failed} passed")
+        print(f"\n  Result: {passed}/{passed + failed} passed")
         return failed == 0
     except Exception as e:
         print(f"  ❌ headpose_film detach test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # ============================================================
 # TEST 8: FeatureBank round-trip
 # ============================================================
 def test_feature_bank():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 8: FeatureBank round-trip")
-    print("="*60)
+    print("=" * 60)
     try:
         import model as model_module
 
         fb = model_module.FeatureBank(embed_dim=512, window_size=8)
 
         B = 2
-        video_ids = ['seq1', 'seq2']
-        camera_views = ['front', 'top']
+        video_ids = ["seq1", "seq2"]
+        camera_views = ["front", "top"]
 
         # FeatureBank.forward() takes (projected_features, video_ids, camera_views)
         # and returns (bank, T, embed_dim) for each item in batch
@@ -580,9 +623,9 @@ def test_feature_bank():
         # Test per-sequence reset — use feat1[0:1] to get B=1 and matching video_ids
         fb(feat1, video_ids, camera_views)  # accumulate first
         fb(feat2, video_ids, camera_views)  # accumulate second
-        fb.reset_sequence('seq1', 'front')
+        fb.reset_sequence("seq1", "front")
         # Must use B=1 with matching video_ids list
-        bank5 = fb(feat1[0:1], ['seq1'], ['front'])
+        bank5 = fb(feat1[0:1], ["seq1"], ["front"])
         print(f"  After reset_sequence seq1 shape: {bank5.shape}")
 
         passed = 0
@@ -611,22 +654,24 @@ def test_feature_bank():
             print(f"  ❌ Reset should restore initial state")
             failed += 1
 
-        print(f"\n  Result: {passed}/{passed+failed} passed")
+        print(f"\n  Result: {passed}/{passed + failed} passed")
         return failed == 0
     except Exception as e:
         print(f"  ❌ FeatureBank test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # ============================================================
 # TEST 9: EMA functionality
 # ============================================================
 @with_timeout(30, False)
 def test_ema():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 9: EMA functionality")
-    print("="*60)
+    print("=" * 60)
     try:
         import model as model_module
 
@@ -707,22 +752,24 @@ def test_ema():
         ema.restore()
         print(f"  ✅ restore() executed")
 
-        print(f"\n  Result: {passed}/{passed+failed} passed")
+        print(f"\n  Result: {passed}/{passed + failed} passed")
         return failed == 0
     except Exception as e:
         print(f"  ❌ EMA test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # ============================================================
 # TEST 10: Staged Kendall masking
 # ============================================================
 @with_timeout(30, False)
 def test_staged_kendall():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 10: Staged Kendall masking")
-    print("="*60)
+    print("=" * 60)
     try:
         import losses as losses_module
         import model as model_module
@@ -749,16 +796,18 @@ def test_staged_kendall():
 
         # Create detection targets per image
         targets = {
-            'detection': [
-                {'boxes': torch.tensor([[100.0, 100.0, 300.0, 300.0]], dtype=torch.float32),
-                 'labels': torch.tensor([2], dtype=torch.long)}
+            "detection": [
+                {
+                    "boxes": torch.tensor([[100.0, 100.0, 300.0, 300.0]], dtype=torch.float32),
+                    "labels": torch.tensor([2], dtype=torch.long),
+                }
                 for _ in range(B)
             ],
-            'keypoints': torch.randn(B, 17, 2),
-            'pose_confidence': torch.rand(B, 17),
-            'head_pose': torch.randn(B, 9),
-            'activity': torch.randint(0, C.NUM_CLASSES_ACT, (B,)),
-            'psr_labels': torch.randint(0, 2, (B, C.NUM_PSR_COMPONENTS)).float(),
+            "keypoints": torch.randn(B, 17, 2),
+            "pose_confidence": torch.rand(B, 17),
+            "head_pose": torch.randn(B, 9),
+            "activity": torch.randint(0, C.NUM_CLASSES_ACT, (B,)),
+            "psr_labels": torch.randint(0, 2, (B, C.NUM_PSR_COMPONENTS)).float(),
         }
 
         passed = 0
@@ -767,39 +816,43 @@ def test_staged_kendall():
         # Test Stage 1 (epoch 1-5)
         loss_fn.set_epoch(3)
         _, loss_dict_s1 = loss_fn(outputs, targets)
-        det_s1 = loss_dict_s1['det']
-        pose_s1 = loss_dict_s1['pose']
-        act_s1 = loss_dict_s1['activity']
-        psr_s1 = loss_dict_s1['psr']
-        hp_s1 = loss_dict_s1['head_pose']
+        det_s1 = loss_dict_s1["det"]
+        pose_s1 = loss_dict_s1["pose"]
+        act_s1 = loss_dict_s1["activity"]
+        psr_s1 = loss_dict_s1["psr"]
+        hp_s1 = loss_dict_s1["head_pose"]
 
-        print(f"  Stage 1 (epoch 3): det={det_s1:.4f}, pose={pose_s1:.4f}, hp={hp_s1:.4f}, act={act_s1:.4f}, psr={psr_s1:.4f}")
+        print(
+            f"  Stage 1 (epoch 3): det={det_s1:.4f}, pose={pose_s1:.4f}, hp={hp_s1:.4f}, act={act_s1:.4f}, psr={psr_s1:.4f}"
+        )
 
         # Stage 1 (epoch 1-5): Kendall zeroes hp/act/psr precisions
         # Raw losses still flow to loss_dict (pre-kendall), but Kendall-weighted total uses staged precisions
         # In stage 1, only det is active in Kendall sum. Check via Kendall weights.
-        w_det_s1 = loss_dict_s1['w_det']
+        w_det_s1 = loss_dict_s1["w_det"]
         print(f"  Kendall weights (S1): w_det={w_det_s1:.4f}")
 
         # Test Stage 2 (epoch 6-15)
         loss_fn.set_epoch(10)
         _, loss_dict_s2 = loss_fn(outputs, targets)
-        det_s2 = loss_dict_s2['det']
-        pose_s2 = loss_dict_s2['pose']
-        act_s2 = loss_dict_s2['activity']
-        psr_s2 = loss_dict_s2['psr']
-        hp_s2 = loss_dict_s2['head_pose']
+        det_s2 = loss_dict_s2["det"]
+        pose_s2 = loss_dict_s2["pose"]
+        act_s2 = loss_dict_s2["activity"]
+        psr_s2 = loss_dict_s2["psr"]
+        hp_s2 = loss_dict_s2["head_pose"]
 
-        print(f"  Stage 2 (epoch 10): det={det_s2:.4f}, pose={pose_s2:.4f}, hp={hp_s2:.4f}, act={act_s2:.4f}, psr={psr_s2:.4f}")
+        print(
+            f"  Stage 2 (epoch 10): det={det_s2:.4f}, pose={pose_s2:.4f}, hp={hp_s2:.4f}, act={act_s2:.4f}, psr={psr_s2:.4f}"
+        )
 
-        w_det_s2 = loss_dict_s2['w_det']
-        w_pose_s2 = loss_dict_s2['w_pose']
+        w_det_s2 = loss_dict_s2["w_det"]
+        w_pose_s2 = loss_dict_s2["w_pose"]
         print(f"  Kendall weights (S2): w_det={w_det_s2:.4f}, w_pose={w_pose_s2:.4f}")
 
         # Stage 2: Kendall zeroes act/psr precisions, det+pose(hp) active
         # The staged Kendall zeroes prec_act and prec_psr to 0 in stage 2
         # So w_act and w_psr should be ~0
-        if loss_dict_s2['w_act'] < 0.01 and loss_dict_s2['w_psr'] < 0.01:
+        if loss_dict_s2["w_act"] < 0.01 and loss_dict_s2["w_psr"] < 0.01:
             print(f"  ✅ Stage 2: Kendall correctly zeroes act/psr precision scalars")
             passed += 1
         else:
@@ -809,20 +862,24 @@ def test_staged_kendall():
         # Test Stage 3 (epoch 16+)
         loss_fn.set_epoch(20)
         _, loss_dict_s3 = loss_fn(outputs, targets)
-        det_s3 = loss_dict_s3['det']
-        act_s3 = loss_dict_s3['activity']
-        psr_s3 = loss_dict_s3['psr']
-        hp_s3 = loss_dict_s3['head_pose']
+        det_s3 = loss_dict_s3["det"]
+        act_s3 = loss_dict_s3["activity"]
+        psr_s3 = loss_dict_s3["psr"]
+        hp_s3 = loss_dict_s3["head_pose"]
 
-        print(f"  Stage 3 (epoch 20): det={det_s3:.4f}, hp={hp_s3:.4f}, act={act_s3:.4f}, psr={psr_s3:.4f}")
+        print(
+            f"  Stage 3 (epoch 20): det={det_s3:.4f}, hp={hp_s3:.4f}, act={act_s3:.4f}, psr={psr_s3:.4f}"
+        )
 
         # Stage 3: all Kendall weights should be non-zero
-        all_weights_nonzero = all([
-            loss_dict_s3['w_det'] > 0.01,
-            loss_dict_s3['w_pose'] > 0.01,
-            loss_dict_s3['w_act'] > 0.01,
-            loss_dict_s3['w_psr'] > 0.01,
-        ])
+        all_weights_nonzero = all(
+            [
+                loss_dict_s3["w_det"] > 0.01,
+                loss_dict_s3["w_pose"] > 0.01,
+                loss_dict_s3["w_act"] > 0.01,
+                loss_dict_s3["w_psr"] > 0.01,
+            ]
+        )
         if all_weights_nonzero:
             print(f"  ✅ Stage 3: all Kendall weights are active")
             passed += 1
@@ -833,8 +890,8 @@ def test_staged_kendall():
         # Test epoch 0 (no staging — backward compat)
         loss_fn.set_epoch(0)
         _, loss_dict_s0 = loss_fn(outputs, targets)
-        det_s0 = loss_dict_s0['det']
-        hp_s0 = loss_dict_s0['head_pose']
+        det_s0 = loss_dict_s0["det"]
+        hp_s0 = loss_dict_s0["head_pose"]
 
         print(f"  Epoch 0 (no staging): det={det_s0:.4f}, hp={hp_s0:.4f}")
 
@@ -845,21 +902,23 @@ def test_staged_kendall():
             print(f"  ❌ Epoch 0: should have both losses")
             failed += 1
 
-        print(f"\n  Result: {passed}/{passed+failed} passed")
+        print(f"\n  Result: {passed}/{passed + failed} passed")
         return failed == 0
     except Exception as e:
         print(f"  ❌ Staged Kendall test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # ============================================================
 # TEST 11: WingLoss, FocalLoss, BinaryFocal sanity
 # ============================================================
 def test_loss_functions():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 11: Individual loss function sanity")
-    print("="*60)
+    print("=" * 60)
     try:
         import losses as losses_module
 
@@ -888,8 +947,10 @@ def test_loss_functions():
         anchors[:, 2:] = anchors[:, :2].abs() + 10  # ensure w,h > 0
         # B_f=4 images in batch → need 4 target dicts, one per image
         targets = [
-            {'boxes': torch.tensor([[50.0, 50.0, 100.0, 100.0]], dtype=torch.float32),
-             'labels': torch.tensor([2], dtype=torch.long)}
+            {
+                "boxes": torch.tensor([[50.0, 50.0, 100.0, 100.0]], dtype=torch.float32),
+                "labels": torch.tensor([2], dtype=torch.long),
+            }
             for _ in range(B_f)
         ]
         f_loss, _ = focal(cls_preds, reg_preds, anchors, targets)
@@ -897,7 +958,9 @@ def test_loss_functions():
             print(f"  ✅ FocalLoss: {f_loss.item():.4f}")
             passed += 1
         else:
-            print(f"  ❌ FocalLoss failed: {f_loss.item() if torch.isfinite(f_loss) else 'NaN/Inf'}")
+            print(
+                f"  ❌ FocalLoss failed: {f_loss.item() if torch.isfinite(f_loss) else 'NaN/Inf'}"
+            )
             failed += 1
 
         # BinaryFocalLoss — use binary_focal_loss function (no class wrapper)
@@ -937,21 +1000,23 @@ def test_loss_functions():
             print(f"  ❌ LDAMLoss failed: {ldam_loss.item()}")
             failed += 1
 
-        print(f"\n  Result: {passed}/{passed+failed} passed")
+        print(f"\n  Result: {passed}/{passed + failed} passed")
         return failed == 0
     except Exception as e:
         print(f"  ❌ Loss functions test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # ============================================================
 # TEST 12: count_parameters utility
 # ============================================================
 def test_count_params():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 12: Parameter counting utility")
-    print("="*60)
+    print("=" * 60)
     try:
         import model as model_module
 
@@ -959,8 +1024,8 @@ def test_count_params():
 
         result = model_module.count_parameters(m)
 
-        total = result['total_all']
-        trainable = result['total_trainable']
+        total = result["total_all"]
+        trainable = result["total_trainable"]
 
         print(f"  Total parameters: {total:,}")
         print(f"  Trainable parameters: {trainable:,}")
@@ -982,22 +1047,24 @@ def test_count_params():
             print(f"  ❌ Trainable params too low")
             failed += 1
 
-        print(f"\n  Result: {passed}/{passed+failed} passed")
+        print(f"\n  Result: {passed}/{passed + failed} passed")
         return failed == 0
     except Exception as e:
         print(f"  ❌ count_parameters test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # ============================================================
 # TEST 13: compute_efficiency_metrics accepts string device
 # [Bug fix: evaluate.py line 1492 — device_obj normalization]
 # ============================================================
 def test_compute_efficiency_metrics_string_device():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 13: compute_efficiency_metrics — string device")
-    print("="*60)
+    print("=" * 60)
     try:
         import config as C
         from model import POPWMultiTaskModel
@@ -1014,17 +1081,19 @@ def test_compute_efficiency_metrics_string_device():
 
         # Pass string 'cuda' (or 'cpu') — this is the bug fix:
         # compute_efficiency_metrics expects torch.device but callers pass str
-        device_str = 'cuda' if torch.cuda.is_available() else 'cpu'
+        device_str = "cuda" if torch.cuda.is_available() else "cpu"
         eff = compute_efficiency_metrics(
             model,
             img_size=(C.IMG_HEIGHT, C.IMG_WIDTH),
             device=device_str,
         )
 
-        has_keys = all(k in eff for k in ['eff_params_m', 'eff_gflops', 'eff_fps'])
+        has_keys = all(k in eff for k in ["eff_params_m", "eff_gflops", "eff_fps"])
         if has_keys:
             print(f"  ✅ compute_efficiency_metrics accepted string device '{device_str}'")
-            print(f"     params={eff['eff_params_m']:.2f}M, gflops={eff['eff_gflops']:.1f}G, fps={eff['eff_fps']:.1f}")
+            print(
+                f"     params={eff['eff_params_m']:.2f}M, gflops={eff['eff_gflops']:.1f}G, fps={eff['eff_fps']:.1f}"
+            )
             return True
         else:
             print(f"  ❌ Missing keys in efficiency output: {eff.keys()}")
@@ -1032,8 +1101,10 @@ def test_compute_efficiency_metrics_string_device():
     except Exception as e:
         print(f"  ❌ compute_efficiency_metrics test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # ============================================================
 # TEST 14: evaluate_all pipeline (synthetic data)
@@ -1041,9 +1112,9 @@ def test_compute_efficiency_metrics_string_device():
 # ============================================================
 @with_timeout(60, False)
 def test_evaluate_all_pipeline():
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("TEST 14: evaluate_all — full pipeline with synthetic data")
-    print("="*60)
+    print("=" * 60)
     try:
         import config as C
         from model import POPWMultiTaskModel
@@ -1052,72 +1123,101 @@ def test_evaluate_all_pipeline():
         from torch.utils.data import DataLoader, Dataset
 
         class _SynthDS(Dataset):
-            def __init__(self, n=6, H=720, W=1280):
-                self.n = n; self.H = H; self.W = W
+            def __init__(self, n=6, h=720, w=1280):
+                self.n = n
+                self.H = h
+                self.W = w
+
             def __len__(self):
                 return self.n
+
             def __getitem__(self, idx):
                 n_dets = 2
                 return (
                     torch.randn(3, self.H, self.W),
                     {
-                        'detection': [{'boxes': torch.rand(n_dets, 4) * torch.tensor([self.W, self.H, self.W, self.H]),
-                                       'labels': torch.randint(0, 24, (n_dets,))}],
-                        'head_pose': torch.rand(9) * 2 - 1,
-                        'psr_labels': torch.randint(0, 2, (11,)).float(),
-                        'activity': torch.randint(0, 75, (1,)).item(),
-                        'keypoints': torch.rand(17, 2) * torch.tensor([self.H, self.W]),
-                        'pose_confidence': torch.rand(17),
-                        'clip_rgb': None,
-                        'metadata': [{'recording_id': f'synth_{idx}', 'camera_view': 'default'}],
-                    }
+                        "detection": [
+                            {
+                                "boxes": torch.rand(n_dets, 4)
+                                * torch.tensor([self.W, self.H, self.W, self.H]),
+                                "labels": torch.randint(0, 24, (n_dets,)),
+                            }
+                        ],
+                        "head_pose": torch.rand(9) * 2 - 1,
+                        "psr_labels": torch.randint(0, 2, (11,)).float(),
+                        "activity": torch.randint(0, 75, (1,)).item(),
+                        "keypoints": torch.rand(17, 2) * torch.tensor([self.H, self.W]),
+                        "pose_confidence": torch.rand(17),
+                        "clip_rgb": None,
+                        "metadata": [{"recording_id": f"synth_{idx}", "camera_view": "default"}],
+                    },
                 )
 
         def _collate(batch):
             B = len(batch)
             images = torch.stack([b[0] for b in batch])
-            detection_list = [{'boxes': b[1]['detection'][0]['boxes'], 'labels': b[1]['detection'][0]['labels']} for b in batch]
+            detection_list = [
+                {"boxes": b[1]["detection"][0]["boxes"], "labels": b[1]["detection"][0]["labels"]}
+                for b in batch
+            ]
             return images, {
-                'detection': detection_list,
-                'head_pose': torch.stack([b[1]['head_pose'] for b in batch]),
-                'psr_labels': torch.stack([b[1]['psr_labels'] for b in batch]),
-                'activity': torch.tensor([b[1]['activity'] for b in batch]),
-                'keypoints': torch.stack([b[1]['keypoints'] for b in batch]),
-                'pose_confidence': torch.stack([b[1]['pose_confidence'] for b in batch]),
-                'clip_rgb': None,
-                'metadata': [b[1]['metadata'][0] for b in batch],
+                "detection": detection_list,
+                "head_pose": torch.stack([b[1]["head_pose"] for b in batch]),
+                "psr_labels": torch.stack([b[1]["psr_labels"] for b in batch]),
+                "activity": torch.tensor([b[1]["activity"] for b in batch]),
+                "keypoints": torch.stack([b[1]["keypoints"] for b in batch]),
+                "pose_confidence": torch.stack([b[1]["pose_confidence"] for b in batch]),
+                "clip_rgb": None,
+                "metadata": [b[1]["metadata"][0] for b in batch],
             }
 
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         model = POPWMultiTaskModel(
-            pretrained=False, backbone_type=C.BACKBONE,
-            use_headpose_film=True, use_videomae=False, train_pose=True,
+            pretrained=False,
+            backbone_type=C.BACKBONE,
+            use_headpose_film=True,
+            use_videomae=False,
+            train_pose=True,
         ).to(device)
         criterion = MultiTaskLoss(
             num_classes_act=C.NUM_CLASSES_ACT,
             num_psr_components=C.NUM_PSR_COMPONENTS,
-            train_det=True, train_pose=True,
-            train_act=True, train_psr=True,
+            train_det=True,
+            train_pose=True,
+            train_act=True,
+            train_psr=True,
             use_kendall=C.STAGED_TRAINING,
         ).to(device)
-        loader = DataLoader(_SynthDS(n=6), batch_size=2, shuffle=False, num_workers=0, collate_fn=_collate)
+        loader = DataLoader(
+            _SynthDS(n=6), batch_size=2, shuffle=False, num_workers=0, collate_fn=_collate
+        )
 
         metrics = evaluate_all(
-            model, criterion, loader,
+            model,
+            criterion,
+            loader,
             device=device,
             max_batches=3,
         )
 
         num_keys = len(metrics)
-        has_loss = 'loss' in metrics
-        has_act_acc = 'act_accuracy' in metrics
-        has_eff = 'eff_params_m' in metrics
+        has_loss = "loss" in metrics
+        has_act_acc = "act_accuracy" in metrics
+        has_eff = "eff_params_m" in metrics
 
         print(f"  ✅ evaluate_all returned {num_keys} metric keys")
         print(f"     loss={metrics.get('loss', None):.4f}" if has_loss else "  ❌ Missing loss")
-        print(f"     act_accuracy={metrics.get('act_accuracy', None)}" if has_act_acc else "  ❌ Missing act_accuracy")
-        print(f"     eff_params_m={metrics.get('eff_params_m', None)}" if has_eff else "  ❌ Missing eff_params_m")
+        print(
+            f"     act_accuracy={metrics.get('act_accuracy', None)}"
+            if has_act_acc
+            else "  ❌ Missing act_accuracy"
+        )
+        print(
+            f"     eff_params_m={metrics.get('eff_params_m', None)}"
+            if has_eff
+            else "  ❌ Missing eff_params_m"
+        )
         print(f"     det_mAP50={metrics.get('det_mAP50', None)}")
 
         passed = num_keys > 60 and has_loss and has_eff
@@ -1126,16 +1226,18 @@ def test_evaluate_all_pipeline():
     except Exception as e:
         print(f"  ❌ evaluate_all pipeline test failed: {e}")
         import traceback
+
         traceback.print_exc()
         return False
+
 
 # ============================================================
 # MAIN
 # ============================================================
 def main():
-    print("\n" + "#"*60)
+    print("\n" + "#" * 60)
     print("# POPW COMPREHENSIVE SMOKE TEST")
-    print("#"*60)
+    print("#" * 60)
 
     tests = [
         ("Imports", test_imports),
@@ -1150,7 +1252,10 @@ def main():
         ("Staged Kendall", test_staged_kendall),
         ("Loss Functions", test_loss_functions),
         ("Count Parameters", test_count_params),
-        ("compute_efficiency_metrics — string device", test_compute_efficiency_metrics_string_device),
+        (
+            "compute_efficiency_metrics — string device",
+            test_compute_efficiency_metrics_string_device,
+        ),
         ("evaluate_all pipeline (synthetic)", test_evaluate_all_pipeline),
     ]
 
@@ -1163,9 +1268,9 @@ def main():
             print(f"  ❌ TEST CRASHED: {e}")
             results.append((name, False))
 
-    print("\n" + "#"*60)
+    print("\n" + "#" * 60)
     print("# SUMMARY")
-    print("#"*60)
+    print("#" * 60)
 
     passed = sum(1 for _, r in results if r)
     failed = len(results) - passed
@@ -1183,5 +1288,6 @@ def main():
         print(f"\n✅ All tests passed!")
         return 0
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     sys.exit(main())

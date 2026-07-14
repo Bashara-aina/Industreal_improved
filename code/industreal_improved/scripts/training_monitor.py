@@ -12,12 +12,11 @@ Usage:
     python scripts/training_monitor.py --log /tmp/mtl_mvit_run9.log
     python scripts/training_monitor.py --log /tmp/mtl_mvit_run9.log --once  # single check
 """
+
 import argparse
-import json
 import re
 import sys
 import time
-from collections import defaultdict
 from pathlib import Path
 
 
@@ -50,44 +49,50 @@ def parse_log(path: Path) -> dict:
         for line in f:
             m = BATCH_RE.search(line)
             if m:
-                batches.append({
-                    "batch": int(m.group(1)),
-                    "total": int(m.group(2)),
-                    "accum_step": int(m.group(3)),
-                    "accum_total": int(m.group(4)),
-                    "loss": float(m.group(5)),
-                    "det": float(m.group(6)),
-                    "act": float(m.group(7)),
-                    "psr": float(m.group(8)),
-                    "pose": float(m.group(9)),
-                })
+                batches.append(
+                    {
+                        "batch": int(m.group(1)),
+                        "total": int(m.group(2)),
+                        "accum_step": int(m.group(3)),
+                        "accum_total": int(m.group(4)),
+                        "loss": float(m.group(5)),
+                        "det": float(m.group(6)),
+                        "act": float(m.group(7)),
+                        "psr": float(m.group(8)),
+                        "pose": float(m.group(9)),
+                    }
+                )
                 continue
             m = EPOCH_RE.search(line)
             if m:
-                epochs.append({
-                    "epoch": int(m.group(1)),
-                    "total": int(m.group(2)),
-                    "loss": float(m.group(3)),
-                    "det": float(m.group(4)),
-                    "act": float(m.group(5)),
-                    "psr": float(m.group(6)),
-                    "pose": float(m.group(7)),
-                    "lv_det": float(m.group(8)),
-                    "lv_act": float(m.group(9)),
-                    "lv_psr": float(m.group(10)),
-                    "lv_pose": float(m.group(11)),
-                })
+                epochs.append(
+                    {
+                        "epoch": int(m.group(1)),
+                        "total": int(m.group(2)),
+                        "loss": float(m.group(3)),
+                        "det": float(m.group(4)),
+                        "act": float(m.group(5)),
+                        "psr": float(m.group(6)),
+                        "pose": float(m.group(7)),
+                        "lv_det": float(m.group(8)),
+                        "lv_act": float(m.group(9)),
+                        "lv_psr": float(m.group(10)),
+                        "lv_pose": float(m.group(11)),
+                    }
+                )
                 continue
             m = EVAL_RE.search(line)
             if m:
-                evals.append({
-                    "split": m.group(1),
-                    "act_top1": float(m.group(2)),
-                    "act_top5": float(m.group(3)),
-                    "psr_f1": float(m.group(4)),
-                    "det_bce": float(m.group(5)),
-                    "pose_fwd": float(m.group(6)),
-                })
+                evals.append(
+                    {
+                        "split": m.group(1),
+                        "act_top1": float(m.group(2)),
+                        "act_top5": float(m.group(3)),
+                        "psr_f1": float(m.group(4)),
+                        "det_bce": float(m.group(5)),
+                        "pose_fwd": float(m.group(6)),
+                    }
+                )
                 continue
             if "WARN" in line.upper() or "ERROR" in line.upper() or "Traceback" in line:
                 warnings.append(line.strip())
@@ -118,14 +123,17 @@ def diagnose(data: dict) -> list:
         last_ep = data["epochs"][-1]
         # act cap = 1.0
         if last_ep["lv_act"] > 1.0:
-            issues.append(("INFO",
-                f"log_var_act={last_ep['lv_act']:.2f} > cap 1.0; cap IS active (loss uses min(lv, 1.0) = exp(-1.0) = 0.37)"))
+            issues.append(
+                (
+                    "INFO",
+                    f"log_var_act={last_ep['lv_act']:.2f} > cap 1.0; cap IS active (loss uses min(lv, 1.0) = exp(-1.0) = 0.37)",
+                )
+            )
         else:
             issues.append(("OK", f"log_var_act={last_ep['lv_act']:.2f} ≤ cap 1.0"))
         # psr cap = 0.5
         if last_ep["lv_psr"] > 0.5:
-            issues.append(("INFO",
-                f"log_var_psr={last_ep['lv_psr']:.2f} > cap 0.5; cap IS active"))
+            issues.append(("INFO", f"log_var_psr={last_ep['lv_psr']:.2f} > cap 0.5; cap IS active"))
         else:
             issues.append(("OK", f"log_var_psr={last_ep['lv_psr']:.2f} ≤ cap 0.5"))
 
@@ -141,15 +149,23 @@ def diagnose(data: dict) -> list:
             severity = "OK" if pct < 5 else ("WARN" if pct < 20 else "ERROR")
             if task == "loss" and pct > 50:
                 severity = "ERROR"
-            issues.append((severity,
-                f"{task}: {e_mean:.4f} → {r_mean:.4f} ({sign}{abs(pct):.1f}% over last 100 batches)"))
+            issues.append(
+                (
+                    severity,
+                    f"{task}: {e_mean:.4f} → {r_mean:.4f} ({sign}{abs(pct):.1f}% over last 100 batches)",
+                )
+            )
 
     # Eval results
     if data["evals"]:
         last_ev = data["evals"][-1]
-        issues.append(("INFO",
-            f"Latest eval ({last_ev['split']}): act_top1={last_ev['act_top1']:.4f}, "
-            f"psr_f1={last_ev['psr_f1']:.4f}, pose_fwd={last_ev['pose_fwd']:.2f}°"))
+        issues.append(
+            (
+                "INFO",
+                f"Latest eval ({last_ev['split']}): act_top1={last_ev['act_top1']:.4f}, "
+                f"psr_f1={last_ev['psr_f1']:.4f}, pose_fwd={last_ev['pose_fwd']:.2f}°",
+            )
+        )
 
     # Warnings/errors in log
     for w in data["warnings"][-5:]:  # last 5 warnings
@@ -176,9 +192,9 @@ def main():
     if args.once:
         data = parse_log(log_path)
         issues = diagnose(data)
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Training status ({log_path})")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         for severity, msg in issues:
             icon = {"OK": "✓", "INFO": "ℹ", "WARN": "⚠", "ERROR": "❌"}[severity]
             print(f"  {icon} [{severity:5s}] {msg}")
@@ -189,7 +205,9 @@ def main():
     while True:
         data = parse_log(log_path)
         issues = diagnose(data)
-        print(f"\n[{time.strftime('%H:%M:%S')}] {len(data['batches'])} batches, {len(data['epochs'])} epochs, {len(data['evals'])} evals")
+        print(
+            f"\n[{time.strftime('%H:%M:%S')}] {len(data['batches'])} batches, {len(data['epochs'])} epochs, {len(data['evals'])} evals"
+        )
         for severity, msg in issues:
             icon = {"OK": "✓", "INFO": "ℹ", "WARN": "⚠", "ERROR": "❌"}[severity]
             print(f"  {icon} [{severity:5s}] {msg}")

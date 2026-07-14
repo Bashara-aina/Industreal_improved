@@ -1,4 +1,5 @@
 """Memory-efficient streaming full eval — computes running stats without storing all logits."""
+
 import json
 import sys
 from pathlib import Path
@@ -14,6 +15,7 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--save-dir", default=None)
@@ -28,25 +30,29 @@ def main():
     print(f"Epoch: {ckpt.get('epoch')}")
 
     from src.models.model import POPWMultiTaskModel
+
     model = POPWMultiTaskModel(
         pretrained=True,
-        backbone_type='convnext_tiny',
+        backbone_type="convnext_tiny",
         use_hand_film=True,
         use_headpose_film=True,
         use_videomae=False,
         train_pose=False,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = 1
     model = model.cuda().eval()
 
     from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
     from torch.utils.data import DataLoader
+
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
-    val_loader = DataLoader(val_ds, batch_size=1, num_workers=0,
-                            collate_fn=collate_fn, shuffle=False)
+    val_loader = DataLoader(
+        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False
+    )
 
     # Running accumulators
     # PSR: store per-component stats
@@ -86,7 +92,7 @@ def main():
         # PSR
         if outputs.get("psr_logits") is not None and targets.get("psr_labels") is not None:
             pl = outputs["psr_logits"].cpu()  # [1, 11]
-            pl_lbl = targets["psr_labels"]    # [1, 11]
+            pl_lbl = targets["psr_labels"]  # [1, 11]
             valid_mask = pl_lbl[0] != -1
             # Use best threshold 0.10 for epoch_18 (from sweep)
             binary = (torch.sigmoid(pl[0]) > 0.10).int()
@@ -154,7 +160,9 @@ def main():
         rec = psr_tp[c] / max(psr_tp[c] + psr_fn[c], 1)
         f1 = 2 * prec * rec / max(prec + rec, 1e-9)
         if c < 5:
-            print(f"  comp{c}: F1={f1:.4f} (P={prec:.3f}, R={rec:.3f}, valid={int(psr_valid[c])}, pred_pos={int(psr_pos_pred[c])}, true_pos={int(psr_pos_true[c])})")
+            print(
+                f"  comp{c}: F1={f1:.4f} (P={prec:.3f}, R={rec:.3f}, valid={int(psr_valid[c])}, pred_pos={int(psr_pos_pred[c])}, true_pos={int(psr_pos_true[c])})"
+            )
         total_f1 += f1
         results["psr"][f"comp{c}"] = {
             "f1": float(f1),
@@ -178,7 +186,9 @@ def main():
             "n_total": act_total,
             "n_valid": act_total_valid,
         }
-        print(f"\nActivity: top1={act_top1:.4f}, top1_valid={act_top1_valid:.4f} ({act_total_valid} valid / {act_total} total)")
+        print(
+            f"\nActivity: top1={act_top1:.4f}, top1_valid={act_top1_valid:.4f} ({act_total_valid} valid / {act_total} total)"
+        )
 
     # Pose
     if pose_fwd_n > 0:

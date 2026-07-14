@@ -9,6 +9,7 @@ preserved for historical reference only. All V2 work targets POPWMultiTaskModel.
 See analyses/consult_claude_science/consult_v2/V1_VS_CODEBASE_DISCREPANCY_REPORT.md
 for the migration rationale.
 """
+
 from __future__ import annotations
 
 import logging
@@ -32,6 +33,7 @@ FPN_CHANNELS = 256
 # ===========================================================================
 # Helper: extract intermediate features from MViTv2-S for detection FPN
 # ===========================================================================
+
 
 class MViTFeaturePyramid(nn.Module):
     """MViTv2-S backbone with forward hooks for detection FPN features.
@@ -66,18 +68,15 @@ class MViTFeaturePyramid(nn.Module):
                 else:
                     # conv_proj output: [B, C, T, H, W] directly
                     self._features[name] = output
+
             return hook
 
         # Hook conv_proj → P2 (96ch, 56×56)
-        self._hooks.append(
-            self.backbone.conv_proj.register_forward_hook(_make_hook("P2"))
-        )
+        self._hooks.append(self.backbone.conv_proj.register_forward_hook(_make_hook("P2")))
         # Hook blocks where spatial resolution halves
         # block[1] → 28×28 (192ch), block[3] → 14×14 (384ch), block[14] → 7×7 (768ch)
         for idx, name in [(1, "P3"), (3, "P4"), (14, "P5")]:
-            self._hooks.append(
-                self.backbone.blocks[idx].register_forward_hook(_make_hook(name))
-            )
+            self._hooks.append(self.backbone.blocks[idx].register_forward_hook(_make_hook(name)))
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Forward pass, returns FPN feature dict.
@@ -113,9 +112,7 @@ class MViTFeaturePyramid(nn.Module):
             if use_grad_ckpt and self.training:
                 # Checkpoint only the early/middle blocks (cheaper recompute)
                 # Leave the last few blocks un-checkpointed for stable training.
-                x, thw = torch.utils.checkpoint.checkpoint(
-                    block, x, thw, use_reentrant=False
-                )
+                x, thw = torch.utils.checkpoint.checkpoint(block, x, thw, use_reentrant=False)
             else:
                 x, thw = block(x, thw)
 
@@ -136,6 +133,7 @@ class MViTFeaturePyramid(nn.Module):
 # Lightweight FPN for detection
 # ===========================================================================
 
+
 class LightweightFPN(nn.Module):
     """BiFPN — top-down + bottom-up with EfficientDet-style weighted fusion.
 
@@ -152,38 +150,39 @@ class LightweightFPN(nn.Module):
         self.eps = 1e-4
 
         # 1x1 lateral projections to out_channels
-        self.lateral = nn.ModuleDict({
-            name: nn.Conv3d(ch, out_channels, kernel_size=1)
-            for name, ch in in_channels.items()
-        })
+        self.lateral = nn.ModuleDict(
+            {name: nn.Conv3d(ch, out_channels, kernel_size=1) for name, ch in in_channels.items()}
+        )
 
         # Smooth convs for top-down path
-        self.td_conv = nn.ModuleDict({
-            name: nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
-            for name in in_channels
-        })
+        self.td_conv = nn.ModuleDict(
+            {
+                name: nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
+                for name in in_channels
+            }
+        )
 
         # Smooth convs for bottom-up path
-        self.bu_conv = nn.ModuleDict({
-            name: nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
-            for name in in_channels
-        })
+        self.bu_conv = nn.ModuleDict(
+            {
+                name: nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
+                for name in in_channels
+            }
+        )
 
         # Learnable fusion weights: top-down
         # P5 has 1 input (lateral only); P4/P3/P2 have 2 (lateral + up from above)
         names_td = ["P5", "P4", "P3", "P2"]
-        self.td_w = nn.ParameterDict({
-            name: nn.Parameter(torch.ones(1 if name == "P5" else 2))
-            for name in names_td
-        })
+        self.td_w = nn.ParameterDict(
+            {name: nn.Parameter(torch.ones(1 if name == "P5" else 2)) for name in names_td}
+        )
 
         # Learnable fusion weights: bottom-up
         # P2 has 1 input (td only); P3/P4/P5 have 2 (td + down from below)
         names_bu = ["P2", "P3", "P4", "P5"]
-        self.bu_w = nn.ParameterDict({
-            name: nn.Parameter(torch.ones(1 if name == "P2" else 2))
-            for name in names_bu
-        })
+        self.bu_w = nn.ParameterDict(
+            {name: nn.Parameter(torch.ones(1 if name == "P2" else 2)) for name in names_bu}
+        )
 
     @staticmethod
     def _fast_weightsum(weights: torch.Tensor, terms: List[torch.Tensor]) -> torch.Tensor:
@@ -206,8 +205,10 @@ class LightweightFPN(nn.Module):
             else:
                 prev = names[i - 1]
                 up = F.interpolate(
-                    td[prev], size=lat[name].shape[-3:],
-                    mode="trilinear", align_corners=False,
+                    td[prev],
+                    size=lat[name].shape[-3:],
+                    mode="trilinear",
+                    align_corners=False,
                 )
                 fused = self._fast_weightsum(self.td_w[name], [lat[name], up])
                 td[name] = self.td_conv[name](fused)
@@ -221,8 +222,10 @@ class LightweightFPN(nn.Module):
             else:
                 prev = bu[i - 1]
                 down = F.interpolate(
-                    out[prev], size=td[name].shape[-3:],
-                    mode="trilinear", align_corners=False,
+                    out[prev],
+                    size=td[name].shape[-3:],
+                    mode="trilinear",
+                    align_corners=False,
                 )
                 fused = self._fast_weightsum(self.bu_w[name], [td[name], down])
                 out[name] = self.bu_conv[name](fused)
@@ -233,6 +236,7 @@ class LightweightFPN(nn.Module):
 # ===========================================================================
 # Detection Head (lightweight YOLO-style decoupled head)
 # ===========================================================================
+
 
 class DetectionHead(nn.Module):
     """Lightweight detection head — decoupled cls + box regression with DFL.
@@ -278,6 +282,7 @@ class DetectionHead(nn.Module):
 # ===========================================================================
 # Activity Head
 # ===========================================================================
+
 
 class ActivityHead(nn.Module):
     """75-class activity recognition from MViTv2 class token.
@@ -369,6 +374,7 @@ class ActivityHead(nn.Module):
 # PSR Head (per-frame transition logits from temporal features)
 # ===========================================================================
 
+
 class PSRHead(nn.Module):
     """PSR head — causal Transformer on spatial-pooled temporal features.
 
@@ -386,11 +392,11 @@ class PSRHead(nn.Module):
 
     def __init__(
         self,
-        feat_dim: int = 256,      # [OPUS 201] internal transformer dim (was 768)
-        input_dim: int = 768,     # [OPUS 201] P5 source feature dim
+        feat_dim: int = 256,  # [OPUS 201] internal transformer dim (was 768)
+        input_dim: int = 768,  # [OPUS 201] P5 source feature dim
         num_components: int = 11,
         nhead: int = 4,
-        num_layers: int = 2,      # [OPUS 201] 2 layers (was 6). 8 tokens needs ≤3.
+        num_layers: int = 2,  # [OPUS 201] 2 layers (was 6). 8 tokens needs ≤3.
     ):
         super().__init__()
         self.spatial_pool = nn.AdaptiveAvgPool3d((None, 1, 1))  # pool H,W
@@ -449,9 +455,11 @@ class PSRHead(nn.Module):
         x = self.dropout(x)
         return self.projection(x)  # [B, 8, 11]
 
+
 # ===========================================================================
 # Pose Head
 # ===========================================================================
+
 
 class PoseHead(nn.Module):
     """6D head pose MLP from MViTv2 class token."""
@@ -489,6 +497,7 @@ class PoseHead(nn.Module):
 # ===========================================================================
 # MTL-MViT: Full multi-task model
 # ===========================================================================
+
 
 class MTLMViTModel(nn.Module):
     """MViTv2-S shared backbone + 4 heads: Detection, Activity, PSR, Pose.
@@ -585,9 +594,7 @@ class MTLMViTModel(nn.Module):
         if psr_input is not None:
             psr_logits = self.psr_head(psr_input)
         else:
-            psr_logits = torch.zeros(
-                clip.size(0), 16, self.num_psr_components, device=clip.device
-            )
+            psr_logits = torch.zeros(clip.size(0), 16, self.num_psr_components, device=clip.device)
 
         # Pose
         pose_6d = self.pose_head(cls_token)

@@ -9,8 +9,8 @@ The 9-DoF pose format is:
 Arrows are drawn from the projected head position in world coordinates.
 Green = forward gaze direction, Blue = up direction.
 """
+
 import csv
-import os
 from pathlib import Path
 
 import cv2
@@ -23,8 +23,7 @@ REC_DIR = Path(
 IMG_DIR = REC_DIR / "rgb"
 POSE_CSV = REC_DIR / "pose.csv"
 OUTPUT_DIR = Path(
-    "/home/newadmin/swarm-bot/project/popw/working/code/"
-    "industreal_improved/headpose_visualizations"
+    "/home/newadmin/swarm-bot/project/popw/working/code/industreal_improved/headpose_visualizations"
 )
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -94,22 +93,14 @@ def draw_axis(
     cv2.putText(img, "H", (px_i + 8, py_i - 8), FONT, 0.6, (0, 255, 255), 2)
 
     cv2.arrowedLine(
-        img, (px_i, py_i), (int(fwd_end_x), int(fwd_end_y)),
-        (0, 255, 0), 3, tipLength=0.3
+        img, (px_i, py_i), (int(fwd_end_x), int(fwd_end_y)), (0, 255, 0), 3, tipLength=0.3
     )
-    cv2.putText(
-        img, "FWD", (int(fwd_end_x) + 5, int(fwd_end_y)),
-        FONT, 0.5, (0, 255, 0), 1
-    )
+    cv2.putText(img, "FWD", (int(fwd_end_x) + 5, int(fwd_end_y)), FONT, 0.5, (0, 255, 0), 1)
 
     cv2.arrowedLine(
-        img, (px_i, py_i), (int(up_end_x), int(up_end_y)),
-        (255, 0, 0), 3, tipLength=0.3
+        img, (px_i, py_i), (int(up_end_x), int(up_end_y)), (255, 0, 0), 3, tipLength=0.3
     )
-    cv2.putText(
-        img, "UP", (int(up_end_x) + 5, int(up_end_y)),
-        FONT, 0.5, (255, 0, 0), 1
-    )
+    cv2.putText(img, "UP", (int(up_end_x) + 5, int(up_end_y)), FONT, 0.5, (255, 0, 0), 1)
 
 
 def main() -> None:
@@ -152,13 +143,21 @@ def main() -> None:
         cv2.putText(
             img_color,
             f"Frame {frame_num} | pos=({pos[0]:.2f}, {pos[1]:.2f}, {pos[2]:.2f})",
-            (10, 30), FONT, 0.6, (255, 255, 255), 2,
+            (10, 30),
+            FONT,
+            0.6,
+            (255, 255, 255),
+            2,
         )
         cv2.putText(
             img_color,
             f"fwd=({forward[0]:.2f}, {forward[1]:.2f}, {forward[2]:.2f})  "
             f"up=({up[0]:.2f}, {up[1]:.2f}, {up[2]:.2f})",
-            (10, 60), FONT, 0.6, (255, 255, 255), 2,
+            (10, 60),
+            FONT,
+            0.6,
+            (255, 255, 255),
+            2,
         )
 
         out_path = OUTPUT_DIR / f"headpose_{frame_name}"
@@ -189,10 +188,7 @@ def main() -> None:
         out_path = all_frames_output / f"hp_{frame_name}"
         cv2.imwrite(str(out_path), img)
 
-    print(
-        f"[head_pose_viz] All frames: {all_frames_output}/  "
-        f"({len(frame_indices)} images)"
-    )
+    print(f"[head_pose_viz] All frames: {all_frames_output}/  ({len(frame_indices)} images)")
 
 
 if __name__ == "__main__":

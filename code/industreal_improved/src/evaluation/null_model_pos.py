@@ -13,6 +13,7 @@ Outputs:
   full_null_pos.json   — per-recording POS for all three models
   full_null_edit.json  — per-recording Edit for all three models
 """
+
 import json
 import gc
 import sys
@@ -28,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 def log(msg):
     """Print with explicit flush so nohup redirects get it immediately."""
     print(msg, flush=True)
+
 
 _IMAGENET_MEAN = (0.485, 0.456, 0.406)
 _IMAGENET_STD = (0.229, 0.224, 0.225)
@@ -61,9 +63,12 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="src/runs/rf_stages/checkpoints/best.pth")
-    parser.add_argument("--max-batches", type=int, default=0,
-                        help="Max batches to process (0 = all)")
-    parser.add_argument("--save-dir", default="src/runs/rf_stages/checkpoints/null_model_pos_extended")
+    parser.add_argument(
+        "--max-batches", type=int, default=0, help="Max batches to process (0 = all)"
+    )
+    parser.add_argument(
+        "--save-dir", default="src/runs/rf_stages/checkpoints/null_model_pos_extended"
+    )
     args = parser.parse_args()
 
     Path(args.save_dir).mkdir(parents=True, exist_ok=True)
@@ -75,19 +80,27 @@ def main():
     from src.models.model import POPWMultiTaskModel
 
     model = POPWMultiTaskModel(
-        pretrained=True, backbone_type='convnext_tiny',
-        use_hand_film=True, use_headpose_film=True,
-        use_videomae=False, train_pose=False,
+        pretrained=True,
+        backbone_type="convnext_tiny",
+        use_hand_film=True,
+        use_headpose_film=True,
+        use_videomae=False,
+        train_pose=False,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = 1
     model = model.cuda().eval()
 
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False,
+        val_ds,
+        batch_size=1,
+        num_workers=0,
+        collate_fn=collate_fn,
+        shuffle=False,
     )
 
     # Collect per-recording per-frame predictions and labels, in frame order
@@ -201,8 +214,7 @@ def main():
         "null_copy_prev_mean": mean_k(per_rec_pos, "null_copy_prev"),
         "null_copy_prev_std": std_k(per_rec_pos, "null_copy_prev"),
         "interpretation": (
-            "If null_copy_prev ≈ ours, POS is a fill-forward artifact. "
-            "Drop POS from headline."
+            "If null_copy_prev ≈ ours, POS is a fill-forward artifact. Drop POS from headline."
         ),
         "per_recording": per_rec_pos,
     }
@@ -236,13 +248,23 @@ def main():
     log("")
     log("=== POS (mean +/- std per recording) ===")
     log(f"  Ours:                {pos_summary['ours_mean']:.4f} +/- {pos_summary['ours_std']:.4f}")
-    log(f"  Null all-zeros:      {pos_summary['null_all_zeros_mean']:.4f} +/- {pos_summary['null_all_zeros_std']:.4f}")
-    log(f"  Null copy-prev:      {pos_summary['null_copy_prev_mean']:.4f} +/- {pos_summary['null_copy_prev_std']:.4f}")
+    log(
+        f"  Null all-zeros:      {pos_summary['null_all_zeros_mean']:.4f} +/- {pos_summary['null_all_zeros_std']:.4f}"
+    )
+    log(
+        f"  Null copy-prev:      {pos_summary['null_copy_prev_mean']:.4f} +/- {pos_summary['null_copy_prev_std']:.4f}"
+    )
     log("")
     log("=== Edit (mean +/- std per recording) ===")
-    log(f"  Ours:                {edit_summary['ours_mean']:.4f} +/- {edit_summary['ours_std']:.4f}")
-    log(f"  Null all-zeros:      {edit_summary['null_all_zeros_mean']:.4f} +/- {edit_summary['null_all_zeros_std']:.4f}")
-    log(f"  Null copy-prev:      {edit_summary['null_copy_prev_mean']:.4f} +/- {edit_summary['null_copy_prev_std']:.4f}")
+    log(
+        f"  Ours:                {edit_summary['ours_mean']:.4f} +/- {edit_summary['ours_std']:.4f}"
+    )
+    log(
+        f"  Null all-zeros:      {edit_summary['null_all_zeros_mean']:.4f} +/- {edit_summary['null_all_zeros_std']:.4f}"
+    )
+    log(
+        f"  Null copy-prev:      {edit_summary['null_copy_prev_mean']:.4f} +/- {edit_summary['null_copy_prev_std']:.4f}"
+    )
 
 
 if __name__ == "__main__":

@@ -17,19 +17,20 @@ The original paper uses a Stackelberg game (rotations learn slowly).
 We simplify: rotation update via SGD on cosine-similarity loss between
 each task's gradient direction and the average direction.
 """
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from typing import Optional, List
 
 
-def cayley_orthogonal(W: torch.Tensor) -> torch.Tensor:
-    """Cayley transform: (I + skew(W))(I - skew(W))^(-1) ∈ SO(n).
+def cayley_orthogonal(w: torch.Tensor) -> torch.Tensor:
+    """Cayley transform: (I + skew(w))(I - skew(w))^(-1) ∈ SO(n).
 
     Maps any matrix to a special orthogonal matrix. No geotorch needed.
     """
-    I = torch.eye(W.size(-1), device=W.device, dtype=W.dtype)
-    A = W - W.transpose(-2, -1)  # skew-symmetrize
+    I = torch.eye(w.size(-1), device=w.device, dtype=w.dtype)
+    a = w - w.transpose(-2, -1)  # skew-symmetrize
     return torch.linalg.solve(I - A, I + A)
 
 
@@ -79,8 +80,8 @@ class RotoGradRotation(nn.Module):
         else:
             # Subspace: P @ R_sub @ Q.T → [d,m] @ [m,m] @ [m,d] = [d,d]
             R_sub = cayley_orthogonal(self.W_sub[task_idx])  # [m, m]
-            p = self.P[task_idx]   # [d, m]
-            q = self.Q[task_idx]   # [d, m]
+            p = self.P[task_idx]  # [d, m]
+            q = self.Q[task_idx]  # [d, m]
             return p @ R_sub @ q.T  # [d, d]
 
     def rotate(self, z: torch.Tensor, task_idx: int) -> torch.Tensor:

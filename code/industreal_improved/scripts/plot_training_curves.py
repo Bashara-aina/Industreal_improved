@@ -8,6 +8,7 @@ Usage:
     python scripts/plot_training_curves.py --log /tmp/mtl_mvit_run9.log
     python scripts/plot_training_curves.py --log /tmp/mtl_mvit_run9.log --csv curves.csv
 """
+
 import argparse
 import csv
 import re
@@ -35,37 +36,42 @@ def parse_log(path: Path):
         for line in f:
             m = BATCH_RE.search(line)
             if m:
-                batches.append({
-                    "batch": int(m.group(1)),
-                    "loss": float(m.group(2)),
-                    "det": float(m.group(3)),
-                    "act": float(m.group(4)),
-                    "psr": float(m.group(5)),
-                    "pose": float(m.group(6)),
-                })
+                batches.append(
+                    {
+                        "batch": int(m.group(1)),
+                        "loss": float(m.group(2)),
+                        "det": float(m.group(3)),
+                        "act": float(m.group(4)),
+                        "psr": float(m.group(5)),
+                        "pose": float(m.group(6)),
+                    }
+                )
                 continue
             m = EPOCH_RE.search(line)
             if m:
-                epochs.append({
-                    "epoch": int(m.group(1)),
-                    "loss": float(m.group(3)),
-                    "det": float(m.group(4)),
-                    "act": float(m.group(5)),
-                    "psr": float(m.group(6)),
-                    "pose": float(m.group(7)),
-                    "lv_det": float(m.group(8)),
-                    "lv_act": float(m.group(9)),
-                    "lv_psr": float(m.group(10)),
-                    "lv_pose": float(m.group(11)),
-                })
+                epochs.append(
+                    {
+                        "epoch": int(m.group(1)),
+                        "loss": float(m.group(3)),
+                        "det": float(m.group(4)),
+                        "act": float(m.group(5)),
+                        "psr": float(m.group(6)),
+                        "pose": float(m.group(7)),
+                        "lv_det": float(m.group(8)),
+                        "lv_act": float(m.group(9)),
+                        "lv_psr": float(m.group(10)),
+                        "lv_pose": float(m.group(11)),
+                    }
+                )
     return batches, epochs
 
 
 def moving_average(values, window=50):
     if len(values) < window:
         return values
-    return [sum(values[max(0, i - window + 1):i + 1]) / min(i + 1, window)
-            for i in range(len(values))]
+    return [
+        sum(values[max(0, i - window + 1) : i + 1]) / min(i + 1, window) for i in range(len(values))
+    ]
 
 
 def ascii_sparkline(values, width=60, height=10):
@@ -141,12 +147,16 @@ def main():
         print("=" * 80)
         print("PER-EPOCH SUMMARY (with log_var caps)")
         print("=" * 80)
-        print(f"  {'Epoch':>5s}  {'loss':>8s}  {'det':>8s}  {'act':>8s}  {'psr':>8s}  {'pose':>8s}  | "
-              f"{'lv_det':>7s}  {'lv_act':>7s}  {'lv_psr':>7s}  {'lv_pose':>7s}")
+        print(
+            f"  {'Epoch':>5s}  {'loss':>8s}  {'det':>8s}  {'act':>8s}  {'psr':>8s}  {'pose':>8s}  | "
+            f"{'lv_det':>7s}  {'lv_act':>7s}  {'lv_psr':>7s}  {'lv_pose':>7s}"
+        )
         for ep in epochs:
-            print(f"  {ep['epoch']:5d}  {ep['loss']:8.4f}  {ep['det']:8.4f}  {ep['act']:8.4f}  "
-                  f"{ep['psr']:8.4f}  {ep['pose']:8.4f}  | "
-                  f"{ep['lv_det']:7.2f}  {ep['lv_act']:7.2f}  {ep['lv_psr']:7.2f}  {ep['lv_pose']:7.2f}")
+            print(
+                f"  {ep['epoch']:5d}  {ep['loss']:8.4f}  {ep['det']:8.4f}  {ep['act']:8.4f}  "
+                f"{ep['psr']:8.4f}  {ep['pose']:8.4f}  | "
+                f"{ep['lv_det']:7.2f}  {ep['lv_act']:7.2f}  {ep['lv_psr']:7.2f}  {ep['lv_pose']:7.2f}"
+            )
 
 
 if __name__ == "__main__":

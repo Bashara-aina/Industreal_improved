@@ -7,6 +7,7 @@ Inverse-log-loss weighting directly targets gradient magnitude imbalance.
 Reference: "Towards Impartial Multi-Task Learning"
 https://openreview.net/forum?id=IMPnRXEWpvr
 """
+
 import torch
 import torch.nn.functional as F
 from typing import Dict

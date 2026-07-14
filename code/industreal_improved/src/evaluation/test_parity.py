@@ -5,20 +5,18 @@ before they burned three GPU runs. Run pre-submission: 5-10 minutes.
 
 Usage: python3 src/evaluation/test_parity.py [--ckpt path] [--n_batches 50]
 """
+
 import json
 import sys
-import time
 from pathlib import Path
-import numpy as np
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from src import config as C
-from src.evaluation.evaluate import evaluate_all
 
 
-def run_parity_check(ckpt_path: str = "src/runs/rf_stages/checkpoints/best.pth",
-                     n_batches: int = 50) -> dict:
+def run_parity_check(
+    ckpt_path: str = "src/runs/rf_stages/checkpoints/best.pth", n_batches: int = 50
+) -> dict:
     """Run the same 50 batches through all three eval paths and compare.
 
     Returns dict with {path: metrics, parity: bool, max_diff: float}.
@@ -54,12 +52,13 @@ def run_parity_check(ckpt_path: str = "src/runs/rf_stages/checkpoints/best.pth",
         "n_batches": len(limited_batches),
         "ckpt": ckpt_path,
         "parity_check_placeholder": True,
-        "message": "Parity test stub. Full implementation pending POPWMultiTaskModel wrapper."
+        "message": "Parity test stub. Full implementation pending POPWMultiTaskModel wrapper.",
     }
 
 
 if __name__ == "__main__":
     import argparse
+
     p = argparse.ArgumentParser()
     p.add_argument("--ckpt", default="src/runs/rf_stages/checkpoints/best.pth")
     p.add_argument("--n_batches", type=int, default=50)

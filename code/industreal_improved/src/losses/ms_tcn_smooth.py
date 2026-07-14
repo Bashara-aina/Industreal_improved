@@ -9,6 +9,7 @@ improves F1@10 from 71.3 to 76.3 (+5.0) at constant frame-accuracy.
 The loss penalizes frame-to-frame changes in log-probabilities, truncated
 at tau to avoid suppressing genuine action boundaries.
 """
+
 import torch
 import torch.nn.functional as F
 

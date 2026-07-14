@@ -1,4 +1,5 @@
 """Sequence-mode activity eval — uses 16-frame clips with proper TCN+ViT temporal context."""
+
 import json
 import sys
 from collections import defaultdict
@@ -15,6 +16,7 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="src/runs/rf_stages/checkpoints/best.pth")
     parser.add_argument("--save-dir", default="/tmp/eval_activity_seq")
@@ -29,27 +31,31 @@ def main():
     print(f"Epoch: {ckpt.get('epoch')}")
 
     from src.models.model import POPWMultiTaskModel
+
     model = POPWMultiTaskModel(
         pretrained=True,
-        backbone_type='convnext_tiny',
+        backbone_type="convnext_tiny",
         use_hand_film=True,
         use_headpose_film=True,
         use_videomae=False,
         train_pose=False,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = args.seq_length
     model = model.cuda().eval()
 
     from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn_sequences
     from torch.utils.data import DataLoader
+
     val_ds = IndustRealMultiTaskDataset(
         split="val", sequence_mode=True, sequence_length=args.seq_length
     )
-    val_loader = DataLoader(val_ds, batch_size=1, num_workers=0,
-                            collate_fn=collate_fn_sequences, shuffle=False)
+    val_loader = DataLoader(
+        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn_sequences, shuffle=False
+    )
 
     # Per-clip: get act_logits per frame, aggregate via majority vote
     clip_preds = []
@@ -74,28 +80,38 @@ def main():
             outputs = model(images)
 
         act_logits = outputs.get("act_logits")  # [B*T, num_classes]
-        act_labels = targets.get("activity")    # [B]
+        act_labels = targets.get("activity")  # [B]
         if act_logits is None or act_labels is None:
             continue
         if n_batches == 0:
-            print(f"  DEBUG: act_labels shape={act_labels.shape if hasattr(act_labels, 'shape') else type(act_labels)}, value={act_labels.tolist() if hasattr(act_labels, 'tolist') else act_labels}")
+            print(
+                f"  DEBUG: act_labels shape={act_labels.shape if hasattr(act_labels, 'shape') else type(act_labels)}, value={act_labels.tolist() if hasattr(act_labels, 'tolist') else act_labels}"
+            )
         act_logits = act_logits.view(B, T, -1)  # [B, T, C]
-        act_preds = act_logits.argmax(dim=-1)    # [B, T]
+        act_preds = act_logits.argmax(dim=-1)  # [B, T]
 
         # Clip-level majority vote using per-frame labels from the dataset's annotation cache
         from src.data.industreal_dataset import IndustRealMultiTaskDataset
+
         metadata_list = targets.get("metadata", [])
         for b in range(B):
             preds_b = act_preds[b]
             # Get per-frame activity labels via the dataset cache
             if b < len(metadata_list):
                 meta = metadata_list[b]
-                rec_id = meta.get('recording_id', 'unknown')
-                frame_nums = meta.get('frame_nums', [])
+                rec_id = meta.get("recording_id", "unknown")
+                frame_nums = meta.get("frame_nums", [])
                 if b == 0 and n_batches == 0:
-                    print(f"  DEBUG meta keys: {list(meta.keys())}, rec={rec_id}, frame_nums={frame_nums[:5] if len(frame_nums)>0 else 'EMPTY'}")
+                    print(
+                        f"  DEBUG meta keys: {list(meta.keys())}, rec={rec_id}, frame_nums={frame_nums[:5] if len(frame_nums) > 0 else 'EMPTY'}"
+                    )
                 cache = val_ds._anno_cache.get(rec_id)
-                if cache is not None and hasattr(cache, '_ar_per_frame') and cache._ar_per_frame is not None and len(frame_nums) > 0:
+                if (
+                    cache is not None
+                    and hasattr(cache, "_ar_per_frame")
+                    and cache._ar_per_frame is not None
+                    and len(frame_nums) > 0
+                ):
                     per_frame_actions = cache._ar_per_frame[frame_nums]
                     # Check how many frames have labels
                     n_pos = (per_frame_actions >= 0).sum()
@@ -109,7 +125,7 @@ def main():
                             start = labeled_idx[0]
                             frame_nums = list(range(start, min(start + T, len(ar_total))))
                             per_frame_actions = ar_total[frame_nums]
-                            meta['frame_nums'] = frame_nums  # update for completeness
+                            meta["frame_nums"] = frame_nums  # update for completeness
                     n_pos = (per_frame_actions >= 0).sum()
                     if n_pos == 0 and b == 0 and n_batches == 0:
                         print(f"  DEBUG {rec_id}: no labeled frames even after skip")
@@ -117,11 +133,15 @@ def main():
                     valid_actions = per_frame_actions[per_frame_actions >= 0]
                     if len(valid_actions) > 0:
                         from collections import Counter
+
                         # Apply the same verb-group remap as training
                         from src import config as C
-                        remap_fn = getattr(C, 'remap_activity_label', None)
+
+                        remap_fn = getattr(C, "remap_activity_label", None)
                         grouped = valid_actions.tolist()
-                        if remap_fn is not None and str(getattr(C, 'ACT_CLASS_GROUPING', 'none')).lower() in ('verb', 'hybrid'):
+                        if remap_fn is not None and str(
+                            getattr(C, "ACT_CLASS_GROUPING", "none")
+                        ).lower() in ("verb", "hybrid"):
                             grouped = [remap_fn(a) for a in grouped]
                         majority_label = Counter(grouped).most_common(1)[0][0]
                     else:
@@ -153,19 +173,26 @@ def main():
 
     # Per-clip accuracy
     clip_acc = (valid_clip_preds == valid_clip_labels).mean()
-    print(f"\nClip-level Top-1 (majority vote, valid clips): {clip_acc:.4f} ({valid_mask.sum()}/{len(valid_mask)})")
+    print(
+        f"\nClip-level Top-1 (majority vote, valid clips): {clip_acc:.4f} ({valid_mask.sum()}/{len(valid_mask)})"
+    )
 
     # Per-frame accuracy
     frame_acc_all = (np.array(per_frame_preds) == np.array(per_frame_labels)).mean()
     per_frame_labels_arr = np.array(per_frame_labels)
     per_frame_preds_arr = np.array(per_frame_preds)
     valid_frame_mask = per_frame_labels_arr >= 0
-    frame_acc_valid = (per_frame_preds_arr[valid_frame_mask] == per_frame_labels_arr[valid_frame_mask]).mean() if valid_frame_mask.sum() > 0 else 0
+    frame_acc_valid = (
+        (per_frame_preds_arr[valid_frame_mask] == per_frame_labels_arr[valid_frame_mask]).mean()
+        if valid_frame_mask.sum() > 0
+        else 0
+    )
     print(f"Per-frame Top-1 (all): {frame_acc_all:.4f}")
     print(f"Per-frame Top-1 (valid only): {frame_acc_valid:.4f}")
 
     # Per-class breakdown (clip-level)
     from collections import Counter
+
     by_class = defaultdict(list)
     for pred, label in zip(clip_preds, clip_labels):
         by_class[label].append(pred == label)
@@ -177,13 +204,17 @@ def main():
 
     out_path = Path(args.save_dir) / "activity_seq.json"
     with open(out_path, "w") as f:
-        json.dump({
-            "checkpoint": args.checkpoint,
-            "n_clips": len(clip_preds),
-            "clip_top1": float(clip_acc),
-            "per_frame_top1": float(frame_acc),
-            "seq_length": args.seq_length,
-        }, f, indent=2)
+        json.dump(
+            {
+                "checkpoint": args.checkpoint,
+                "n_clips": len(clip_preds),
+                "clip_top1": float(clip_acc),
+                "per_frame_top1": float(frame_acc),
+                "seq_length": args.seq_length,
+            },
+            f,
+            indent=2,
+        )
     print(f"\nSaved to {out_path}")
 
 

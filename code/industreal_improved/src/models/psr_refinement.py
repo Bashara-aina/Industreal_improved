@@ -23,6 +23,7 @@ Args:
     num_layers: dilated conv layers per stage (paper uses 10)
     num_filters: conv filters per layer (paper uses 64)
 """
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -42,7 +43,7 @@ class MSRefinementStage(nn.Module):
         self.num_layers = num_layers
         layers = []
         for i in range(num_layers):
-            dilation = 2 ** i  # 1, 2, 4, 8, ..., 512
+            dilation = 2**i  # 1, 2, 4, 8, ..., 512
             in_ch = num_components if i == 0 else num_filters
             out_ch = num_components if i == num_layers - 1 else num_filters
             padding = dilation  # same-length output
@@ -90,10 +91,12 @@ class PSRRefinementHead(nn.Module):
         self.smoothing_lambda = smoothing_lambda
         self.smoothing_tau = smoothing_tau
 
-        self.stages = nn.ModuleList([
-            MSRefinementStage(num_components, num_layers, num_filters, dropout)
-            for _ in range(num_stages)
-        ])
+        self.stages = nn.ModuleList(
+            [
+                MSRefinementStage(num_components, num_layers, num_filters, dropout)
+                for _ in range(num_stages)
+            ]
+        )
 
     def forward(self, logits: torch.Tensor, apply_sigmoid: bool = True) -> torch.Tensor:
         """Refine PSR logits through dilated temporal convolutions.
@@ -120,7 +123,7 @@ class PSRRefinementHead(nn.Module):
         for stage in self.stages:
             # Reshape for Conv1d: [B, T, C] → [B, C, T]
             x = stage_input.permute(0, 2, 1)  # [B, C, T]
-            out = stage(x)                     # [B, C, T] → refined probs
+            out = stage(x)  # [B, C, T] → refined probs
             out_probs = out.permute(0, 2, 1)  # [B, T, C]
             total_output = total_output + out_probs
             # Next stage input: refined probabilities (detach to prevent

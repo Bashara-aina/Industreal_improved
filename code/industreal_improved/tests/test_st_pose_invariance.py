@@ -16,7 +16,6 @@ Usage:
 from __future__ import annotations
 
 import sys
-import os
 from pathlib import Path
 
 # Path setup
@@ -37,13 +36,13 @@ for _p in [
         sys.path.insert(0, _p)
 
 import warnings
+
 warnings.filterwarnings("ignore", category=UserWarning, module="torch")
 
 import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
 import random
 
 
@@ -59,6 +58,7 @@ _st_pose = None
 
 # Execute the script to get its symbols
 import importlib.util
+
 spec = importlib.util.spec_from_file_location("train_st_pose", str(_SCRIPT_PATH))
 _st_pose = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(_st_pose)
@@ -67,6 +67,7 @@ spec.loader.exec_module(_st_pose)
 # ===========================================================================
 # Fixtures
 # ===========================================================================
+
 
 @pytest.fixture(scope="module")
 def device():
@@ -100,6 +101,7 @@ def sample_batch(device):
 # Test 1: Pose head produces 6D output of correct shape
 # ===========================================================================
 
+
 class TestPoseHeadOutputShape:
     """Verify the pose MLP head produces [B, 6] from [B, 768] features."""
 
@@ -130,6 +132,7 @@ class TestPoseHeadOutputShape:
 # ===========================================================================
 # Test 2: Renormalization step does not produce NaN
 # ===========================================================================
+
 
 class TestRenormalization:
     """Verify renormalize_pose handles edge cases without NaN."""
@@ -173,6 +176,7 @@ class TestRenormalization:
 # ===========================================================================
 # Test 3: Cosine/geodesic loss is finite on sample
 # ===========================================================================
+
 
 class TestCosinePoseLoss:
     """Verify cosine_pose_loss produces finite, sensible values."""
@@ -225,6 +229,7 @@ class TestCosinePoseLoss:
 # Test 3b: Angular MAE computation
 # ===========================================================================
 
+
 class TestAngularMAE:
     """Verify angular_mae_per_frame produces correct values."""
 
@@ -258,6 +263,7 @@ class TestAngularMAE:
 # Test 4: Bootstrap CI produces lower <= mean <= upper
 # ===========================================================================
 
+
 class TestBootstrapCI:
     """Verify bootstrap_ci invariants."""
 
@@ -283,7 +289,9 @@ class TestBootstrapCI:
         mean, lo, hi = _st_pose.bootstrap_ci(values, weights, n_resamples=1000, seed=42)
         # Weighted mean = (2*1 + 1*2 + 1*3) / (2+1+1) = 7/4 = 1.75
         expected_mean = (2 * 1.0 + 1 * 2.0 + 1 * 3.0) / 4.0
-        assert abs(mean - expected_mean) < 1e-6, f"Weighted mean mismatch: {mean} != {expected_mean}"
+        assert abs(mean - expected_mean) < 1e-6, (
+            f"Weighted mean mismatch: {mean} != {expected_mean}"
+        )
         assert lo <= mean <= hi, f"CI invariant violated: {lo} <= {mean} <= {hi}"
 
     def test_ci_empty_returns_nan(self):
@@ -304,6 +312,7 @@ class TestBootstrapCI:
 # ===========================================================================
 # Test 4b: End-to-end evaluate_pose returns correct structure
 # ===========================================================================
+
 
 class TestEvaluatePoseStructure:
     """Verify evaluate_pose returns dict matching bootstrap_ci.json structure."""
@@ -326,12 +335,20 @@ class TestEvaluatePoseStructure:
         assert "headline_weighted_mean_deg" in fwd
         assert "bootstrap_95_ci_deg" in fwd
         assert len(fwd["bootstrap_95_ci_deg"]) == 2
-        assert fwd["bootstrap_95_ci_deg"][0] <= fwd["headline_weighted_mean_deg"] <= fwd["bootstrap_95_ci_deg"][1]
+        assert (
+            fwd["bootstrap_95_ci_deg"][0]
+            <= fwd["headline_weighted_mean_deg"]
+            <= fwd["bootstrap_95_ci_deg"][1]
+        )
 
         assert "headline_weighted_mean_deg" in up
         assert "bootstrap_95_ci_deg" in up
         assert len(up["bootstrap_95_ci_deg"]) == 2
-        assert up["bootstrap_95_ci_deg"][0] <= up["headline_weighted_mean_deg"] <= up["bootstrap_95_ci_deg"][1]
+        assert (
+            up["bootstrap_95_ci_deg"][0]
+            <= up["headline_weighted_mean_deg"]
+            <= up["bootstrap_95_ci_deg"][1]
+        )
 
     def test_evaluate_pose_mirrors_bootstrap_ref_structure(self, model, sample_batch, device):
         """Output key structure mirrors bootstrap_ci.json."""
@@ -341,13 +358,25 @@ class TestEvaluatePoseStructure:
         results = _st_pose.evaluate_pose(model, loader, device=device, max_batches=1)
 
         # Reference structure from bootstrap_ci.json
-        expected_fwd_keys = {"headline_weighted_mean_deg", "bootstrap_95_ci_deg", "bootstrap_method", "n_frames"}
-        expected_up_keys = {"headline_weighted_mean_deg", "bootstrap_95_ci_deg", "bootstrap_method", "n_frames"}
+        expected_fwd_keys = {
+            "headline_weighted_mean_deg",
+            "bootstrap_95_ci_deg",
+            "bootstrap_method",
+            "n_frames",
+        }
+        expected_up_keys = {
+            "headline_weighted_mean_deg",
+            "bootstrap_95_ci_deg",
+            "bootstrap_method",
+            "n_frames",
+        }
 
-        assert expected_fwd_keys.issubset(results["head_pose_forward"].keys()), \
+        assert expected_fwd_keys.issubset(results["head_pose_forward"].keys()), (
             f"Missing keys in fwd: {expected_fwd_keys - results['head_pose_forward'].keys()}"
-        assert expected_up_keys.issubset(results["head_pose_up"].keys()), \
+        )
+        assert expected_up_keys.issubset(results["head_pose_up"].keys()), (
             f"Missing keys in up: {expected_up_keys - results['head_pose_up'].keys()}"
+        )
 
 
 # Need math for NaN test

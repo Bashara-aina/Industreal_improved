@@ -21,9 +21,9 @@ Usage:
     # Eval split: val for model selection (default), test for final eval
     python scripts/train_mtl_mvit.py --eval-split val
 """
+
 # DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
-import gc
 import json
 import logging
 import math
@@ -34,7 +34,8 @@ from pathlib import Path
 from typing import Optional
 
 import os
-os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 import numpy as np
 import torch
@@ -52,6 +53,7 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
 # Also reduce RAM cache from env (allows fork() with DataLoader workers)
 import os as _os
 import src.config as C
+
 C.ACT_CLASS_GROUPING = "none"
 C.RAM_CACHE_MAX_IMAGES = int(_os.environ.get("RAM_CACHE_MAX_IMAGES", C.RAM_CACHE_MAX_IMAGES))
 
@@ -75,6 +77,7 @@ OUTPUT_ROOT = _CODE_ROOT / "src" / "runs" / "rf_stages" / "checkpoints" / "mtl_m
 # ===========================================================================
 # Loss functions
 # ===========================================================================
+
 
 def ciou_loss(pred_boxes: torch.Tensor, gt_boxes: torch.Tensor) -> torch.Tensor:
     """CIoU loss for box regression.
@@ -119,7 +122,9 @@ def ciou_loss(pred_boxes: torch.Tensor, gt_boxes: torch.Tensor) -> torch.Tensor:
     pred_h = pred_boxes[:, 3] - pred_boxes[:, 1]
     gt_w = gt_boxes[:, 2] - gt_boxes[:, 0]
     gt_h = gt_boxes[:, 3] - gt_boxes[:, 1]
-    v = (4 / math.pi ** 2) * (torch.atan(gt_w / (gt_h + 1e-7)) - torch.atan(pred_w / (pred_h + 1e-7))) ** 2
+    v = (4 / math.pi**2) * (
+        torch.atan(gt_w / (gt_h + 1e-7)) - torch.atan(pred_w / (pred_h + 1e-7))
+    ) ** 2
     alpha = v / ((1 - iou).detach() + v + 1e-7)
 
     ciou = iou - rho2 / c2 - alpha * v
@@ -178,9 +183,13 @@ def detection_loss(
         return torch.tensor(0.0, device=device)
 
     from src.losses.tal_assigner import TaskAlignedAssigner
+
     tal = TaskAlignedAssigner(topk=tal_topk, alpha=1.0, beta=6.0)
 
-    loss_cls = 0.0; loss_iou = 0.0; loss_dfl = 0.0; n_levels_active = 0
+    loss_cls = 0.0
+    loss_iou = 0.0
+    loss_dfl = 0.0
+    n_levels_active = 0
     levels = ("P3", "P4", "P5") if use_tal else ("P2", "P3", "P4", "P5")
     strides = {"P2": 4, "P3": 8, "P4": 16, "P5": 32}
 
@@ -189,14 +198,22 @@ def detection_loss(
             continue
         n_levels_active += 1
         out = det_outputs[level_name]
-        cls_logits = out["cls_logits"]; reg_preds = out["reg_preds"]
-        B, nc, H, W = cls_logits.shape; stride = strides[level_name]
+        cls_logits = out["cls_logits"]
+        reg_preds = out["reg_preds"]
+        B, nc, H, W = cls_logits.shape
+        stride = strides[level_name]
 
-        ys = torch.arange(H, device=device); xs = torch.arange(W, device=device)
+        ys = torch.arange(H, device=device)
+        xs = torch.arange(W, device=device)
         cell_cx = xs.float() * stride + stride / 2.0
         cell_cy = ys.float() * stride + stride / 2.0
-        anchor_points = torch.stack([cell_cx.unsqueeze(0).expand(H, -1),
-                                     cell_cy.unsqueeze(1).expand(-1, W)], dim=0).reshape(2, -1).t()
+        anchor_points = (
+            torch.stack(
+                [cell_cx.unsqueeze(0).expand(H, -1), cell_cy.unsqueeze(1).expand(-1, W)], dim=0
+            )
+            .reshape(2, -1)
+            .t()
+        )
 
         cls_target = torch.zeros(B, H, W, dtype=torch.long, device=device)
         pos_mask = torch.zeros(B, H, W, dtype=torch.bool, device=device)
@@ -207,115 +224,152 @@ def detection_loss(
             # === TAL assignment per image ===
             for b in range(B):
                 det_item = det_list[b] if isinstance(det_list[b], dict) else {}
-                boxes = det_item.get("boxes"); labels = det_item.get("labels")
+                boxes = det_item.get("boxes")
+                labels = det_item.get("labels")
                 if boxes is None or labels is None or boxes.numel() == 0:
                     continue
-                boxes = boxes.to(device, torch.float); labels = labels.to(device, torch.long)
-                if boxes.dim() == 1: boxes = boxes.unsqueeze(0); labels = labels.unsqueeze(0)
+                boxes = boxes.to(device, torch.float)
+                labels = labels.to(device, torch.long)
+                if boxes.dim() == 1:
+                    boxes = boxes.unsqueeze(0)
+                    labels = labels.unsqueeze(0)
                 n_gt = boxes.size(0)
-                if n_gt == 0: continue
+                if n_gt == 0:
+                    continue
 
-                cls_sig = torch.sigmoid(cls_logits[b]).permute(1,2,0).reshape(-1,nc)
+                cls_sig = torch.sigmoid(cls_logits[b]).permute(1, 2, 0).reshape(-1, nc)
                 reg_dist_v = reg_preds[b].view(4, reg_max, H, W)
-                proj = torch.arange(reg_max, device=device).float().view(1,reg_max,1,1)
-                decoded_o = (reg_dist_v.softmax(dim=1)*proj).sum(dim=1)
-                px1=(cell_cx.view(1,1,W)-decoded_o[0:1]*stride).reshape(H,W)
-                py1=(cell_cy.view(1,H,1)-decoded_o[1:2]*stride).reshape(H,W)
-                px2=(cell_cx.view(1,1,W)+decoded_o[2:3]*stride).reshape(H,W)
-                py2=(cell_cy.view(1,H,1)+decoded_o[3:4]*stride).reshape(H,W)
-                pred_xyxy=torch.stack([px1,py1,px2,py2],dim=-1).reshape(-1,4)
+                proj = torch.arange(reg_max, device=device).float().view(1, reg_max, 1, 1)
+                decoded_o = (reg_dist_v.softmax(dim=1) * proj).sum(dim=1)
+                px1 = (cell_cx.view(1, 1, W) - decoded_o[0:1] * stride).reshape(H, W)
+                py1 = (cell_cy.view(1, H, 1) - decoded_o[1:2] * stride).reshape(H, W)
+                px2 = (cell_cx.view(1, 1, W) + decoded_o[2:3] * stride).reshape(H, W)
+                py2 = (cell_cy.view(1, H, 1) + decoded_o[3:4] * stride).reshape(H, W)
+                pred_xyxy = torch.stack([px1, py1, px2, py2], dim=-1).reshape(-1, 4)
 
-                mn=20; pb=torch.zeros(mn,4,device=device); pb[:n_gt]=boxes
-                pl=torch.zeros(mn,dtype=torch.long,device=device); pl[:n_gt]=labels
-                tl,tb,_,mk,_=tal(cls_sig.unsqueeze(0),pred_xyxy.unsqueeze(0),
-                                 anchor_points,pb.unsqueeze(0),pl.unsqueeze(0),
-                                 anchor_points,torch.tensor([stride],device=device))
-                mask_flat=mk.squeeze(0).squeeze(-1)
-                if mask_flat.sum()==0: continue
-                assigned=mask_flat.bool()
-                h_idx=assigned.nonzero(as_tuple=False)[:,0]
-                hi=(h_idx%W).long(); hj=(h_idx//W).long()
+                mn = 20
+                pb = torch.zeros(mn, 4, device=device)
+                pb[:n_gt] = boxes
+                pl = torch.zeros(mn, dtype=torch.long, device=device)
+                pl[:n_gt] = labels
+                tl, tb, _, mk, _ = tal(
+                    cls_sig.unsqueeze(0),
+                    pred_xyxy.unsqueeze(0),
+                    anchor_points,
+                    pb.unsqueeze(0),
+                    pl.unsqueeze(0),
+                    anchor_points,
+                    torch.tensor([stride], device=device),
+                )
+                mask_flat = mk.squeeze(0).squeeze(-1)
+                if mask_flat.sum() == 0:
+                    continue
+                assigned = mask_flat.bool()
+                h_idx = assigned.nonzero(as_tuple=False)[:, 0]
+                hi = (h_idx % W).long()
+                hj = (h_idx // W).long()
                 for k in range(len(hi)):
-                    ci,cj=hi[k].item(),hj[k].item()
-                    if 0<=ci<W and 0<=cj<H and not pos_mask[b,cj,ci]:
-                        pos_mask[b,cj,ci]=True
-                        tcls=tl.squeeze(0)[h_idx[k]].argmax().item()
-                        cls_target[b,cj,ci]=tcls+1
-                        tbox=tb.squeeze(0)[h_idx[k]]
-                        dfl_target[b,cj,ci,0]=(cell_cx[ci]-tbox[0])/stride
-                        dfl_target[b,cj,ci,1]=(cell_cy[cj]-tbox[1])/stride
-                        dfl_target[b,cj,ci,2]=(tbox[2]-cell_cx[ci])/stride
-                        dfl_target[b,cj,ci,3]=(tbox[3]-cell_cy[cj])/stride
-                        iou_target[b,cj,ci]=tbox
+                    ci, cj = hi[k].item(), hj[k].item()
+                    if 0 <= ci < W and 0 <= cj < H and not pos_mask[b, cj, ci]:
+                        pos_mask[b, cj, ci] = True
+                        tcls = tl.squeeze(0)[h_idx[k]].argmax().item()
+                        cls_target[b, cj, ci] = tcls + 1
+                        tbox = tb.squeeze(0)[h_idx[k]]
+                        dfl_target[b, cj, ci, 0] = (cell_cx[ci] - tbox[0]) / stride
+                        dfl_target[b, cj, ci, 1] = (cell_cy[cj] - tbox[1]) / stride
+                        dfl_target[b, cj, ci, 2] = (tbox[2] - cell_cx[ci]) / stride
+                        dfl_target[b, cj, ci, 3] = (tbox[3] - cell_cy[cj]) / stride
+                        iou_target[b, cj, ci] = tbox
         else:
             # Legacy 3×3 sparse assignment (fallback)
             for b in range(B):
                 det_item = det_list[b] if isinstance(det_list[b], dict) else {}
-                boxes = det_item.get("boxes"); labels = det_item.get("labels")
+                boxes = det_item.get("boxes")
+                labels = det_item.get("labels")
                 if boxes is None or labels is None or boxes.numel() == 0:
                     continue
-                boxes = boxes.to(device, torch.float); labels = labels.to(device, torch.long)
-                if boxes.dim() == 1: boxes = boxes.unsqueeze(0); labels = labels.unsqueeze(0)
-                gt_cx=(boxes[:,0]+boxes[:,2])/2.0; gt_cy=(boxes[:,1]+boxes[:,3])/2.0
+                boxes = boxes.to(device, torch.float)
+                labels = labels.to(device, torch.long)
+                if boxes.dim() == 1:
+                    boxes = boxes.unsqueeze(0)
+                    labels = labels.unsqueeze(0)
+                gt_cx = (boxes[:, 0] + boxes[:, 2]) / 2.0
+                gt_cy = (boxes[:, 1] + boxes[:, 3]) / 2.0
                 for n in range(boxes.shape[0]):
-                    gi=(gt_cx[n]/stride).long().clamp(0,W-1)
-                    gj=(gt_cy[n]/stride).long().clamp(0,H-1)
-                    for di in range(-pos_radius,pos_radius+1):
-                        for dj in range(-pos_radius,pos_radius+1):
-                            ci=gi+di; cj=gj+dj
-                            if 0<=ci<W and 0<=cj<H and not pos_mask[b,cj,ci]:
-                                pos_mask[b,cj,ci]=True
-                                cls_target[b,cj,ci]=labels[n].long()
-                                dfl_target[b,cj,ci,0]=(cell_cx[ci]-boxes[n,0])/stride
-                                dfl_target[b,cj,ci,1]=(cell_cy[cj]-boxes[n,1])/stride
-                                dfl_target[b,cj,ci,2]=(boxes[n,2]-cell_cx[ci])/stride
-                                dfl_target[b,cj,ci,3]=(boxes[n,3]-cell_cy[cj])/stride
-                                iou_target[b,cj,ci]=boxes[n]
+                    gi = (gt_cx[n] / stride).long().clamp(0, W - 1)
+                    gj = (gt_cy[n] / stride).long().clamp(0, H - 1)
+                    for di in range(-pos_radius, pos_radius + 1):
+                        for dj in range(-pos_radius, pos_radius + 1):
+                            ci = gi + di
+                            cj = gj + dj
+                            if 0 <= ci < W and 0 <= cj < H and not pos_mask[b, cj, ci]:
+                                pos_mask[b, cj, ci] = True
+                                cls_target[b, cj, ci] = labels[n].long()
+                                dfl_target[b, cj, ci, 0] = (cell_cx[ci] - boxes[n, 0]) / stride
+                                dfl_target[b, cj, ci, 1] = (cell_cy[cj] - boxes[n, 1]) / stride
+                                dfl_target[b, cj, ci, 2] = (boxes[n, 2] - cell_cx[ci]) / stride
+                                dfl_target[b, cj, ci, 3] = (boxes[n, 3] - cell_cy[cj]) / stride
+                                iou_target[b, cj, ci] = boxes[n]
 
         # ---- Classification: Focal BCE or Varifocal ----
-        cls_p = cls_logits.permute(0,2,3,1).contiguous()
+        cls_p = cls_logits.permute(0, 2, 3, 1).contiguous()
         cls_oh = F.one_hot(cls_target, num_classes).float()
         if use_varifocal:
             from src.losses.varifocal_loss import VarifocalLoss
+
             _vfl = VarifocalLoss(alpha=alpha, gamma=gamma)
-            loss_cls = loss_cls + _vfl(cls_p.reshape(-1, num_classes), cls_oh.reshape(-1, num_classes))
+            loss_cls = loss_cls + _vfl(
+                cls_p.reshape(-1, num_classes), cls_oh.reshape(-1, num_classes)
+            )
         else:
             cls_prob = torch.sigmoid(cls_p)
-            pt = cls_oh*cls_prob+(1-cls_oh)*(1-cls_prob)
-            focal_w = (1-pt)**gamma
-            alpha_t = cls_oh*alpha+(1-cls_oh)*(1-alpha)
+            pt = cls_oh * cls_prob + (1 - cls_oh) * (1 - cls_prob)
+            focal_w = (1 - pt) ** gamma
+            alpha_t = cls_oh * alpha + (1 - cls_oh) * (1 - alpha)
             cls_loss_bce = F.binary_cross_entropy_with_logits(cls_p, cls_oh, reduction="none")
-            loss_cls = loss_cls + (alpha_t*focal_w*cls_loss_bce).sum(dim=-1).mean()
+            loss_cls = loss_cls + (alpha_t * focal_w * cls_loss_bce).sum(dim=-1).mean()
 
         # ---- Box losses (positive cells only) ----
         if pos_mask.any():
-            reg_dist = reg_preds.view(B,4,reg_max,H,W)
-            pred_dist = reg_dist.permute(0,3,4,1,2)[pos_mask]
+            reg_dist = reg_preds.view(B, 4, reg_max, H, W)
+            pred_dist = reg_dist.permute(0, 3, 4, 1, 2)[pos_mask]
             gt_dfl = dfl_target[pos_mask]
-            if pred_dist.size(0)>0:
-                dfl_inst=0.0
+            if pred_dist.size(0) > 0:
+                dfl_inst = 0.0
                 for k in range(4):
-                    pk=pred_dist[:,k,:]; tk=gt_dfl[:,k].clamp(0,reg_max-1.01)
-                    tl=tk.long().clamp(0,reg_max-2); th=(tl+1).clamp(0,reg_max-1)
-                    wh=tk-tl.float(); wl=1-wh
-                    dfl_inst=dfl_inst+(F.cross_entropy(pk,tl,reduction="none")*wl+
-                                       F.cross_entropy(pk,th,reduction="none")*wh).mean()
-                loss_dfl = loss_dfl + dfl_inst/4
-            proj=torch.arange(reg_max,device=device).float().view(1,1,reg_max,1,1)
-            dec=(reg_dist.softmax(dim=2)*proj).sum(dim=2)
-            px1=cell_cx.view(1,1,W)-dec[:,0:1]*stride
-            py1=cell_cy.view(1,H,1)-dec[:,1:2]*stride
-            px2=cell_cx.view(1,1,W)+dec[:,2:3]*stride
-            py2=cell_cy.view(1,H,1)+dec[:,3:4]*stride
-            pa=torch.cat([px1,py1,px2,py2],dim=1).permute(0,2,3,1).contiguous()
+                    pk = pred_dist[:, k, :]
+                    tk = gt_dfl[:, k].clamp(0, reg_max - 1.01)
+                    tl = tk.long().clamp(0, reg_max - 2)
+                    th = (tl + 1).clamp(0, reg_max - 1)
+                    wh = tk - tl.float()
+                    wl = 1 - wh
+                    dfl_inst = (
+                        dfl_inst
+                        + (
+                            F.cross_entropy(pk, tl, reduction="none") * wl
+                            + F.cross_entropy(pk, th, reduction="none") * wh
+                        ).mean()
+                    )
+                loss_dfl = loss_dfl + dfl_inst / 4
+            proj = torch.arange(reg_max, device=device).float().view(1, 1, reg_max, 1, 1)
+            dec = (reg_dist.softmax(dim=2) * proj).sum(dim=2)
+            px1 = cell_cx.view(1, 1, W) - dec[:, 0:1] * stride
+            py1 = cell_cy.view(1, H, 1) - dec[:, 1:2] * stride
+            px2 = cell_cx.view(1, 1, W) + dec[:, 2:3] * stride
+            py2 = cell_cy.view(1, H, 1) + dec[:, 3:4] * stride
+            pa = torch.cat([px1, py1, px2, py2], dim=1).permute(0, 2, 3, 1).contiguous()
             if use_wiou_v3:
                 from src.losses.wiou_loss import wiou_v3_loss
-                loss_iou = loss_iou + wiou_v3_loss(pa[pos_mask], iou_target[pos_mask], iou_target[pos_mask]).mean()
+
+                loss_iou = (
+                    loss_iou
+                    + wiou_v3_loss(pa[pos_mask], iou_target[pos_mask], iou_target[pos_mask]).mean()
+                )
             else:
                 loss_iou = loss_iou + ciou_loss(pa[pos_mask], iou_target[pos_mask]).mean()
 
     n_levels_active = max(n_levels_active, 1)
-    return loss_cls/n_levels_active + loss_iou/n_levels_active + loss_dfl/n_levels_active
+    return loss_cls / n_levels_active + loss_iou / n_levels_active + loss_dfl / n_levels_active
 
 
 def compute_activity_class_weights(
@@ -345,7 +399,8 @@ def compute_activity_class_weights(
     # np.where evaluates both branches; np.divide with where= skips zeros.
     with np.errstate(divide="ignore", invalid="ignore"):
         weights = np.divide(
-            total, num_classes * counts,
+            total,
+            num_classes * counts,
             out=np.zeros_like(counts, dtype=np.float64),
             where=counts > 0,
         )
@@ -353,7 +408,9 @@ def compute_activity_class_weights(
     weights = np.power(weights, 0.5)
     logger.info(
         "Class weights — min=%.4f  max=%.4f  mean=%.4f  num_nonzero=%d  [sqrt-tamed]",
-        weights.min(), weights.max(), weights.mean(),
+        weights.min(),
+        weights.max(),
+        weights.mean(),
         int((weights > 0).sum()),
     )
     return torch.from_numpy(weights).float()
@@ -396,11 +453,10 @@ def activity_loss(
     if logit_adjust_freq is not None:
         # [OPUS 207 §2.6] Additive logit correction inside the loss.
         # logits += tau * log(freq) shifts decision boundary toward rare classes.
-        logits = logits + logit_adjust_tau * torch.log(
-            logit_adjust_freq + 1e-9
-        ).unsqueeze(0)
+        logits = logits + logit_adjust_tau * torch.log(logit_adjust_freq + 1e-9).unsqueeze(0)
     return F.cross_entropy(
-        logits, targets,
+        logits,
+        targets,
         weight=class_weights,
         ignore_index=-1,
         label_smoothing=0.05,  # [OPUS 181 D1b] 0.1→0.05: lowers CE floor on 75 classes.
@@ -448,7 +504,7 @@ def psr_loss(
             output_size=T_logit,
         ).transpose(1, 2)  # [B, T_logit, 11]
 
-    bce = F.binary_cross_entropy_with_logits(psr_logits, psr_targets, reduction='none')
+    bce = F.binary_cross_entropy_with_logits(psr_logits, psr_targets, reduction="none")
 
     # [OPUS 207] Transition-aware frame weighting.
     # Detect 0→1 transitions along time axis; boost weight on those frames
@@ -460,9 +516,9 @@ def psr_loss(
         # Any component transition at time t → boost frame t and t-1
         has_transition = (transitions.sum(dim=-1) > 0).float()  # [B, T]
         neighbor_boost = F.pad(has_transition[:, :-1], (1, 0))  # shift right
-        frame_weight = 1.0 + (transition_boost - 1.0) * (
-            has_transition + neighbor_boost
-        ).clamp(0, 1).unsqueeze(-1)  # [B, T, 1]
+        frame_weight = 1.0 + (transition_boost - 1.0) * (has_transition + neighbor_boost).clamp(
+            0, 1
+        ).unsqueeze(-1)  # [B, T, 1]
 
     if use_focal:
         # Focal-BCE: down-weight easy examples
@@ -508,6 +564,7 @@ def pose_loss(pred_6d: torch.Tensor, target_6d: torch.Tensor) -> torch.Tensor:
 # Efficiency measurement
 # ===========================================================================
 
+
 def measure_efficiency(args):
     """Measure FLOPs, FPS, peak VRAM, and parameter efficiency.
 
@@ -517,15 +574,10 @@ def measure_efficiency(args):
     try:
         from fvcore.nn import FlopCountAnalysis, parameter_count_table
     except ImportError:
-        logger.error(
-            "fvcore is required for efficiency measurement. "
-            "Install: pip install fvcore"
-        )
+        logger.error("fvcore is required for efficiency measurement. Install: pip install fvcore")
         sys.exit(1)
 
-    device = torch.device(
-        "cpu" if args.cpu or not torch.cuda.is_available() else "cuda"
-    )
+    device = torch.device("cpu" if args.cpu or not torch.cuda.is_available() else "cuda")
     logger.info("Device: %s", device)
 
     model = MTLMViTModel().to(device)
@@ -533,9 +585,7 @@ def measure_efficiency(args):
 
     # ---- 1. Parameter count ----
     total_params = sum(p.numel() for p in model.parameters()) / 1e6
-    trainable_params = (
-        sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
-    )
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
     logger.info("Params: %.1fM total, %.1fM trainable", total_params, trainable_params)
     param_table = parameter_count_table(model)
     logger.info("Parameter count table:\n%s", param_table)
@@ -610,7 +660,8 @@ def measure_efficiency(args):
     results["mtl_vs_single_ratio"] = round(total_params / estimated_single_task_sum_M, 3)
     logger.info(
         "MTL params (%.1fM) vs estimated 4x single task (%.0fM): %.1fx smaller",
-        total_params, estimated_single_task_sum_M,
+        total_params,
+        estimated_single_task_sum_M,
         estimated_single_task_sum_M / total_params,
     )
 
@@ -628,6 +679,7 @@ def measure_efficiency(args):
 # ===========================================================================
 # PCGrad gradient surgery
 # ===========================================================================
+
 
 def pcgrad_fn(
     per_task_grads: list,
@@ -684,7 +736,7 @@ def pcgrad_fn(
     offset = 0
     for p in shared_params:
         numel = p.numel()
-        result.append(sum_grad[offset:offset + numel].view_as(p).contiguous())
+        result.append(sum_grad[offset : offset + numel].view_as(p).contiguous())
         offset += numel
 
     return result
@@ -694,8 +746,11 @@ def pcgrad_fn(
 # SWA within-run checkpoint averaging (Task #259 / §6 lever #3)
 # ===========================================================================
 
+
 def swa_average_checkpoints(
-    ckpt_dir: Path, n_last: int, device: torch.device,
+    ckpt_dir: Path,
+    n_last: int,
+    device: torch.device,
 ) -> OrderedDict:
     """Average the last N periodic checkpoints (epoch_NNNN.pt) in ckpt_dir.
 
@@ -732,8 +787,11 @@ def swa_average_checkpoints(
 # Head warm-starting from ST checkpoints (Task #260 / §6 lever #4)
 # ===========================================================================
 
+
 def warm_start_heads_from_st(
-    model: nn.Module, st_dir: str, device: torch.device,
+    model: nn.Module,
+    st_dir: str,
+    device: torch.device,
 ) -> int:
     """Initialize MTL head weights from single-task specialist checkpoints.
 
@@ -778,7 +836,9 @@ def warm_start_heads_from_st(
         if loaded > 0:
             logger.info("Warm-start %s: loaded %d tensors from %s", head_name, loaded, ckpt_name)
         else:
-            logger.warning("Warm-start %s: no matching tensors found (prefix=%s)", head_name, prefix)
+            logger.warning(
+                "Warm-start %s: no matching tensors found (prefix=%s)", head_name, prefix
+            )
         total_loaded += loaded
 
     return total_loaded
@@ -788,8 +848,10 @@ def warm_start_heads_from_st(
 # Distillation from ST teachers (Task #261 / §6 lever #5)
 # ===========================================================================
 
+
 def load_distill_teachers(
-    st_dir: str, device: torch.device,
+    st_dir: str,
+    device: torch.device,
 ) -> dict:
     """Load frozen ST specialist models as distillation teachers.
 
@@ -810,28 +872,38 @@ def load_distill_teachers(
     for head_name, (ckpt_name, _prefix) in head_map.items():
         ckpt_path = Path(st_dir) / ckpt_name
         if not ckpt_path.exists():
-            logger.info("Distill teacher %s: checkpoint not found (%s), skipping", head_name, ckpt_path)
+            logger.info(
+                "Distill teacher %s: checkpoint not found (%s), skipping", head_name, ckpt_path
+            )
             teachers[head_name] = None
             continue
         # Create fresh MTLMViTModel for teacher (structurally identical)
         from src.models.mvit_mtl_model import MTLMViTModel
+
         teacher = MTLMViTModel(num_act_classes=75).to(device).eval()
         st_state = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         st_sd = st_state.get("model_state_dict", st_state)
         # Shape-match filter
         teacher_sd = teacher.state_dict()
-        filtered = {k: v.to(device) for k, v in st_sd.items()
-                    if k in teacher_sd and teacher_sd[k].shape == v.shape}
+        filtered = {
+            k: v.to(device)
+            for k, v in st_sd.items()
+            if k in teacher_sd and teacher_sd[k].shape == v.shape
+        }
         teacher.load_state_dict(filtered, strict=False)
         for p in teacher.parameters():
             p.requires_grad = False
         teachers[head_name] = teacher
-        logger.info("Distill teacher %s: loaded %d tensors from %s", head_name, len(filtered), ckpt_name)
+        logger.info(
+            "Distill teacher %s: loaded %d tensors from %s", head_name, len(filtered), ckpt_name
+        )
     return teachers
 
 
 def compute_distill_loss(
-    outputs: dict, teacher_outputs: dict, distill_temperature: float,
+    outputs: dict,
+    teacher_outputs: dict,
+    distill_temperature: float,
     distill_alpha: float,
 ) -> torch.Tensor:
     """KL-divergence distillation loss from frozen ST teachers.
@@ -846,27 +918,41 @@ def compute_distill_loss(
         Scalar distillation loss (summed across heads).
     """
     T = distill_temperature
-    loss = torch.tensor(0.0, device=next(iter(outputs.values())).device
-                        if isinstance(next(iter(outputs.values())), torch.Tensor)
-                        else outputs.get("activity", torch.zeros(1)).device)
+    loss = torch.tensor(
+        0.0,
+        device=next(iter(outputs.values())).device
+        if isinstance(next(iter(outputs.values())), torch.Tensor)
+        else outputs.get("activity", torch.zeros(1)).device,
+    )
 
     # Activity: standard knowledge distillation (Hinton 2015)
     if "act" in teacher_outputs and teacher_outputs["act"] is not None:
         act_out = outputs.get("activity")
         if act_out is not None:
-            loss = loss + F.kl_div(
-                F.log_softmax(act_out / T, dim=-1),
-                F.softmax(teacher_outputs["act"] / T, dim=-1),
-                reduction='batchmean',
-            ) * T * T * distill_alpha
+            loss = (
+                loss
+                + F.kl_div(
+                    F.log_softmax(act_out / T, dim=-1),
+                    F.softmax(teacher_outputs["act"] / T, dim=-1),
+                    reduction="batchmean",
+                )
+                * T
+                * T
+                * distill_alpha
+            )
 
     # PSR: MSE on logits (binary sigmoid, KL makes less sense)
     if "psr" in teacher_outputs and teacher_outputs["psr"] is not None:
         psr_out = outputs.get("psr_logits")
         if psr_out is not None:
-            loss = loss + F.mse_loss(
-                psr_out.float(), teacher_outputs["psr"].float(),
-            ) * distill_alpha
+            loss = (
+                loss
+                + F.mse_loss(
+                    psr_out.float(),
+                    teacher_outputs["psr"].float(),
+                )
+                * distill_alpha
+            )
 
     # Detection: KL on classification logits (per FPN level)
     if "det" in teacher_outputs and teacher_outputs["det"] is not None:
@@ -877,19 +963,30 @@ def compute_distill_loss(
                     cls_pred = det_out[level].get("cls_logits")
                     cls_tea = teacher_outputs["det"][level].get("cls_logits")
                     if cls_pred is not None and cls_tea is not None:
-                        loss = loss + F.kl_div(
-                            F.log_softmax(cls_pred / T, dim=-1),
-                            F.softmax(cls_tea / T, dim=-1),
-                            reduction='batchmean',
-                        ) * T * T * distill_alpha
+                        loss = (
+                            loss
+                            + F.kl_div(
+                                F.log_softmax(cls_pred / T, dim=-1),
+                                F.softmax(cls_tea / T, dim=-1),
+                                reduction="batchmean",
+                            )
+                            * T
+                            * T
+                            * distill_alpha
+                        )
 
     # Pose: MSE on 6D vector
     if "pose" in teacher_outputs and teacher_outputs["pose"] is not None:
         pose_out = outputs.get("pose_6d")
         if pose_out is not None:
-            loss = loss + F.mse_loss(
-                pose_out.float(), teacher_outputs["pose"].float(),
-            ) * distill_alpha
+            loss = (
+                loss
+                + F.mse_loss(
+                    pose_out.float(),
+                    teacher_outputs["pose"].float(),
+                )
+                * distill_alpha
+            )
 
     return loss
 
@@ -913,8 +1010,9 @@ def distill_teacher_forward(teachers: dict, images: torch.Tensor) -> dict:
         elif head_name == "psr":
             results["psr"] = t_out["psr_logits"].detach()
         elif head_name == "det":
-            results["det"] = {k: v.detach() if hasattr(v, "detach") else v
-                              for k, v in t_out["detection"].items()}
+            results["det"] = {
+                k: v.detach() if hasattr(v, "detach") else v for k, v in t_out["detection"].items()
+            }
         elif head_name == "pose":
             results["pose"] = t_out["pose_6d"].detach()
     return results
@@ -923,6 +1021,7 @@ def distill_teacher_forward(teachers: dict, images: torch.Tensor) -> dict:
 # ===========================================================================
 # Training step
 # ===========================================================================
+
 
 def train_step(
     model: nn.Module,
@@ -943,27 +1042,27 @@ def train_step(
     distill_teachers: Optional[dict] = None,
     distill_alpha: float = 0.1,
     distill_temperature: float = 4.0,
-    uw_so_temperature: float = 1.0,      # [Tier 1 Item 1] UW-SO temperature
-    db_mtl: bool = False,                # [Tier 1 Item 12] DB-MTL log-transform
-    psr_asl: bool = False,               # [Tier 1 Item 8] Asymmetric Loss for PSR
-    psr_asl_gamma_neg: float = 4.0,      # ASL gamma for negative examples
-    psr_gaussian_smear: bool = False,    # [Tier 2 Item 15] Gaussian-smeared PSR targets
+    uw_so_temperature: float = 1.0,  # [Tier 1 Item 1] UW-SO temperature
+    db_mtl: bool = False,  # [Tier 1 Item 12] DB-MTL log-transform
+    psr_asl: bool = False,  # [Tier 1 Item 8] Asymmetric Loss for PSR
+    psr_asl_gamma_neg: float = 4.0,  # ASL gamma for negative examples
+    psr_gaussian_smear: bool = False,  # [Tier 2 Item 15] Gaussian-smeared PSR targets
     act_balanced_softmax: nn.Module = None,  # [Tier 1 Item 3] Balanced Softmax for activity
-    act_ldam: nn.Module = None,          # [Tier 1 Item 6] LDAM-DRW for activity
-    act_ldam_epoch: int = 0,             # Current epoch for DRW schedule
-    famo_weighter = None,                # FAMO stateful weight tracker (NeurIPS 2023)
-    ms_tcn_smooth: bool = False,         # MS-TCN smoothing loss for PSR
-    ms_tcn_tau: float = 4.0,            # MS-TCN truncation threshold
-    ms_tcn_lambda: float = 0.15,         # MS-TCN smoothing weight
-    use_varifocal: bool = False,         # Varifocal Loss for detection cls
-    use_wiou_v3: bool = False,           # WIoU v3 for detection box regression
+    act_ldam: nn.Module = None,  # [Tier 1 Item 6] LDAM-DRW for activity
+    act_ldam_epoch: int = 0,  # Current epoch for DRW schedule
+    famo_weighter=None,  # FAMO stateful weight tracker (NeurIPS 2023)
+    ms_tcn_smooth: bool = False,  # MS-TCN smoothing loss for PSR
+    ms_tcn_tau: float = 4.0,  # MS-TCN truncation threshold
+    ms_tcn_lambda: float = 0.15,  # MS-TCN smoothing weight
+    use_varifocal: bool = False,  # Varifocal Loss for detection cls
+    use_wiou_v3: bool = False,  # WIoU v3 for detection box regression
     use_pose_geodesic_huber: bool = False,  # Huber-capped geodesic pose loss
-    equal_weight_loss: bool = False,         # Kurin baseline: simple equal-weight sum
+    equal_weight_loss: bool = False,  # Kurin baseline: simple equal-weight sum
     # ── v4: RotoGrad + MetaBalance + PSR refinement ─────────────────────
-    rotograd_model = None,                   # RotoGradRotation module
-    metabalance = None,                      # MetaBalance gradient rescaler
-    psr_refinement_head = None,              # MS-TCN PSR refinement stages
-    grad_checkpoint: bool = False,          # Gradient checkpointing for 480/640
+    rotograd_model=None,  # RotoGradRotation module
+    metabalance=None,  # MetaBalance gradient rescaler
+    psr_refinement_head=None,  # MS-TCN PSR refinement stages
+    grad_checkpoint: bool = False,  # Gradient checkpointing for 480/640
 ) -> dict:
     """Single training step with Kendall uncertainty weighting and optional PCGrad gradient surgery.
 
@@ -994,6 +1093,7 @@ def train_step(
     aug_targets = targets
     if det_aug:
         from src.data.det_augment import DetectionAugment
+
         _det_aug = DetectionAugment(p_flip=0.5, p_color=0.5, p_crop=0.3)
         aug_images, aug_targets = _det_aug(images, targets)
 
@@ -1017,16 +1117,14 @@ def train_step(
 
         # ── v4: PSR multi-stage refinement (CVPR 2019) ───────────────────
         if psr_refinement_head is not None and "psr_logits" in outputs:
-            outputs["psr_logits"] = psr_refinement_head(
-                outputs["psr_logits"], apply_sigmoid=True
-            )
+            outputs["psr_logits"] = psr_refinement_head(outputs["psr_logits"], apply_sigmoid=True)
 
         # Per-task losses
         # Detection: use augmented targets (bboxes adjusted to augmentation)
         det_list = aug_targets.get("detection", [])
-        l_det = detection_loss(outputs["detection"], det_list,
-                               use_varifocal=use_varifocal,
-                               use_wiou_v3=use_wiou_v3)
+        l_det = detection_loss(
+            outputs["detection"], det_list, use_varifocal=use_varifocal, use_wiou_v3=use_wiou_v3
+        )
 
         # Activity loss: Balanced Softmax or LDAM-DRW (Tier 1 Items 3,6)
         _act_targets = targets.get("activity")
@@ -1045,11 +1143,14 @@ def train_step(
                 l_act = act_balanced_softmax(_act_logits, _act_trainable.to(images.device))
             elif act_ldam is not None:
                 _act_logits = outputs["activity"][_valid_mask.to(images.device)]
-                l_act = act_ldam(_act_logits, _act_trainable.to(images.device), epoch=act_ldam_epoch)
+                l_act = act_ldam(
+                    _act_logits, _act_trainable.to(images.device), epoch=act_ldam_epoch
+                )
             else:
                 l_act = activity_loss(
                     outputs["activity"],
-                    _act_targets.to(images.device) if _act_targets is not None and _act_targets.numel() > 0
+                    _act_targets.to(images.device)
+                    if _act_targets is not None and _act_targets.numel() > 0
                     else torch.zeros(B, dtype=torch.long, device=images.device),
                     class_weights=act_class_weights,
                     logit_adjust_freq=act_logit_adjust_freq,
@@ -1061,7 +1162,7 @@ def train_step(
         _psr_comp_weights = None
         psr_comp_breakdown = {}
         if "psr_labels" in targets:
-            if hasattr(C, 'PSR_COMP_WEIGHTS') and C.PSR_COMP_WEIGHTS:
+            if hasattr(C, "PSR_COMP_WEIGHTS") and C.PSR_COMP_WEIGHTS:
                 _psr_comp_weights = torch.tensor(
                     C.PSR_COMP_WEIGHTS, device=images.device, dtype=torch.float32
                 ).view(1, 1, -1)
@@ -1074,8 +1175,7 @@ def train_step(
                 _psr_comp_weights = (_inv_weights / _inv_weights[0].clamp(min=1e-6)).view(1, 1, -1)
 
         # PSR: handle T=16→T=8 downsampling + optional Gaussian smear (Tier 2 Item 15)
-        _psr_labels = targets.get("psr_labels",
-                                  torch.zeros(B, 16, 11, device=images.device))
+        _psr_labels = targets.get("psr_labels", torch.zeros(B, 16, 11, device=images.device))
         # Always downsample to match PSR head output (T=16 labels → T=8)
         if "psr_labels" in targets and _psr_labels.size(1) != outputs["psr_logits"].size(1):
             _psr_labels = F.adaptive_max_pool1d(
@@ -1085,22 +1185,32 @@ def train_step(
         # Gaussian smear: soft blur on downsampled targets (GPU-based, fast)
         if psr_gaussian_smear and "psr_labels" in targets:
             _psr_labels = _psr_labels.float()
-            _kernel = torch.tensor([0.1, 0.25, 0.3, 0.25, 0.1], device=images.device).view(1,1,-1)
-            _psr_labels = F.conv1d(_psr_labels.transpose(1,2), _kernel.expand(11,1,-1),
-                                   padding=2, groups=11).transpose(1,2).clamp(0, 1)
+            _kernel = torch.tensor([0.1, 0.25, 0.3, 0.25, 0.1], device=images.device).view(1, 1, -1)
+            _psr_labels = (
+                F.conv1d(
+                    _psr_labels.transpose(1, 2), _kernel.expand(11, 1, -1), padding=2, groups=11
+                )
+                .transpose(1, 2)
+                .clamp(0, 1)
+            )
 
         if psr_asl and "psr_labels" in targets:
             from src.losses.asymmetric_loss import AsymmetricLoss
+
             _asl = AsymmetricLoss(gamma_neg=psr_asl_gamma_neg, gamma_pos=0.0)
             l_psr = _asl(outputs["psr_logits"].flatten(0, 1), _psr_labels.flatten(0, 1))
         else:
-            l_psr = psr_loss(
-                outputs["psr_logits"],
-                targets.get("psr_labels", torch.zeros(B, 16, 11, device=images.device)),
-                comp_weights=_psr_comp_weights,
-                use_focal=psr_focal,
-                transition_boost=C.PSR_TRANSITION_BOOST,
-            ) if "psr_labels" in targets else torch.tensor(0.0, device=images.device)
+            l_psr = (
+                psr_loss(
+                    outputs["psr_logits"],
+                    targets.get("psr_labels", torch.zeros(B, 16, 11, device=images.device)),
+                    comp_weights=_psr_comp_weights,
+                    use_focal=psr_focal,
+                    transition_boost=C.PSR_TRANSITION_BOOST,
+                )
+                if "psr_labels" in targets
+                else torch.tensor(0.0, device=images.device)
+            )
 
         # Per-component PSR loss breakdown for logging
         if "psr_labels" in targets:
@@ -1114,7 +1224,7 @@ def train_step(
                         output_size=outputs["psr_logits"].size(1),
                     ).transpose(1, 2)
                 _pc = F.binary_cross_entropy_with_logits(
-                    outputs["psr_logits"], _psr_labels_for_pc, reduction='none'
+                    outputs["psr_logits"], _psr_labels_for_pc, reduction="none"
                 ).mean(dim=(0, 1))
             for ci in range(_pc.size(0)):
                 psr_comp_breakdown[f"loss_psr_c{ci}"] = _pc[ci].item()
@@ -1127,6 +1237,7 @@ def train_step(
             hp_6d = torch.zeros(B, 6, device=images.device)
         if use_pose_geodesic_huber:
             from src.losses.geodesic_loss import huberised_geodesic_loss
+
             l_pose = huberised_geodesic_loss(outputs["pose_6d"], hp_6d, delta=30.0)
         else:
             l_pose = pose_loss(outputs["pose_6d"], hp_6d)
@@ -1136,7 +1247,10 @@ def train_step(
         if distill_teachers is not None:
             teacher_outputs = distill_teacher_forward(distill_teachers, images)
             l_distill = compute_distill_loss(
-                outputs, teacher_outputs, distill_temperature, distill_alpha,
+                outputs,
+                teacher_outputs,
+                distill_temperature,
+                distill_alpha,
             )
 
         # ── Per-task loss scale normalization ──────────────────────────────
@@ -1163,6 +1277,7 @@ def train_step(
                 l_psr_smooth = psr_refinement_head.smoothing_loss(outputs["psr_logits"])
             else:
                 from src.losses.ms_tcn_smooth import ms_tcn_smoothing_loss
+
                 l_psr_smooth = ms_tcn_smoothing_loss(
                     outputs["psr_logits"], tau=ms_tcn_tau, lambda_smooth=ms_tcn_lambda
                 )
@@ -1182,6 +1297,7 @@ def train_step(
         else:
             # UW-SO: weights = softmax(-sg(losses) / T)
             from src.losses.uw_so import uw_so_loss
+
             task_total = uw_so_loss(task_losses, temperature=uw_so_temperature)
 
         # Update EMA of task losses for logging (track RAW losses)
@@ -1198,18 +1314,27 @@ def train_step(
         if not torch.isfinite(total_loss):
             logger.warning(
                 "Non-finite total_loss at step: det=%s act=%s psr=%s pose=%s | skipping optimizer step",
-                l_det.item(), l_act.item(), l_psr.item(), l_pose.item(),
+                l_det.item(),
+                l_act.item(),
+                l_psr.item(),
+                l_pose.item(),
             )
             if do_step:
                 optimizer.zero_grad()
             return {
                 "loss": float("nan"),
-                "loss_det": l_det.item(), "loss_act": l_act.item(),
-                "loss_psr": l_psr.item(), "loss_pose": l_pose.item(),
+                "loss_det": l_det.item(),
+                "loss_act": l_act.item(),
+                "loss_psr": l_psr.item(),
+                "loss_pose": l_pose.item(),
                 "loss_distill": l_distill.item(),
                 **psr_comp_breakdown,
-                **{f"ema_{k}": (ema_losses[k].item() if ema_losses is not None and k in ema_losses else 0.0)
-                   for k in ["det", "act", "psr", "pose"]},
+                **{
+                    f"ema_{k}": (
+                        ema_losses[k].item() if ema_losses is not None and k in ema_losses else 0.0
+                    )
+                    for k in ["det", "act", "psr", "pose"]
+                },
             }
 
     # [OPUS 181 D4] zero_grad moved from top of train_step to AFTER step() below.
@@ -1219,8 +1344,10 @@ def train_step(
         per_task_grads = []
         for name in ["det", "act", "psr", "pose"]:
             g = torch.autograd.grad(
-                task_losses[name], shared_params,
-                retain_graph=True, allow_unused=True,
+                task_losses[name],
+                shared_params,
+                retain_graph=True,
+                allow_unused=True,
             )
             per_task_grads.append(g)
 
@@ -1247,8 +1374,10 @@ def train_step(
         per_task_grads = []
         for k, name in enumerate(task_names):
             g = torch.autograd.grad(
-                task_losses[name], shared_params,
-                retain_graph=True, allow_unused=True,
+                task_losses[name],
+                shared_params,
+                retain_graph=True,
+                allow_unused=True,
             )
             per_task_grads.append(g)
             # Record EMA of per-parameter gradient norms for this task
@@ -1298,14 +1427,17 @@ def train_step(
         "loss_pose": l_pose.item(),
         "loss_distill": l_distill.item(),
         **psr_comp_breakdown,
-        **{f"ema_{k}": (ema_losses[k].item() if ema_losses is not None else 0.0)
-           for k in ["det", "act", "psr", "pose"]},
+        **{
+            f"ema_{k}": (ema_losses[k].item() if ema_losses is not None else 0.0)
+            for k in ["det", "act", "psr", "pose"]
+        },
     }
 
 
 # ===========================================================================
 # Validation evaluation (Doc 175 section 7.2)
 # ===========================================================================
+
 
 def _compute_tau(pred_tr: np.ndarray, gt_tr: np.ndarray, tol: int = 3) -> float:
     """Mean signed delay between matched predicted and GT transition events.
@@ -1372,8 +1504,9 @@ def evaluate(
     # tau-norm: post-hoc classifier rebalancing for activity (Kang et al. ICLR 2020)
     # Normalize activity classifier weights by ||w_i||^tau during eval only.
     # Save/restore weights so training is unaffected. tau=0.7 recommended.
-    _tau_saved_weight = None; _tau_saved_bias = None
-    if hasattr(model, 'act_head') and hasattr(model.act_head, 'classifier'):
+    _tau_saved_weight = None
+    _tau_saved_bias = None
+    if hasattr(model, "act_head") and hasattr(model.act_head, "classifier"):
         with torch.no_grad():
             _tau_saved_weight = model.act_head.classifier.weight.data.clone()
             _tau_saved_bias = model.act_head.classifier.bias.data.clone()
@@ -1448,7 +1581,7 @@ def evaluate(
         # resolution). Downsample the T=16 ground-truth labels to T=8 via
         # max-pool to match the prediction temporal resolution.
         psr_logits = outputs["psr_logits"]  # [B, 8, 11]
-        psr_gt = targets["psr_labels"]      # [B, 16, 11]
+        psr_gt = targets["psr_labels"]  # [B, 16, 11]
         # Downsample labels T=16 → T=8 via max-pool (preserves transition events)
         psr_gt_t8 = torch.nn.functional.adaptive_max_pool1d(
             psr_gt.transpose(1, 2),  # [B, 11, 16]
@@ -1467,7 +1600,7 @@ def evaluate(
 
         # -- Activity: top-1 and top-5 --
         act_logits = outputs["activity"]  # [B, 75]
-        act_gt = targets["activity"]      # [B]
+        act_gt = targets["activity"]  # [B]
         act_mask = targets.get("activity_mask")
         if act_mask is not None:
             act_valid = act_mask.bool()
@@ -1492,7 +1625,7 @@ def evaluate(
                 continue
             cls_logits = det_outputs[level_name]["cls_logits"]  # [B, 24, H, W]
             cls_sig = torch.sigmoid(cls_logits)
-            level_presence.append(cls_sig.amax(dim=(2, 3)))     # [B, 24]
+            level_presence.append(cls_sig.amax(dim=(2, 3)))  # [B, 24]
 
         if level_presence:
             pred_presence = torch.stack(level_presence, dim=0).amax(dim=0)
@@ -1524,44 +1657,52 @@ def evaluate(
         # autograd internal ops, crashing the whole eval. If the decode fails
         # for a batch, we just log a warning and skip mAP for that batch.
         try:
-          for level_name in ("P2", "P3", "P4", "P5"):
-            if level_name not in det_outputs:
-                continue
-            cls_logits_lvl = det_outputs[level_name]["cls_logits"]  # [B, 24, H, W]
-            reg_preds_lvl = det_outputs[level_name]["reg_preds"]    # [B, 64, H, W]
-            _B, _, H, W = cls_logits_lvl.shape
-            stride = _strides[level_name]
+            for level_name in ("P2", "P3", "P4", "P5"):
+                if level_name not in det_outputs:
+                    continue
+                cls_logits_lvl = det_outputs[level_name]["cls_logits"]  # [B, 24, H, W]
+                reg_preds_lvl = det_outputs[level_name]["reg_preds"]  # [B, 64, H, W]
+                _B, _, H, W = cls_logits_lvl.shape
+                stride = _strides[level_name]
 
-            # Decode DFL: [B, 64, H, W] -> [B, 4, 16, H, W] -> softmax -> weighted sum
-            reg_dist = reg_preds_lvl.view(_B, 4, _DFL_REG_MAX, H, W)
-            proj = torch.arange(_DFL_REG_MAX, device=device).float().view(1, 1, _DFL_REG_MAX, 1, 1)
-            decoded = (reg_dist.softmax(dim=2) * proj).sum(dim=2)  # [B, 4, H, W]
+                # Decode DFL: [B, 64, H, W] -> [B, 4, 16, H, W] -> softmax -> weighted sum
+                reg_dist = reg_preds_lvl.view(_B, 4, _DFL_REG_MAX, H, W)
+                proj = (
+                    torch.arange(_DFL_REG_MAX, device=device).float().view(1, 1, _DFL_REG_MAX, 1, 1)
+                )
+                decoded = (reg_dist.softmax(dim=2) * proj).sum(dim=2)  # [B, 4, H, W]
 
-            # Grid cell centers
-            ys = torch.arange(H, device=device)
-            xs = torch.arange(W, device=device)
-            cell_cx = xs.float() * stride + stride / 2.0
-            cell_cy = ys.float() * stride + stride / 2.0
+                # Grid cell centers
+                ys = torch.arange(H, device=device)
+                xs = torch.arange(W, device=device)
+                cell_cx = xs.float() * stride + stride / 2.0
+                cell_cy = ys.float() * stride + stride / 2.0
 
-            # Deltas to absolute xyxy (matching detection_loss() decode)
-            pred_x1 = cell_cx.view(1, W) - decoded[:, 0] * stride  # [B, H, W]
-            pred_y1 = cell_cy.view(H, 1) - decoded[:, 1] * stride
-            pred_x2 = cell_cx.view(1, W) + decoded[:, 2] * stride
-            pred_y2 = cell_cy.view(H, 1) + decoded[:, 3] * stride
-            pred_abs = torch.stack([pred_x1, pred_y1, pred_x2, pred_y2], dim=1)  # [B, 4, H, W]
-            boxes_lvl = pred_abs.permute(0, 2, 3, 1).reshape(_B, -1, 4)         # [B, H*W, 4]
-            scores_lvl = torch.sigmoid(cls_logits_lvl).permute(0, 2, 3, 1).reshape(_B, -1, C.NUM_DET_CLASSES)  # [B, H*W, 24]
-            max_scores_lvl = scores_lvl.amax(dim=-1)  # [B, H*W]
-            labels_lvl = scores_lvl.argmax(dim=-1)    # [B, H*W]
-            level_boxes.append(boxes_lvl)
-            level_scores.append(max_scores_lvl)
-            level_labels.append(labels_lvl)
+                # Deltas to absolute xyxy (matching detection_loss() decode)
+                pred_x1 = cell_cx.view(1, W) - decoded[:, 0] * stride  # [B, H, W]
+                pred_y1 = cell_cy.view(H, 1) - decoded[:, 1] * stride
+                pred_x2 = cell_cx.view(1, W) + decoded[:, 2] * stride
+                pred_y2 = cell_cy.view(H, 1) + decoded[:, 3] * stride
+                pred_abs = torch.stack([pred_x1, pred_y1, pred_x2, pred_y2], dim=1)  # [B, 4, H, W]
+                boxes_lvl = pred_abs.permute(0, 2, 3, 1).reshape(_B, -1, 4)  # [B, H*W, 4]
+                scores_lvl = (
+                    torch.sigmoid(cls_logits_lvl)
+                    .permute(0, 2, 3, 1)
+                    .reshape(_B, -1, C.NUM_DET_CLASSES)
+                )  # [B, H*W, 24]
+                max_scores_lvl = scores_lvl.amax(dim=-1)  # [B, H*W]
+                labels_lvl = scores_lvl.argmax(dim=-1)  # [B, H*W]
+                level_boxes.append(boxes_lvl)
+                level_scores.append(max_scores_lvl)
+                level_labels.append(labels_lvl)
         except RuntimeError as e:
-            logger.warning("  Detection decode failed for batch %d: %s — skipping mAP", n_batches, str(e)[:200])
+            logger.warning(
+                "  Detection decode failed for batch %d: %s — skipping mAP", n_batches, str(e)[:200]
+            )
         if level_boxes:
-            all_boxes = torch.cat(level_boxes, dim=1)    # [B, N_total, 4]
+            all_boxes = torch.cat(level_boxes, dim=1)  # [B, N_total, 4]
             all_scores = torch.cat(level_scores, dim=1)  # [B, N_total]
-            all_labels = torch.cat(level_labels, dim=1)   # [B, N_total]
+            all_labels = torch.cat(level_labels, dim=1)  # [B, N_total]
         else:
             all_boxes = torch.zeros(B, 0, 4, device=device)
             all_scores = torch.zeros(B, 0, device=device)
@@ -1599,9 +1740,21 @@ def evaluate(
             # GT for this image
             det_item = det_list[b] if isinstance(det_list[b], dict) else {}
             gt_boxes_np = det_item.get("boxes", torch.zeros(0, 4, device=device)).cpu().numpy()
-            gt_labels_np = det_item.get("labels", torch.zeros(0, dtype=torch.long, device=device)).cpu().numpy()
-            det_map_gt_boxes.append(gt_boxes_np.reshape(-1, 4) if gt_boxes_np.size > 0 else np.zeros((0, 4), dtype=np.float32))
-            det_map_gt_labels.append(gt_labels_np.ravel().astype(np.int64) if gt_labels_np.size > 0 else np.zeros(0, dtype=np.int64))
+            gt_labels_np = (
+                det_item.get("labels", torch.zeros(0, dtype=torch.long, device=device))
+                .cpu()
+                .numpy()
+            )
+            det_map_gt_boxes.append(
+                gt_boxes_np.reshape(-1, 4)
+                if gt_boxes_np.size > 0
+                else np.zeros((0, 4), dtype=np.float32)
+            )
+            det_map_gt_labels.append(
+                gt_labels_np.ravel().astype(np.int64)
+                if gt_labels_np.size > 0
+                else np.zeros(0, dtype=np.int64)
+            )
 
         # -- Pose: angular MAE --
         hp = targets.get("head_pose")  # [B, 16, 9]
@@ -1631,38 +1784,49 @@ def evaluate(
         metrics["act_top1"] = act_top1_correct / act_total
         metrics["act_top5"] = act_top5_correct / act_total
         metrics["act_n_total"] = act_total
-        logger.info("  Activity: top1=%.4f  top5=%.4f  (n=%d)",
-                     metrics["act_top1"], metrics["act_top5"], act_total)
+        logger.info(
+            "  Activity: top1=%.4f  top5=%.4f  (n=%d)",
+            metrics["act_top1"],
+            metrics["act_top5"],
+            act_total,
+        )
     else:
         metrics["act_top1"] = 0.0
         metrics["act_top5"] = 0.0
 
     # -- Detection presence BCE --
     if det_presence_preds:
-        all_pred = np.concatenate(det_presence_preds, axis=0)   # [N, 24]
+        all_pred = np.concatenate(det_presence_preds, axis=0)  # [N, 24]
         all_gt = np.concatenate(det_presence_targets, axis=0)  # [N, 24]
-        presence_bce = float(F.binary_cross_entropy(
-            torch.from_numpy(all_pred), torch.from_numpy(all_gt), reduction="mean"
-        ).item())
+        presence_bce = float(
+            F.binary_cross_entropy(
+                torch.from_numpy(all_pred), torch.from_numpy(all_gt), reduction="mean"
+            ).item()
+        )
         pred_bin = (all_pred > 0.5).astype(np.float32)
         presence_acc = float((pred_bin == all_gt).mean())
         metrics["det_presence_bce"] = presence_bce
         metrics["det_presence_acc"] = presence_acc
-        logger.info("  Detection: presence_bce=%.4f  presence_acc=%.4f",
-                     presence_bce, presence_acc)
+        logger.info("  Detection: presence_bce=%.4f  presence_acc=%.4f", presence_bce, presence_acc)
 
     # -- Detection mAP@0.5 / mAP@0.5:0.95 --
     if det_map_pred_boxes:
         det_map_result = compute_det_metrics_extended(
-            det_map_pred_boxes, det_map_pred_scores, det_map_pred_labels,
-            det_map_gt_boxes, det_map_gt_labels,
+            det_map_pred_boxes,
+            det_map_pred_scores,
+            det_map_pred_labels,
+            det_map_gt_boxes,
+            det_map_gt_labels,
         )
         metrics["det_mAP50"] = det_map_result["det_mAP50"]
         metrics["det_mAP_50_95"] = det_map_result["det_mAP_50_95"]
         metrics["det_mAP50_pc"] = det_map_result["det_mAP50_pc"]
-        logger.info("  Detection mAP: mAP50=%.4f  mAP50:95=%.4f  mAP50_pc=%.4f",
-                     det_map_result["det_mAP50"], det_map_result["det_mAP_50_95"],
-                     det_map_result["det_mAP50_pc"])
+        logger.info(
+            "  Detection mAP: mAP50=%.4f  mAP50:95=%.4f  mAP50_pc=%.4f",
+            det_map_result["det_mAP50"],
+            det_map_result["det_mAP_50_95"],
+            det_map_result["det_mAP50_pc"],
+        )
 
     # -- PSR transition eval (Doc 175 section 7.2) --
     if psr_pred_logits:
@@ -1685,7 +1849,7 @@ def evaluate(
         for rid, arrs in rec_data.items():
             _frames = np.array(arrs["frame"], dtype=np.int64)
             _sort = np.argsort(_frames)
-            _vp_raw = np.array(arrs["pred"])[_sort]   # [T, 11]
+            _vp_raw = np.array(arrs["pred"])[_sort]  # [T, 11]
             _vl_raw = np.array(arrs["label"])[_sort]  # [T, 11]
 
             # Sigmoid probabilities
@@ -1709,11 +1873,13 @@ def evaluate(
             if len(_gv) < 1:
                 continue
 
-            _rec_sweep_data.append({
-                "vp_mono": _vp_mono_valid,
-                "gv": _gv,
-                "valid_tr": _valid_tr,
-            })
+            _rec_sweep_data.append(
+                {
+                    "vp_mono": _vp_mono_valid,
+                    "gv": _gv,
+                    "valid_tr": _valid_tr,
+                }
+            )
 
         if _rec_sweep_data:
             _candidate_thresholds = [0.3, 0.4, 0.5, 0.6, 0.7]
@@ -1734,8 +1900,7 @@ def evaluate(
 
             # Report sweep table
             _sweep_msg = "  PSR threshold sweep: " + " | ".join(
-                f"th={th:.1f}: F1={np.mean(_sweep_results[th]):.4f}"
-                for th in _candidate_thresholds
+                f"th={th:.1f}: F1={np.mean(_sweep_results[th]):.4f}" for th in _candidate_thresholds
             )
             logger.info(_sweep_msg)
             logger.info("  PSR selected threshold: %.1f  (best event F1=%.4f)", _best_th, _best_f1)
@@ -1756,11 +1921,14 @@ def evaluate(
             metrics["psr_threshold"] = _best_th
             metrics["psr_pos"] = float(np.mean(_poss)) if _poss else 0.0
             metrics["psr_tau_frames"] = float(np.nanmean(_taus)) if _taus else float("nan")
-            logger.info("  PSR: event_f1@+-3=%.4f  (th=%.1f)  POS=%.4f  tau=%.2f  (n_recs=%d)",
-                         _best_f1, _best_th,
-                         metrics["psr_pos"],
-                         metrics.get("psr_tau_frames", float("nan")),
-                         len(_rec_sweep_data))
+            logger.info(
+                "  PSR: event_f1@+-3=%.4f  (th=%.1f)  POS=%.4f  tau=%.2f  (n_recs=%d)",
+                _best_f1,
+                _best_th,
+                metrics["psr_pos"],
+                metrics.get("psr_tau_frames", float("nan")),
+                len(_rec_sweep_data),
+            )
 
     # -- Pose angular MAE with bootstrap CI --
     if pose_fwd_maes:
@@ -1784,11 +1952,16 @@ def evaluate(
             float(np.percentile(_up_boot, 2.5)),
             float(np.percentile(_up_boot, 97.5)),
         ]
-        logger.info("  Pose: fwd_MAE=%.2fdeg [%.2f, %.2f]  up_MAE=%.2fdeg [%.2f, %.2f]  (n=%d)",
-                     metrics["pose_fwd_mae"], metrics["pose_fwd_mae_ci95"][0],
-                     metrics["pose_fwd_mae_ci95"][1],
-                     metrics["pose_up_mae"], metrics["pose_up_mae_ci95"][0],
-                     metrics["pose_up_mae_ci95"][1], metrics["pose_n"])
+        logger.info(
+            "  Pose: fwd_MAE=%.2fdeg [%.2f, %.2f]  up_MAE=%.2fdeg [%.2f, %.2f]  (n=%d)",
+            metrics["pose_fwd_mae"],
+            metrics["pose_fwd_mae_ci95"][0],
+            metrics["pose_fwd_mae_ci95"][1],
+            metrics["pose_up_mae"],
+            metrics["pose_up_mae_ci95"][0],
+            metrics["pose_up_mae_ci95"][1],
+            metrics["pose_n"],
+        )
 
     logger.info("Validation complete (%.1fs, %d batches)", metrics["eval_time_s"], n_batches)
     logger.info("=" * 60)
@@ -1807,123 +1980,289 @@ def evaluate(
 # Main training loop
 # ===========================================================================
 
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="MTL-All with MViTv2-S shared backbone"
-    )
+    parser = argparse.ArgumentParser(description="MTL-All with MViTv2-S shared backbone")
     parser.add_argument("--plumbing", action="store_true", help="1 epoch, subset")
     parser.add_argument("--epochs", type=int, default=100, help="Number of epochs")
-    parser.add_argument("--batch-size", type=int, default=4, help="[§6 lever #6] Batch size (effective = batch_size × grad_accum_steps = 16)")
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=4,
+        help="[§6 lever #6] Batch size (effective = batch_size × grad_accum_steps = 16)",
+    )
     parser.add_argument("--num-workers", type=int, default=4, help="DataLoader workers")
     parser.add_argument("--lr-backbone", type=float, default=1e-4, help="Backbone LR")
     parser.add_argument("--lr-head", type=float, default=1e-3, help="Head LR")
-    parser.add_argument("--hp-prec-cap", action="store_true", default=True, help="Cap pose precision")
-    parser.add_argument("--uw-so-temperature", type=float, default=1.0,
-                        help="UW-SO temperature scaling (default: 1.0)")
-    parser.add_argument("--db-mtl", action="store_true", default=False,
-                        help="DB-MTL log-transform for uncertainty weighting")
-    parser.add_argument("--pcgrad", action=argparse.BooleanOptionalAction, default=True, help="PCGrad gradient surgery (default: on; use --no-pcgrad to disable)")
-    parser.add_argument("--psr-asl", action="store_true", default=False,
-                        help="[Tier 1 Item 8] Use Asymmetric Loss for PSR (Ridnik 2021)")
-    parser.add_argument("--psr-gaussian-smear", action="store_true", default=False,
-                        help="[Tier 2 Item 15] Gaussian-smeared PSR targets (sigma=2)")
-    parser.add_argument("--act-balanced-softmax", action="store_true", default=False,
-                        help="[Tier 1 Item 3] Balanced Softmax for activity (Ren 2020)")
-    parser.add_argument("--act-ldam-drw", action="store_true", default=False,
-                        help="[Tier 1 Item 6] LDAM-DRW for activity (Cao 2019)")
-    parser.add_argument("--psr-focal", action=argparse.BooleanOptionalAction, default=True,
-                        help="[EP10] Use Focal-BCE (γ=2.0, α=0.25) for PSR (default: on; use --no-psr-focal to disable).")
-    parser.add_argument("--det-aug", action="store_true", default=True,
-                        help="[OPUS 192 §5.5 / Q6] Enable detection-specific augmentation (random horizontal flip, "
-                             "color jitter, random crop). Augments images and adjusts bboxes for detection only. "
-                             "Other heads see original images. Helps data-limited detection branch.")
-    parser.add_argument("--act-decoupled", action="store_true", default=False,
-                        help="[OPUS 207] Decoupled activity training (Kang et al. ICLR 2020). "
-                             "Phase A (epochs 1-25): instance-balanced sampling. "
-                             "Phase B (epochs 26+): freeze backbone, retrain activity classifier "
-                             "with class-balanced sampling + raw logits (no class weights).")
-    parser.add_argument("--act-decoupled-epoch", type=int, default=25,
-                        help="[OPUS 207] Epoch to switch from Phase A to Phase B in decoupled training.")
+    parser.add_argument(
+        "--hp-prec-cap", action="store_true", default=True, help="Cap pose precision"
+    )
+    parser.add_argument(
+        "--uw-so-temperature",
+        type=float,
+        default=1.0,
+        help="UW-SO temperature scaling (default: 1.0)",
+    )
+    parser.add_argument(
+        "--db-mtl",
+        action="store_true",
+        default=False,
+        help="DB-MTL log-transform for uncertainty weighting",
+    )
+    parser.add_argument(
+        "--pcgrad",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="PCGrad gradient surgery (default: on; use --no-pcgrad to disable)",
+    )
+    parser.add_argument(
+        "--psr-asl",
+        action="store_true",
+        default=False,
+        help="[Tier 1 Item 8] Use Asymmetric Loss for PSR (Ridnik 2021)",
+    )
+    parser.add_argument(
+        "--psr-gaussian-smear",
+        action="store_true",
+        default=False,
+        help="[Tier 2 Item 15] Gaussian-smeared PSR targets (sigma=2)",
+    )
+    parser.add_argument(
+        "--act-balanced-softmax",
+        action="store_true",
+        default=False,
+        help="[Tier 1 Item 3] Balanced Softmax for activity (Ren 2020)",
+    )
+    parser.add_argument(
+        "--act-ldam-drw",
+        action="store_true",
+        default=False,
+        help="[Tier 1 Item 6] LDAM-DRW for activity (Cao 2019)",
+    )
+    parser.add_argument(
+        "--psr-focal",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="[EP10] Use Focal-BCE (γ=2.0, α=0.25) for PSR (default: on; use --no-psr-focal to disable).",
+    )
+    parser.add_argument(
+        "--det-aug",
+        action="store_true",
+        default=True,
+        help="[OPUS 192 §5.5 / Q6] Enable detection-specific augmentation (random horizontal flip, "
+        "color jitter, random crop). Augments images and adjusts bboxes for detection only. "
+        "Other heads see original images. Helps data-limited detection branch.",
+    )
+    parser.add_argument(
+        "--act-decoupled",
+        action="store_true",
+        default=False,
+        help="[OPUS 207] Decoupled activity training (Kang et al. ICLR 2020). "
+        "Phase A (epochs 1-25): instance-balanced sampling. "
+        "Phase B (epochs 26+): freeze backbone, retrain activity classifier "
+        "with class-balanced sampling + raw logits (no class weights).",
+    )
+    parser.add_argument(
+        "--act-decoupled-epoch",
+        type=int,
+        default=25,
+        help="[OPUS 207] Epoch to switch from Phase A to Phase B in decoupled training.",
+    )
     parser.add_argument("--output-dir", type=str, default=str(OUTPUT_ROOT))
     parser.add_argument("--resume", type=str, default=None, help="Checkpoint to resume")
-    parser.add_argument("--eval-every", type=int, default=5,
-                        help="Run validation evaluation every N epochs (default: 5)")
-    parser.add_argument("--eval-split", type=str, default="val",
-                        help="Split for model selection (val) or final eval (test)")
-    parser.add_argument("--test-only", action="store_true",
-                        help="Load --resume checkpoint and evaluate on test split only")
+    parser.add_argument(
+        "--eval-every",
+        type=int,
+        default=5,
+        help="Run validation evaluation every N epochs (default: 5)",
+    )
+    parser.add_argument(
+        "--eval-split",
+        type=str,
+        default="val",
+        help="Split for model selection (val) or final eval (test)",
+    )
+    parser.add_argument(
+        "--test-only",
+        action="store_true",
+        help="Load --resume checkpoint and evaluate on test split only",
+    )
     parser.add_argument("--cpu", action="store_true", help="Force CPU")
     parser.add_argument(
-        "--measure-efficiency", action="store_true",
+        "--measure-efficiency",
+        action="store_true",
         help="Run efficiency measurement (FLOPs, FPS, VRAM) and exit",
     )
-    parser.add_argument("--max-batches-per-epoch", type=int, default=0,
-                        help="[§6 lever #6] Cap batches per epoch (0 = full epoch of ~39k; default 0; 200 for fast smoke)")
-    parser.add_argument("--grad-accum-steps", type=int, default=4,
-                        help="[§6 lever #6] Gradient accumulation steps (effective batch = batch_size * this)")
-    parser.add_argument("--grad-clip-norm", type=float, default=5.0,
-                        help="Grad-clip norm (5.0 is standard for ViT).")
-    parser.add_argument("--weight-decay", type=float, default=0.05,
-                        help="Weight decay for optimizer (default: 0.05; Kurin baseline uses 1e-3)")
-    parser.add_argument("--compile", action="store_true",
-                        help="Use torch.compile() for ~2x speedup (PyTorch 2.0+)")
+    parser.add_argument(
+        "--max-batches-per-epoch",
+        type=int,
+        default=0,
+        help="[§6 lever #6] Cap batches per epoch (0 = full epoch of ~39k; default 0; 200 for fast smoke)",
+    )
+    parser.add_argument(
+        "--grad-accum-steps",
+        type=int,
+        default=4,
+        help="[§6 lever #6] Gradient accumulation steps (effective batch = batch_size * this)",
+    )
+    parser.add_argument(
+        "--grad-clip-norm",
+        type=float,
+        default=5.0,
+        help="Grad-clip norm (5.0 is standard for ViT).",
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=0.05,
+        help="Weight decay for optimizer (default: 0.05; Kurin baseline uses 1e-3)",
+    )
+    parser.add_argument(
+        "--compile", action="store_true", help="Use torch.compile() for ~2x speedup (PyTorch 2.0+)"
+    )
     # ── SWA within-run checkpoint averaging (Task #259 / §6 lever #3) ─────
-    parser.add_argument("--swa-checkpoints", type=int, default=10,
-                        help="Average the last N periodic checkpoints for final eval (0=disabled, default 5)")
+    parser.add_argument(
+        "--swa-checkpoints",
+        type=int,
+        default=10,
+        help="Average the last N periodic checkpoints for final eval (0=disabled, default 5)",
+    )
     # ── Head warm-starting (Task #260 / §6 lever #4) ──────────────────────
-    parser.add_argument("--warm-start-dir", type=str, default=None,
-                        help="Directory with st_{head}_best.pt checkpoints for head warm-start")
+    parser.add_argument(
+        "--warm-start-dir",
+        type=str,
+        default=None,
+        help="Directory with st_{head}_best.pt checkpoints for head warm-start",
+    )
     # ── Distillation (Task #261 / §6 lever #5) ────────────────────────────
-    parser.add_argument("--distill-teacher-dir", type=str, default=None,
-                        help="Directory with ST checkpoints for distillation teachers")
-    parser.add_argument("--distill-alpha", type=float, default=0.1,
-                        help="Distillation loss weight (default: 0.1)")
-    parser.add_argument("--distill-temperature", type=float, default=4.0,
-                        help="Softmax temperature for distillation (default: 4.0)")
+    parser.add_argument(
+        "--distill-teacher-dir",
+        type=str,
+        default=None,
+        help="Directory with ST checkpoints for distillation teachers",
+    )
+    parser.add_argument(
+        "--distill-alpha", type=float, default=0.1, help="Distillation loss weight (default: 0.1)"
+    )
+    parser.add_argument(
+        "--distill-temperature",
+        type=float,
+        default=4.0,
+        help="Softmax temperature for distillation (default: 4.0)",
+    )
     # ── Kurin baseline: equal-weight loss combination ─────────────────────
-    parser.add_argument("--equal-weights", action="store_true", default=False,
-                        help="Kurin baseline: simple equal-weight sum of task losses (no adaptive weighting)")
+    parser.add_argument(
+        "--equal-weights",
+        action="store_true",
+        default=False,
+        help="Kurin baseline: simple equal-weight sum of task losses (no adaptive weighting)",
+    )
     # ── FAMO loss weighting (NeurIPS 2023) ────────────────────────────────
-    parser.add_argument("--famo", action="store_true", default=False,
-                        help="Use FAMO (O(1) single-backward) instead of UW-SO loss weighting")
-    parser.add_argument("--famo-lr", type=float, default=0.01,
-                        help="FAMO weight update learning rate (default: 0.01)")
-    parser.add_argument("--famo-temperature", type=float, default=1.0,
-                        help="FAMO softmax temperature (default: 1.0)")
+    parser.add_argument(
+        "--famo",
+        action="store_true",
+        default=False,
+        help="Use FAMO (O(1) single-backward) instead of UW-SO loss weighting",
+    )
+    parser.add_argument(
+        "--famo-lr",
+        type=float,
+        default=0.01,
+        help="FAMO weight update learning rate (default: 0.01)",
+    )
+    parser.add_argument(
+        "--famo-temperature",
+        type=float,
+        default=1.0,
+        help="FAMO softmax temperature (default: 1.0)",
+    )
     # ── MS-TCN smoothing loss for PSR (CVPR 2019) ─────────────────────────
-    parser.add_argument("--ms-tcn-smooth", action="store_true", default=False,
-                        help="Add MS-TCN truncated-MSE smoothing loss to PSR head")
-    parser.add_argument("--ms-tcn-tau", type=float, default=4.0,
-                        help="MS-TCN truncation threshold (default: 4.0)")
-    parser.add_argument("--ms-tcn-lambda", type=float, default=0.15,
-                        help="MS-TCN smoothing loss weight (default: 0.15)")
+    parser.add_argument(
+        "--ms-tcn-smooth",
+        action="store_true",
+        default=False,
+        help="Add MS-TCN truncated-MSE smoothing loss to PSR head",
+    )
+    parser.add_argument(
+        "--ms-tcn-tau", type=float, default=4.0, help="MS-TCN truncation threshold (default: 4.0)"
+    )
+    parser.add_argument(
+        "--ms-tcn-lambda",
+        type=float,
+        default=0.15,
+        help="MS-TCN smoothing loss weight (default: 0.15)",
+    )
     # ── Varifocal + WIoU v3 detection losses ───────────────────────────────
-    parser.add_argument("--varifocal", action="store_true", default=False,
-                        help="Use Varifocal Loss (Zhang CVPR 2021) for detection classification")
-    parser.add_argument("--wiou-v3", action="store_true", default=False,
-                        help="Use WIoU v3 (Tong 2023) for detection box regression")
+    parser.add_argument(
+        "--varifocal",
+        action="store_true",
+        default=False,
+        help="Use Varifocal Loss (Zhang CVPR 2021) for detection classification",
+    )
+    parser.add_argument(
+        "--wiou-v3",
+        action="store_true",
+        default=False,
+        help="Use WIoU v3 (Tong 2023) for detection box regression",
+    )
     # ── Huberised geodesic pose loss ──────────────────────────────────────
-    parser.add_argument("--pose-geodesic-huber", action="store_true", default=False,
-                        help="Use Huber-capped geodesic loss (delta=30°) for pose")
-    parser.add_argument("--img-size", type=int, default=224,
-                        help="Input H=W. 224=fast (default), 640=matches Schonbeek 2024 YOLOv8 baseline (8x slower but should give much higher mAP).")
+    parser.add_argument(
+        "--pose-geodesic-huber",
+        action="store_true",
+        default=False,
+        help="Use Huber-capped geodesic loss (delta=30°) for pose",
+    )
+    parser.add_argument(
+        "--img-size",
+        type=int,
+        default=224,
+        help="Input H=W. 224=fast (default), 640=matches Schonbeek 2024 YOLOv8 baseline (8x slower but should give much higher mAP).",
+    )
     # ── v4: RotoGrad feature rotation (ICLR 2022) ─────────────────────────
-    parser.add_argument("--rotograd", action="store_true", default=False,
-                        help="Per-task feature rotation for gradient direction alignment (Javaloy 2022)")
-    parser.add_argument("--rotograd-subspace", type=int, default=128,
-                        help="RotoGrad subspace dimension (0=full, default: 128)")
+    parser.add_argument(
+        "--rotograd",
+        action="store_true",
+        default=False,
+        help="Per-task feature rotation for gradient direction alignment (Javaloy 2022)",
+    )
+    parser.add_argument(
+        "--rotograd-subspace",
+        type=int,
+        default=128,
+        help="RotoGrad subspace dimension (0=full, default: 128)",
+    )
     # ── v4: MetaBalance gradient rescaling (WWW 2022) ─────────────────────
-    parser.add_argument("--metabalance", action="store_true", default=False,
-                        help="Per-parameter gradient magnitude rescaling to match target task")
+    parser.add_argument(
+        "--metabalance",
+        action="store_true",
+        default=False,
+        help="Per-parameter gradient magnitude rescaling to match target task",
+    )
     # ── v4: MS-TCN PSR refinement stages (CVPR 2019) ─────────────────────
-    parser.add_argument("--psr-refinement", action="store_true", default=False,
-                        help="Stack MS-TCN dilated refinement stages on PSR causal transformer")
-    parser.add_argument("--psr-refinement-stages", type=int, default=2,
-                        help="Number of MS-TCN refinement stages (default: 2)")
-    parser.add_argument("--grad-checkpoint", action="store_true", default=False,
-                        help="[v4 480px] Enable gradient checkpointing — reduces VRAM ~3x at cost of ~30%% compute. Required for 480x480 batch=1 on 16GB GPU.")
-    parser.add_argument("--sequence-length", type=int, default=16,
-                        help="T frames per sequence. Default 16. Use 4 for 480px training to fit in 16GB GPU.")
+    parser.add_argument(
+        "--psr-refinement",
+        action="store_true",
+        default=False,
+        help="Stack MS-TCN dilated refinement stages on PSR causal transformer",
+    )
+    parser.add_argument(
+        "--psr-refinement-stages",
+        type=int,
+        default=2,
+        help="Number of MS-TCN refinement stages (default: 2)",
+    )
+    parser.add_argument(
+        "--grad-checkpoint",
+        action="store_true",
+        default=False,
+        help="[v4 480px] Enable gradient checkpointing — reduces VRAM ~3x at cost of ~30%% compute. Required for 480x480 batch=1 on 16GB GPU.",
+    )
+    parser.add_argument(
+        "--sequence-length",
+        type=int,
+        default=16,
+        help="T frames per sequence. Default 16. Use 4 for 480px training to fit in 16GB GPU.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -1936,8 +2275,9 @@ def main():
     if args.test_only:
         require_split("test", allow_test_only=True)
     else:
-        assert args.eval_split == "val", \
+        assert args.eval_split == "val", (
             f"Model selection must use 'val' split (got '{args.eval_split}') per Doc 175 §7.1"
+        )
 
     # ── Standalone efficiency measurement ──
     if args.measure_efficiency:
@@ -1945,7 +2285,9 @@ def main():
         measure_efficiency(args)
         return
 
-    device = torch.device("cpu") if args.cpu or not torch.cuda.is_available() else torch.device("cuda")
+    device = (
+        torch.device("cpu") if args.cpu or not torch.cuda.is_available() else torch.device("cuda")
+    )
     logger.info("Device: %s", device)
 
     output_dir = Path(args.output_dir)
@@ -1973,14 +2315,19 @@ def main():
     # linearly interpolate to DET_GT_CURRICULUM_END over the first N epochs.
     if C.DET_GT_CURRICULUM_DECAY:
         C.DET_GT_FRAME_FRACTION = C.DET_GT_CURRICULUM_START
-        logger.info("Curriculum decay enabled: DET_GT_FRAME_FRACTION=%.2f → %.2f over %d epochs",
-                    C.DET_GT_CURRICULUM_START, C.DET_GT_CURRICULUM_END,
-                    C.DET_GT_CURRICULUM_EPOCHS)
+        logger.info(
+            "Curriculum decay enabled: DET_GT_FRAME_FRACTION=%.2f → %.2f over %d epochs",
+            C.DET_GT_CURRICULUM_START,
+            C.DET_GT_CURRICULUM_END,
+            C.DET_GT_CURRICULUM_EPOCHS,
+        )
 
     sampler = torch.utils.data.WeightedRandomSampler(
-        train_ds.get_sampler_weights() if hasattr(train_ds, "get_sampler_weights")
+        train_ds.get_sampler_weights()
+        if hasattr(train_ds, "get_sampler_weights")
         else torch.ones(len(train_ds)),
-        num_samples=len(train_ds), replacement=True,
+        num_samples=len(train_ds),
+        replacement=True,
     )
 
     train_loader = torch.utils.data.DataLoader(
@@ -2017,7 +2364,7 @@ def main():
     logger.info("Building MTL-MViT model...")
     model = MTLMViTModel(num_act_classes=getattr(C, "NUM_ACT_OUTPUTS", 75)).to(device)
     # [v4 480px] Enable gradient checkpointing if requested
-    if getattr(args, 'grad_checkpoint', False):
+    if getattr(args, "grad_checkpoint", False):
         model._grad_checkpoint = True
         logger.info("Gradient checkpointing ENABLED — reduces VRAM ~3x at cost of ~30%% compute")
     total_params = sum(p.numel() for p in model.parameters()) / 1e6
@@ -2042,14 +2389,20 @@ def main():
         # [OPUS 186] Pre-filter state_dict to matching shapes (see resume path).
         ckpt_sd = ckpt["model_state_dict"]
         model_sd = model.state_dict()
-        filtered_sd = {k: v for k, v in ckpt_sd.items()
-                       if k in model_sd and model_sd[k].shape == v.shape}
-        skipped = sum(1 for k, v in ckpt_sd.items()
-                      if k not in model_sd or model_sd[k].shape != v.shape)
+        filtered_sd = {
+            k: v for k, v in ckpt_sd.items() if k in model_sd and model_sd[k].shape == v.shape
+        }
+        skipped = sum(
+            1 for k, v in ckpt_sd.items() if k not in model_sd or model_sd[k].shape != v.shape
+        )
         load_result = model.load_state_dict(filtered_sd, strict=False)
-        logger.info("Loaded checkpoint from %s (epoch %d) — %d skipped (shape mismatch), %d missing",
-                    args.resume, ckpt.get("epoch", "?"),
-                    skipped, len(load_result.missing_keys))
+        logger.info(
+            "Loaded checkpoint from %s (epoch %d) — %d skipped (shape mismatch), %d missing",
+            args.resume,
+            ckpt.get("epoch", "?"),
+            skipped,
+            len(load_result.missing_keys),
+        )
 
         test_ds = IndustRealMultiTaskDataset(
             split="test",
@@ -2070,7 +2423,9 @@ def main():
         test_metrics = evaluate(model, test_loader, device, epoch=None)
         logger.info("Test metrics: %s", test_metrics)
         with open(output_dir / "metrics.json", "w") as f:
-            json.dump({"test_metrics": test_metrics, "config": vars(args)}, f, indent=2, default=str)
+            json.dump(
+                {"test_metrics": test_metrics, "config": vars(args)}, f, indent=2, default=str
+            )
         logger.info("Test-only evaluation complete. Output: %s", output_dir)
         return
 
@@ -2098,13 +2453,18 @@ def main():
         if soup_path.exists():
             logger.info("Auto-loading soup backbone from %s", soup_path)
             soup_sd = torch.load(soup_path, map_location="cpu", weights_only=False)
-            filtered = {k: v for k, v in soup_sd.items()
-                         if k in model.state_dict()
-                         and model.state_dict()[k].shape == v.shape}
+            filtered = {
+                k: v
+                for k, v in soup_sd.items()
+                if k in model.state_dict() and model.state_dict()[k].shape == v.shape
+            }
             load_result = model.load_state_dict(filtered, strict=False)
-            logger.info("  Loaded %d/%d soup tensors (skipped %d shape-mismatched)",
-                        len(filtered), len(soup_sd),
-                        len(soup_sd) - len(filtered))
+            logger.info(
+                "  Loaded %d/%d soup tensors (skipped %d shape-mismatched)",
+                len(filtered),
+                len(soup_sd),
+                len(soup_sd) - len(filtered),
+            )
         else:
             logger.info("No soup backbone found at %s — using random init", soup_path)
 
@@ -2113,10 +2473,7 @@ def main():
     # loss (no divide-by-zero, no underflow). Tracks each task's running mean
     # so Kendall balances comparable scales (≈O(1) per task) instead of
     # collapsing to inverse-loss scaling `weight = 1/(2·loss)`.
-    ema_losses = {
-        name: torch.tensor(1.0, device=device)
-        for name in ["det", "act", "psr", "pose"]
-    }
+    ema_losses = {name: torch.tensor(1.0, device=device) for name in ["det", "act", "psr", "pose"]}
     logger.info("EMA loss tracker initialized to 1.0")
 
     # ── EMA model weights [OPUS 186 E-3/I-8] ─────────────────────────────
@@ -2124,10 +2481,7 @@ def main():
     # across all metrics. Initialized to the model state_dict on the first
     # update; used for eval instead of the raw model state. Momentum 0.999
     # (≈ last 1000 steps dominate). Detached from autograd.
-    ema_model_state: dict = {
-        k: v.detach().clone().float()
-        for k, v in model.state_dict().items()
-    }
+    ema_model_state: dict = {k: v.detach().clone().float() for k, v in model.state_dict().items()}
     ema_momentum_model = 0.999
     logger.info("EMA model weights initialized to current model state_dict")
 
@@ -2146,7 +2500,11 @@ def main():
     # not model.feature_pyramid.fpn. All 14.5M BiFPN params were missing from
     # the optimizer. Fix: use "fpn" prefix (matches named_parameters keys).
     param_groups = [
-        {"params": model.feature_pyramid.backbone.parameters(), "lr": args.lr_backbone, "weight_decay": args.weight_decay},
+        {
+            "params": model.feature_pyramid.backbone.parameters(),
+            "lr": args.lr_backbone,
+            "weight_decay": args.weight_decay,
+        },
         _group_params(["fpn", "det_head"], 1.0),
         _group_params(["act_head"], 1.0),
         _group_params(["psr_head"], 0.3),
@@ -2154,12 +2512,11 @@ def main():
     ]
     # Log the LR structure
     for pg in param_groups:
-        lr_val = pg["lr"]; n_params = sum(p.numel() for p in pg["params"])
+        lr_val = pg["lr"]
+        n_params = sum(p.numel() for p in pg["params"])
         logger.info("  lr=%.2e | params=%.2fM", lr_val, n_params / 1e6)
     optimizer = torch.optim.AdamW(param_groups)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.epochs
-    )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
 
     # ── Resume ────────────────────────────────────────────────────────────
     start_epoch = 0
@@ -2180,8 +2537,13 @@ def main():
             if k in model_sd and model_sd[k].shape == v.shape:
                 filtered_sd[k] = v
             else:
-                skipped.append((k, tuple(v.shape) if hasattr(v, "shape") else None,
-                                tuple(model_sd[k].shape) if k in model_sd else None))
+                skipped.append(
+                    (
+                        k,
+                        tuple(v.shape) if hasattr(v, "shape") else None,
+                        tuple(model_sd[k].shape) if k in model_sd else None,
+                    )
+                )
         if skipped:
             logger.warning("Resume: skipped %d keys with shape mismatch:", len(skipped))
             for k, ckpt_shape, model_shape in skipped[:5]:
@@ -2190,8 +2552,11 @@ def main():
                 logger.warning("  ... and %d more", len(skipped) - 5)
         load_result = model.load_state_dict(filtered_sd, strict=False)
         if load_result.missing_keys:
-            logger.warning("Resume: %d missing keys (new layers initialize fresh): %s",
-                           len(load_result.missing_keys), load_result.missing_keys[:3])
+            logger.warning(
+                "Resume: %d missing keys (new layers initialize fresh): %s",
+                len(load_result.missing_keys),
+                load_result.missing_keys[:3],
+            )
         # [OPUS 186] Optimizer state may also have shape mismatches (param
         # groups changed because new layers were added). Try to load; if it
         # fails, skip and start fresh optimizer momentum.
@@ -2225,10 +2590,7 @@ def main():
         # to the now-loaded model. This way any keys that didn't load (e.g.,
         # the reshaped PSR head) start EMA-tracking the *new* random init
         # rather than carrying over stale shapes.
-        ema_model_state = {
-            k: v.detach().clone().float()
-            for k, v in model.state_dict().items()
-        }
+        ema_model_state = {k: v.detach().clone().float() for k, v in model.state_dict().items()}
         logger.info("Re-anchored EMA model state to current model (post-resume)")
         logger.info("Resumed from epoch %d", start_epoch)
 
@@ -2236,18 +2598,26 @@ def main():
     scaler = torch.amp.GradScaler(device.type, enabled=True)
 
     # ── Activity class weights (Doc 175 §4) ────────────────────────────────
-    act_class_weights = compute_activity_class_weights(train_ds, num_classes=len(train_ds.class_counts))
+    act_class_weights = compute_activity_class_weights(
+        train_ds, num_classes=len(train_ds.class_counts)
+    )
     act_class_weights = act_class_weights.to(device)
-    logger.info("Activity class weights computed — shape=%s, device=%s",
-                act_class_weights.shape, act_class_weights.device)
+    logger.info(
+        "Activity class weights computed — shape=%s, device=%s",
+        act_class_weights.shape,
+        act_class_weights.device,
+    )
 
     # [OPUS 201] Enable logit-adjustment on ActivityHead (Menon et al. 2020).
     # Balanced softmax corrects for long-tail class distribution at eval time,
     # counteracting the class-weight collapse that produces below-random top-1.
     class_counts_tensor = torch.from_numpy(train_ds.class_counts.astype(np.int64))
     model.act_head.enable_logit_adjust(class_counts_tensor)
-    logger.info("Activity logit-adjust enabled (%d classes, %d total samples)",
-                len(train_ds.class_counts), int(class_counts_tensor.sum()))
+    logger.info(
+        "Activity logit-adjust enabled (%d classes, %d total samples)",
+        len(train_ds.class_counts),
+        int(class_counts_tensor.sum()),
+    )
 
     # [OPUS 207 §2.6] Compute class frequencies for Menon logit-adjust in loss.
     # These are passed to activity_loss() which adds tau*log(freq) to logits
@@ -2262,52 +2632,70 @@ def main():
     act_ldam = None
     if args.act_balanced_softmax:
         from src.losses.balanced_softmax import BalancedSoftmaxLoss
+
         _priors = class_counts_tensor.float() / class_counts_tensor.sum().clamp(min=1)
         act_balanced_softmax = BalancedSoftmaxLoss(_priors.to(device))
-        logger.info("Balanced Softmax initialized — 75-class priors, range [%.2e, %.2e]",
-                    _priors.min().item(), _priors.max().item())
+        logger.info(
+            "Balanced Softmax initialized — 75-class priors, range [%.2e, %.2e]",
+            _priors.min().item(),
+            _priors.max().item(),
+        )
     elif args.act_ldam_drw:
         from src.losses.ldam_drw import LDAMLoss
-        act_ldam = LDAMLoss(cls_num_list=train_ds.class_counts.tolist(),
-                           max_m=0.5, s=30, reweight_epoch=35)
+
+        act_ldam = LDAMLoss(
+            cls_num_list=train_ds.class_counts.tolist(), max_m=0.5, s=30, reweight_epoch=35
+        )
         logger.info("LDAM-DRW initialized — reweight at epoch 35")
 
     # ── FAMO loss weighter (NeurIPS 2023) ────────────────────────────────
     famo_weighter = None
     if args.famo:
         from src.losses.famo import FAMOWeighter
+
         famo_weighter = FAMOWeighter(
-            num_tasks=4, lr=args.famo_lr, temperature=args.famo_temperature,
+            num_tasks=4,
+            lr=args.famo_lr,
+            temperature=args.famo_temperature,
         )
-        logger.info("FAMO weighter initialized — lr=%.3f, temp=%.1f, O(1) single-backward",
-                    args.famo_lr, args.famo_temperature)
+        logger.info(
+            "FAMO weighter initialized — lr=%.3f, temp=%.1f, O(1) single-backward",
+            args.famo_lr,
+            args.famo_temperature,
+        )
 
     # ── v4: RotoGrad feature rotation (ICLR 2022) ─────────────────────────
     rotograd_model = None
     if args.rotograd:
         from src.models.rotograd import RotoGradRotation
+
         _subspace = args.rotograd_subspace if args.rotograd_subspace > 0 else None
         rotograd_model = RotoGradRotation(
-            feat_dim=768, num_tasks=3,  # act, pose, psr (det uses FPN)
+            feat_dim=768,
+            num_tasks=3,  # act, pose, psr (det uses FPN)
             subspace_dim=_subspace,
         ).to(device)
         _n_params = sum(p.numel() for p in rotograd_model.parameters())
-        logger.info("RotoGrad initialized — %d tasks, subspace=%s, params=%d",
-                    3, _subspace, _n_params)
+        logger.info(
+            "RotoGrad initialized — %d tasks, subspace=%s, params=%d", 3, _subspace, _n_params
+        )
         # [FIX Claude Science V2 Agent 8] RotoGrad was instantiated AFTER
         # optimizer creation, so its 639K parameters were never added to any
         # param group — they sat at random init throughout training.
-        optimizer.add_param_group({
-            "params": rotograd_model.parameters(),
-            "lr": args.lr_head * 0.3,  # match PSR/pose rate
-            "weight_decay": args.weight_decay,
-        })
+        optimizer.add_param_group(
+            {
+                "params": rotograd_model.parameters(),
+                "lr": args.lr_head * 0.3,  # match PSR/pose rate
+                "weight_decay": args.weight_decay,
+            }
+        )
         logger.info("RotoGrad params added to optimizer (lr=%.2e)", args.lr_head * 0.3)
 
     # ── v4: MetaBalance gradient rescaling (WWW 2022) ─────────────────────
     metabalance = None
     if args.metabalance:
         from src.losses.metabalance import MetaBalance
+
         metabalance = MetaBalance(target_task="pose")
         logger.info("MetaBalance initialized — target=pose, rescaling per-block gradients")
 
@@ -2315,19 +2703,28 @@ def main():
     psr_refinement_head = None
     if args.psr_refinement:
         from src.models.psr_refinement import PSRRefinementHead
+
         psr_refinement_head = PSRRefinementHead(
-            num_components=11, num_stages=args.psr_refinement_stages,
-            num_layers=10, num_filters=64,
+            num_components=11,
+            num_stages=args.psr_refinement_stages,
+            num_layers=10,
+            num_filters=64,
         ).to(device)
         _n_params = sum(p.numel() for p in psr_refinement_head.parameters())
-        logger.info("PSR refinement head initialized — %d stages, params=%d",
-                    args.psr_refinement_stages, _n_params)
+        logger.info(
+            "PSR refinement head initialized — %d stages, params=%d",
+            args.psr_refinement_stages,
+            _n_params,
+        )
 
     # ── Training loop ─────────────────────────────────────────────────────
     logger.info("Starting training (%d epochs)...", args.epochs)
     if args.act_decoupled:
-        logger.info("Decoupled activity training: Phase A (epochs 1-%d) → Phase B (epochs %d+)",
-                    args.act_decoupled_epoch, args.act_decoupled_epoch + 1)
+        logger.info(
+            "Decoupled activity training: Phase A (epochs 1-%d) → Phase B (epochs %d+)",
+            args.act_decoupled_epoch,
+            args.act_decoupled_epoch + 1,
+        )
     metrics_log = {"train_metrics": [], "config": vars(args)}
     act_decoupled_phase_b = False  # [OPUS 207] Tracks whether we've transitioned
 
@@ -2339,41 +2736,64 @@ def main():
             if abs(new_frac - prev_frac) > 1e-6:
                 _new_weights = train_ds.get_sampler_weights()
                 sampler = torch.utils.data.WeightedRandomSampler(
-                    _new_weights, num_samples=len(train_ds), replacement=True,
+                    _new_weights,
+                    num_samples=len(train_ds),
+                    replacement=True,
                 )
                 train_loader = torch.utils.data.DataLoader(
-                    train_ds, batch_size=args.batch_size, sampler=sampler,
-                    num_workers=args.num_workers, pin_memory=True,
+                    train_ds,
+                    batch_size=args.batch_size,
+                    sampler=sampler,
+                    num_workers=args.num_workers,
+                    pin_memory=True,
                     prefetch_factor=2 if args.num_workers > 0 else None,
-                    collate_fn=collate_fn_sequences, drop_last=True,
+                    collate_fn=collate_fn_sequences,
+                    drop_last=True,
                 )
-                logger.info("Curriculum decay epoch %d: DET_GT_FRAME_FRACTION %.3f → %.3f",
-                            epoch, prev_frac, new_frac)
+                logger.info(
+                    "Curriculum decay epoch %d: DET_GT_FRAME_FRACTION %.3f → %.3f",
+                    epoch,
+                    prev_frac,
+                    new_frac,
+                )
 
         # [OPUS 207] Decoupled training Phase B transition.
         # Freeze backbone, retrain only activity classifier with class-balanced sampling.
         if args.act_decoupled and epoch > args.act_decoupled_epoch and not act_decoupled_phase_b:
-            logger.info("=== Decoupled Phase B: freezing backbone, class-balanced activity retrain ===")
+            logger.info(
+                "=== Decoupled Phase B: freezing backbone, class-balanced activity retrain ==="
+            )
             for name, param in model.named_parameters():
                 if "act_head.classifier" not in name:
                     param.requires_grad = False
             # Recompute class-balanced sampler: oversample rare classes
             from torch.utils.data import WeightedRandomSampler
+
             class_counts = train_ds.class_counts
             class_weights_bal = 1.0 / np.maximum(class_counts, 1)
-            sample_weights = np.array([class_weights_bal[train_ds[i][1]["activity"].item()]
-                                       if train_ds[i][1].get("activity") is not None
-                                       and train_ds[i][1]["activity"].item() >= 0
-                                       else 0.0 for i in range(len(train_ds))])
+            sample_weights = np.array(
+                [
+                    class_weights_bal[train_ds[i][1]["activity"].item()]
+                    if train_ds[i][1].get("activity") is not None
+                    and train_ds[i][1]["activity"].item() >= 0
+                    else 0.0
+                    for i in range(len(train_ds))
+                ]
+            )
             balanced_sampler = WeightedRandomSampler(
                 torch.from_numpy(sample_weights).float(),
-                num_samples=len(train_ds), replacement=True
+                num_samples=len(train_ds),
+                replacement=True,
             )
             train_loader = torch.utils.data.DataLoader(
-                train_ds, batch_size=args.batch_size, shuffle=False,
+                train_ds,
+                batch_size=args.batch_size,
+                shuffle=False,
                 sampler=balanced_sampler,
-                collate_fn=collate_fn_sequences, num_workers=args.num_workers,
-                pin_memory=True, drop_last=True,
+                collate_fn=collate_fn_sequences,
+                num_workers=args.num_workers,
+                pin_memory=True,
+                drop_last=True,
             )
             # Disable class weights — balanced batches handle long-tail
             act_class_weights = None
@@ -2383,7 +2803,11 @@ def main():
             logger.info("Phase B active: backbone frozen, class-balanced sampler, raw logits")
         t0 = time.time()
         epoch_metrics = {
-            "loss": 0, "loss_det": 0, "loss_act": 0, "loss_psr": 0, "loss_pose": 0,
+            "loss": 0,
+            "loss_det": 0,
+            "loss_act": 0,
+            "loss_psr": 0,
+            "loss_pose": 0,
             "loss_distill": 0,
             **{f"loss_psr_c{i}": 0 for i in range(11)},
         }
@@ -2400,8 +2824,10 @@ def main():
                 if isinstance(v, torch.Tensor):
                     targets[k] = v.to(device, non_blocking=True)
                 elif isinstance(v, dict):
-                    targets[k] = {sk: sv.to(device) if isinstance(sv, torch.Tensor) else sv
-                                  for sk, sv in v.items()}
+                    targets[k] = {
+                        sk: sv.to(device) if isinstance(sv, torch.Tensor) else sv
+                        for sk, sv in v.items()
+                    }
                 else:
                     targets[k] = v
 
@@ -2415,12 +2841,17 @@ def main():
             images = images.permute(0, 2, 1, 3, 4).contiguous()
 
             # Gradient accumulation: only step optimizer on boundary
-            is_accum_boundary = ((batch_idx + 1) % args.grad_accum_steps == 0) or \
-                                (batch_idx + 1 == len(train_loader))
+            is_accum_boundary = ((batch_idx + 1) % args.grad_accum_steps == 0) or (
+                batch_idx + 1 == len(train_loader)
+            )
             do_step = is_accum_boundary
 
             step_metrics = train_step(
-                model, images, targets, optimizer, scaler,
+                model,
+                images,
+                targets,
+                optimizer,
+                scaler,
                 grad_clip_norm=args.grad_clip_norm,
                 pcgrad=args.pcgrad,
                 act_class_weights=act_class_weights,
@@ -2473,8 +2904,10 @@ def main():
             if batch_idx % 100 == 0:
                 logger.info(
                     "  [batch %5d/%d accum=%d/%d] loss=%.4f det=%.4f act=%.4f psr=%.4f pose=%.4f",
-                    batch_idx, len(train_loader),
-                    (batch_idx % args.grad_accum_steps) + 1, args.grad_accum_steps,
+                    batch_idx,
+                    len(train_loader),
+                    (batch_idx % args.grad_accum_steps) + 1,
+                    args.grad_accum_steps,
                     step_metrics.get("loss", 0),
                     step_metrics.get("loss_det", 0),
                     step_metrics.get("loss_act", 0),
@@ -2499,11 +2932,16 @@ def main():
         logger.info(
             "Epoch %3d/%d | loss=%.4f det=%.4f act=%.4f psr=%.4f pose=%.4f distill=%.4f | "
             "lr=%.2e | %.1fs",
-            epoch, args.epochs,
-            avg_metrics["loss"], avg_metrics["loss_det"], avg_metrics["loss_act"],
-            avg_metrics["loss_psr"], avg_metrics["loss_pose"],
+            epoch,
+            args.epochs,
+            avg_metrics["loss"],
+            avg_metrics["loss_det"],
+            avg_metrics["loss_act"],
+            avg_metrics["loss_psr"],
+            avg_metrics["loss_pose"],
             avg_metrics.get("loss_distill", 0),
-            avg_metrics["lr"], dt,
+            avg_metrics["lr"],
+            dt,
         )
         # Per-component PSR loss breakdown (Doc 175 §4)
         _pcs = [avg_metrics.get(f"loss_psr_c{i}", 0) for i in range(11)]
@@ -2521,7 +2959,7 @@ def main():
                 for _qc_batch in eval_loader:
                     if _qc_B >= 2:
                         break
-                    _qc_images = _qc_batch[0][:args.batch_size].to(device, non_blocking=True)
+                    _qc_images = _qc_batch[0][: args.batch_size].to(device, non_blocking=True)
                     _qc_images = _qc_images.float() / 255.0
                     _mean = torch.tensor([0.45, 0.45, 0.45], device=device).view(1, 1, 3, 1, 1)
                     _std = torch.tensor([0.225, 0.225, 0.225], device=device).view(1, 1, 3, 1, 1)
@@ -2532,7 +2970,9 @@ def main():
                 # Activity: how many classes are predicted across the batch?
                 _qc_preds = _qc_out["activity"].argmax(dim=-1)
                 _qc_n_pred = len(_qc_preds.unique())
-                _qc_max_conf = torch.softmax(_qc_out["activity"], dim=-1).max(dim=-1)[0].mean().item()
+                _qc_max_conf = (
+                    torch.softmax(_qc_out["activity"], dim=-1).max(dim=-1)[0].mean().item()
+                )
                 # PSR: stddev across frames per component
                 _qc_psr_std = _qc_out["psr_logits"].float().std(dim=(0, 1)).tolist()
                 _qc_psr_std_max = max(_qc_psr_std)
@@ -2540,7 +2980,10 @@ def main():
                 _qc_det_levels = list(_qc_out["detection"].keys())
                 logger.info(
                     "  Quick: act_preds=%duniq/%.2fmaxconf | psr_stdmax=%.4f | det_lvls=%s",
-                    _qc_n_pred, _qc_max_conf, _qc_psr_std_max, _qc_det_levels,
+                    _qc_n_pred,
+                    _qc_max_conf,
+                    _qc_psr_std_max,
+                    _qc_det_levels,
                 )
             model.train()
 
@@ -2570,23 +3013,32 @@ def main():
             logger.info(
                 "  Eval (%s): act_top1=%.4f act_top5=%.4f psr_f1=%.4f "
                 "det_bce=%.4f pose_fwd=%.2fdeg pose_up=%.2fdeg",
-                args.eval_split, act1, act5, psr, det, fwd, up,
+                args.eval_split,
+                act1,
+                act5,
+                psr,
+                det,
+                fwd,
+                up,
             )
 
             # Best model based on activity top-1 (Doc 175 section 7.2)
             if act1 > best_act_top1:
                 best_act_top1 = act1
                 best_ckpt = output_dir / "best.pt"
-                torch.save({
-                    "epoch": epoch,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "ema_losses": ema_losses,  # [OPUS 181 D1]
-                    "ema_model_state": ema_model_state,  # [OPUS 186 E-3]
-                    "best_act_top1": best_act_top1,
-                    "best_val_loss": best_val_loss,
-                    "val_metrics": eval_metrics,
-                }, best_ckpt)
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "ema_losses": ema_losses,  # [OPUS 181 D1]
+                        "ema_model_state": ema_model_state,  # [OPUS 186 E-3]
+                        "best_act_top1": best_act_top1,
+                        "best_val_loss": best_val_loss,
+                        "val_metrics": eval_metrics,
+                    },
+                    best_ckpt,
+                )
                 logger.info("  New best activity top-1: %.4f (saved: %s)", best_act_top1, best_ckpt)
 
         # Save checkpoint
@@ -2604,7 +3056,7 @@ def main():
             torch.save(ckpt, ckpt_path)
             logger.info("Checkpoint saved: %s", ckpt_path)
 
-        # Save latest
+            # Save latest
             latest = output_dir / "latest.pt"
             torch.save({**ckpt, "epoch": epoch}, latest)
 
@@ -2638,8 +3090,11 @@ def main():
         swa_sd = swa_average_checkpoints(output_dir, args.swa_checkpoints, device)
         if swa_sd is not None:
             raw_state_swa = {k: v.detach().clone() for k, v in model.state_dict().items()}
-            filtered_swa = {k: v.to(raw_state_swa[k].dtype) for k, v in swa_sd.items()
-                           if k in raw_state_swa and raw_state_swa[k].shape == v.shape}
+            filtered_swa = {
+                k: v.to(raw_state_swa[k].dtype)
+                for k, v in swa_sd.items()
+                if k in raw_state_swa and raw_state_swa[k].shape == v.shape
+            }
             model.load_state_dict(filtered_swa, strict=False)
             logger.info("SWA: loaded %d tensors (of %d total)", len(filtered_swa), len(swa_sd))
 
@@ -2648,8 +3103,14 @@ def main():
             metrics_log["test_metrics_swa"] = swa_test_metrics
 
             swa_path = output_dir / "swa_averaged.pt"
-            torch.save({"model_state_dict": model.state_dict(), "method": "swa",
-                         "n_checkpoints": args.swa_checkpoints}, swa_path)
+            torch.save(
+                {
+                    "model_state_dict": model.state_dict(),
+                    "method": "swa",
+                    "n_checkpoints": args.swa_checkpoints,
+                },
+                swa_path,
+            )
             logger.info("SWA model saved: %s", swa_path)
 
             # Restore raw weights for the standard test eval below

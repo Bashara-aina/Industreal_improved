@@ -62,6 +62,7 @@ N_TIMING = 50
 # ---------------------------------------------------------------------------
 class ModelWrapperV5(torch.nn.Module):
     """Wraps POPWMultiTaskModel so forward accepts a single positional tensor."""
+
     def __init__(self, model):
         super().__init__()
         self._model = model
@@ -72,6 +73,7 @@ class ModelWrapperV5(torch.nn.Module):
 
 class ModelWrapperV8(torch.nn.Module):
     """Wraps VideoMultiTaskModel so forward accepts a single positional tensor."""
+
     def __init__(self, model):
         super().__init__()
         self._model = model
@@ -82,6 +84,7 @@ class ModelWrapperV8(torch.nn.Module):
 
 class ModelWrapperV8Simple(torch.nn.Module):
     """Wraps simple V8Model so forward accepts a single positional tensor."""
+
     def __init__(self, model):
         super().__init__()
         self._model = model
@@ -101,9 +104,9 @@ def measure_model(
     batch: int = 1,
 ) -> dict:
     """Measure params, FLOPs, FPS, and peak VRAM for a model."""
-    logger.info(f"\n{'='*60}")
+    logger.info(f"\n{'=' * 60}")
     logger.info(f"Measuring: {model_name}  (batch={batch})")
-    logger.info(f"{'='*60}")
+    logger.info(f"{'=' * 60}")
 
     model.to(DEVICE)
     model.eval()
@@ -115,8 +118,8 @@ def measure_model(
     # --- Params ---
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info(f"  Total params:     {total_params/1e6:.2f}M")
-    logger.info(f"  Trainable params: {trainable_params/1e6:.2f}M")
+    logger.info(f"  Total params:     {total_params / 1e6:.2f}M")
+    logger.info(f"  Trainable params: {trainable_params / 1e6:.2f}M")
 
     # --- FLOPs (fvcore) ---
     flops = None
@@ -124,7 +127,7 @@ def measure_model(
         with torch.no_grad():
             flops_analysis = FlopCountAnalysis(wrapper, device_tensor)
             flops = flops_analysis.total()
-        logger.info(f"  FLOPs:            {flops/1e9:.2f} GFLOPs")
+        logger.info(f"  FLOPs:            {flops / 1e9:.2f} GFLOPs")
     except Exception as e:
         logger.warning(f"  FLOPs: FAILED — {e}")
 
@@ -209,13 +212,19 @@ def main():
 
     # V5 takes frame input [B, 3, H, W] at native resolution
     results["v5_b1"] = measure_model(
-        model_v5, "V5 (ConvNeXt-Tiny, batch=1)",
-        torch.randn(1, 3, 720, 1280), ModelWrapperV5, batch=1,
+        model_v5,
+        "V5 (ConvNeXt-Tiny, batch=1)",
+        torch.randn(1, 3, 720, 1280),
+        ModelWrapperV5,
+        batch=1,
     )
 
     results["v5_b2"] = measure_model(
-        model_v5, "V5 (ConvNeXt-Tiny, batch=2)",
-        torch.randn(2, 3, 720, 1280), ModelWrapperV5, batch=2,
+        model_v5,
+        "V5 (ConvNeXt-Tiny, batch=2)",
+        torch.randn(2, 3, 720, 1280),
+        ModelWrapperV5,
+        batch=2,
     )
 
     del model_v5
@@ -238,13 +247,19 @@ def main():
 
     # V8 takes clip [B, 3, T, H, W] at 224x224, T=16
     results["v8_b1"] = measure_model(
-        model_v8, "V8 (MViTv2-S, batch=1)",
-        torch.randn(1, 3, 16, 224, 224), ModelWrapperV8, batch=1,
+        model_v8,
+        "V8 (MViTv2-S, batch=1)",
+        torch.randn(1, 3, 16, 224, 224),
+        ModelWrapperV8,
+        batch=1,
     )
 
     results["v8_b2"] = measure_model(
-        model_v8, "V8 (MViTv2-S, batch=2)",
-        torch.randn(2, 3, 16, 224, 224), ModelWrapperV8, batch=2,
+        model_v8,
+        "V8 (MViTv2-S, batch=2)",
+        torch.randn(2, 3, 16, 224, 224),
+        ModelWrapperV8,
+        batch=2,
     )
 
     del model_v8
@@ -260,8 +275,11 @@ def main():
     model_v8s = V8Model(num_classes=69, num_psr_comps=11)
 
     results["v8_simple_b1"] = measure_model(
-        model_v8s, "V8-Simple (frozen MViTv2-S, linear heads, batch=1)",
-        torch.randn(1, 3, 16, 224, 224), ModelWrapperV8Simple, batch=1,
+        model_v8s,
+        "V8-Simple (frozen MViTv2-S, linear heads, batch=1)",
+        torch.randn(1, 3, 16, 224, 224),
+        ModelWrapperV8Simple,
+        batch=1,
     )
 
     del model_v8s
@@ -274,7 +292,7 @@ def main():
     results["tier_f"] = {
         "status": "not_available",
         "note": "Hiera-B backbone + 4-head Tier F model not yet implemented "
-                "(Agent 2 pending). Once built, measure with clip [B, 3, 16, 224, 224].",
+        "(Agent 2 pending). Once built, measure with clip [B, 3, 16, 224, 224].",
     }
 
     # ======================================================================
@@ -289,9 +307,9 @@ def main():
     with open(output_path, "w") as f:
         json.dump(results, f, indent=2)
 
-    logger.info(f"\n{'='*60}")
+    logger.info(f"\n{'=' * 60}")
     logger.info(f"Results saved to: {output_path}")
-    logger.info(f"{'='*60}")
+    logger.info(f"{'=' * 60}")
     logger.info(json.dumps(results, indent=2))
 
 

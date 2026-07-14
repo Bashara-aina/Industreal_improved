@@ -24,7 +24,6 @@ import gc
 import json
 import sys
 import time
-from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +49,7 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 # IoU helper
 # ---------------------------------------------------------------------------
 
+
 def box_iou_numpy(boxes1: np.ndarray, boxes2: np.ndarray) -> np.ndarray:
     """Compute IoU between two sets of boxes (Nx4, Mx4, xyxy format)."""
     x11, y11, x12, y12 = np.split(boxes1, 4, axis=1)
@@ -69,6 +69,7 @@ def box_iou_numpy(boxes1: np.ndarray, boxes2: np.ndarray) -> np.ndarray:
 # Model loading (mirrors full_eval_inprocess.load_model)
 # ---------------------------------------------------------------------------
 
+
 def load_model(ckpt_path: str, device: torch.device) -> tuple[torch.nn.Module, int, dict]:
     """Load POPWMultiTaskModel from checkpoint. Returns (model, epoch, config)."""
     print(f"Loading checkpoint: {ckpt_path}")
@@ -81,14 +82,18 @@ def load_model(ckpt_path: str, device: torch.device) -> tuple[torch.nn.Module, i
     use_videomae = bool(cfg.get("USE_VIDEOMAE", getattr(C, "USE_VIDEOMAE", False)))
     train_pose = bool(cfg.get("TRAIN_HEAD_POSE", getattr(C, "TRAIN_HEAD_POSE", True)))
 
-    model = POPWMultiTaskModel(
-        pretrained=True,
-        backbone_type=backbone_type,
-        use_hand_film=use_hand_film,
-        use_headpose_film=use_headpose_film,
-        use_videomae=use_videomae,
-        train_pose=train_pose,
-    ).to(device).eval()
+    model = (
+        POPWMultiTaskModel(
+            pretrained=True,
+            backbone_type=backbone_type,
+            use_hand_film=use_hand_film,
+            use_headpose_film=use_headpose_film,
+            use_videomae=use_videomae,
+            train_pose=train_pose,
+        )
+        .to(device)
+        .eval()
+    )
 
     seq_len = cfg.get("PSR_SEQUENCE_LENGTH", getattr(C, "PSR_SEQUENCE_LENGTH", 1))
     model._seq_len = seq_len if cfg.get("USE_PSR_SEQUENCE_MODE", False) else 1
@@ -117,6 +122,7 @@ def prepare_images(images: torch.Tensor, device: torch.device) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 # Threshold sweep post-processing
 # ---------------------------------------------------------------------------
+
 
 def compute_map_for_threshold(
     detections: list[dict],
@@ -181,15 +187,21 @@ def compute_map_for_threshold(
 
     # mAP@0.5
     ap50 = compute_ap_per_class(
-        filtered_boxes, filtered_scores, filtered_labels,
-        gt_boxes_list, gt_labels_list,
+        filtered_boxes,
+        filtered_scores,
+        filtered_labels,
+        gt_boxes_list,
+        gt_labels_list,
         iou_thresh=0.5,
         num_classes=num_classes,
     )
     # mAP@0.75 (surrogate for mAP@0.5-95)
     ap75 = compute_ap_per_class(
-        filtered_boxes, filtered_scores, filtered_labels,
-        gt_boxes_list, gt_labels_list,
+        filtered_boxes,
+        filtered_scores,
+        filtered_labels,
+        gt_boxes_list,
+        gt_labels_list,
         iou_thresh=0.75,
         num_classes=num_classes,
     )
@@ -253,8 +265,11 @@ def find_optimal_per_class(
 
     for t in candidate_thresholds:
         result = compute_map_for_threshold(
-            detections, gt_data, score_thresh=t,
-            nms_thresh=nms_thresh, num_classes=num_classes,
+            detections,
+            gt_data,
+            score_thresh=t,
+            nms_thresh=nms_thresh,
+            num_classes=num_classes,
         )
         for cls_str, ap_val in result["per_class_ap50"].items():
             cls_int = int(cls_str)
@@ -268,6 +283,7 @@ def find_optimal_per_class(
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -284,19 +300,26 @@ def main():
         help="Output directory for results JSON",
     )
     parser.add_argument(
-        "--max-images", type=int, default=5000,
+        "--max-images",
+        type=int,
+        default=5000,
         help="Max images to process (default: 5000, ~13% of val set)",
     )
     parser.add_argument(
-        "--top-k", type=int, default=2000,
+        "--top-k",
+        type=int,
+        default=2000,
         help="Save top-K anchor predictions per image (default: 2000)",
     )
     parser.add_argument(
-        "--nms-thresh", type=float, default=0.5,
+        "--nms-thresh",
+        type=float,
+        default=0.5,
         help="NMS IoU threshold (default: 0.5, matches config)",
     )
     parser.add_argument(
-        "--per-class", action="store_true",
+        "--per-class",
+        action="store_true",
         help="Also compute per-class optimal thresholds (slower, ~5x)",
     )
     args = parser.parse_args()
@@ -309,11 +332,19 @@ def main():
 
     # ── Candidate thresholds (log-scale) ─────────────────────────────────
     # Dense near 0.001 (current config value), sparse at extremes
-    thresholds = np.sort(np.unique(np.concatenate([
-        np.logspace(np.log10(0.0003), np.log10(0.5), num=25),
-        [0.001],  # ensure current config value is included
-    ])))
-    print(f"Candidate thresholds: {len(thresholds)} values from {thresholds[0]:.5f} to {thresholds[-1]:.3f}")
+    thresholds = np.sort(
+        np.unique(
+            np.concatenate(
+                [
+                    np.logspace(np.log10(0.0003), np.log10(0.5), num=25),
+                    [0.001],  # ensure current config value is included
+                ]
+            )
+        )
+    )
+    print(
+        f"Candidate thresholds: {len(thresholds)} values from {thresholds[0]:.5f} to {thresholds[-1]:.3f}"
+    )
 
     # ── Load model ───────────────────────────────────────────────────────
     model, epoch, cfg = load_model(args.checkpoint, device)
@@ -322,15 +353,18 @@ def main():
     print("Loading validation dataset...")
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=1, num_workers=0,
-        collate_fn=collate_fn, shuffle=False,
+        val_ds,
+        batch_size=1,
+        num_workers=0,
+        collate_fn=collate_fn,
+        shuffle=False,
     )
     print(f"  Dataset size: {len(val_ds)} frames")
 
     # ── Inference pass: save raw detections ─────────────────────────────
     print("\nRunning inference pass (saving raw predictions)...")
-    detections: list[dict] = []   # per-image filtered predictions
-    gt_data: list[dict] = []      # per-image ground truth
+    detections: list[dict] = []  # per-image filtered predictions
+    gt_data: list[dict] = []  # per-image ground truth
     n_processed = 0
     _anchors_np = None
     t_start = time.time()
@@ -362,7 +396,7 @@ def main():
                 argmax_classes = scores_i.argmax(axis=1)
 
                 # Top-K filter (keep enough for recall at low thresholds)
-                topk_idx = np.argsort(max_scores)[::-1][:args.top_k]
+                topk_idx = np.argsort(max_scores)[::-1][: args.top_k]
                 topk_scores = max_scores[topk_idx]
                 topk_classes = argmax_classes[topk_idx]
                 topk_reg = reg_i[topk_idx]
@@ -375,11 +409,13 @@ def main():
                 boxes[:, 2] = np.clip(boxes[:, 2], 0, C.IMG_WIDTH)
                 boxes[:, 3] = np.clip(boxes[:, 3], 0, C.IMG_HEIGHT)
 
-                detections.append({
-                    "boxes": boxes,
-                    "scores": topk_scores,
-                    "labels": topk_classes.astype(np.int64),
-                })
+                detections.append(
+                    {
+                        "boxes": boxes,
+                        "scores": topk_scores,
+                        "labels": topk_classes.astype(np.int64),
+                    }
+                )
 
                 # GT
                 gt_boxes = detection_list[i]["boxes"].cpu().numpy()
@@ -394,10 +430,12 @@ def main():
 
             if (bi + 1) % 500 == 0:
                 elapsed = time.time() - t_start
-                print(f"  processed {bi+1} batches ({n_processed} images) in {elapsed:.0f}s")
+                print(f"  processed {bi + 1} batches ({n_processed} images) in {elapsed:.0f}s")
 
     elapsed = time.time() - t_start
-    print(f"\nInference complete: {n_processed} images in {elapsed:.0f}s ({elapsed/max(n_processed,1):.3f}s/img)")
+    print(
+        f"\nInference complete: {n_processed} images in {elapsed:.0f}s ({elapsed / max(n_processed, 1):.3f}s/img)"
+    )
 
     # Count total GT boxes
     total_gt = sum(len(g["boxes"]) for g in gt_data)
@@ -414,7 +452,8 @@ def main():
     t_sweep = time.time()
     for ti, t in enumerate(thresholds):
         result = compute_map_for_threshold(
-            detections, gt_data,
+            detections,
+            gt_data,
             score_thresh=t,
             nms_thresh=args.nms_thresh,
             num_classes=C.NUM_DET_CLASSES,
@@ -428,7 +467,9 @@ def main():
             best_result = result
 
         if (ti + 1) % 5 == 0 or ti == len(thresholds) - 1:
-            print(f"  thresh={t:.5f}  mAP50={result['mAP50']:.4f}  F1={result['f1_at_threshold']:.4f}  P={result['precision']:.3f}  R={result['recall']:.3f}  TP/FP/FN={result['tp']}/{result['fp']}/{result['fn']}")
+            print(
+                f"  thresh={t:.5f}  mAP50={result['mAP50']:.4f}  F1={result['f1_at_threshold']:.4f}  P={result['precision']:.3f}  R={result['recall']:.3f}  TP/FP/FN={result['tp']}/{result['fp']}/{result['fn']}"
+            )
 
     sweep_elapsed = time.time() - t_sweep
     print(f"\nSweep complete in {sweep_elapsed:.0f}s")
@@ -438,15 +479,19 @@ def main():
     # F1@threshold (precision/recall at operating point) is the real metric to optimize.
     best_f1_result = max(sweep_results, key=lambda r: (r["f1_at_threshold"], -r["n_total_preds"]))
     best_f1_threshold = best_f1_result["threshold"]
-    print(f"\n  [F1-based] Optimal threshold: {best_f1_threshold:.5f}  F1={best_f1_result['f1_at_threshold']:.4f}  "
-          f"P={best_f1_result['precision']:.3f}  R={best_f1_result['recall']:.3f}  preds={best_f1_result['n_total_preds']}")
+    print(
+        f"\n  [F1-based] Optimal threshold: {best_f1_threshold:.5f}  F1={best_f1_result['f1_at_threshold']:.4f}  "
+        f"P={best_f1_result['precision']:.3f}  R={best_f1_result['recall']:.3f}  preds={best_f1_result['n_total_preds']}"
+    )
 
     # ── Per-class optimal thresholds (optional) ──────────────────────────
     per_class_thresholds = None
     if args.per_class:
         print("\nComputing per-class optimal thresholds...")
         per_class_thresholds = find_optimal_per_class(
-            detections, gt_data, thresholds,
+            detections,
+            gt_data,
+            thresholds,
             nms_thresh=args.nms_thresh,
             num_classes=C.NUM_DET_CLASSES,
         )
@@ -465,22 +510,30 @@ def main():
     print(f"  NMS IoU threshold:  {args.nms_thresh}")
     print()
     print(f"  Current config threshold (DET_EVAL_SCORE_THRESH): {C.DET_EVAL_SCORE_THRESH}")
-    print(f"  Current mAP@0.5 at config threshold:              {sweep_results[list(thresholds).index(C.DET_EVAL_SCORE_THRESH) if C.DET_EVAL_SCORE_THRESH in thresholds else 0]['mAP50']:.4f}")
+    print(
+        f"  Current mAP@0.5 at config threshold:              {sweep_results[list(thresholds).index(C.DET_EVAL_SCORE_THRESH) if C.DET_EVAL_SCORE_THRESH in thresholds else 0]['mAP50']:.4f}"
+    )
     print()
     print(f"  ⚠  NOTE: mAP@0.5 is rank-based and invariant across thresholds.")
     print(f"     F1@threshold is the real metric for operating-point selection.")
     print()
     print(f"  BEST (by mAP@0.5): threshold={best_threshold:.5f}  mAP50={best_mAP50:.4f}")
-    print(f"  BEST (by F1):      threshold={best_f1_threshold:.5f}  F1={best_f1_result['f1_at_threshold']:.4f}  "
-          f"P={best_f1_result['precision']:.3f}  R={best_f1_result['recall']:.3f}  preds={best_f1_result['n_total_preds']}")
+    print(
+        f"  BEST (by F1):      threshold={best_f1_threshold:.5f}  F1={best_f1_result['f1_at_threshold']:.4f}  "
+        f"P={best_f1_result['precision']:.3f}  R={best_f1_result['recall']:.3f}  preds={best_f1_result['n_total_preds']}"
+    )
     print()
     print("  Sweep summary (sorted by F1@threshold):")
-    sorted_by_f1 = sorted(sweep_results, key=lambda r: (r["f1_at_threshold"], -r["n_total_preds"]), reverse=True)
+    sorted_by_f1 = sorted(
+        sweep_results, key=lambda r: (r["f1_at_threshold"], -r["n_total_preds"]), reverse=True
+    )
     for rank, sr in enumerate(sorted_by_f1[:5]):
         marker = " *" if abs(sr["threshold"] - best_f1_threshold) < 1e-6 else ""
-        print(f"    {rank+1}. thresh={sr['threshold']:.5f}  F1={sr['f1_at_threshold']:.4f}  "
-              f"mAP50={sr['mAP50']:.4f}  P={sr['precision']:.3f}  R={sr['recall']:.3f}  "
-              f"preds={sr['n_total_preds']}{marker}")
+        print(
+            f"    {rank + 1}. thresh={sr['threshold']:.5f}  F1={sr['f1_at_threshold']:.4f}  "
+            f"mAP50={sr['mAP50']:.4f}  P={sr['precision']:.3f}  R={sr['recall']:.3f}  "
+            f"preds={sr['n_total_preds']}{marker}"
+        )
     print()
     print(f"  Config recommendation: DET_EVAL_SCORE_THRESH = {best_f1_threshold:.5f}")
     print("=" * 64)
@@ -494,7 +547,13 @@ def main():
         "nms_threshold": args.nms_thresh,
         "candidate_thresholds": thresholds.tolist(),
         "config_current_threshold": C.DET_EVAL_SCORE_THRESH,
-        "config_current_mAP50": float(sweep_results[list(thresholds).index(C.DET_EVAL_SCORE_THRESH) if C.DET_EVAL_SCORE_THRESH in thresholds else 0]["mAP50"]),
+        "config_current_mAP50": float(
+            sweep_results[
+                list(thresholds).index(C.DET_EVAL_SCORE_THRESH)
+                if C.DET_EVAL_SCORE_THRESH in thresholds
+                else 0
+            ]["mAP50"]
+        ),
         "optimal_global_threshold": float(best_threshold),
         "optimal_mAP50": best_mAP50,
         "optimal_mAP75": float(best_result["mAP75"]) if best_result else 0.0,
@@ -511,23 +570,33 @@ def main():
     # Save optimal threshold (F1-based)
     opt_path = save_dir / "optimal_threshold.json"
     with open(opt_path, "w") as f:
-        json.dump({
-            "optimal_threshold": float(best_f1_threshold),
-            "optimal_criterion": "F1@threshold",
-            "config_current": C.DET_EVAL_SCORE_THRESH,
-            "config_current_mAP50": float(sweep_results[list(thresholds).index(C.DET_EVAL_SCORE_THRESH) if C.DET_EVAL_SCORE_THRESH in thresholds else 0]["mAP50"]),
-            "mAP50_at_optimal": float(best_f1_result["mAP50"]),
-            "mAP75_at_optimal": float(best_f1_result["mAP75"]),
-            "f1_at_optimal": float(best_f1_result["f1_at_threshold"]),
-            "precision_at_optimal": float(best_f1_result["precision"]),
-            "recall_at_optimal": float(best_f1_result["recall"]),
-            "n_preds_at_optimal": best_f1_result["n_total_preds"],
-            "n_images": n_processed,
-            "n_total_gt_boxes": total_gt,
-            "checkpoint": str(args.checkpoint),
-            "note": "mAP@0.5 is rank-based and invariant across thresholds. F1@threshold is the real metric. Optimal threshold maximizes F1 then minimises pred count.",
-            "recommendation": f"Set DET_EVAL_SCORE_THRESH = {best_f1_threshold:.5f}",
-        }, f, indent=2)
+        json.dump(
+            {
+                "optimal_threshold": float(best_f1_threshold),
+                "optimal_criterion": "F1@threshold",
+                "config_current": C.DET_EVAL_SCORE_THRESH,
+                "config_current_mAP50": float(
+                    sweep_results[
+                        list(thresholds).index(C.DET_EVAL_SCORE_THRESH)
+                        if C.DET_EVAL_SCORE_THRESH in thresholds
+                        else 0
+                    ]["mAP50"]
+                ),
+                "mAP50_at_optimal": float(best_f1_result["mAP50"]),
+                "mAP75_at_optimal": float(best_f1_result["mAP75"]),
+                "f1_at_optimal": float(best_f1_result["f1_at_threshold"]),
+                "precision_at_optimal": float(best_f1_result["precision"]),
+                "recall_at_optimal": float(best_f1_result["recall"]),
+                "n_preds_at_optimal": best_f1_result["n_total_preds"],
+                "n_images": n_processed,
+                "n_total_gt_boxes": total_gt,
+                "checkpoint": str(args.checkpoint),
+                "note": "mAP@0.5 is rank-based and invariant across thresholds. F1@threshold is the real metric. Optimal threshold maximizes F1 then minimises pred count.",
+                "recommendation": f"Set DET_EVAL_SCORE_THRESH = {best_f1_threshold:.5f}",
+            },
+            f,
+            indent=2,
+        )
     print(f"\nOptimal threshold saved to {opt_path}")
 
     # Save full sweep
@@ -540,13 +609,21 @@ def main():
     if per_class_thresholds:
         pc_path = save_dir / "per_class_thresholds.json"
         with open(pc_path, "w") as f:
-            json.dump({
-                "optimal_thresholds": {str(k): float(v) for k, v in per_class_thresholds.items()},
-                "default_threshold": float(best_threshold),
-            }, f, indent=2)
+            json.dump(
+                {
+                    "optimal_thresholds": {
+                        str(k): float(v) for k, v in per_class_thresholds.items()
+                    },
+                    "default_threshold": float(best_threshold),
+                },
+                f,
+                indent=2,
+            )
         print(f"Per-class thresholds saved to {pc_path}")
 
-    print(f"\nDone. {'✅' if best_mAP50 > 0 else '❌'} Best mAP@0.5 = {best_mAP50:.4f} at threshold = {best_threshold:.5f}")
+    print(
+        f"\nDone. {'✅' if best_mAP50 > 0 else '❌'} Best mAP@0.5 = {best_mAP50:.4f} at threshold = {best_threshold:.5f}"
+    )
 
 
 if __name__ == "__main__":

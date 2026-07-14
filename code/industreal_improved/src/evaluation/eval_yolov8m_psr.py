@@ -31,7 +31,7 @@ import logging
 import math
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import torch
@@ -51,13 +51,12 @@ from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
 
 logger = logging.getLogger("eval_yolov8m_psr")
 
-_OUTPUT_PATH = Path(
-    "src/runs/rf_stages/checkpoints/eval_yolov8m_psr_results.json"
-)
+_OUTPUT_PATH = Path("src/runs/rf_stages/checkpoints/eval_yolov8m_psr_results.json")
 
 INDUSTREAL_WEIGHT_URL = (
     "https://github.com/microsoft/IndustReal/raw/main/weights/yolov8m_industreal.pt"
 )
+
 
 # ── ASD class -> PSR component mapping ──────────────────────────────────
 # Each DET_CLASS_NAME (1-indexed, COCO convention) is an 11-char binary
@@ -80,7 +79,10 @@ def _build_psr_mask() -> np.ndarray:
         if len(name) != C.NUM_PSR_COMPONENTS:
             logger.warning(
                 "DET_CLASS_NAMES[%d] = '%s' has length %d, expected %d. Skipping.",
-                one_idx, name, len(name), C.NUM_PSR_COMPONENTS,
+                one_idx,
+                name,
+                len(name),
+                C.NUM_PSR_COMPONENTS,
             )
             continue
         for comp in range(C.NUM_PSR_COMPONENTS):
@@ -96,9 +98,7 @@ def _download_weights(
     url: str = INDUSTREAL_WEIGHT_URL,
 ) -> Optional[Path]:
     """Download YOLOv8m weights (IndustReal-specific or COCO fallback)."""
-    save_path = Path(
-        "src/runs/rf_stages/checkpoints/yolov8m_industreal.pt"
-    )
+    save_path = Path("src/runs/rf_stages/checkpoints/yolov8m_industreal.pt")
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
     if save_path.exists():
@@ -108,6 +108,7 @@ def _download_weights(
     logger.info("Downloading IndustReal weights from %s ...", url)
     try:
         import urllib.request
+
         urllib.request.urlretrieve(url, str(save_path))
         logger.info("Downloaded to %s", save_path)
         return save_path
@@ -126,9 +127,7 @@ def _build_yolo_model(
     try:
         from ultralytics import YOLO
     except ImportError:
-        raise ImportError(
-            "ultralytics is required. Install: pip install ultralytics"
-        )
+        raise ImportError("ultralytics is required. Install: pip install ultralytics")
 
     if weight_path is not None and weight_path.exists():
         logger.info("Loading YOLOv8m from: %s", weight_path)
@@ -234,11 +233,10 @@ def decode_and_score_psr_from_logits(
     """
     try:
         from src.models.psr_transition import MonotonicDecoder
+
         decoder = MonotonicDecoder(num_components=C.NUM_PSR_COMPONENTS)
     except ImportError:
-        logger.warning(
-            "MonotonicDecoder not available — PSR metrics will be zeros."
-        )
+        logger.warning("MonotonicDecoder not available — PSR metrics will be zeros.")
         return {"psr_f1": 0.0, "psr_pos": 0.0, "psr_edit": 0.0}
 
     # Same scoring helpers as evaluate.py.
@@ -273,12 +271,10 @@ def decode_and_score_psr_from_logits(
 
     def _psr_edit_score(pred_states, gt_states):
         pred_events = "".join(
-            str(int(b))
-            for b in (pred_states[1:] != pred_states[:-1]).any(axis=1).astype(int)
+            str(int(b)) for b in (pred_states[1:] != pred_states[:-1]).any(axis=1).astype(int)
         )
         gt_events = "".join(
-            str(int(b))
-            for b in (gt_states[1:] != gt_states[:-1]).any(axis=1).astype(int)
+            str(int(b)) for b in (gt_states[1:] != gt_states[:-1]).any(axis=1).astype(int)
         )
         if not gt_events:
             return 1.0 if not pred_events else 0.0
@@ -381,10 +377,10 @@ def run_yolov8m_psr_eval(
     )
 
     # ── Accumulators ────────────────────────────────────────────────────
-    all_psr_logits: List[np.ndarray] = []     # per-batch [B, 11]
-    all_psr_labels: List[np.ndarray] = []     # per-batch [B, 11]
-    all_rec_ids: List[str] = []               # per-frame
-    all_frame_nums: List[int] = []            # per-frame
+    all_psr_logits: List[np.ndarray] = []  # per-batch [B, 11]
+    all_psr_labels: List[np.ndarray] = []  # per-batch [B, 11]
+    all_rec_ids: List[str] = []  # per-frame
+    all_frame_nums: List[int] = []  # per-frame
 
     logger.info(
         "Starting YOLOv8m -> PSR eval, batch_size=%d, detection_thresh=%.3f",
@@ -410,7 +406,8 @@ def run_yolov8m_psr_eval(
 
         # s2 feature conversion: detections -> PSR logits [B, 11].
         psr_logits_batch = s2_from_yolo_detections(
-            results, detection_thresh=detection_thresh,
+            results,
+            detection_thresh=detection_thresh,
         )
         all_psr_logits.append(psr_logits_batch)
 
@@ -440,7 +437,9 @@ def run_yolov8m_psr_eval(
             n_det = sum((r.boxes is not None and len(r.boxes)) for r in results)
             logger.info(
                 "Batch %d: %d images, %d total detections",
-                bi, B, n_det,
+                bi,
+                B,
+                n_det,
             )
 
         del images, targets, results
@@ -462,14 +461,10 @@ def run_yolov8m_psr_eval(
             lb = lb[None, :]
         for row in range(bl.shape[0]):
             rec = all_rec_ids[flat_i] if flat_i < len(all_rec_ids) else f"rec_{flat_i}"
-            fn = (
-                all_frame_nums[flat_i]
-                if flat_i < len(all_frame_nums)
-                else flat_i
-            )
-            by_rec_logits.setdefault(rec, []).append(bl[row, :C.NUM_PSR_COMPONENTS])
+            fn = all_frame_nums[flat_i] if flat_i < len(all_frame_nums) else flat_i
+            by_rec_logits.setdefault(rec, []).append(bl[row, : C.NUM_PSR_COMPONENTS])
             by_rec_gt.setdefault(rec, []).append(
-                lb[row, :C.NUM_PSR_COMPONENTS] if row < lb.shape[0] else None
+                lb[row, : C.NUM_PSR_COMPONENTS] if row < lb.shape[0] else None
             )
             by_rec_fn.setdefault(rec, []).append(fn)
             flat_i += 1
@@ -494,7 +489,9 @@ def run_yolov8m_psr_eval(
     # ── Decode and score PSR ───────────────────────────────────────────
     logger.info("Running MonotonicDecoder on %d recordings...", len(psr_logits_by_rec))
     psr_metrics = decode_and_score_psr_from_logits(
-        psr_logits_by_rec, gt_states_by_rec, tol_frames=3,
+        psr_logits_by_rec,
+        gt_states_by_rec,
+        tol_frames=3,
     )
 
     # Add metadata.
@@ -502,9 +499,7 @@ def run_yolov8m_psr_eval(
     psr_metrics["_detection_thresh"] = detection_thresh
     psr_metrics["_num_frames"] = flat_i
     psr_metrics["_num_recordings"] = len(psr_logits_by_rec)
-    psr_metrics["_weight_source"] = (
-        str(weight_path) if weight_path else "ultralytics_coco"
-    )
+    psr_metrics["_weight_source"] = str(weight_path) if weight_path else "ultralytics_coco"
 
     logger.info(
         "YOLOv8m -> PSR results — F1: %.4f  POS: %.4f  Edit: %.4f",
@@ -517,33 +512,27 @@ def run_yolov8m_psr_eval(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="YOLOv8m -> PSR evaluation (D4 / Q16)"
-    )
-    parser.add_argument(
-        "--batch_size", type=int, default=16, help="YOLOv8 batch size"
-    )
-    parser.add_argument(
-        "--max_batches", type=int, default=0, help="Max batches (0 = all)"
-    )
+    parser = argparse.ArgumentParser(description="YOLOv8m -> PSR evaluation (D4 / Q16)")
+    parser.add_argument("--batch_size", type=int, default=16, help="YOLOv8 batch size")
+    parser.add_argument("--max_batches", type=int, default=0, help="Max batches (0 = all)")
     parser.add_argument(
         "--detection_thresh",
         type=float,
         default=0.1,
         help="Min detection confidence for s2 aggregation",
     )
+    parser.add_argument("--weight_url", type=str, default=INDUSTREAL_WEIGHT_URL, help="Weight URL")
     parser.add_argument(
-        "--weight_url", type=str, default=INDUSTREAL_WEIGHT_URL, help="Weight URL"
-    )
-    parser.add_argument(
-        "--weights", type=str, default=None,
+        "--weights",
+        type=str,
+        default=None,
         help="Path to local YOLOv8m weights file (overrides --weight_url)",
     )
+    parser.add_argument("--output", type=str, default=str(_OUTPUT_PATH), help="Output JSON path")
     parser.add_argument(
-        "--output", type=str, default=str(_OUTPUT_PATH), help="Output JSON path"
-    )
-    parser.add_argument(
-        "--save-dir", type=str, default=None,
+        "--save-dir",
+        type=str,
+        default=None,
         help="Directory to save metrics.json, per_video.json, verdict.md",
     )
     parser.add_argument(
@@ -586,9 +575,7 @@ def main() -> None:
             json.dumps(v)
             clean[k] = v
         except (TypeError, OverflowError):
-            clean[k] = (
-                float(v) if isinstance(v, (int, float, np.floating)) else str(v)
-            )
+            clean[k] = float(v) if isinstance(v, (int, float, np.floating)) else str(v)
 
     with open(output_path, "w") as f:
         json.dump(clean, f, indent=2, default=str)
@@ -620,7 +607,9 @@ def main() -> None:
         if psr_f1 >= 0.6:
             verdict = "decoder transfers given adequate detection density"
         elif psr_f1 >= 0.4:
-            verdict = "decoder partially transfers; threshold calibration and density both contribute"
+            verdict = (
+                "decoder partially transfers; threshold calibration and density both contribute"
+            )
         else:
             verdict = "decoder is also a bottleneck; both detection density AND decoder capacity are binding"
 

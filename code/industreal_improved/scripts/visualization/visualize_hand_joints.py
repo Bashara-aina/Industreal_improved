@@ -4,21 +4,23 @@ Uses actual data from recordings/train/01_assy_0_1/
 
 Bug fix: coordinates must be drawn at full scale on full-size image (1280x720).
 """
+
 import sys
-sys.path.insert(0, '/home/newadmin/swarm-bot/project/popw/working/code/industreal_improved')
+
+sys.path.insert(0, "/home/newadmin/swarm-bot/project/popw/working/code/industreal_improved")
 
 from PIL import Image, ImageDraw
 import csv
 import os
 
-img_dir = '/home/newadmin/swarm-bot/project/popw/working/data/dataset/industreal/recordings/train/01_assy_0_1/rgb'
-hands_csv = '/home/newadmin/swarm-bot/project/popw/working/data/dataset/industreal/recordings/train/01_assy_0_1/hands.csv'
-output_dir = '/home/newadmin/swarm-bot/project/popw/working/code/industreal_improved/hand_joint_visualizations'
+img_dir = "/home/newadmin/swarm-bot/project/popw/working/data/dataset/industreal/recordings/train/01_assy_0_1/rgb"
+hands_csv = "/home/newadmin/swarm-bot/project/popw/working/data/dataset/industreal/recordings/train/01_assy_0_1/hands.csv"
+output_dir = "/home/newadmin/swarm-bot/project/popw/working/code/industreal_improved/hand_joint_visualizations"
 os.makedirs(output_dir, exist_ok=True)
 
 # Read hands.csv
 frames = []
-with open(hands_csv, 'r') as f:
+with open(hands_csv, "r") as f:
     reader = csv.reader(f)
     for row in reader:
         frames.append(row)
@@ -30,12 +32,29 @@ with open(hands_csv, 'r') as f:
 # 13=ring_mcp, 14=ring_pip, 15=ring_dip, 16=ring_tip,
 # 17=pinky_mcp, 18=pinky_pip, 19=pinky_dip, 20=pinky_tip
 HAND_EDGES = [
-    (0,1), (1,2), (2,3), (3,4),   # thumb
-    (0,5), (5,6), (6,7), (7,8),   # index
-    (0,9), (9,10), (10,11), (11,12),  # middle
-    (0,13), (13,14), (14,15), (15,16),  # ring
-    (0,17), (17,18), (18,19), (19,20),  # pinky
-    (5,9), (9,13), (13,17),  # palm
+    (0, 1),
+    (1, 2),
+    (2, 3),
+    (3, 4),  # thumb
+    (0, 5),
+    (5, 6),
+    (6, 7),
+    (7, 8),  # index
+    (0, 9),
+    (9, 10),
+    (10, 11),
+    (11, 12),  # middle
+    (0, 13),
+    (13, 14),
+    (14, 15),
+    (15, 16),  # ring
+    (0, 17),
+    (17, 18),
+    (18, 19),
+    (19, 20),  # pinky
+    (5, 9),
+    (9, 13),
+    (13, 17),  # palm
 ]
 
 # Frame indices to visualize
@@ -47,10 +66,10 @@ for frame_idx in FRAME_INDICES:
     all_coords = [float(x) for x in row[1:]]  # 104 coords: left(52) + right(52)
 
     # Load image at full resolution
-    img = Image.open(f'{img_dir}/{frame_name}').convert('RGB')
+    img = Image.open(f"{img_dir}/{frame_name}").convert("RGB")
     draw = ImageDraw.Draw(img)
 
-    for hand_start, color, label in [(0, (255, 0, 0), 'LEFT'), (52, (0, 255, 0), 'RIGHT')]:
+    for hand_start, color, label in [(0, (255, 0, 0), "LEFT"), (52, (0, 255, 0), "RIGHT")]:
         # Extract 26 joint (x,y) pairs from flat coords
         joints = []
         for i in range(26):
@@ -70,13 +89,13 @@ for frame_idx in FRAME_INDICES:
         for i, (x, y) in enumerate(joints):
             if x > 0 and y > 0:
                 r = 5 if i == 0 else 4  # wrist slightly larger
-                draw.ellipse([x-r, y-r, x+r, y+r], fill=color, outline=(255,255,255))
+                draw.ellipse([x - r, y - r, x + r, y + r], fill=color, outline=(255, 255, 255))
                 if i == 0:
-                    draw.text((x+6, y-12), f'{label} wrist ({x:.0f},{y:.0f})', fill=color)
+                    draw.text((x + 6, y - 12), f"{label} wrist ({x:.0f},{y:.0f})", fill=color)
 
     # Save
-    output_path = f'{output_dir}/{frame_name}'
+    output_path = f"{output_dir}/{frame_name}"
     img.save(output_path)
-    print(f'Saved: {output_path}')
+    print(f"Saved: {output_path}")
 
-print(f'\nAll visualizations saved to: {output_dir}/')
+print(f"\nAll visualizations saved to: {output_dir}/")

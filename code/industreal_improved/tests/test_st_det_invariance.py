@@ -29,6 +29,7 @@ sys.path.insert(0, str(_ROOT))
 
 # Patch config before any project imports
 import src.config as C
+
 C.TRAIN_DET = True
 C.TRAIN_HEAD_POSE = False
 C.TRAIN_ACT = False
@@ -180,12 +181,24 @@ def test_eval_dual_protocol_compute_functions():
             gt_boxes.append(np.zeros((0, 4), dtype=np.float32))
             gt_labels.append(np.zeros((0,), dtype=np.int32))
 
-    af = compute_ap_per_class(pred_boxes, pred_scores, pred_labels,
-                              gt_boxes, gt_labels, iou_thresh=0.5,
-                              num_classes=num_classes)
-    ev = compute_ap_per_class_all_frames(pred_boxes, pred_scores, pred_labels,
-                                         gt_boxes, gt_labels, iou_thresh=0.5,
-                                         num_classes=num_classes)
+    af = compute_ap_per_class(
+        pred_boxes,
+        pred_scores,
+        pred_labels,
+        gt_boxes,
+        gt_labels,
+        iou_thresh=0.5,
+        num_classes=num_classes,
+    )
+    ev = compute_ap_per_class_all_frames(
+        pred_boxes,
+        pred_scores,
+        pred_labels,
+        gt_boxes,
+        gt_labels,
+        iou_thresh=0.5,
+        num_classes=num_classes,
+    )
     assert "mAP" in af, "Missing mAP key in annotated-frames result"
     assert "mAP" in ev, "Missing mAP key in entire-video result"
     assert "per_class_ap" in af
@@ -197,8 +210,9 @@ def test_eval_dual_protocol_compute_functions():
 # ===========================================================================
 
 
-@pytest.mark.skipif(not __import__("torch").cuda.is_available(),
-                    reason="GPU required for model forward test")
+@pytest.mark.skipif(
+    not __import__("torch").cuda.is_available(), reason="GPU required for model forward test"
+)
 def test_model_forward_detection_keys():
     """Model forward must return cls_preds + reg_preds keys.
 
@@ -247,8 +261,9 @@ def _build_detection_model():
 # ===========================================================================
 
 
-@pytest.mark.skipif(not __import__("torch").cuda.is_available(),
-                    reason="GPU required for training smoke test")
+@pytest.mark.skipif(
+    not __import__("torch").cuda.is_available(), reason="GPU required for training smoke test"
+)
 def test_one_epoch_training_smoke():
     """Smoke test: run train_st_det.py --plumbing and check output exists.
 
@@ -260,16 +275,16 @@ def test_one_epoch_training_smoke():
     st_det_script = _ROOT / "scripts" / "train_st_det.py"
     result = subprocess.run(
         [sys.executable, str(st_det_script), "--plumbing", "--max-eval-batches", "50"],
-        capture_output=True, text=True, timeout=3600,
+        capture_output=True,
+        text=True,
+        timeout=3600,
     )
     print(result.stdout)
     if result.returncode != 0:
         print(result.stderr)
         pytest.fail(f"train_st_det.py --plumbing exited {result.returncode}")
 
-    metrics_path = (
-        _ROOT / "src/runs/rf_stages/checkpoints/st_det_run/metrics.json"
-    )
+    metrics_path = _ROOT / "src/runs/rf_stages/checkpoints/st_det_run/metrics.json"
     assert metrics_path.exists(), f"metrics.json not found at {metrics_path}"
     with open(metrics_path) as f:
         m = json.load(f)

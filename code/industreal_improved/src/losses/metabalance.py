@@ -18,6 +18,7 @@ Usage:
     # After each backward pass through all tasks, rescale
     balancer.rescale()
 """
+
 import torch
 import torch.nn as nn
 from typing import List, Optional, Dict

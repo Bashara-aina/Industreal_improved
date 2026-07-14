@@ -20,7 +20,6 @@ Date: April 2026
 """
 
 import argparse
-import gc
 import os
 import sys
 import time
@@ -38,8 +37,8 @@ import torch.nn as nn
 import config as C
 import model as _model_module
 
-POPWMultiTaskModel = getattr(_model_module, 'POPWMultiTaskModel')
-count_parameters = getattr(_model_module, 'count_parameters')
+POPWMultiTaskModel = getattr(_model_module, "POPWMultiTaskModel")
+count_parameters = getattr(_model_module, "count_parameters")
 
 
 def count_gflops(model: nn.Module, input_shape=(1, 3, 720, 1280)) -> float:
@@ -82,31 +81,31 @@ def measure_streaming_fps(
     input_shape = (1, 3, 720, 1280)
     x = torch.randn(*input_shape, device=device)
 
-    recording_ids = [f'seq_{i:06d}' for i in range(seq_length)]
-    camera_views = ['rgb'] * seq_length
+    recording_ids = [f"seq_{i:06d}" for i in range(seq_length)]
+    camera_views = ["rgb"] * seq_length
 
     warmup_x = torch.randn(*input_shape, device=device)
     with torch.no_grad():
         for _ in range(n_warmup):
             model(warmup_x)
 
-    if device.type == 'cuda':
+    if device.type == "cuda":
         torch.cuda.synchronize()
 
     with torch.no_grad():
         t0 = time.perf_counter()
         for i in range(seq_length):
             model(x, video_ids=[recording_ids[i]], camera_views=[camera_views[i]])
-        if device.type == 'cuda':
+        if device.type == "cuda":
             torch.cuda.synchronize()
 
     elapsed = time.perf_counter() - t0
     streaming_fps = seq_length / elapsed
 
     return {
-        'streaming_fps': streaming_fps,
-        'total_frames': seq_length,
-        'total_time_s': elapsed,
+        "streaming_fps": streaming_fps,
+        "total_frames": seq_length,
+        "total_time_s": elapsed,
     }
 
 
@@ -245,7 +244,7 @@ def build_report(
         },
         "gflops": gflops,
         "fps": fps,
-        "streaming_fps": streaming['streaming_fps'],
+        "streaming_fps": streaming["streaming_fps"],
         "latency_ms": latency,
         "peak_memory_mb": memory_mb,
     }
@@ -270,7 +269,7 @@ def print_report(report: Dict):
     print(f"  Frozen:          {prm['frozen_m']:.2f} M")
     print(f"  GFLOPs:          {report['gflops']:.1f}")
     print(f"  FPS (batched):   {report['fps']:.1f}")
-    if 'streaming_fps' in report:
+    if "streaming_fps" in report:
         print(f"  Streaming FPS:   {report['streaming_fps']:.1f}")
     lat = report["latency_ms"]
     print(f"  Latency p50:     {lat['p50_ms']:.2f} ms")
@@ -283,9 +282,9 @@ def print_report(report: Dict):
 
 
 BASELINE_CONFIGS = [
-    ("ResNet-50 (RGB)",           "resnet50",        False, False),
-    ("ConvNeXt-Tiny (RGB)",       "convnext_tiny",   False, False),
-    ("ConvNeXt-Tiny + HPFiLM",    "convnext_tiny",   True,  False),
+    ("ResNet-50 (RGB)", "resnet50", False, False),
+    ("ConvNeXt-Tiny (RGB)", "convnext_tiny", False, False),
+    ("ConvNeXt-Tiny + HPFiLM", "convnext_tiny", True, False),
     ("ConvNeXt-Tiny + HPFiLM + VMAE", "convnext_tiny", True, True),
 ]
 
@@ -325,7 +324,7 @@ def print_comparison_table(reports: list[Dict]) -> None:
         row_vals = [
             label[:29],
             f"{prm['total_m']:.1f}",
-            f"{report['gflops']:.1f}" if report['gflops'] > 0 else "N/A",
+            f"{report['gflops']:.1f}" if report["gflops"] > 0 else "N/A",
             f"{report['fps']:.1f}",
             f"{report.get('streaming_fps', 0):.1f}",
             f"{lat['p50_ms']:.2f}",
@@ -335,9 +334,7 @@ def print_comparison_table(reports: list[Dict]) -> None:
         print("|" + fmt_row(row_vals) + "|")
         print(sep)
 
-    print(
-        "\n  Note: Streaming FPS = frame-by-frame processing FPS through full pipeline.\n"
-    )
+    print("\n  Note: Streaming FPS = frame-by-frame processing FPS through full pipeline.\n")
 
 
 def main(args):
@@ -393,9 +390,7 @@ def main(args):
             try:
                 import onnxruntime as ort
 
-                sess = ort.InferenceSession(
-                    str(onnx_path), providers=["CUDAExecutionProvider"]
-                )
+                sess = ort.InferenceSession(str(onnx_path), providers=["CUDAExecutionProvider"])
                 x = np.random.randn(1, 3, 720, 1280).astype(np.float32)
                 for _ in range(20):
                     sess.run(None, {"input": x})
@@ -415,8 +410,11 @@ if __name__ == "__main__":
     parser.add_argument("--use_videomae", action="store_true")
     parser.add_argument("--batch_size", type=int, default=1)
     parser.add_argument("--all_configs", action="store_true")
-    parser.add_argument("--baseline_compare", action="store_true",
-                        help="Run all baseline configs and print comparison table")
+    parser.add_argument(
+        "--baseline_compare",
+        action="store_true",
+        help="Run all baseline configs and print comparison table",
+    )
     parser.add_argument("--onnx_export", action="store_true")
     args = parser.parse_args()
     main(args)

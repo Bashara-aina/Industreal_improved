@@ -1,4 +1,5 @@
 """WIoU v3 (Tong et al. 2023) — dynamic non-monotonic IoU loss for detection box regression."""
+
 import torch
 
 
@@ -35,8 +36,9 @@ def wiou_v3_loss(pred: torch.Tensor, target: torch.Tensor, anchor: torch.Tensor)
         if anchor is not None:
             ax1, ay1 = anchor[:, 0], anchor[:, 1]
             ax2, ay2 = anchor[:, 2], anchor[:, 3]
-            a_inter = (torch.min(ax2, target[:, 2]) - torch.max(ax1, target[:, 0])).clamp(min=0) * \
-                      (torch.min(ay2, target[:, 3]) - torch.max(ay1, target[:, 1])).clamp(min=0)
+            a_inter = (torch.min(ax2, target[:, 2]) - torch.max(ax1, target[:, 0])).clamp(min=0) * (
+                torch.min(ay2, target[:, 3]) - torch.max(ay1, target[:, 1])
+            ).clamp(min=0)
             a_union = (ax2 - ax1) * (ay2 - ay1) + area_t - a_inter + eps
             anchor_iou = a_inter / a_union
         else:

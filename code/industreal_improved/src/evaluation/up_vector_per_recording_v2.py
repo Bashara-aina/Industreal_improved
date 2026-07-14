@@ -9,6 +9,7 @@ Outputs:
   - full-eval median of medians with IQR
   - identifies outlier recording
 """
+
 import json
 import sys
 from collections import defaultdict
@@ -25,17 +26,21 @@ _IMAGENET_STD = (0.229, 0.224, 0.225)
 
 def angular_mae_3d(pred, gt):
     """Compute angular MAE in degrees between two 3D unit vectors."""
-    cos_angle = torch.clamp((pred * gt).sum() / (
-        torch.norm(pred) * torch.norm(gt) + 1e-12), -1.0, 1.0)
+    cos_angle = torch.clamp(
+        (pred * gt).sum() / (torch.norm(pred) * torch.norm(gt) + 1e-12), -1.0, 1.0
+    )
     return torch.acos(cos_angle) * (180.0 / np.pi)
 
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="src/runs/rf_stages/checkpoints/best.pth")
     parser.add_argument("--max-batches", type=int, default=20000)
-    parser.add_argument("--save-dir", default="src/runs/rf_stages/checkpoints/up_vector_per_recording_v2")
+    parser.add_argument(
+        "--save-dir", default="src/runs/rf_stages/checkpoints/up_vector_per_recording_v2"
+    )
     args = parser.parse_args()
 
     Path(args.save_dir).mkdir(parents=True, exist_ok=True)
@@ -47,19 +52,27 @@ def main():
     from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
 
     model = POPWMultiTaskModel(
-        pretrained=True, backbone_type='convnext_tiny',
-        use_hand_film=True, use_headpose_film=True,
-        use_videomae=False, train_pose=True,
+        pretrained=True,
+        backbone_type="convnext_tiny",
+        use_hand_film=True,
+        use_headpose_film=True,
+        use_videomae=False,
+        train_pose=True,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = 1
     model = model.cuda().eval()
 
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False,
+        val_ds,
+        batch_size=1,
+        num_workers=0,
+        collate_fn=collate_fn,
+        shuffle=False,
     )
 
     recording_errors = defaultdict(list)
@@ -139,7 +152,9 @@ def main():
         },
         "full_eval": {
             "median_of_medians": float(np.median(medians)) if len(medians) > 0 else 0.0,
-            "iqr_of_medians": float(np.percentile(medians, 75) - np.percentile(medians, 25)) if len(medians) > 0 else 0.0,
+            "iqr_of_medians": float(np.percentile(medians, 75) - np.percentile(medians, 25))
+            if len(medians) > 0
+            else 0.0,
         },
         "outlier": {
             "recording_id": outlier_id,
@@ -155,14 +170,16 @@ def main():
     with open(out, "w") as f:
         json.dump(summary, f, indent=2)
     print(f"\nResults saved to {out}")
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Per-Recording Up-Vector Angular MAE (deg)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     for rid in sorted(results.keys()):
         r = summary["per_recording"][rid]
-        print(f"  {rid:>16s}:  median={r['median']:6.2f}  "
-              f"IQR=[{r['q25']:5.2f}, {r['q75']:5.2f}]  "
-              f"mean={r['mean']:6.2f}  n={r['count']:5d}")
+        print(
+            f"  {rid:>16s}:  median={r['median']:6.2f}  "
+            f"IQR=[{r['q25']:5.2f}, {r['q75']:5.2f}]  "
+            f"mean={r['mean']:6.2f}  n={r['count']:5d}"
+        )
 
     fe = summary["full_eval"]
     full_med = fe["median_of_medians"]
@@ -173,7 +190,7 @@ def main():
     print(f"\n--- Outlier ---")
     print(f"  Recording: {summary['outlier']['recording_id']}")
     print(f"  Median MAE: {summary['outlier']['median_mae']:.2f} deg")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
 
 if __name__ == "__main__":

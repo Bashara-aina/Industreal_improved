@@ -27,15 +27,13 @@ Usage:
     python scripts/mvp_smoke_suite.py --probe 4 --head det
     python scripts/mvp_smoke_suite.py --probe all
 """
+
 # DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import json
 import sys
-import time
 from pathlib import Path
-from typing import Optional
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -48,12 +46,13 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
         sys.path.insert(0, _p)
 
 import src.config as C
+
 C.NUM_ACT_OUTPUTS = 75
 C.ACT_CLASS_GROUPING = "none"
 
 from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn_sequences
 from src.models.mvit_mtl_model import MTLMViTModel
-from scripts.train_mtl_mvit import train_step, detection_loss, activity_loss, psr_loss, pose_loss
+from scripts.train_mtl_mvit import detection_loss, activity_loss, psr_loss, pose_loss
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 N_FIXED = 200  # overfit set size
@@ -63,6 +62,7 @@ N_FIXED = 200  # overfit set size
 # Probe 1: Overfit-200 eval-harness sanity
 # ===========================================================================
 
+
 def probe1_overfit_200(head: str, n_steps: int = 500):
     """Overfit 200 fixed images. If eval metric stays ~0, eval harness is broken.
 
@@ -70,14 +70,17 @@ def probe1_overfit_200(head: str, n_steps: int = 500):
         head: One of 'det', 'act', 'psr', 'pose'
         n_steps: Number of optimization steps (~500 should be enough)
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"PROBE 1: Overfit-200 sanity check for {head}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     # Build dataset
     train_ds = IndustRealMultiTaskDataset(
-        split="train", img_size=(224, 224),
-        augment=False, sequence_mode=True, sequence_length=16,
+        split="train",
+        img_size=(224, 224),
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
     )
     # Take first N_FIXED samples (deterministic)
     indices = list(range(min(N_FIXED, len(train_ds))))
@@ -116,10 +119,12 @@ def probe1_overfit_200(head: str, n_steps: int = 500):
     scaler = torch.amp.GradScaler(DEVICE.type, enabled=False)
 
     # Log_vars (not used in eval, but train_step needs them)
-    log_vars = nn.ParameterDict({
-        name: nn.Parameter(torch.tensor([0.0], device=DEVICE))
-        for name in ["det", "act", "psr", "pose"]
-    })
+    log_vars = nn.ParameterDict(
+        {
+            name: nn.Parameter(torch.tensor([0.0], device=DEVICE))
+            for name in ["det", "act", "psr", "pose"]
+        }
+    )
 
     print(f"Training {head} head on {N_FIXED} fixed images for {n_steps} steps...")
     losses = []
@@ -167,7 +172,9 @@ def probe1_overfit_200(head: str, n_steps: int = 500):
         optimizer.step()
         losses.append(loss.item())
         if (step + 1) % 50 == 0:
-            print(f"  Step {step+1}/{n_steps}: {head} loss = {loss.item():.4f} (first={losses[0]:.4f})")
+            print(
+                f"  Step {step + 1}/{n_steps}: {head} loss = {loss.item():.4f} (first={losses[0]:.4f})"
+            )
 
     initial_loss = losses[0]
     final_loss = losses[-1]
@@ -199,32 +206,45 @@ def probe1_overfit_200(head: str, n_steps: int = 500):
 # Probe 2: ST-activity 5 epochs
 # ===========================================================================
 
+
 def probe2_st_activity(n_epochs: int = 5, max_batches: int = 200):
     """Single-task activity training for 5 epochs (capped at 200 batches/epoch).
 
     If top-1 ≥ 0.30 by ep5, head+backbone are adequate (do not touch activity).
     If <0.10, deeper issue.
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"PROBE 2: ST-activity {n_epochs} epochs (cap {max_batches}/ep)")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     # Build dataset
     train_ds = IndustRealMultiTaskDataset(
-        split="train", img_size=(224, 224),
-        augment=False, sequence_mode=True, sequence_length=16,
+        split="train",
+        img_size=(224, 224),
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
     )
     val_ds = IndustRealMultiTaskDataset(
-        split="val", img_size=(224, 224),
-        augment=False, sequence_mode=True, sequence_length=16,
+        split="val",
+        img_size=(224, 224),
+        augment=False,
+        sequence_mode=True,
+        sequence_length=16,
     )
     train_loader = DataLoader(
-        train_ds, batch_size=2, shuffle=True,
-        collate_fn=collate_fn_sequences, num_workers=0,
+        train_ds,
+        batch_size=2,
+        shuffle=True,
+        collate_fn=collate_fn_sequences,
+        num_workers=0,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=2, shuffle=False,
-        collate_fn=collate_fn_sequences, num_workers=0,
+        val_ds,
+        batch_size=2,
+        shuffle=False,
+        collate_fn=collate_fn_sequences,
+        num_workers=0,
     )
 
     # Build model
@@ -242,8 +262,8 @@ def probe2_st_activity(n_epochs: int = 5, max_batches: int = 200):
             if batch_idx >= max_batches:
                 break
             images = images.to(DEVICE).float() / 255.0
-            mean = torch.tensor([0.45]*3, device=DEVICE).view(1, 1, 3, 1, 1, 1)
-            std = torch.tensor([0.225]*3, device=DEVICE).view(1, 1, 3, 1, 1, 1)
+            mean = torch.tensor([0.45] * 3, device=DEVICE).view(1, 1, 3, 1, 1, 1)
+            std = torch.tensor([0.225] * 3, device=DEVICE).view(1, 1, 3, 1, 1, 1)
             images = (images - mean) / std
             images = images.permute(0, 2, 1, 3, 4, 5).contiguous()
             for k, v in targets.items():
@@ -266,7 +286,9 @@ def probe2_st_activity(n_epochs: int = 5, max_batches: int = 200):
             n_batches += 1
         avg_loss = epoch_loss / max(n_batches, 1)
         train_top1 = correct / max(total, 1)
-        print(f"  Epoch {epoch+1}/{n_epochs}: act loss = {avg_loss:.4f}, train top-1 = {train_top1:.4f}")
+        print(
+            f"  Epoch {epoch + 1}/{n_epochs}: act loss = {avg_loss:.4f}, train top-1 = {train_top1:.4f}"
+        )
 
     # Eval
     model.eval()
@@ -277,8 +299,8 @@ def probe2_st_activity(n_epochs: int = 5, max_batches: int = 200):
             if batch_idx >= 50:  # quick eval
                 break
             images = images.to(DEVICE).float() / 255.0
-            mean = torch.tensor([0.45]*3, device=DEVICE).view(1, 1, 3, 1, 1, 1)
-            std = torch.tensor([0.225]*3, device=DEVICE).view(1, 1, 3, 1, 1, 1)
+            mean = torch.tensor([0.45] * 3, device=DEVICE).view(1, 1, 3, 1, 1, 1)
+            std = torch.tensor([0.225] * 3, device=DEVICE).view(1, 1, 3, 1, 1, 1)
             images = (images - mean) / std
             images = images.permute(0, 2, 1, 3, 4, 5).contiguous()
             for k, v in targets.items():
@@ -294,7 +316,9 @@ def probe2_st_activity(n_epochs: int = 5, max_batches: int = 200):
     val_top1 = correct / max(total, 1)
     print(f"\n  Val top-1: {val_top1:.4f}")
     if val_top1 >= 0.30:
-        verdict = "✅ PASS: ST-activity ≥0.30 by ep5. Head+backbone adequate. Do NOT touch activity head."
+        verdict = (
+            "✅ PASS: ST-activity ≥0.30 by ep5. Head+backbone adequate. Do NOT touch activity head."
+        )
     elif val_top1 >= 0.10:
         verdict = "🟡 PARTIAL: head is learning but slow. Check label noise / data quality."
     else:
@@ -307,14 +331,15 @@ def probe2_st_activity(n_epochs: int = 5, max_batches: int = 200):
 # Probe 3: PSR P5 + temporal-res A/B
 # ===========================================================================
 
+
 def probe3_psr_ab(n_steps: int = 300):
     """PSR on P5: A/B interpolate (current) vs predict-at-T=8.
 
     A/B shows whether the T=16→8→16 interpolation (FC-4) is the bottleneck.
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"PROBE 3: PSR on P5 — temporal-resolution A/B")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
     # This is a stub; the full implementation requires monkey-patching the
     # PSR head to disable the linear interpolation. See:
     # python -c "from src.models.mvit_mtl_model import PSRHead; import torch; \
@@ -336,14 +361,15 @@ def probe3_psr_ab(n_steps: int = 300):
 # Probe 4: Detection TAL-lite vs 3x3
 # ===========================================================================
 
+
 def probe4_det_tal_vs_3x3():
     """On the overfit set, compare 3x3 (current) vs minimal TAL assigner.
 
     If 3x3 already overfits to mAP ≥ 0.6, assigner isn't the bottleneck.
     """
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"PROBE 4: Detection — TAL-lite vs 3x3 on overfit set")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
     print("  Probe 4 implementation: requires implementing TAL assigner")
     print("  (cite TOOD, ICCV 2021) and running on overfit-200 set.")
     print("  Skip this probe if Probe 1 already shows eval metric is moving")
@@ -356,18 +382,31 @@ def probe4_det_tal_vs_3x3():
 # Main
 # ===========================================================================
 
+
 def main():
     parser = argparse.ArgumentParser(description="MVP smoke suite (Opus 192 §6)")
-    parser.add_argument("--probe", choices=["1", "2", "3", "4", "all"], default="all",
-                        help="Which probe to run (default: all)")
-    parser.add_argument("--head", choices=["det", "act", "psr", "pose"], default="det",
-                        help="Which head (for probes 1 and 2)")
-    parser.add_argument("--n-steps", type=int, default=500,
-                        help="Number of optimization steps for probe 1")
-    parser.add_argument("--n-epochs", type=int, default=5,
-                        help="Number of epochs for probe 2")
-    parser.add_argument("--output", type=str, default="/tmp/mvp_smoke_results.json",
-                        help="Output JSON file for results")
+    parser.add_argument(
+        "--probe",
+        choices=["1", "2", "3", "4", "all"],
+        default="all",
+        help="Which probe to run (default: all)",
+    )
+    parser.add_argument(
+        "--head",
+        choices=["det", "act", "psr", "pose"],
+        default="det",
+        help="Which head (for probes 1 and 2)",
+    )
+    parser.add_argument(
+        "--n-steps", type=int, default=500, help="Number of optimization steps for probe 1"
+    )
+    parser.add_argument("--n-epochs", type=int, default=5, help="Number of epochs for probe 2")
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="/tmp/mvp_smoke_results.json",
+        help="Output JSON file for results",
+    )
     args = parser.parse_args()
 
     results = []

@@ -14,6 +14,7 @@ Architecture:
 Usage:
     python scripts/train_st_act.py --epochs 30
 """
+
 import argparse
 import json
 import logging
@@ -24,7 +25,6 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torchvision.models.video import mvit_v2_s, MViT_V2_S_Weights
 
 # Path
@@ -34,6 +34,7 @@ for _p in [str(_CODE_ROOT), str(_CODE_ROOT / "src")]:
         sys.path.insert(0, _p)
 
 import src.config as C
+
 # Force 75-class for SOTA comparison (175 §7.2)
 C.ACT_CLASS_GROUPING = "none"
 C.NUM_ACT_OUTPUTS = 75
@@ -92,8 +93,12 @@ def collate_act(batch):
     """Stacks single-frame images + activity labels. [B, 3, 224, 224]."""
     images = torch.stack([b["images"]["rgb"] for b in batch], dim=0)  # [B, 3, 224, 224]
     labels = torch.tensor(
-        [int(b["action_label"]) if hasattr(b["action_label"], "item") else int(b.get("action_label", -1))
-         for b in batch],
+        [
+            int(b["action_label"])
+            if hasattr(b["action_label"], "item")
+            else int(b.get("action_label", -1))
+            for b in batch
+        ],
         dtype=torch.long,
     )
     return images, labels
@@ -141,7 +146,11 @@ def train_epoch(model, loader, criterion, optimizer, scaler, device, epoch, max_
             acc = 100.0 * n_correct / max(n_total, 1)
             logger.info(
                 "  [ep %d batch %d/%d] loss=%.4f acc=%.2f%% (%.2fs/batch)",
-                epoch, batch_idx, len(loader), loss.item(), acc,
+                epoch,
+                batch_idx,
+                len(loader),
+                loss.item(),
+                acc,
                 (time.time() - t0) / max(batch_idx + 1, 1),
             )
 
@@ -193,8 +202,11 @@ def main():
     logger.info("Args: %s", vars(args))
 
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
-    logger.info("Device: %s, GPU: %s", device,
-                torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU")
+    logger.info(
+        "Device: %s, GPU: %s",
+        device,
+        torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
+    )
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -202,23 +214,34 @@ def main():
     # Data — single-frame mode for speed
     logger.info("Building ST-Act dataset (single-frame mode for fast I/O)...")
     train_ds = IndustRealMultiTaskDataset(
-        split="train", img_size=(224, 224), augment=True,
+        split="train",
+        img_size=(224, 224),
+        augment=True,
         sequence_mode=False,  # SINGLE FRAME per sample — 16x less I/O than sequence mode
     )
     val_ds = IndustRealMultiTaskDataset(
-        split="val", img_size=(224, 224), augment=False,
+        split="val",
+        img_size=(224, 224),
+        augment=False,
         sequence_mode=False,
     )
     logger.info("Train: %d, Val: %d", len(train_ds), len(val_ds))
 
     train_loader = torch.utils.data.DataLoader(
-        train_ds, batch_size=args.batch_size, shuffle=True,
-        num_workers=args.num_workers, pin_memory=True,
-        collate_fn=collate_act, drop_last=True,
+        train_ds,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=True,
+        collate_fn=collate_act,
+        drop_last=True,
     )
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=args.batch_size, shuffle=False,
-        num_workers=args.num_workers, pin_memory=True,
+        val_ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=True,
         collate_fn=collate_act,
     )
 
@@ -233,10 +256,12 @@ def main():
 
     backbone_params = [p for n, p in model.named_parameters() if "backbone" in n]
     head_params = [p for n, p in model.named_parameters() if "backbone" not in n]
-    optimizer = torch.optim.AdamW([
-        {"params": backbone_params, "lr": args.lr_backbone, "weight_decay": args.weight_decay},
-        {"params": head_params, "lr": args.lr_head, "weight_decay": args.weight_decay},
-    ])
+    optimizer = torch.optim.AdamW(
+        [
+            {"params": backbone_params, "lr": args.lr_backbone, "weight_decay": args.weight_decay},
+            {"params": head_params, "lr": args.lr_head, "weight_decay": args.weight_decay},
+        ]
+    )
     warmup_epochs = min(3, args.epochs // 5)
     warmup_sched = torch.optim.lr_scheduler.LinearLR(
         optimizer, start_factor=0.1, end_factor=1.0, total_iters=warmup_epochs
@@ -257,8 +282,14 @@ def main():
 
         t0 = time.time()
         loss, train_acc = train_epoch(
-            model, train_loader, criterion, optimizer, scaler, device,
-            epoch, args.max_batches_per_epoch,
+            model,
+            train_loader,
+            criterion,
+            optimizer,
+            scaler,
+            device,
+            epoch,
+            args.max_batches_per_epoch,
         )
 
         val_metrics = evaluate(model, val_loader, device)
@@ -266,38 +297,64 @@ def main():
         val_top5 = val_metrics["top5"]
         dt = time.time() - t0
 
-        history.append({
-            "epoch": epoch, "train_loss": loss, "train_acc": train_acc,
-            "val_top1": val_top1, "val_top5": val_top5,
-            "val_n": val_metrics["n"], "time": dt,
-        })
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": loss,
+                "train_acc": train_acc,
+                "val_top1": val_top1,
+                "val_top5": val_top5,
+                "val_n": val_metrics["n"],
+                "time": dt,
+            }
+        )
         logger.info(
             "Epoch %3d/%d | train_loss=%.4f train_acc=%.4f | val_top1=%.4f val_top5=%.4f (n=%d) | %.1fs",
-            epoch, args.epochs, loss, train_acc, val_top1, val_top5,
-            val_metrics["n"], dt,
+            epoch,
+            args.epochs,
+            loss,
+            train_acc,
+            val_top1,
+            val_top5,
+            val_metrics["n"],
+            dt,
         )
 
         if val_top1 > best_top1:
             best_top1 = val_top1
-            torch.save({
-                "epoch": epoch, "model_state_dict": model.state_dict(),
-                "val_top1": val_top1, "val_top5": val_top5,
-                "config": vars(args),
-            }, output_dir / "best.pth")
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": model.state_dict(),
+                    "val_top1": val_top1,
+                    "val_top5": val_top5,
+                    "config": vars(args),
+                },
+                output_dir / "best.pth",
+            )
             logger.info("  New best: val_top1=%.4f, top5=%.4f", val_top1, val_top5)
 
-        torch.save({
-            "epoch": epoch, "model_state_dict": model.state_dict(),
-            "val_top1": val_top1, "val_top5": val_top5,
-            "config": vars(args),
-        }, output_dir / "latest.pth")
+        torch.save(
+            {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "val_top1": val_top1,
+                "val_top5": val_top5,
+                "config": vars(args),
+            },
+            output_dir / "latest.pth",
+        )
 
         if args.plumbing and epoch >= 1:
             break
 
     with open(output_dir / "metrics.json", "w") as f:
-        json.dump({"history": history, "best_top1": best_top1, "config": vars(args)},
-                  f, indent=2, default=str)
+        json.dump(
+            {"history": history, "best_top1": best_top1, "config": vars(args)},
+            f,
+            indent=2,
+            default=str,
+        )
     logger.info("Training complete. Best val top-1: %.4f (vs WACV MViTv2-S: 0.6525)", best_top1)
 
 

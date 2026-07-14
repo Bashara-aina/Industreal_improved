@@ -11,6 +11,7 @@ Outputs:
 
 Reference: Opus 141 §2 Q24, Q29 — extend from 3 recordings to all 16.
 """
+
 import json
 import sys
 from collections import defaultdict
@@ -40,6 +41,7 @@ def edit_metric(pred_seq, gt_seq):
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", default="src/runs/rf_stages/checkpoints/best.pth")
     parser.add_argument("--save-dir", default="src/runs/rf_stages/checkpoints/null_model_pos")
@@ -54,19 +56,27 @@ def main():
     from src.data.industreal_dataset import IndustRealMultiTaskDataset, collate_fn
 
     model = POPWMultiTaskModel(
-        pretrained=True, backbone_type='convnext_tiny',
-        use_hand_film=True, use_headpose_film=True,
-        use_videomae=False, train_pose=False,
+        pretrained=True,
+        backbone_type="convnext_tiny",
+        use_hand_film=True,
+        use_headpose_film=True,
+        use_videomae=False,
+        train_pose=False,
     )
-    state_dict = {k: v for k, v in ckpt["model"].items()
-                  if 'total_ops' not in k and 'total_params' not in k}
+    state_dict = {
+        k: v for k, v in ckpt["model"].items() if "total_ops" not in k and "total_params" not in k
+    }
     model.load_state_dict(state_dict, strict=False)
     model._seq_len = 1
     model = model.cuda().eval()
 
     val_ds = IndustRealMultiTaskDataset(split="val", sequence_mode=False)
     val_loader = torch.utils.data.DataLoader(
-        val_ds, batch_size=1, num_workers=0, collate_fn=collate_fn, shuffle=False,
+        val_ds,
+        batch_size=1,
+        num_workers=0,
+        collate_fn=collate_fn,
+        shuffle=False,
     )
 
     # Collect per-recording per-frame predictions and labels
@@ -169,8 +179,12 @@ def main():
         "n_frames": n,
         "n_recordings": len(per_rec_pos),
         "ours_pos_mean": float(np.mean([v["ours_pos"] for v in per_rec_pos.values()])),
-        "null_all_zeros_pos_mean": float(np.mean([v["null_all_zeros_pos"] for v in per_rec_pos.values()])),
-        "null_copy_prev_pos_mean": float(np.mean([v["null_copy_prev_pos"] for v in per_rec_pos.values()])),
+        "null_all_zeros_pos_mean": float(
+            np.mean([v["null_all_zeros_pos"] for v in per_rec_pos.values()])
+        ),
+        "null_copy_prev_pos_mean": float(
+            np.mean([v["null_copy_prev_pos"] for v in per_rec_pos.values()])
+        ),
         "interpretation": (
             "If null_copy_prev_pos is similar to ours_pos, POS is a fill-forward artifact, not a real metric. "
             "Drop POS from headline. Use per-component F1 (and transition F1 if available) as primary PSR metric."
