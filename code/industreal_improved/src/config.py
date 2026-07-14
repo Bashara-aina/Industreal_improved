@@ -44,6 +44,9 @@ TRAIN_HEAD_POSE = True    # Train 9-DoF head pose from pose.csv (real HL2 sensor
                            # The 8.71° forward-gaze target is our own baseline, not from the paper.
 TRAIN_ACT       = True
 TRAIN_PSR       = True
+USE_ASL_PSR     = False  # [V1 IMPLEMENTATION_PLAN Item 8] Use Asymmetric Loss (Ben-Baruch et al. CVPR 2020)
+                           # instead of Focal-BCE for PSR. When True, uses AsymmetricLoss(gamma_neg=4, gamma_pos=0, clip=0.05).
+                           # Default False for full backward compat.
 USE_KENDALL     = True   # Kendall weighting active for 4 tasks (det, act, psr, head_pose).
 USE_FAMO        = os.environ.get('USE_FAMO', '0') == '1'  # FAMO (Liu et al. NeurIPS 2023): fast adaptive MTL weighting.
                            # NOTE: body pose (17 COCO keypoints) shares log_var_pose with head_pose
@@ -52,6 +55,8 @@ USE_FAMO        = os.environ.get('USE_FAMO', '0') == '1'  # FAMO (Liu et al. Neu
                            # Head pose 9-DoF MSE is the real task under log_var_pose.
 USE_IMTL_L      = os.environ.get('USE_IMTL_L', '0') == '1'      # IMTL-L (Liu et al. ICLR 2021): stateless log-space scalar weighting
 USE_RLW         = os.environ.get('USE_RLW', '0') == '1'          # RLW (Lin et al. TMLR 2022): random loss weighting baseline
+USE_UW_SO       = os.environ.get('USE_UW_SO', '0') == '1'        # UW-SO (Kirchdorfer IJCV 2025, arXiv 2408.07985): softmax ordinal uncertainty weighting
+UW_SO_TEMPERATURE = float(os.environ.get('UW_SO_TEMPERATURE', '1.0'))  # UW-SO temperature: lower = sharper weighting, higher = more uniform
 USE_METABALANCE = os.environ.get('USE_METABALANCE', '0') == '1'  # MetaBalance gradient magnitude rescaling (He et al., WWW 2022)
 METABALANCE_TARGET_TASK = os.environ.get('METABALANCE_TARGET_TASK', 'head_pose')  # Target task whose gradient norm to match
 # [FIX 2026-07-04 Opus 111 SS3.2] FREEZE_BODY_POSE_BRANCH: freeze the body-pose
@@ -185,7 +190,9 @@ VIDEOMAE_UNFREEZE_LR = 1e-5
 USE_TMA_CELL = True       # GRU-based Temporal Masked Attention Cell
 USE_TEMPORAL_BANK = True  # Feature Bank (Doc 01 A.2: T=16)
 FEATURE_BANK_WINDOW = 16    # T=16 — 1.6s context at 30FPS (median action)
-EMA_SMOOTHING = False      # Not in diagram — removed
+# EMA warmup: don't accumulate EMA shadow before this epoch.
+# Set to 0 to disable warmup (legacy behavior — EMA updates from epoch 0).
+EMA_START_EPOCH = 5
 
 # [FIX 2026-06-15] Gradient checkpointing for ConvNeXt backbone
 # Uses torch.utils.checkpoint on each of the 4 backbone stages, trading
@@ -916,6 +923,12 @@ USE_CB_FOCAL_ACT = False   # True = use ClassBalancedFocalLoss; False = CE+label
 CB_FOCAL_BETA = 0.999    # Effective number beta for CB-Focal (Cui et al., 2019)
 CB_FOCAL_GAMMA = 2.0     # Focal loss gamma for CB-Focal
 
+# Balanced Softmax for activity (Menon et al., 2020 NeurIPS)
+# Alternative to CE+logit_adjust: shifts logits by log(class_priors) so
+# rare classes get a higher effective probability. Overrides LDAM and CB-Focal.
+# Priors computed from class_counts at set_class_counts() time.
+USE_BALANCED_SOFTMAX_ACT = False  # V1 IMPLEMENTATION_PLAN Item 3 / MASTER_VERIFICATION Item 10
+
 # PSR temporal smoothing weight (transition-aware loss)
 PSR_TEMPORAL_SMOOTH_WEIGHT = 0.05  # encourages predicted transitions to match label transitions
 
@@ -1053,6 +1066,8 @@ ACTIVITY_LR_MULTIPLIER = 1.0    # [FIX 2026-06-30 v4] RESET TO 1.0 after root ca
                             # With the fix, activity gradient should be ~0.48 (comparable to detection),
                             # so 20x LR would cause gradient explosion. Standard head_lr (5e-4) is
                             # sufficient for a healthy gradient path.
+PSR_LR_MULTIPLIER = 0.5         # [2026-07-14 per 30_DAY_EXECUTION_PLAN Day 1] PSR head LR = head_lr × 0.5.
+HEAD_POSE_LR_MULTIPLIER = 0.3   # [2026-07-14 per 30_DAY_EXECUTION_PLAN Day 1] Head pose LR = head_lr × 0.3.
 ACTIVITY_LOSS_WEIGHT = 0.8     # Per paper: "CE (label_smooth=0.1) × 0.8" (was 0.2 during debugging)
 
 # [FIX 2026-06-30 Opus consult] ACTIVITY_HEAD_SIMPLE — bypass the TCN+2xViT

@@ -182,6 +182,7 @@ CFG_USE_KENDALL     = bool(getattr(C, 'USE_KENDALL', True))
 CFG_USE_FAMO        = bool(getattr(C, 'USE_FAMO', False))
 CFG_USE_IMTL_L      = bool(getattr(C, 'USE_IMTL_L', False))
 CFG_USE_RLW         = bool(getattr(C, 'USE_RLW', False))
+CFG_USE_UW_SO       = bool(getattr(C, 'USE_UW_SO', False))
 CFG_VAL_NUM_WORKERS = int(getattr(C, 'VAL_NUM_WORKERS', C.NUM_WORKERS))
 CFG_VAL_BATCH_SIZE  = int(getattr(C, 'VAL_BATCH_SIZE', C.BATCH_SIZE))
 CFG_EVAL_MAX_BATCHES = int(getattr(C, 'EVAL_MAX_BATCHES', 0))
@@ -1514,7 +1515,8 @@ def train_one_epoch(
                                 f'({opt_skipped}/{opt_windows} windows so far, seq path) — '
                                 f'inf/NaN grads under AMP.'
                             )
-                    if ema is not None and (not staged_training or stage >= 3):
+                    if ema is not None and (not staged_training or stage >= 3) \
+                            and (C.EMA_START_EPOCH == 0 or epoch >= C.EMA_START_EPOCH):
                         ema.update()
                     optimizer.zero_grad(set_to_none=True)
             # [FIX #1] Restore criterion flags AFTER PSR-only sequence batch
@@ -2087,7 +2089,8 @@ def train_one_epoch(
                             f'({opt_skipped}/{opt_windows} windows so far) — '
                             f'inf/NaN grads under AMP.'
                         )
-                if ema is not None and (not staged_training or stage >= 3):
+                if ema is not None and (not staged_training or stage >= 3) \
+                        and (C.EMA_START_EPOCH == 0 or epoch >= C.EMA_START_EPOCH):
                     ema.update()
                 if CFG_USE_FAMO and hasattr(criterion, 'famo_step'):
                     criterion.famo_step()
@@ -3782,6 +3785,8 @@ def main(args):
         use_famo=CFG_USE_FAMO,
         use_imtl_l=CFG_USE_IMTL_L,
         use_rlw=CFG_USE_RLW,
+        use_uw_so=CFG_USE_UW_SO,
+        uw_so_temperature=float(getattr(C, 'UW_SO_TEMPERATURE', 1.0)),
     ).to(device)
     criterion.set_class_counts(class_counts)
 
@@ -3814,7 +3819,7 @@ def main(args):
                 _n_frozen += 1
         if _n_frozen > 0:
             logger.info(f'  [FREEZE_BACKBONE] Frozen {_n_frozen} backbone params (linear probe mode)')
-    backbone_params, det_head_params, head_params, activity_params, psr_params, det_head_bias_params, bias_params = [], [], [], [], [], [], []
+    backbone_params, det_head_params, head_params, activity_params, psr_params, head_pose_params, det_head_bias_params, bias_params = [], [], [], [], [], [], [], []
     videomae_params = []
     loss_params = list(criterion.parameters())
     for name, param in model.named_parameters():
@@ -3844,6 +3849,8 @@ def main(args):
             activity_params.append(param)
         elif 'psr_head' in name:
             psr_params.append(param)
+        elif 'head_pose_head' in name:
+            head_pose_params.append(param)
         elif name.startswith('detection_head'):
             # Separate param group with DET_LR_MULTIPLIER to escape near-zero regime
             det_head_params.append(param)
@@ -3879,7 +3886,9 @@ def main(args):
     det_head_lr = head_lr * float(getattr(C, 'DET_LR_MULTIPLIER', 5.0))
     det_head_bias_lr = head_lr * DET_BIAS_LR_FACTOR
     bias_lr = head_lr * BIAS_LR_FACTOR
-    activity_head_lr = head_lr * float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0))
+    activity_head_lr = head_lr * float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 1.0))
+    psr_head_lr = head_lr * float(getattr(C, 'PSR_LR_MULTIPLIER', 0.5))
+    head_pose_head_lr = head_lr * float(getattr(C, 'HEAD_POSE_LR_MULTIPLIER', 0.3))
 
     try:
         from lion_pytorch import Lion
@@ -3896,7 +3905,8 @@ def main(args):
             {'params': det_head_params,         'lr': det_head_lr},
             {'params': head_params,             'lr': head_lr},
             {'params': activity_params,         'lr': activity_head_lr},
-            {'params': psr_params,              'lr': head_lr},
+            {'params': psr_params,              'lr': psr_head_lr},
+            {'params': head_pose_params,        'lr': head_pose_head_lr},
             {'params': det_head_bias_params,    'lr': det_head_bias_lr},
             {'params': bias_params,             'lr': bias_lr},
             {'params': videomae_params,         'lr': 0.0},  # [OPUS FIX #3] pre-registered frozen; lr toggled at unfreeze
@@ -3909,14 +3919,15 @@ def main(args):
             param_groups.append({'params': loss_params, 'lr': head_lr, 'weight_decay': 0.0})
         _effective_wd = C.WEIGHT_DECAY * 3  # constant — NOT scaled by _stage_lr_mult
         optimizer = Lion(param_groups, weight_decay=_effective_wd)
-        logger.info('Optimizer: Lion (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)), DET_BIAS_LR_FACTOR, _effective_wd))
+        logger.info('Optimizer: Lion (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=%gx, hp=%gx, det_head_bias=%gx, bias=0.3x, WD=%g)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 1.0)), float(getattr(C, 'PSR_LR_MULTIPLIER', 0.5)), float(getattr(C, 'HEAD_POSE_LR_MULTIPLIER', 0.3)), DET_BIAS_LR_FACTOR, _effective_wd))
     else:
         param_groups = [
             {'params': backbone_params,        'lr': backbone_lr},
             {'params': det_head_params,         'lr': det_head_lr},
             {'params': head_params,             'lr': head_lr},
             {'params': activity_params,         'lr': activity_head_lr},
-            {'params': psr_params,              'lr': head_lr},
+            {'params': psr_params,              'lr': psr_head_lr},
+            {'params': head_pose_params,        'lr': head_pose_head_lr},
             {'params': det_head_bias_params,    'lr': det_head_bias_lr,  'weight_decay': 0.0},
             {'params': bias_params,             'lr': bias_lr,           'weight_decay': 0.0},
             {'params': videomae_params,         'lr': 0.0},  # [OPUS FIX #3] pre-registered frozen; lr toggled at unfreeze
@@ -3927,17 +3938,18 @@ def main(args):
             param_groups.append({'params': loss_params, 'lr': head_lr, 'weight_decay': 0.0})
         _effective_wd = C.WEIGHT_DECAY  # constant — NOT scaled by _stage_lr_mult
         optimizer = torch.optim.AdamW(param_groups, weight_decay=_effective_wd)
-        logger.info('Optimizer: AdamW with differential LR (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=1x, det_head_bias=%gx, bias=0.3x, WD=%g, bias WD=0)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)), DET_BIAS_LR_FACTOR, _effective_wd))
+        logger.info('Optimizer: AdamW with differential LR (backbone=0.1x, det_head=%gx, heads=1x, act=%gx, psr=%gx, hp=%gx, det_head_bias=%gx, bias=0.3x, WD=%g, bias WD=0)' % (C.DET_LR_MULTIPLIER, float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 1.0)), float(getattr(C, 'PSR_LR_MULTIPLIER', 0.5)), float(getattr(C, 'HEAD_POSE_LR_MULTIPLIER', 0.3)), DET_BIAS_LR_FACTOR, _effective_wd))
 
     # Snapshot initial param-group LRs so --reset-scheduler can restore them after
     # optimizer.load_state_dict overwrites them with checkpoint values.
     _init_pg_lrs = [pg['lr'] for pg in optimizer.param_groups]
 
     # Param-group index map (used by Stage 3 warmup ramp + videomae unfreeze toggle):
-    #   0 = backbone, 1 = det_head, 2 = head, 3 = activity, 4 = psr, 5 = det_head_bias, 6 = bias, 7 = videomae, [8 = loss if loss_params]
+    #   0 = backbone, 1 = det_head, 2 = head, 3 = activity, 4 = head_pose, 5 = psr, 6 = det_head_bias, 7 = bias, 8 = videomae, [9 = loss if loss_params]
     ACTIVITY_PARAM_GROUP_IDX = 3
-    PSR_PARAM_GROUP_IDX = 4
-    VIDEOMAE_PARAM_GROUP_IDX = 7
+    HEAD_POSE_PARAM_GROUP_IDX = 4
+    PSR_PARAM_GROUP_IDX = 5
+    VIDEOMAE_PARAM_GROUP_IDX = 8
 
     _stage_warmup_mult = float(os.environ.get('_STAGE_WARMUP_MULT', 1.0))
     _stage_warmup_epochs = int(C.WARMUP_EPOCHS * _stage_warmup_mult)
@@ -3976,14 +3988,19 @@ def main(args):
             backbone_lr_local * _peak,  # idx 0: backbone
             head_lr_local * _peak * C.DET_LR_MULTIPLIER,  # idx 1: det_head
             head_lr_local * _peak,      # idx 2: head
-            head_lr_local * _peak * float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 3.0)),  # idx 3: activity
-            head_lr_local * _peak,      # idx 4: psr
-            det_head_bias_lr_local * _peak,  # idx 5: det_head_bias
-            bias_lr_local * _peak,      # idx 6: bias
-            0.0,                      # idx 7: videomae (frozen at start, toggled at unfreeze)
+            head_lr_local * _peak * float(getattr(C, 'ACTIVITY_LR_MULTIPLIER', 1.0)),  # idx 3: activity
+            head_lr_local * _peak * float(getattr(C, 'HEAD_POSE_LR_MULTIPLIER', 0.3)),  # idx 4: head_pose
+            head_lr_local * _peak * float(getattr(C, 'PSR_LR_MULTIPLIER', 0.5)),  # idx 5: psr
+            det_head_bias_lr_local * _peak,  # idx 6: det_head_bias
+            bias_lr_local * _peak,      # idx 7: bias
+            0.0,                      # idx 8: videomae (frozen at start, toggled at unfreeze)
         ]
+        _mult_str = (f'det={C.DET_LR_MULTIPLIER:g}x, '
+                     f'activity={float(getattr(C, "ACTIVITY_LR_MULTIPLIER", 1.0)):g}x, '
+                     f'hp={float(getattr(C, "HEAD_POSE_LR_MULTIPLIER", 0.3)):g}x, '
+                     f'psr={float(getattr(C, "PSR_LR_MULTIPLIER", 0.5)):g}x')
         if loss_params:
-            max_lr.append(head_lr_local * _peak)  # idx 8 (if present): loss
+            max_lr.append(head_lr_local * _peak)  # idx 9 (if present): loss
         # [FIX 2026-07-01 agent audit] OneCycleLR was built with steps_per_epoch=len(train_loader)//accum_steps
         # (~800) but scheduler.step() is called ONCE per epoch (line 4290), not per optimizer step.
         # Result: OneCycleLR received only ~100 total steps vs expected ~80,000 — stayed in warmup phase
@@ -4002,7 +4019,7 @@ def main(args):
                                milestones=[_stage_warmup_epochs])
         lr_str = ', '.join(f'{v:.2e}' for v in max_lr)
         logger.info(f'Scheduler: OneCycleLR (pct_start=0.1, steps_per_epoch=1, '
-                    f'peak_factor={_peak}, max_lr=[{lr_str}])')
+                    f'peak_factor={_peak}, multipliers=[{_mult_str}], max_lr=[{lr_str}])')
         # [F4b] Stash for the resume path: optimizer.load_state_dict() restores the
         # CHECKPOINT's max_lr/initial_lr/min_lr into param_groups, silently undoing
         # any ONE_CYCLE_PEAK_FACTOR change. The resume block re-applies these.

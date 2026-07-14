@@ -53,6 +53,7 @@ import torch
 from src.losses.famo import FAMOWeighter
 from src.losses.imtl_l import imtl_l_loss
 from src.losses.rlw import RLWWeighter
+from src.losses.uw_so import uw_so_loss  # UW-SO (Kirchdorfer IJCV 2025): softmax ordinal uncertainty weighting
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.ops import box_iou, generalized_box_iou_loss
@@ -60,6 +61,9 @@ from torchvision.ops import box_iou, generalized_box_iou_loss
 from src import config as C
 from src.losses.varifocal_loss import VarifocalLoss
 from src.losses.wiou_loss import wiou_v3_loss
+from src.losses.asymmetric_loss import AsymmetricLoss
+from src.losses.balanced_softmax import BalancedSoftmaxLoss
+
 
 
 def _get_kendall_stage(epoch: int) -> int:
@@ -1002,18 +1006,28 @@ def head_pose_loss_split(
 
 class MultiTaskLoss(nn.Module):
     """
-    Kendall homoscedastic uncertainty weighting for 4 tasks:
+    Multi-task loss with configurable weighting strategy.
+
+    Primary: Kendall homoscedastic uncertainty (default) for 4 tasks:
       detection + pose + activity + PSR
+      L = sum_t [ exp(-s_t) * L_t + s_t ]
 
-    L = sum_t [ exp(-s_t) * L_t + s_t ]
+    Alternatives (mutually exclusive, selected via config flags):
+      - FAMO (Liu et al. NeurIPS 2023)     : use_famo=True
+      - IMTL-L (Liu et al. ICLR 2021)       : use_imtl_l=True
+      - RLW (Lin et al. TMLR 2022)          : use_rlw=True
+      - UW-SO (Kirchdorfer IJCV 2025)       : use_uw_so=True
+        arXiv 2408.07985. Softmax ordinal uncertainty:
+        w_i = softmax(-L_i / temperature) with no learnable params.
+        Temperature defaults to 1.0 (configurable via uw_so_temperature).
 
-    Initialization per diagram:
+    Kendall initialization per diagram:
       s_det = 0   (precision=1.0, neutral)
       s_pose = -1 (precision~2.7x higher at init)
       s_act = 0   (precision=1.0, neutral)
       s_psr = 0   (precision=1.0, neutral)
 
-    Activity warmup: ramp from 0→1 over first 5 epochs.
+    Activity warmup: ramp from 0->1 over first 5 epochs.
     act_ramp = min(1, epoch/5)
 
     Kendall clamp range [-4, 2]:
@@ -1037,6 +1051,8 @@ class MultiTaskLoss(nn.Module):
         use_famo: bool = False,
         use_imtl_l: bool = False,
         use_rlw: bool = False,
+        use_uw_so: bool = False,
+        uw_so_temperature: float = 1.0,
     ):
         super().__init__()
         self.train_det = train_det
@@ -1047,6 +1063,8 @@ class MultiTaskLoss(nn.Module):
         self.use_famo = use_famo
         self.use_imtl_l = use_imtl_l
         self.use_rlw = use_rlw
+        self.use_uw_so = use_uw_so
+        self._uw_so_temperature = uw_so_temperature
 
         # MTL loss weighter instances (created on first forward to know device)
         self.famo_weighter: Optional[FAMOWeighter] = None
@@ -1103,12 +1121,15 @@ class MultiTaskLoss(nn.Module):
                 gamma=float(getattr(C, 'CB_FOCAL_GAMMA', 2.0)),
                 label_smoothing=getattr(C, 'CB_LABEL_SMOOTHING', 0.1),
             )
+        elif bool(getattr(C, 'USE_BALANCED_SOFTMAX_ACT', False)):
+            self.act_loss_fn = BalancedSoftmaxLoss(num_classes=num_classes_act)
         else:
             self.act_loss_fn = nn.CrossEntropyLoss(
                 label_smoothing=getattr(C, 'CB_LABEL_SMOOTHING', 0.1),
             )
         self.use_ldam = use_ldam
         self.use_cb_focal = use_cb_focal
+        self.use_balanced_softmax = bool(getattr(C, 'USE_BALANCED_SOFTMAX_ACT', False))
 
         # C.3: Binary focal loss for PSR (instead of BCE)
         self.psr_loss_fn = nn.BCEWithLogitsLoss(reduction='mean')
@@ -1116,6 +1137,11 @@ class MultiTaskLoss(nn.Module):
         self.use_psr_transition = bool(getattr(C, 'USE_PSR_TRANSITION', False))  # [OPUS v5] transition objective
         self.psr_focal_alpha = float(getattr(C, 'PSR_FOCAL_ALPHA', 0.25))
         self.psr_focal_gamma = float(getattr(C, 'PSR_FOCAL_GAMMA', 2.0))
+        # [V1 Item 8] Asymmetric Loss (Ben-Baruch et al. CVPR 2020) as alternative to Focal-BCE for PSR.
+        self.use_psr_asl = bool(getattr(C, 'USE_ASL_PSR', False))
+        if self.use_psr_asl:
+            self.psr_asl_loss = AsymmetricLoss(gamma_neg=4, gamma_pos=0, clip=0.05)
+            logger.info('  [ASL] USE_ASL_PSR=True — using AsymmetricLoss for PSR instead of Focal-BCE')
         self._psr_per_component_alpha: torch.Tensor = None
         self._psr_num_components = num_psr_components
         # [FIX 2026-06-15] Per-component PSR loss weights (11 components)
@@ -1486,7 +1512,9 @@ class MultiTaskLoss(nn.Module):
                         )
                     except Exception as e:
                         logger.warning(f'  [PSR_TRANSITION] build_transition_targets failed: {e} — falling back')
-                    if self.use_psr_focal:
+                    if self.use_psr_asl:
+                        loss_psr = self.psr_asl_loss(outputs['psr_logits'], _psr_targets)
+                    elif self.use_psr_focal:
                         loss_psr = binary_focal_loss(
                             outputs['psr_logits'], _psr_targets,
                             alpha=self.psr_focal_alpha, gamma=self.psr_focal_gamma,
@@ -1512,6 +1540,8 @@ class MultiTaskLoss(nn.Module):
                     _psr_structurally_zero = True
                     # Skip sensitivity penalty + smooth-cap for per-frame batches under transition objective.
                     # The transition signal only flows on sequence (dim==3) batches.
+            elif self.use_psr_asl:
+                loss_psr = self.psr_asl_loss(outputs['psr_logits'], _psr_targets)
             elif self.use_psr_focal:
                 loss_psr = binary_focal_loss(
                     outputs['psr_logits'], _psr_targets,
@@ -1698,10 +1728,10 @@ class MultiTaskLoss(nn.Module):
             logger.warning(_msg)
             print(_msg, flush=True)
 
-        # === MTL alternative weighting (FAMO / IMTL-L / RLW) ===
+        # === MTL alternative weighting (FAMO / IMTL-L / RLW / UW-SO) ===
         # These optional modules replace Kendall weighting entirely for the total loss.
         # Precision vars in loss_dict are zeroed (not meaningful for non-Kendall MTL).
-        if self.use_famo or self.use_imtl_l or self.use_rlw:
+        if self.use_famo or self.use_imtl_l or self.use_rlw or self.use_uw_so:
             mtl_losses = {}
             if self.train_det:
                 mtl_losses["det"] = loss_det
@@ -1726,6 +1756,11 @@ class MultiTaskLoss(nn.Module):
                 loss_tensor = torch.stack(list(mtl_losses.values()))
                 weights = self.rlw_weighter.get_weights(loss_tensor.device)
                 total = (loss_tensor * weights).sum()
+            elif self.use_uw_so:
+                # UW-SO (Kirchdorfer IJCV 2025): softmax ordinal uncertainty weighting.
+                # w_i = softmax(-L_i / temperature), where L_i is the raw per-task loss.
+                # No learnable precision params — weighting emerges from relative loss magnitudes.
+                total = uw_so_loss(mtl_losses, temperature=self._uw_so_temperature)
 
             # MTL paths don't use Kendall precisions; zero for logging
             prec_det = prec_hp = prec_act = prec_psr = torch.tensor(0.0, device=device)
