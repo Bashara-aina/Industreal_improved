@@ -15,6 +15,7 @@ Usage:
 [OPUS 201] This script was rewritten from the old ConvNeXt-based
 overfit_50img_cls.py to use the current MViTv2-S MTL architecture.
 """
+# DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import json
 import sys

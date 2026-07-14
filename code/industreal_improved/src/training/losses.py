@@ -48,11 +48,18 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
+
+# MTL loss weighting modules (optional alternatives to Kendall weighting)
+from src.losses.famo import FAMOWeighter
+from src.losses.imtl_l import imtl_l_loss
+from src.losses.rlw import RLWWeighter
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.ops import box_iou, generalized_box_iou_loss
 
 from src import config as C
+from src.losses.varifocal_loss import VarifocalLoss
+from src.losses.wiou_loss import wiou_v3_loss
 
 
 def _get_kendall_stage(epoch: int) -> int:
@@ -82,7 +89,8 @@ class FocalLoss(nn.Module):
     """
     def __init__(self, alpha: float = 0.25, gamma: float = 2.0,
                  pos_iou_thresh: float = 0.5, neg_iou_thresh: float = 0.4,
-                 class_alphas: Optional[Dict[int, float]] = None):
+                 class_alphas: Optional[Dict[int, float]] = None,
+                 use_varifocal: bool = False):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
@@ -91,10 +99,14 @@ class FocalLoss(nn.Module):
         # [FIX 2026-06-20] Per-class alpha for fine-grained detection classes.
         # Stored as {class_id: alpha}. Applied at the alpha_t step in forward().
         self.class_alphas = class_alphas or {}
+        # [VFL 2026-07-14] VarifocalLoss replaces focal for detection cls.
+        self.use_varifocal = use_varifocal
+        if use_varifocal:
+            self.varifocal_loss = VarifocalLoss(alpha=alpha, gamma=gamma)
 
     def _match_anchors(self, anchors: torch.Tensor, gt_boxes: torch.Tensor,
-                      gt_labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Assign anchors to GT boxes. Returns labels and matched boxes.
+                      gt_labels: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Assign anchors to GT boxes. Returns labels, matched boxes, and max IoU.
 
         BUG FIX #1: Normalize both anchors and GT boxes to [0,1] image coords
         before IoU matching. GT boxes from COCO are in pixel coordinates
@@ -107,7 +119,8 @@ class FocalLoss(nn.Module):
 
         if gt_boxes.shape[0] == 0:
             return (torch.full((N,), -2, dtype=torch.long, device=device),
-                    torch.zeros((N, 4), device=device))
+                    torch.zeros((N, 4), device=device),
+                    torch.zeros(N, device=device))
 
         # --- Normalize anchors and GT boxes to [0,1] before IoU matching ---
         # Anchors: shifts in pixels → divide by image dimensions
@@ -152,7 +165,7 @@ class FocalLoss(nn.Module):
                         if _iou_floor <= 0 or gi_ious[idx].item() >= _iou_floor:
                             labels[idx] = gt_labels[gi]
 
-        return labels, matched_boxes
+        return labels, matched_boxes, max_iou
 
     def _encode_boxes(self, anchors: torch.Tensor, gt_boxes: torch.Tensor) -> torch.Tensor:
         """Encode GT boxes as deltas relative to anchors."""
@@ -261,7 +274,7 @@ class FocalLoss(nn.Module):
                 continue
             n_img_with_gt += 1
 
-            matched_labels, matched_boxes = self._match_anchors(anchors, gt_boxes, gt_labels)
+            matched_labels, matched_boxes, matched_iou = self._match_anchors(anchors, gt_boxes, gt_labels)
             probe_anchor_matching(matched_labels, num_gt=gt_boxes.shape[0], img_idx=i)
 
             pos_mask = matched_labels >= 0
@@ -303,6 +316,11 @@ class FocalLoss(nn.Module):
                     pos_labels = pos_labels.clamp(0, num_det_classes - 1)
                 cls_target[pos_in_valid, pos_labels] = 1.0
 
+                # [VFL 2026-07-14] VarifocalLoss uses IoU for positive targets
+                if self.use_varifocal:
+                    _pos_iou_vals = matched_iou[valid_mask][pos_in_valid].clamp(0.0, 1.0)
+                    cls_target[pos_in_valid, pos_labels] = _pos_iou_vals
+
             # --- OHEM: Subsample negatives to prevent class imbalance collapse ---
             # With ~0.01% positive anchors in detection, cumulative gradient from 173K
             # negatives per image drives cls logits to -16 over ~850 steps (collapse).
@@ -334,34 +352,41 @@ class FocalLoss(nn.Module):
                     cls_pred = cls_pred[ohem_mask]
                     cls_target = cls_target[ohem_mask]
 
-            # --- FIX #1: Clamp sigmoid inputs to prevent NaN in focal loss ---
-            # p_t near 0 causes (1-p_t)^gamma → inf and log(0) → NaN
-            p = torch.sigmoid(cls_pred).clamp(1e-7, 1.0 - 1e-7)
-            ce = F.binary_cross_entropy_with_logits(cls_pred, cls_target, reduction='none')
-            p_t = p * cls_target + (1 - p) * (1 - cls_target)
-
-            # Asymmetric gamma: positives get less/no suppression to prevent cls mean collapse
-            if getattr(C, 'DET_ASYMMETRIC_GAMMA', False):
-                gamma_pos = getattr(C, 'DET_GAMMA_POS', 0.0)
-                gamma_neg = getattr(C, 'DET_GAMMA_NEG', self.gamma)
-                gamma_eff = gamma_pos * cls_target + gamma_neg * (1 - cls_target)
+            # [VFL 2026-07-14] VarifocalLoss (Zhang et al.) replaces focal for detection cls.
+            # VFL only down-weights negative samples; positive samples get full weight
+            # with IoU-based target values (already set in target construction above).
+            # Asymmetric gamma and per-class alpha do not apply in VFL mode.
+            if self.use_varifocal:
+                total_cls = total_cls + self.varifocal_loss(cls_pred, cls_target)
             else:
-                gamma_eff = self.gamma
+                # --- FIX #1: Clamp sigmoid inputs to prevent NaN in focal loss ---
+                # p_t near 0 causes (1-p_t)^gamma → inf and log(0) → NaN
+                p = torch.sigmoid(cls_pred).clamp(1e-7, 1.0 - 1e-7)
+                ce = F.binary_cross_entropy_with_logits(cls_pred, cls_target, reduction='none')
+                p_t = p * cls_target + (1 - p) * (1 - cls_target)
 
-            # [FIX 2026-06-20] Per-class alpha: override default alpha for specific classes
-            # to break gradient conflicts from fine-grained class ambiguity (e.g., class_6 vs class_7).
-            # alpha_per_class[class_id] when set, else self.alpha.
-            if self.class_alphas:
-                num_det_classes = cls_target.shape[1]
-                base_alpha_arr = torch.full((num_det_classes,), self.alpha, device=cls_target.device)
-                for cid, ca in self.class_alphas.items():
-                    if 0 <= cid < num_det_classes:
-                        base_alpha_arr[cid] = ca
-                base_alpha_arr = base_alpha_arr.unsqueeze(0)  # [1, 24]
-                alpha_t = base_alpha_arr * cls_target + (1 - base_alpha_arr) * (1 - cls_target)
-            else:
-                alpha_t = self.alpha * cls_target + (1 - self.alpha) * (1 - cls_target)
-            total_cls = total_cls + (alpha_t * (1 - p_t) ** gamma_eff * ce).sum() / num_pos
+                # Asymmetric gamma: positives get less/no suppression to prevent cls mean collapse
+                if getattr(C, 'DET_ASYMMETRIC_GAMMA', False):
+                    gamma_pos = getattr(C, 'DET_GAMMA_POS', 0.0)
+                    gamma_neg = getattr(C, 'DET_GAMMA_NEG', self.gamma)
+                    gamma_eff = gamma_pos * cls_target + gamma_neg * (1 - cls_target)
+                else:
+                    gamma_eff = self.gamma
+
+                # [FIX 2026-06-20] Per-class alpha: override default alpha for specific classes
+                # to break gradient conflicts from fine-grained class ambiguity (e.g., class_6 vs class_7).
+                # alpha_per_class[class_id] when set, else self.alpha.
+                if self.class_alphas:
+                    num_det_classes = cls_target.shape[1]
+                    base_alpha_arr = torch.full((num_det_classes,), self.alpha, device=cls_target.device)
+                    for cid, ca in self.class_alphas.items():
+                        if 0 <= cid < num_det_classes:
+                            base_alpha_arr[cid] = ca
+                    base_alpha_arr = base_alpha_arr.unsqueeze(0)  # [1, 24]
+                    alpha_t = base_alpha_arr * cls_target + (1 - base_alpha_arr) * (1 - cls_target)
+                else:
+                    alpha_t = self.alpha * cls_target + (1 - self.alpha) * (1 - cls_target)
+                total_cls = total_cls + (alpha_t * (1 - p_t) ** gamma_eff * ce).sum() / num_pos
 
             # C.1: GIoU loss replaces SmoothL1 — directly optimizes IoU metric
             # --- FIX #2: Guard GIoU against degenerate zero-area boxes ---
@@ -388,20 +413,26 @@ class FocalLoss(nn.Module):
                 gt_y2 = torch.maximum(gt_boxes_pos[:, 3], gt_boxes_pos[:, 1] + 1.0)
                 gt_boxes_pos = torch.stack([gt_x1, gt_y1, gt_x2, gt_y2], dim=1).clone()
 
-                giou_loss = generalized_box_iou_loss(
-                    pred_boxes, gt_boxes_pos, reduction='sum'
-                )
-                # Guard NaN GIoU (happens when boxes don't overlap at all)
-                giou_loss = torch.where(
-                    torch.isfinite(giou_loss),
-                    giou_loss,
-                    torch.tensor(0.0, device=device),
-                )
+                if getattr(C, 'USE_WIOU', False):
+                    # WIoU v3 — dynamic non-monotonic focusing (Tong et al. 2023)
+                    reg_loss = wiou_v3_loss(pred_boxes, gt_boxes_pos, pos_anchors)
+                    # wiou_v3_loss returns mean; scale to sum for consistent accumulation
+                    reg_loss = reg_loss * num_pos
+                else:
+                    reg_loss = generalized_box_iou_loss(
+                        pred_boxes, gt_boxes_pos, reduction='sum'
+                    )
+                    # Guard NaN GIoU (happens when boxes don't overlap at all)
+                    reg_loss = torch.where(
+                        torch.isfinite(reg_loss),
+                        reg_loss,
+                        torch.tensor(0.0, device=device),
+                    )
                 # [A5 FIX 2026-06-17] Accumulate sum and count for single global mean.
                 # Per-image mean + mean-across-images dilutes gradient from dense-positive
                 # frames (2 positives get same weight as 50). Single global mean preserves
                 # proportional contribution from each positive box.
-                total_reg_sum = total_reg_sum + giou_loss
+                total_reg_sum = total_reg_sum + reg_loss
                 total_reg_cnt = total_reg_cnt + num_pos
 
         # [RC-28 FIX 2026-06-12] Normalize by the number of images that
@@ -1003,6 +1034,9 @@ class MultiTaskLoss(nn.Module):
         train_act: bool = True,
         train_psr: bool = True,
         use_kendall: bool = True,
+        use_famo: bool = False,
+        use_imtl_l: bool = False,
+        use_rlw: bool = False,
     ):
         super().__init__()
         self.train_det = train_det
@@ -1010,6 +1044,14 @@ class MultiTaskLoss(nn.Module):
         self.train_act = train_act
         self.train_psr = train_psr
         self.use_kendall = use_kendall
+        self.use_famo = use_famo
+        self.use_imtl_l = use_imtl_l
+        self.use_rlw = use_rlw
+
+        # MTL loss weighter instances (created on first forward to know device)
+        self.famo_weighter: Optional[FAMOWeighter] = None
+        self.rlw_weighter: Optional[RLWWeighter] = None
+        self._mtl_task_names: List[str] = []
 
         # Kendall log variances (log σ²) — initialized on CPU; forward() moves
         # them to the correct device before use. This avoids GPU OOM at init
@@ -1038,7 +1080,8 @@ class MultiTaskLoss(nn.Module):
         self.det_loss_fn = FocalLoss(alpha=C.FOCAL_ALPHA, gamma=C.FOCAL_GAMMA,
                                       pos_iou_thresh=C.DET_POS_IOU_THRESH,
                                       neg_iou_thresh=C.DET_NEG_IOU_THRESH,
-                                      class_alphas=getattr(C, 'DET_CLASS_ALPHAS', {}))
+                                      class_alphas=getattr(C, 'DET_CLASS_ALPHAS', {}),
+                                      use_varifocal=bool(getattr(C, 'USE_VARIFOCAL', False)))
         self.pose_loss_fn = PoseLoss(wing_omega=C.WING_OMEGA, wing_epsilon=C.WING_EPSILON)
 
         # C.2: Per paper §3.7.1 — "CE (label_smooth=0.1)" for activity.
@@ -1655,10 +1698,41 @@ class MultiTaskLoss(nn.Module):
             logger.warning(_msg)
             print(_msg, flush=True)
 
+        # === MTL alternative weighting (FAMO / IMTL-L / RLW) ===
+        # These optional modules replace Kendall weighting entirely for the total loss.
+        # Precision vars in loss_dict are zeroed (not meaningful for non-Kendall MTL).
+        if self.use_famo or self.use_imtl_l or self.use_rlw:
+            mtl_losses = {}
+            if self.train_det:
+                mtl_losses["det"] = loss_det
+            mtl_losses["pose"] = loss_pose + loss_head_pose
+            if self.train_act:
+                mtl_losses["act"] = loss_act
+            if self.train_psr and not _psr_structurally_zero:
+                mtl_losses["psr"] = loss_psr
+
+            if self.use_famo:
+                if self.famo_weighter is None:
+                    self.famo_weighter = FAMOWeighter(num_tasks=len(mtl_losses))
+                    self._mtl_task_names = list(mtl_losses.keys())
+                total = self.famo_weighter.forward(mtl_losses)
+                self._last_mtl_losses = mtl_losses
+            elif self.use_imtl_l:
+                total = imtl_l_loss(mtl_losses)
+            elif self.use_rlw:
+                if self.rlw_weighter is None:
+                    self.rlw_weighter = RLWWeighter(num_tasks=len(mtl_losses))
+                    self._mtl_task_names = list(mtl_losses.keys())
+                loss_tensor = torch.stack(list(mtl_losses.values()))
+                weights = self.rlw_weighter.get_weights(loss_tensor.device)
+                total = (loss_tensor * weights).sum()
+
+            # MTL paths don't use Kendall precisions; zero for logging
+            prec_det = prec_hp = prec_act = prec_psr = torch.tensor(0.0, device=device)
+
         # === Kendall weighting ===
         # Init precision vars before branching so logging at line 1772 never hits UnboundLocalError.
-        prec_det = prec_hp = prec_act = prec_psr = torch.tensor(1.0, device=device)
-        if self.use_kendall:
+        elif self.use_kendall:
             # [FIX 2026-06-20 (Opus v8 §3 Fix 1)] Fixed-weight path for RF1-RF2.
             # Bypasses learned Kendall log_vars entirely; uses fixed lambda weights so
             # detection drives the backbone and head_pose just stabilizes it.
@@ -1933,3 +2007,20 @@ class MultiTaskLoss(nn.Module):
         }
 
         return total, loss_dict
+
+    def famo_step(self) -> None:
+        """Update FAMO weights after optimizer.step().
+
+        Must be called AFTER optimizer.step() each training step when
+        ``use_famo=True``. Delegates to ``FAMOWeighter.step()`` with the
+        per-task losses captured in the preceding forward pass.
+
+        Safe no-op when not in FAMO mode, weighter not initialized, or
+        no cached losses available.
+        """
+        if not self.use_famo or self.famo_weighter is None:
+            return
+        if not hasattr(self, '_last_mtl_losses') or self._last_mtl_losses is None:
+            return
+        self.famo_weighter.step(self._last_mtl_losses)
+        self._last_mtl_losses = None  # prevent double-step on same batch

@@ -18,6 +18,7 @@ Usage:
     python scripts/train_st.py --task psr --epochs 30 --output_dir runs/st_psr
     python scripts/train_st.py --task pose --epochs 30 --output_dir runs/st_pose
 """
+# DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import gc
 import json
@@ -88,13 +89,13 @@ def train_one_task(task: str, args):
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Build dataset
+    _img_size = (args.img_size, args.img_size)
     train_ds = IndustRealMultiTaskDataset(
-        split="train", img_size=(224, 224),
+        split="train", img_size=_img_size,
         augment=False, sequence_mode=True, sequence_length=16,
     )
     val_ds = IndustRealMultiTaskDataset(
-        split="val", img_size=(224, 224),
+        split="val", img_size=_img_size,
         augment=False, sequence_mode=True, sequence_length=16,
     )
     train_loader = torch.utils.data.DataLoader(
@@ -111,6 +112,17 @@ def train_one_task(task: str, args):
     # Build model
     model = MTLMViTModel(num_act_classes=75).to(device)
     logger.info(f"Built MTL model (will use only --task {task} head)")
+
+    # ── Resume from checkpoint (optional) ──────────────────────────────────
+    if args.resume:
+        logger.info(f"Resuming from checkpoint: {args.resume}")
+        ckpt = torch.load(args.resume, map_location=device, weights_only=False)
+        sd = ckpt.get("model_state_dict", ckpt)
+        model_sd = model.state_dict()
+        filtered = {k: v for k, v in sd.items() if k in model_sd and v.shape == model_sd[k].shape}
+        skipped = sum(1 for k in sd if k not in filtered)
+        logger.info(f"Resume: loaded {len(filtered)}/{len(sd)} tensors, skipped {skipped}")
+        model.load_state_dict(filtered, strict=False)
 
     # Optimizer
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.05)
@@ -139,7 +151,9 @@ def train_one_task(task: str, args):
                 outputs = model(images)
                 # Single-task loss: only the selected head
                 if task == "det":
-                    loss = detection_loss(outputs["detection"], targets.get("detection", []))
+                    loss = detection_loss(outputs["detection"], targets.get("detection", []),
+                                          use_varifocal=args.varifocal,
+                                          use_wiou_v3=args.wiou_v3)
                 elif task == "act":
                     loss = activity_loss(outputs["activity"], targets["activity"])
                 elif task == "psr":
@@ -244,7 +258,13 @@ def main():
                         help="[Doc 207 §9.3] Use 6D + geodesic rotation loss for pose task "
                              "(rotation_matrix -> geodesic angular + cosine). "
                              "Off by default (falls back to fwd/up cosine loss).")
+    parser.add_argument("--varifocal", action="store_true", default=False,
+                        help="Use Varifocal Loss (Zhang CVPR 2021) for detection classification")
+    parser.add_argument("--wiou-v3", action="store_true", default=False,
+                        help="Use WIoU v3 (Tong 2023) for detection box regression")
     parser.add_argument("--output-dir", type=str, required=True)
+    parser.add_argument("--img-size", type=int, default=224, help="Input H=W (default 224). 640 matches Schonbeek 2024 YOLOv8 baseline; trade-off: 8x slower, 10x+ mAP improvement expected.")
+    parser.add_argument("--resume", type=str, default=None, help="Resume from checkpoint .pt")
     args = parser.parse_args()
 
     train_one_task(args.task, args)

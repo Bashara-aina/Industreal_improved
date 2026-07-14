@@ -99,7 +99,11 @@ class DetectionAugment:
             # Saturation: scale toward grayscale (approximate)
             gray = aug_images.mean(dim=1, keepdim=True)  # [B, 1, T, H, W]
             aug_images = gray + (aug_images - gray) * saturation
-            aug_images = aug_images.clamp(0.0, 1.0)  # back to [0, 1]
+            # [FIX Claude Science V2 Agent 9] Do NOT clamp to [0,1] — images
+            # arrive pre-normalized (mean=0.45, std=0.225) and clamping destroys
+            # the normalization, mapping all negative values to 0 and all bright
+            # values to 1. The color jitter parameters (±0.2 range) are mild
+            # enough that values stay within ±3σ after normalization.
 
         # 3) Random crop + pad (per-batch, p=p_crop)
         if random.random() < self.p_crop:

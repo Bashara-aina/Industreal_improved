@@ -1,10 +1,14 @@
-"""Multi-task loss balancer with PCGrad gradient surgery.
+"""Multi-task loss balancer with PCGrad gradient surgery and MetaBalance
+gradient magnitude rescaling.
 
-Implements PCGrad (Projecting Conflicting Gradients) per 175 §5.2.
-PCGrad resolves gradient conflicts between tasks by projecting each
-task's gradient onto the normal plane of any conflicting task gradient.
+PCGrad (Projecting Conflicting Gradients) per 175 §5.2 resolves gradient
+conflicts between tasks by projecting each task's gradient onto the normal
+plane of any conflicting task gradient.
 
-Algorithm (per step, for shared-backbone params only):
+MetaBalance (He et al., WWW 2022) rescales auxiliary-task gradient
+magnitudes per parameter block to match a target task's gradient norm.
+
+Algorithm (per step, for shared-backbone params only) -- PCGrad:
     for each task i:  g_i = ∇_shared (prec_i · loss_i)
     for each task i:
         g_i^PC = g_i
@@ -14,7 +18,17 @@ Algorithm (per step, for shared-backbone params only):
     shared.grad = Σ_i g_i^PC
     # head params: normal per-head grads (no sharing -> no conflict)
 
-Reference: Yu et al., "Gradient Surgery for Multi-Task Learning" (NeurIPS 2020).
+Algorithm (per step, for shared-backbone params only) -- MetaBalance:
+    for each parameter block p_i:
+        target_norm = EMA ||g_target(p_i)||
+        for each task k:
+            scale_k = target_norm / EMA ||g_k(p_i)||  (capped [0.1, 10.0])
+            g_k(p_i) *= scale_k
+    shared.grad = Σ_k g_k   (rescaled)
+
+References:
+    Yu et al., "Gradient Surgery for Multi-Task Learning" (NeurIPS 2020).
+    He et al., "MetaBalance: Gradient Magnitude Rescaling" (WWW 2022).
 """
 
 import random
@@ -25,14 +39,17 @@ import torch.nn as nn
 
 
 class MTLBalancer:
-    """Multi-task loss balancer wrapping per-task losses with PCGrad.
+    """Multi-task loss balancer wrapping per-task losses.
 
     Wraps a list of per-task weighted losses and optionally applies PCGrad
-    gradient surgery on shared backbone parameters to resolve conflicts.
+    gradient surgery or MetaBalance gradient rescaling on shared backbone
+    parameters to improve multi-task learning.
 
     Modes:
-        "none":    sum(task_losses) -- standard behavior, no surgery.
-        "pcgrad":  PCGrad projection on shared params.
+        "none":         sum(task_losses) -- standard behavior, no surgery.
+        "pcgrad":       PCGrad projection on shared params.
+        "metabalance":  MetaBalance gradient magnitude rescaling on shared
+                        params. Requires ``task_names`` and ``target_task``.
 
     Integration (training loop):
         balancer = MTLBalancer(model.backbone.parameters(), mode="pcgrad")
@@ -42,32 +59,63 @@ class MTLBalancer:
         combined.backward()
         optimizer.step()
 
-    In PCGrad mode, shared backbone params receive deconflicted gradients;
-    non-shared params (task heads, log_vars) receive standard gradients from
-    the backward pass.
+    In PCGrad/MetaBalance modes, shared backbone params receive deconflicted
+    or rescaled gradients; non-shared params (task heads, log_vars) receive
+    standard gradients from the backward pass.
 
     Args:
         shared_params: Iterable of shared backbone nn.Parameter tensors.
-            If None, PCGrad degrades to sum-of-losses (no params to project).
-        mode: ``"pcgrad"`` for gradient surgery, ``"none"`` for standard sum.
+            If None, both PCGrad and MetaBalance degrade to sum-of-losses.
+        mode: ``"pcgrad"``, ``"metabalance"``, or ``"none"``.
+        task_names: List of task names matching the order of ``task_losses``
+            passed to ``compute_step``. Required for ``"metabalance"`` mode.
+        target_task: Task whose gradient norm MetaBalance targets
+            (default: ``"head_pose"``). Must be in ``task_names``.
     """
 
     def __init__(
         self,
         shared_params: Optional[List[nn.Parameter]] = None,
         mode: str = "none",
+        task_names: Optional[List[str]] = None,
+        target_task: str = "head_pose",
     ):
         self.shared_params = list(shared_params) if shared_params is not None else []
         self.mode = mode
         self._hooks: List[torch.utils.hooks.RemovableHandle] = []
         self._step_counter: int = 0
 
+        # ---- MetaBalance-specific state ----
+        if mode == "metabalance":
+            if task_names is None or len(task_names) < 2:
+                raise ValueError(
+                    "MetaBalance requires task_names with at least 2 tasks"
+                )
+            if target_task not in task_names:
+                raise ValueError(
+                    f"target_task '{target_task}' not in task_names {task_names}"
+                )
+            self._mb_task_names: List[str] = list(task_names)
+            self._mb_target_task: str = target_task
+            self._mb_alpha: float = 0.9
+            self._mb_eps: float = 1e-8
+            # _mb_norms[param_idx][task_idx] = EMA of gradient norm
+            self._mb_norms: List[List[float]] = [
+                [0.0] * len(task_names) for _ in self.shared_params
+            ]
+        else:
+            self._mb_task_names = []
+            self._mb_target_task = ""
+            self._mb_alpha = 0.0
+            self._mb_eps = 0.0
+            self._mb_norms = []
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     def compute_step(self, task_losses: List[torch.Tensor]) -> torch.Tensor:
-        """Compute combined loss with optional PCGrad projection.
+        """Compute combined loss with optional PCGrad / MetaBalance.
 
         In ``"pcgrad"`` mode:
             1. Computes per-task gradients w.r.t. shared backbone params
@@ -79,6 +127,14 @@ class MTLBalancer:
                their gradients with the deconflicted result.
             4. Returns the summed loss so that ``.backward()`` flows
                normally for non-shared params (head weights, log_vars).
+
+        In ``"metabalance"`` mode:
+            1. Computes per-task gradients via ``autograd.grad``.
+            2. Updates EMA gradient norms per-parameter-block per-task.
+            3. Rescales each task's gradient per block to match the
+               target task's EMA norm (scale capped [0.1, 10.0]).
+            4. Installs backward hooks with rescaled + summed grads.
+            5. Returns the summed loss for non-shared params.
 
         In ``"none"`` mode: returns ``sum(task_losses)`` unchanged.
 
@@ -117,14 +173,17 @@ class MTLBalancer:
             task_grads.append(g)
 
         # --------------------------------------------------------------
-        # 2. PCGrad projection (flat-vector Gram-Schmidt)
+        # 2. Gradient surgery: PCGrad or MetaBalance
         # --------------------------------------------------------------
-        pcgrad_grads = self._project_pcgrad(task_grads)
+        if self.mode == "metabalance":
+            projected_grads = self._project_metabalance(task_grads)
+        else:
+            projected_grads = self._project_pcgrad(task_grads)
 
         # --------------------------------------------------------------
         # 3. Install backward hooks that override shared-param grads
         # --------------------------------------------------------------
-        for param, grad in zip(self.shared_params, pcgrad_grads):
+        for param, grad in zip(self.shared_params, projected_grads):
             _grad = grad.clone()  # capture before it goes out of scope
             hook = param.register_hook(lambda g, pg=_grad: pg)
             self._hooks.append(hook)
@@ -138,6 +197,10 @@ class MTLBalancer:
     def set_shared_params(self, params: List[nn.Parameter]) -> None:
         """Update the shared parameter list (e.g., after model surgery)."""
         self.shared_params = list(params)
+        if self.mode == "metabalance":
+            self._mb_norms = [
+                [0.0] * len(self._mb_task_names) for _ in self.shared_params
+            ]
 
     @property
     def has_hooks(self) -> bool:
@@ -201,6 +264,81 @@ class MTLBalancer:
             numel = param.numel()
             result.append(combined_flat[offset : offset + numel].view(param.shape))
             offset += numel
+
+        return tuple(result)
+
+    # ------------------------------------------------------------------
+    # MetaBalance core
+    # ------------------------------------------------------------------
+
+    def _project_metabalance(
+        self,
+        task_grads: List[Tuple[torch.Tensor, ...]],
+    ) -> Tuple[torch.Tensor, ...]:
+        """Apply MetaBalance gradient magnitude rescaling.
+
+        For each shared parameter block p_i:
+            target_norm = EMA ||g_target(p_i)||
+            For each task k:
+                scale_k = target_norm / EMA ||g_k(p_i)||
+                scale_k = clamp(scale_k, 0.1, 10.0)
+                g_k(p_i) *= scale_k
+        Returns summed rescaled gradients across all tasks.
+
+        Uses EMA-smoothed gradient norms per parameter block per task,
+        tracked across training steps with momentum ``_mb_alpha``.
+
+        Args:
+            task_grads: ``task_grads[t]`` is a tuple of per-parameter
+                gradients for task *t* (same length as ``shared_params``).
+
+        Returns:
+            Tuple of per-parameter summed rescaled gradients (same
+            structure as ``shared_params``).
+        """
+        n_tasks = len(task_grads)
+        n_params = len(self.shared_params)
+        target_idx = self._mb_task_names.index(self._mb_target_task)
+        alpha = self._mb_alpha
+        eps = self._mb_eps
+
+        # 1. Update EMA gradient norms from current batch.
+        for i in range(n_params):
+            for k in range(n_tasks):
+                g = task_grads[k][i]
+                if g is not None:
+                    gn = g.norm().item()
+                    prev = self._mb_norms[i][k]
+                    self._mb_norms[i][k] = alpha * prev + (1 - alpha) * gn
+
+        # 2. Rescale per-parameter-block per-task, then sum.
+        result: List[torch.Tensor] = []
+        for i, param in enumerate(self.shared_params):
+            target_norm = max(self._mb_norms[i][target_idx], eps)
+            if target_norm <= 0 or not torch.isfinite(
+                torch.tensor(target_norm)
+            ):
+                # Fallback: plain sum (before EMA warms up).
+                pieces = [
+                    task_grads[k][i]
+                    for k in range(n_tasks)
+                    if task_grads[k][i] is not None
+                ]
+                result.append(
+                    sum(pieces) if pieces else torch.zeros_like(param.data)
+                )
+                continue
+
+            accumulator = torch.zeros_like(param.data)
+            for k in range(n_tasks):
+                g = task_grads[k][i]
+                if g is None:
+                    continue
+                norm_k = max(self._mb_norms[i][k], eps)
+                scale = target_norm / norm_k
+                scale = max(0.1, min(10.0, scale))
+                accumulator += g * scale
+            result.append(accumulator)
 
         return tuple(result)
 

@@ -34,6 +34,7 @@ SUBSET_RATIO = float(os.environ.get('SUBSET_RATIO', '1.0'))  # Full dataset — 
 TRAIN_FRAME_STRIDE = 3  # A.2: stride 3 → T=16 covers 1.6s at 30FPS (median action)
 EVAL_FRAME_STRIDE  = 1
 USE_SPATIAL_AUG = True           # Enable spatial augmentation (flip, crop)
+USE_WIOU = False                 # Use WIoU v3 instead of GIoU for detection box regression
 
 # Ablation flags
 # =========================================================================
@@ -44,10 +45,15 @@ TRAIN_HEAD_POSE = True    # Train 9-DoF head pose from pose.csv (real HL2 sensor
 TRAIN_ACT       = True
 TRAIN_PSR       = True
 USE_KENDALL     = True   # Kendall weighting active for 4 tasks (det, act, psr, head_pose).
+USE_FAMO        = os.environ.get('USE_FAMO', '0') == '1'  # FAMO (Liu et al. NeurIPS 2023): fast adaptive MTL weighting.
                            # NOTE: body pose (17 COCO keypoints) shares log_var_pose with head_pose
                            # but has NO real annotations — keypoints are pseudo-generated from detection boxes.
                            # The Wing Loss body-pose branch is effectively dead code (loss_pose ≈ 0 always).
                            # Head pose 9-DoF MSE is the real task under log_var_pose.
+USE_IMTL_L      = os.environ.get('USE_IMTL_L', '0') == '1'      # IMTL-L (Liu et al. ICLR 2021): stateless log-space scalar weighting
+USE_RLW         = os.environ.get('USE_RLW', '0') == '1'          # RLW (Lin et al. TMLR 2022): random loss weighting baseline
+USE_METABALANCE = os.environ.get('USE_METABALANCE', '0') == '1'  # MetaBalance gradient magnitude rescaling (He et al., WWW 2022)
+METABALANCE_TARGET_TASK = os.environ.get('METABALANCE_TARGET_TASK', 'head_pose')  # Target task whose gradient norm to match
 # [FIX 2026-07-04 Opus 111 SS3.2] FREEZE_BODY_POSE_BRANCH: freeze the body-pose
 # sub-head (pose_head) and zero its loss contribution. The body-pose branch has no
 # real annotations. Default False for backward compat with running training.
@@ -129,6 +135,13 @@ SIMPLIFY_LOSS = int(os.environ.get('SIMPLIFY_LOSS', '0')) == 1  # 1 = no ramps/c
 USE_HAND_FILM   = True
 HAND_FILM_CHANNELS = 768   # ConvNeXt C5 channel count
 
+# RotoGrad: per-task feature rotation for gradient homogenization
+# (Javaloy & Valera, ICLR 2022). Rotates shared backbone features before
+# each task head so no single task's gradient direction dominates.
+# Subspace mode uses low-rank rotation (dim 128) to keep params ~0.4M vs ~1.2M.
+USE_ROTOGRAD = os.environ.get('USE_ROTOGRAD', '0') == '1'
+ROTOGRAD_SUBSPACE_DIM = int(os.environ.get('ROTOGRAD_SUBSPACE_DIM', '128'))
+
 # Backbone configuration — ResNet-50 or ConvNeXt-Tiny (Doc 01 D.1)
 # =========================================================================
 BACKBONE = 'convnext_tiny'
@@ -140,6 +153,11 @@ CONVNEXT_CHANNELS = {
     'c4': 384,
     'c5': 768,
 }
+
+# [V2 D2] BiFPN — Weighted Bidirectional FPN (Tan et al. CVPR 2020, EfficientDet).
+# When enabled, replaces the standard FPN with weighted top-down + bottom-up fusion.
+# Estimated +0.4-0.7 mAP improvement. Default False for backward compatibility.
+USE_BIFPN = False
 
 # HeadPoseFiLM — second-stage FiLM from 9-DoF head pose (Doc 01 E)
 USE_HEADPOSE_FILM = True
@@ -610,6 +628,31 @@ assert IMG_SIZE[0] == IMG_WIDTH and IMG_SIZE[1] == IMG_HEIGHT, (
 ORIGINAL_WIDTH  = 1280
 ORIGINAL_HEIGHT = 720
 
+# =========================================================================
+# V2 T2.3: Dual-resolution detection
+# =========================================================================
+# DETECTION_RESOLUTION controls the feature resolution used by the detection
+# head. At default (224), detection runs on backbone features from an input
+# resized to 224px—adequate for most assembly objects.
+#
+# USE_HIGH_RES_DETECTION overrides detection to 480px, giving the detection
+# head ~4.6x more spatial pixels (480^2 / 224^2) for improved small-object
+# detection. Non-detection heads (activity, PSR, pose) remain at the base
+# IMG_SIZE resolution.
+#
+# Backward compatible: when USE_HIGH_RES_DETECTION=False (the default), the
+# model runs a single backbone pass exactly as before. No dataset or caller
+# changes required—the optional images_det parameter to forward() is simply
+# not passed.
+#
+# Activation memory for a second backbone pass at 480px:
+#   ConvNeXt-Tiny activations roughly scale with pixel count.
+#   480^2 / 224^2 ~ 4.6x the 224px activation volume.
+#   At batch=2: estimated ~2.5-3.5 GB additional VRAM for the detection
+#   backbone+FPN pass. Total model fits within 16 GB (RTX 5060 Ti).
+DETECTION_RESOLUTION = 224       # Detection head feature resolution (px)
+USE_HIGH_RES_DETECTION = False   # When True, detection uses 480px input
+
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD  = [0.229, 0.224, 0.225]
 
@@ -757,6 +800,12 @@ MATMUL_PRECISION = 'high'
 # ROLLBACK: 0.25 if cls loss diverges or false-positive flood at epoch-3 eval.
 FOCAL_ALPHA   = 0.50
 FOCAL_GAMMA   = 2.0
+
+# [VFL 2026-07-14] Use VarifocalLoss (Zhang et al. 2021 CVPR Oral) instead of
+# standard FocalLoss for detection classification. VarifocalLoss only down-weights
+# negative samples (alpha * p^gamma * (1-target)) while keeping full positive weight.
+# Compatible with DET_CLASS_ALPHAS dict when TOGGLE OFF — VFL ignores per-class alphas.
+USE_VARIFOCAL = False
 
 # Per-class alpha for detection focal loss.
 # Mechanism: higher α = stronger positive gradient when class IS target,
@@ -1095,14 +1144,13 @@ CLEAR_FRAME_CACHE_EPOCH_END = True  # free ~5-7GB FRAME_CACHE between epochs
 # =========================================================================
 # NOTE: USE_LDAM_DRW is set to False below for A/B testing (CB-Focal vs LDAM).
 # Set back to True for the full 100-epoch run after confirming activity loss moves.
-USE_LDAM_DRW = False  # [OPUS v5] Disabled — s=30 amplifies 30× on top of CB sampling + LS → 1-class collapse. Use plain CE + label smoothing for first joint runs.
+USE_LDAM_DRW = True   # [V2 D7 + A5] Activated — CB-Focal loss moves, LDAM-DRW wiring verified solid. Deferred DRW to epoch 50 to avoid 1-class collapse from s=30 + CB + LS early on.
 LDAM_MAX_M = 0.5
 LDAM_S = 30
-LDAM_DRW_EPOCH = 0    # Switch to CB weights at this epoch (DRW deferred re-weighting)
-# DRW activates immediately (epoch 0) when activity training begins, applying class-balanced
-# weights from the start. This corrects the prior misconfiguration where DRW was delayed
-# to epoch 60, resulting in 60 epochs of unweighted LDAM margin loss before CB re-weighting.
-# Features being "stable" at epoch 60 was not supported by IndustReal experimental evidence.
+LDAM_DRW_EPOCH = 50   # [V2 D7 + A5] Deferred — run LDAM margins only for 50 epochs, then introduce CB re-weighting.
+# Deferred to avoid 1-class collapse from s=30 × CB sampling × label smoothing simultaneously.
+# The prior "epoch 0" setting was correct in spirit but risky in practice: the first 50 epochs let
+# features stabilize before CB re-weighting kicks in, matching the original LDAM-DRW paper intent.
 
 # [OPUS FIX] LDAM_USE_DRW flag: when True, LDAMLoss.set_class_counts wires cb_weights
 # so that DRW applies class-balanced re-weighting at epoch >= LDAM_DRW_EPOCH.
@@ -2179,6 +2227,34 @@ def apply_preset(preset_name: str) -> None:
         f'[config] DET_GT_FRAME_FRACTION = {DET_GT_FRAME_FRACTION:.2f} '
         f'(train_det={TRAIN_DET}, train_act={TRAIN_ACT}, train_psr={TRAIN_PSR})'
     )
+
+
+# ── Curriculum decay schedule for DET_GT_FRAME_FRACTION ──
+# [FIX 2026-07-13] Smooth interpolation between detection-dominant (0.90)
+# and detection+other-tasks (0.40) phases. Eliminates the abrupt jump that
+# destabilizes the warm-up → main training transition. Off by default.
+DET_GT_CURRICULUM_DECAY   = int(os.environ.get('DET_GT_CURRICULUM_DECAY', '0'))
+DET_GT_CURRICULUM_START   = float(os.environ.get('DET_GT_CURRICULUM_START', '0.90'))
+DET_GT_CURRICULUM_END     = float(os.environ.get('DET_GT_CURRICULUM_END',   '0.40'))
+DET_GT_CURRICULUM_EPOCHS  = int(os.environ.get('DET_GT_CURRICULUM_EPOCHS',  '5'))
+
+
+def apply_curriculum_decay(epoch: int) -> float:
+    """Linearly interpolate DET_GT_FRAME_FRACTION over epochs 0..N-1.
+
+    Returns the GT-frame fraction for `epoch`. No-op when
+    DET_GT_CURRICULUM_DECAY=0 (returns existing DET_GT_FRAME_FRACTION).
+    """
+    global DET_GT_FRAME_FRACTION
+    if not DET_GT_CURRICULUM_DECAY:
+        return DET_GT_FRAME_FRACTION
+    if epoch >= DET_GT_CURRICULUM_EPOCHS:
+        new_frac = DET_GT_CURRICULUM_END
+    else:
+        progress = epoch / max(DET_GT_CURRICULUM_EPOCHS - 1, 1)
+        new_frac = DET_GT_CURRICULUM_START + (DET_GT_CURRICULUM_END - DET_GT_CURRICULUM_START) * progress
+    DET_GT_FRAME_FRACTION = float(new_frac)
+    return float(new_frac)
     # [OPUS v5 BLOCKER-C FIX] Winnable-task flags — actually set them from preset.
     # These were declared but never assigned → paper_run was a no-op for its key flags.
     USE_PSR_TRANSITION = bool(preset.get('use_psr_transition', USE_PSR_TRANSITION))

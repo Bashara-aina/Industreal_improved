@@ -126,6 +126,9 @@ os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 import model as _model_module
 import model as _popw_model_module
 from src.training import losses as _losses_module
+from src.losses.famo import FAMOWeighter
+from src.losses.imtl_l import imtl_l_loss
+from src.losses.rlw import RLWWeighter
 from src.training.distillation import DistillationLoss
 import evaluate as _evaluate_module
 from subprocess_eval import run_val_subprocess
@@ -176,6 +179,9 @@ CFG_TRAIN_HEAD_POSE = bool(getattr(C, 'TRAIN_HEAD_POSE', True))
 CFG_TRAIN_ACT       = bool(getattr(C, 'TRAIN_ACT', True))
 CFG_TRAIN_PSR       = bool(getattr(C, 'TRAIN_PSR', True))
 CFG_USE_KENDALL     = bool(getattr(C, 'USE_KENDALL', True))
+CFG_USE_FAMO        = bool(getattr(C, 'USE_FAMO', False))
+CFG_USE_IMTL_L      = bool(getattr(C, 'USE_IMTL_L', False))
+CFG_USE_RLW         = bool(getattr(C, 'USE_RLW', False))
 CFG_VAL_NUM_WORKERS = int(getattr(C, 'VAL_NUM_WORKERS', C.NUM_WORKERS))
 CFG_VAL_BATCH_SIZE  = int(getattr(C, 'VAL_BATCH_SIZE', C.BATCH_SIZE))
 CFG_EVAL_MAX_BATCHES = int(getattr(C, 'EVAL_MAX_BATCHES', 0))
@@ -1566,11 +1572,59 @@ def train_one_epoch(
         # [E6] Knowledge Distillation (only when USE_DISTILLATION=True + teacher cache configured)
         if distill_loss_fn is not None and getattr(C, 'USE_DISTILLATION', False):
             try:
-                # Teacher predictions must be loaded per-batch and matched by frame identity.
-                # This requires the teacher cache (TeacherPredictionLoader) to provide
-                # predictions keyed by (video_id, frame_idx) from the current batch.
-                # TODO(E6): Implement per-batch teacher lookup using targets['metadata'].
-                pass  # Stub — teacher_outputs not yet plumbed per batch
+                # Per-batch teacher lookup via TeacherPredictionLoader keyed by
+                # f"{recording_id}_{frame_num}" from targets['metadata'].
+                metadata_list = targets.get('metadata', [])
+                if not metadata_list:
+                    raise ValueError('empty metadata list')
+
+                teacher_det_logits = []
+                teacher_det_boxes = []
+                teacher_act_logits = []
+
+                for m in metadata_list:
+                    rid = m.get('recording_id', '')
+                    # Non-seq batch: single frame_num; seq batch: frame_nums list
+                    fn = m.get('frame_num')
+                    if fn is None:
+                        fns = m.get('frame_nums', [])
+                        if not fns:
+                            raise KeyError(f'no frame identifier in metadata entry: {m}')
+                        fn = fns[len(fns) // 2]  # middle frame matches detection target
+                    frame_key = f'{rid}_{fn}'
+                    pred = distill_loss_fn.teacher_loader.get(frame_key)
+                    if pred is None:
+                        raise KeyError(f'no teacher preds for {frame_key}')
+
+                    if 'det_logits' in pred:
+                        teacher_det_logits.append(
+                            torch.from_numpy(pred['det_logits']).to(device)
+                        )
+                    if 'det_boxes' in pred:
+                        teacher_det_boxes.append(
+                            torch.from_numpy(pred['det_boxes']).to(device)
+                        )
+                    if 'act_logits' in pred:
+                        teacher_act_logits.append(
+                            torch.from_numpy(pred['act_logits']).to(device)
+                        )
+
+                teacher_outputs = {}
+                if teacher_det_logits:
+                    teacher_outputs['det_logits'] = torch.stack(teacher_det_logits)
+                if teacher_det_boxes:
+                    teacher_outputs['det_boxes'] = torch.stack(teacher_det_boxes)
+                if teacher_act_logits:
+                    teacher_outputs['act_logits'] = torch.stack(teacher_act_logits)
+
+                if not teacher_outputs:
+                    raise ValueError('no teacher predictions found in batch')
+
+                distill_loss, distill_metrics = distill_loss_fn(outputs, teacher_outputs)
+                loss = loss + distill_loss
+                for k, v in distill_metrics.items():
+                    loss_dict[k] = v
+
             except Exception as _dexc:
                 logger.warning(f'  [DISTILL] skipped batch: {_dexc!r}')
 
@@ -2035,6 +2089,8 @@ def train_one_epoch(
                         )
                 if ema is not None and (not staged_training or stage >= 3):
                     ema.update()
+                if CFG_USE_FAMO and hasattr(criterion, 'famo_step'):
+                    criterion.famo_step()
                 # [FIX4] Per-param detection head weight stats (every 100 optimizer steps).
                 # NOTE: this block is inside `if (step + 1) % accum_steps == 0:` (optimizer step
                 # boundary), so forward-step-based checks like `step % 100 == 0` will NEVER fire
@@ -3723,6 +3779,9 @@ def main(args):
         train_act=CFG_TRAIN_ACT,
         train_psr=CFG_TRAIN_PSR,
         use_kendall=CFG_USE_KENDALL,
+        use_famo=CFG_USE_FAMO,
+        use_imtl_l=CFG_USE_IMTL_L,
+        use_rlw=CFG_USE_RLW,
     ).to(device)
     criterion.set_class_counts(class_counts)
 

@@ -8,6 +8,7 @@ Usage:
     python scripts/verify_checkpoint.py --ckpt runs/mtl_mvit_run/best.pt
     python scripts/verify_checkpoint.py --ckpt runs/mtl_mvit_run/latest.pt
 """
+# DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import json
 import sys

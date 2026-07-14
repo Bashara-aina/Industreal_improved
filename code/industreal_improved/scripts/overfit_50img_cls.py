@@ -302,7 +302,7 @@ def run_overfit(args):
                             _boxes = det_targets[bi]['boxes']
                             _labels = det_targets[bi]['labels']
                             if _boxes.shape[0] > 0:
-                                _ml, _ = focal_loss._match_anchors(anchors, _boxes, _labels)
+                                _ml, _, _ = focal_loss._match_anchors(anchors, _boxes, _labels)
                                 _pm = _ml >= 0
                                 _pos_n += _pm.sum().item()
                                 if _pm.sum() > 0:

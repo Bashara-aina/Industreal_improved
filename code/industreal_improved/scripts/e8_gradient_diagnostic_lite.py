@@ -11,6 +11,7 @@ Run on GPU 0 (training uses GPU 1). Total ~5-10 minutes for 100 batches.
 Usage:
     python scripts/e8_gradient_diagnostic_lite.py --max-batches 100
 """
+# DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import gc
 import json

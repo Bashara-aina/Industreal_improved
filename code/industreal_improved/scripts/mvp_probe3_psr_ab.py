@@ -17,6 +17,7 @@ Usage:
     python scripts/mvp_probe3_psr_ab.py --variant c  # current
     python scripts/mvp_probe3_psr_ab.py --variant ab  # A/B both
 """
+# DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import json
 import sys

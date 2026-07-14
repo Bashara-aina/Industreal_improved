@@ -15,6 +15,7 @@ Usage:
     python scripts/e8_gradient_diagnostic.py --max-batches 200 \
         --output /tmp/e8_results.json
 """
+# DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import json
 import sys

@@ -42,5 +42,10 @@ def wiou_v3_loss(pred: torch.Tensor, target: torch.Tensor, anchor: torch.Tensor)
         else:
             anchor_iou = iou
         beta = (iou / anchor_iou.clamp(min=eps)).detach()
-        r = torch.exp(beta - beta)
+        # WIoU v3 dynamic non-monotonic focusing (Tong et al. 2023):
+        # r = delta / (alpha^(beta - delta)) with delta=1.3, alpha=3.0
+        # The original exp(beta-beta) was a bug that always produced r=1.0.
+        delta = 1.3
+        alpha = 3.0
+        r = delta / (alpha ** (beta - delta))
     return ((1 - wiou_v1) * r).mean()

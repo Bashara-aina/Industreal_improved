@@ -440,6 +440,113 @@ class FPN(nn.Module):
         return {'p3': p3, 'p4': p4, 'p5': p5, 'p6': p6, 'p7': p7}
 
 
+class BiFPN(nn.Module):
+    """
+    BiFPN — Weighted Bidirectional Feature Pyramid Network.
+    Tan et al. "EfficientDet: Scalable and Efficient Object Detection" CVPR 2020.
+
+    Takes [C3, C4, C5] -> {'p3', 'p4', 'p5', 'p6', 'p7'} via:
+      - 1x1 lateral projections to out_channels
+      - Weighted top-down fusion with learnable per-level weights (ReLU norm)
+      - Weighted bottom-up fusion with learnable per-level weights
+      - Stride-2 convs for P6/P7 from bottom-up P5
+
+    All pyramid levels have 256 channels.
+    P6/P7 from stride-2 conv on P5_out (unlike standard FPN which uses C5 directly).
+
+    Ported from the legacy LightweightFPN (mvit_mtl_model.py:139-230),
+    adapted to 2D Conv2d for the POPWMultiTaskModel backbone features.
+    """
+    def __init__(self, in_channels: List[int] = [512, 1024, 2048], out_channels: int = 256):
+        super().__init__()
+        c3_ch, c4_ch, c5_ch = in_channels
+        self.out_channels = out_channels
+        self.eps = 1e-4
+
+        # 1x1 lateral projections to out_channels
+        self.lateral_c3 = nn.Conv2d(c3_ch, out_channels, 1)
+        self.lateral_c4 = nn.Conv2d(c4_ch, out_channels, 1)
+        self.lateral_c5 = nn.Conv2d(c5_ch, out_channels, 1)
+
+        # Smoothing convs for top-down path
+        self.td_conv_c3 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+        self.td_conv_c4 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+        self.td_conv_c5 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+
+        # Smoothing convs for bottom-up path
+        self.bu_conv_c3 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+        self.bu_conv_c4 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+        self.bu_conv_c5 = nn.Conv2d(out_channels, out_channels, 3, padding=1)
+
+        # P6/P7 from bottom-up P5 via stride conv
+        self.p6_conv = nn.Conv2d(out_channels, out_channels, 3, stride=2, padding=1)
+        self.p7_conv = nn.Conv2d(out_channels, out_channels, 3, stride=2, padding=1)
+
+        # Learnable fusion weights: top-down
+        # P5 has 1 input (lateral only); P4/P3 have 2 (lateral + upsampled)
+        self.td_w_c5 = nn.Parameter(torch.ones(1))
+        self.td_w_c4 = nn.Parameter(torch.ones(2))
+        self.td_w_c3 = nn.Parameter(torch.ones(2))
+
+        # Learnable fusion weights: bottom-up
+        # P3 has 1 input (td only); P4/P5 have 2 (td + downsampled)
+        self.bu_w_c3 = nn.Parameter(torch.ones(1))
+        self.bu_w_c4 = nn.Parameter(torch.ones(2))
+        self.bu_w_c5 = nn.Parameter(torch.ones(2))
+
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_uniform_(m.weight, a=1)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+
+    @staticmethod
+    def _fast_weightsum(weights: torch.Tensor, terms: List[torch.Tensor]) -> torch.Tensor:
+        """Fast normalized weighted sum (EfficientDet-style ReLU + normalize)."""
+        w = F.relu(weights)
+        return sum(w[i] * terms[i] for i in range(len(terms))) / (w.sum() + 1e-4)
+
+    def forward(self, c3, c4, c5) -> Dict[str, torch.Tensor]:
+        """BiFPN forward: lateral -> top-down -> bottom-up -> P6/P7."""
+        # 1x1 lateral projection
+        lat3 = self.lateral_c3(c3)
+        lat4 = self.lateral_c4(c4)
+        lat5 = self.lateral_c5(c5)
+
+        # --- Top-down pathway (P5 -> P4 -> P3) ---
+        # P5_td: lateral only (1 input)
+        td5 = self.td_conv_c5(self._fast_weightsum(self.td_w_c5, [lat5]))
+
+        # P4_td: lateral + upsample P5_td
+        up5 = F.interpolate(td5, size=c4.shape[2:], mode='bilinear', align_corners=False)
+        td4 = self.td_conv_c4(self._fast_weightsum(self.td_w_c4, [lat4, up5]))
+
+        # P3_td: lateral + upsample P4_td
+        up4 = F.interpolate(td4, size=c3.shape[2:], mode='bilinear', align_corners=False)
+        td3 = self.td_conv_c3(self._fast_weightsum(self.td_w_c3, [lat3, up4]))
+
+        # --- Bottom-up pathway (P3 -> P4 -> P5) ---
+        # P3_out: only TD output (1 input)
+        p3 = self.bu_conv_c3(td3)
+
+        # P4_out: td4 + downsample P3_out
+        down3 = F.interpolate(p3, size=c4.shape[2:], mode='bilinear', align_corners=False)
+        p4 = self.bu_conv_c4(self._fast_weightsum(self.bu_w_c4, [td4, down3]))
+
+        # P5_out: td5 + downsample P4_out (p4 is now bottom-up refined)
+        down4 = F.interpolate(p4, size=c5.shape[2:], mode='bilinear', align_corners=False)
+        p5 = self.bu_conv_c5(self._fast_weightsum(self.bu_w_c5, [td5, down4]))
+
+        # P6/P7 from bottom-up P5 via stride conv
+        p6 = self.p6_conv(p5)
+        p7 = self.p7_conv(F.relu(p6))
+
+        return {'p3': p3, 'p4': p4, 'p5': p5, 'p6': p6, 'p7': p7}
+
+
 # ===========================================================================
 # Anchor Generator (RetinaNet-style)
 # ===========================================================================
@@ -1813,8 +1920,14 @@ class POPWMultiTaskModel(nn.Module):
         self.c4_channels = c4_ch
         self.c5_channels = c5_ch
 
-        # === FPN Neck ===
-        self.fpn = FPN(in_channels=fpn_in_channels, out_channels=256)
+        # === FPN / BiFPN Neck ===
+        # [V2 D2] BiFPN replaces standard FPN when USE_BIFPN=True.
+        # Drop-in replacement: same init/forward interface, same output dict.
+        if getattr(C, 'USE_BIFPN', False):
+            self.fpn = BiFPN(in_channels=fpn_in_channels, out_channels=256)
+            logger.info('  [MODEL] Using BiFPN neck (weighted bidirectional FPN)')
+        else:
+            self.fpn = FPN(in_channels=fpn_in_channels, out_channels=256)
 
         # === Detection Head ===
         self.detection_head = DetectionHead(
@@ -1892,6 +2005,15 @@ class POPWMultiTaskModel(nn.Module):
             num_components=C.NUM_PSR_COMPONENTS,
             dropout=0.2,
         )
+
+        # === RotoGrad (opt-in feature rotation for gradient homogenization) ===
+        if C.USE_ROTOGRAD:
+            from src.models.rotograd import RotoGradRotation
+            self.rotograd = RotoGradRotation(
+                feat_dim=768,
+                num_tasks=3,
+                subspace_dim=C.ROTOGRAD_SUBSPACE_DIM,
+            )
 
         # === Feature Bank ===
         self.feature_bank = FeatureBank(embed_dim=512, window_size=16)
@@ -2174,13 +2296,15 @@ class POPWMultiTaskModel(nn.Module):
             if isinstance(head_pose, tuple):
                 _rot6d, _rot_mat, _pos = head_pose
                 # Reconstruct [B,9] = forward(3) + position(3) + up(3)
-                _forward = _rot_mat[:, :, 0]                  # first column = forward dir
-                _up = _rot_mat[:, :, 2]                        # third column = up dir
-                head_pose = torch.cat([_forward, _pos, _up], dim=1)  # [B, 9]
+                head_pose = self.head_pose_head.to_legacy_9dof(_rot6d, _pos)  # [B, 9]
             if self.use_headpose_film and hasattr(self, 'headpose_film'):
                 c5_mod = self.headpose_film(c5_mod, head_pose.detach())  # stop_grad per paper ?HeadPoseFiLM
         else:
             head_pose = None
+
+        # RotoGrad: rotate shared features per task for gradient direction alignment
+        if getattr(C, 'USE_ROTOGRAD', False) and hasattr(self, 'rotograd'):
+            c5_mod = self.rotograd.rotate(c5_mod, task_idx=0)  # task 0: activity
 
         # Per paper §5.4: "Gradient scaling: blend_ratio·C5_mod2 + (1-blend_ratio)·detach(C5_mod2)"
         # This lets a small gradient flow into C5_mod2 (and thus the FiLM/Pose heads)

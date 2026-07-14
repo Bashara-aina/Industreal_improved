@@ -1,17 +1,13 @@
-"""
-MViTv2-S Multi-Task Model — shared backbone for Detection + Activity + PSR + Pose.
+"""DEPRECATED — DO NOT USE FOR NEW WORK.
 
-[OPUS 201] PSR head on a diet: 70.9M → ~1.8M. Efficiency spine restored.
-Total ~45M params (34.5M backbone + ~10M heads) vs ~100M specialists = ~2.2× win.
+The active multi-task model is POPWMultiTaskModel in src/models/model.py
+(2361 lines, convnext_tiny backbone, 46.47M params).
 
-Architecture:
-  - Backbone: MViTv2-S (Kinetics-400 pretrained, 34.5M)
-  - Detection: P5/P4/P3 → FPN (256ch) → decoupled cls+reg head + TAL assigner
-  - Activity: cls_token → 3-layer MLP (768→2048→1024→75) + optional logit-adjust
-  - PSR: P5 features [B,768,T=8,7²] → spatial pool → Linear(768→256)
-         → 2-layer causal Transformer (d=256, nhead=4, ff=1024)
-         → Linear(256→11) per-frame transition logits. Total ≈1.8M.
-  - Pose: cls_token → MLP(768→256→6) → Tanh → renormalized fwd+up
+This file is the LEGACY MViTv2-S based MTLMViTModel (655 lines). It is
+preserved for historical reference only. All V2 work targets POPWMultiTaskModel.
+
+See analyses/consult_claude_science/consult_v2/V1_VS_CODEBASE_DISCREPANCY_REPORT.md
+for the migration rationale.
 """
 from __future__ import annotations
 
@@ -98,16 +94,30 @@ class MViTFeaturePyramid(nn.Module):
         # Full forward through backbone (triggers hooks)
         # We need the class token for activity/pose heads
         # Run forward without head (block 0..15)
-        x = self.backbone.conv_proj(x)  # [B, 96, T=8, H=56, W=56]
+        x = self.backbone.conv_proj(x)  # [B, 96, T, H, W]
+        # [FIX 2026-07-13] Use dynamic thw from conv_proj output instead of hardcoded
+        # pos_encoding.spatial_size. Enables multi-resolution inference (224/320/480):
+        # MViTv2-S uses RELATIVE position encoding which is auto-interpolated per-block
+        # for any spatial size — only the thw tracking was preventing multi-scale use.
+        T_t, H_t, W_t = x.shape[2], x.shape[3], x.shape[4]
         x = x.flatten(2).transpose(1, 2)  # [B, N, C]
         x = self.backbone.pos_encoding(x)
-        thw = (
-            self.backbone.pos_encoding.temporal_size,
-            *self.backbone.pos_encoding.spatial_size,
-        )  # (T=8, H=56, W=56)
+        thw = (T_t, H_t, W_t)
 
+        # [FIX 2026-07-13] Gradient checkpointing for 480/640 training. Trades
+        # ~30% extra compute for ~3-4x lower activation memory. Enabled by
+        # --grad-checkpoint flag (passed via model cfg). Trades: 480 batch=1
+        # becomes feasible on 16GB GPU where it would OOM otherwise.
+        use_grad_ckpt = getattr(self, "_grad_checkpoint", False)
         for i, block in enumerate(self.backbone.blocks):
-            x, thw = block(x, thw)
+            if use_grad_ckpt and self.training:
+                # Checkpoint only the early/middle blocks (cheaper recompute)
+                # Leave the last few blocks un-checkpointed for stable training.
+                x, thw = torch.utils.checkpoint.checkpoint(
+                    block, x, thw, use_reentrant=False
+                )
+            else:
+                x, thw = block(x, thw)
 
         # Class token for activity/pose: [B, 768]
         cls_token = x[:, 0, :]

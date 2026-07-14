@@ -21,6 +21,7 @@ Usage:
     # Eval split: val for model selection (default), test for final eval
     python scripts/train_mtl_mvit.py --eval-split val
 """
+# DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import gc
 import json
@@ -31,6 +32,9 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
+
+import os
+os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
 import numpy as np
 import torch
@@ -160,6 +164,8 @@ def detection_loss(
     pos_radius: int = 1,
     use_tal: bool = True,
     tal_topk: int = 10,
+    use_varifocal: bool = False,
+    use_wiou_v3: bool = False,
 ) -> torch.Tensor:
     """Detection loss with TAL assigner (TOOD, ICCV 2021).
 
@@ -266,15 +272,20 @@ def detection_loss(
                                 dfl_target[b,cj,ci,3]=(boxes[n,3]-cell_cy[cj])/stride
                                 iou_target[b,cj,ci]=boxes[n]
 
-        # ---- Classification: Focal BCE ----
+        # ---- Classification: Focal BCE or Varifocal ----
         cls_p = cls_logits.permute(0,2,3,1).contiguous()
         cls_oh = F.one_hot(cls_target, num_classes).float()
-        cls_prob = torch.sigmoid(cls_p)
-        pt = cls_oh*cls_prob+(1-cls_oh)*(1-cls_prob)
-        focal_w = (1-pt)**gamma
-        alpha_t = cls_oh*alpha+(1-cls_oh)*(1-alpha)
-        cls_loss_bce = F.binary_cross_entropy_with_logits(cls_p, cls_oh, reduction="none")
-        loss_cls = loss_cls + (alpha_t*focal_w*cls_loss_bce).sum(dim=-1).mean()
+        if use_varifocal:
+            from src.losses.varifocal_loss import VarifocalLoss
+            _vfl = VarifocalLoss(alpha=alpha, gamma=gamma)
+            loss_cls = loss_cls + _vfl(cls_p.reshape(-1, num_classes), cls_oh.reshape(-1, num_classes))
+        else:
+            cls_prob = torch.sigmoid(cls_p)
+            pt = cls_oh*cls_prob+(1-cls_oh)*(1-cls_prob)
+            focal_w = (1-pt)**gamma
+            alpha_t = cls_oh*alpha+(1-cls_oh)*(1-alpha)
+            cls_loss_bce = F.binary_cross_entropy_with_logits(cls_p, cls_oh, reduction="none")
+            loss_cls = loss_cls + (alpha_t*focal_w*cls_loss_bce).sum(dim=-1).mean()
 
         # ---- Box losses (positive cells only) ----
         if pos_mask.any():
@@ -297,7 +308,11 @@ def detection_loss(
             px2=cell_cx.view(1,1,W)+dec[:,2:3]*stride
             py2=cell_cy.view(1,H,1)+dec[:,3:4]*stride
             pa=torch.cat([px1,py1,px2,py2],dim=1).permute(0,2,3,1).contiguous()
-            loss_iou = loss_iou + ciou_loss(pa[pos_mask], iou_target[pos_mask]).mean()
+            if use_wiou_v3:
+                from src.losses.wiou_loss import wiou_v3_loss
+                loss_iou = loss_iou + wiou_v3_loss(pa[pos_mask], iou_target[pos_mask], iou_target[pos_mask]).mean()
+            else:
+                loss_iou = loss_iou + ciou_loss(pa[pos_mask], iou_target[pos_mask]).mean()
 
     n_levels_active = max(n_levels_active, 1)
     return loss_cls/n_levels_active + loss_iou/n_levels_active + loss_dfl/n_levels_active
@@ -936,6 +951,19 @@ def train_step(
     act_balanced_softmax: nn.Module = None,  # [Tier 1 Item 3] Balanced Softmax for activity
     act_ldam: nn.Module = None,          # [Tier 1 Item 6] LDAM-DRW for activity
     act_ldam_epoch: int = 0,             # Current epoch for DRW schedule
+    famo_weighter = None,                # FAMO stateful weight tracker (NeurIPS 2023)
+    ms_tcn_smooth: bool = False,         # MS-TCN smoothing loss for PSR
+    ms_tcn_tau: float = 4.0,            # MS-TCN truncation threshold
+    ms_tcn_lambda: float = 0.15,         # MS-TCN smoothing weight
+    use_varifocal: bool = False,         # Varifocal Loss for detection cls
+    use_wiou_v3: bool = False,           # WIoU v3 for detection box regression
+    use_pose_geodesic_huber: bool = False,  # Huber-capped geodesic pose loss
+    equal_weight_loss: bool = False,         # Kurin baseline: simple equal-weight sum
+    # ── v4: RotoGrad + MetaBalance + PSR refinement ─────────────────────
+    rotograd_model = None,                   # RotoGradRotation module
+    metabalance = None,                      # MetaBalance gradient rescaler
+    psr_refinement_head = None,              # MS-TCN PSR refinement stages
+    grad_checkpoint: bool = False,          # Gradient checkpointing for 480/640
 ) -> dict:
     """Single training step with Kendall uncertainty weighting and optional PCGrad gradient surgery.
 
@@ -973,22 +1001,51 @@ def train_step(
     with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
         outputs = model(aug_images)
 
+        # ── v4: RotoGrad feature rotation (ICLR 2022) ────────────────────
+        # Intercept cls_token, rotate per-task, recompute act/pose/psr heads.
+        # Detection uses FPN (not cls_token) — rotation not applied.
+        if rotograd_model is not None and "cls_token" in outputs:
+            _z = outputs["cls_token"]  # [B, 768]
+            # Task 0 = activity, task 1 = pose, task 2 = PSR (uses cls_token for
+            # gradient alignment; PSR head itself uses FPN P5 but cls_token gradient
+            # direction matters for backbone updates)
+            _z_act = rotograd_model.rotate(_z, 0)
+            _z_pose = rotograd_model.rotate(_z, 1)
+            # Recompute heads on rotated features
+            outputs["activity"] = model.act_head(_z_act)
+            outputs["pose_6d"] = model.pose_head(_z_pose)
+
+        # ── v4: PSR multi-stage refinement (CVPR 2019) ───────────────────
+        if psr_refinement_head is not None and "psr_logits" in outputs:
+            outputs["psr_logits"] = psr_refinement_head(
+                outputs["psr_logits"], apply_sigmoid=True
+            )
+
         # Per-task losses
         # Detection: use augmented targets (bboxes adjusted to augmentation)
         det_list = aug_targets.get("detection", [])
-        l_det = detection_loss(outputs["detection"], det_list)
+        l_det = detection_loss(outputs["detection"], det_list,
+                               use_varifocal=use_varifocal,
+                               use_wiou_v3=use_wiou_v3)
 
         # Activity loss: Balanced Softmax or LDAM-DRW (Tier 1 Items 3,6)
         _act_targets = targets.get("activity")
         _has_activity = "activity" in targets and _act_targets is not None
         if _has_activity and _act_targets.numel() > 0:
-            _act_trainable = _act_targets[_act_targets >= 0]  # Filter unlabeled (-1)
-            if len(_act_trainable) == 0:
+            # Filter unlabeled frames (-1) — index both logits and targets
+            _valid_mask = _act_targets >= 0
+            _act_trainable = _act_targets[_valid_mask]
+            # Safety: clamp labels to [0, 74] to prevent CUDA asserts from
+            # out-of-range labels (e.g., from mislabeled frames in AR_labels.csv).
+            _act_trainable = _act_trainable.clamp(0, 74)
+            if _act_trainable.numel() == 0:
                 l_act = torch.tensor(0.0, device=images.device)
             elif act_balanced_softmax is not None:
-                l_act = act_balanced_softmax(outputs["activity"], _act_targets.to(images.device))
+                _act_logits = outputs["activity"][_valid_mask.to(images.device)]
+                l_act = act_balanced_softmax(_act_logits, _act_trainable.to(images.device))
             elif act_ldam is not None:
-                l_act = act_ldam(outputs["activity"], _act_targets.to(images.device), epoch=act_ldam_epoch)
+                _act_logits = outputs["activity"][_valid_mask.to(images.device)]
+                l_act = act_ldam(_act_logits, _act_trainable.to(images.device), epoch=act_ldam_epoch)
             else:
                 l_act = activity_loss(
                     outputs["activity"],
@@ -1068,7 +1125,11 @@ def train_step(
             hp_6d = hp[:, hp.size(1) // 2, :6]  # [B, 6] middle frame
         else:
             hp_6d = torch.zeros(B, 6, device=images.device)
-        l_pose = pose_loss(outputs["pose_6d"], hp_6d)
+        if use_pose_geodesic_huber:
+            from src.losses.geodesic_loss import huberised_geodesic_loss
+            l_pose = huberised_geodesic_loss(outputs["pose_6d"], hp_6d, delta=30.0)
+        else:
+            l_pose = pose_loss(outputs["pose_6d"], hp_6d)
 
         # ── Distillation loss (Task #261 / §6 lever #5) ──────────────────────
         l_distill = torch.tensor(0.0, device=images.device)
@@ -1078,27 +1139,57 @@ def train_step(
                 outputs, teacher_outputs, distill_temperature, distill_alpha,
             )
 
-        # ── UW-SO Loss Weighting (Kirchdorfer 2025 IJCV) ──────────────────
-        # Replaces Kendall uncertainty weighting. Analytical softmax on
-        # stop-gradient task losses — eliminates learned weight collapse.
-        # Keep Kendall as --loss-weighting kendall for ablation.
-        task_losses = {"det": l_det, "act": l_act, "psr": l_psr, "pose": l_pose}
+        # ── Per-task loss scale normalization ──────────────────────────────
+        # Without PCGrad, the pose geodesic loss (~4000°) dominates the shared
+        # backbone gradient 67% even after DB-MTL log1p. Pre-scale losses so
+        # FAMO can actually observe per-task decrease rates from the start.
+        # Scales normalize each task to approximately O(1) before weighting.
+        _loss_scale = {"det": 0.125, "act": 0.27, "psr": 2.7, "pose": 0.00025}
+        l_det_s = l_det * _loss_scale["det"]
+        l_act_s = l_act * _loss_scale["act"]
+        l_psr_s = l_psr * _loss_scale["psr"]
+        l_pose_s = l_pose * _loss_scale["pose"]
+
+        # ── UW-SO or FAMO Loss Weighting ──────────────────────────────────
+        task_losses = {"det": l_det_s, "act": l_act_s, "psr": l_psr_s, "pose": l_pose_s}
+        # Also store raw losses for logging (preserve original scale)
+        _raw_losses = {"det": l_det, "act": l_act, "psr": l_psr, "pose": l_pose}
         losses = {**task_losses, "distill": l_distill}
+
+        # MS-TCN smoothing loss for PSR (head-only, zero backbone gradient impact)
+        # When PSR refinement head is active, it provides its own smoothing loss.
+        if ms_tcn_smooth and "psr_labels" in targets:
+            if psr_refinement_head is not None:
+                l_psr_smooth = psr_refinement_head.smoothing_loss(outputs["psr_logits"])
+            else:
+                from src.losses.ms_tcn_smooth import ms_tcn_smoothing_loss
+                l_psr_smooth = ms_tcn_smoothing_loss(
+                    outputs["psr_logits"], tau=ms_tcn_tau, lambda_smooth=ms_tcn_lambda
+                )
+            task_losses["psr"] = task_losses["psr"] + l_psr_smooth
 
         # DB-MTL log-transform normalizes loss scales across tasks
         if db_mtl:
             task_losses = {k: torch.log1p(v) for k, v in task_losses.items()}
 
-        # UW-SO: weights = softmax(-sg(losses) / T)
-        from src.losses.uw_so import uw_so_loss
-        task_total = uw_so_loss(task_losses, temperature=uw_so_temperature)
+        if equal_weight_loss:
+            # Kurin baseline: simple equal-weight sum of task losses
+            # No adaptive weighting (Kurin et al., NeurIPS 2022, arXiv:2201.04122)
+            task_total = sum(task_losses.values())
+        elif famo_weighter is not None:
+            # FAMO: O(1) single-backward weighting (NeurIPS 2023)
+            task_total = famo_weighter.forward(task_losses)
+        else:
+            # UW-SO: weights = softmax(-sg(losses) / T)
+            from src.losses.uw_so import uw_so_loss
+            task_total = uw_so_loss(task_losses, temperature=uw_so_temperature)
 
-        # Update EMA of task losses for logging
+        # Update EMA of task losses for logging (track RAW losses)
         if ema_losses is not None:
             with torch.no_grad():
                 for name in ["det", "act", "psr", "pose"]:
                     ema_losses[name].mul_(ema_momentum).add_(
-                        task_losses[name].detach(), alpha=1.0 - ema_momentum
+                        _raw_losses[name].detach(), alpha=1.0 - ema_momentum
                     )
 
         total_loss = task_total + l_distill
@@ -1136,21 +1227,39 @@ def train_step(
         # PCGrad: project conflicting gradients
         deconflicted = pcgrad_fn(per_task_grads, shared_params)
 
-        # Backward for head params (also populates backbone grads, overridden below)
-        # For bf16 AMP, the scaler is mostly a no-op; we skip explicit unscale_() to
-        # avoid issues with gradient accumulation (unscale_ can only be called once
-        # per scaler.update() cycle).
-        # [OPUS 186 §5.1] Divide by grad_accum_steps so the boundary step sees the
-        # MEAN of micro-batch gradients, not the SUM. (Otherwise grad_clip_norm=1.0
-        # clips most of the doubled magnitude, coupling accumulation with clipping.)
         scaler.scale(total_loss / grad_accum_steps).backward()
 
-        # [OPUS 181 D4] PCGrad backbone override now ACCUMULATES (instead of
-        # overwriting) so gradient accumulation across micro-batches is preserved.
-        # [OPUS 186 §5.1] Also scale by 1/grad_accum_steps so the deconflicted
-        # backbone grads match the (already-scaled) head grads from backward().
         accum_scale = 1.0 / grad_accum_steps
         for param, grad in zip(shared_params, deconflicted):
+            g = (grad.to(param.dtype)) * accum_scale
+            if param.grad is None:
+                param.grad = g
+            else:
+                param.grad = param.grad + g
+    elif metabalance is not None:
+        shared_params = [p for p in model.feature_pyramid.backbone.parameters() if p.requires_grad]
+        task_names = ["det", "act", "psr", "pose"]
+
+        # Register params on first call (static list, no state change after)
+        if not metabalance._params:
+            metabalance.register(shared_params, task_names)
+
+        per_task_grads = []
+        for k, name in enumerate(task_names):
+            g = torch.autograd.grad(
+                task_losses[name], shared_params,
+                retain_graph=True, allow_unused=True,
+            )
+            per_task_grads.append(g)
+            # Record EMA of per-parameter gradient norms for this task
+            metabalance.record_grad(name, k)
+
+        combined = metabalance.rescale(per_task_grads)
+
+        scaler.scale(total_loss / grad_accum_steps).backward()
+
+        accum_scale = 1.0 / grad_accum_steps
+        for param, grad in zip(shared_params, combined):
             g = (grad.to(param.dtype)) * accum_scale
             if param.grad is None:
                 param.grad = g
@@ -1176,6 +1285,10 @@ def train_step(
 
     # For bf16, scaler is essentially a no-op (no inf check needed). We avoid
     # calling unscale_() in accumulation since it would raise.
+
+    # FAMO weight update: called after optimizer step on boundary
+    if famo_weighter is not None and do_step:
+        famo_weighter.step(task_losses)
 
     return {
         "loss": total_loss.item(),
@@ -1256,6 +1369,18 @@ def evaluate(
     from src.evaluation.evaluate import compute_det_metrics_extended, nms_numpy
 
     model.eval()
+    # tau-norm: post-hoc classifier rebalancing for activity (Kang et al. ICLR 2020)
+    # Normalize activity classifier weights by ||w_i||^tau during eval only.
+    # Save/restore weights so training is unaffected. tau=0.7 recommended.
+    _tau_saved_weight = None; _tau_saved_bias = None
+    if hasattr(model, 'act_head') and hasattr(model.act_head, 'classifier'):
+        with torch.no_grad():
+            _tau_saved_weight = model.act_head.classifier.weight.data.clone()
+            _tau_saved_bias = model.act_head.classifier.bias.data.clone()
+            _w = model.act_head.classifier.weight.data
+            _w_norm = _w.norm(dim=1, keepdim=True)
+            model.act_head.classifier.weight.data = _w / (_w_norm.pow(0.7) + 1e-12)
+            model.act_head.classifier.bias.data.zero_()
     _prefix = f" (epoch {epoch})" if epoch else ""
     logger.info("=" * 60)
     logger.info("Starting validation evaluation%s", _prefix)
@@ -1668,6 +1793,12 @@ def evaluate(
     logger.info("Validation complete (%.1fs, %d batches)", metrics["eval_time_s"], n_batches)
     logger.info("=" * 60)
 
+    # Restore classifier weights if tau-norm was applied during eval
+    if _tau_saved_weight is not None:
+        with torch.no_grad():
+            model.act_head.classifier.weight.data.copy_(_tau_saved_weight)
+            model.act_head.classifier.bias.data.copy_(_tau_saved_bias)
+
     model.train()
     return metrics
 
@@ -1732,6 +1863,8 @@ def main():
                         help="[§6 lever #6] Gradient accumulation steps (effective batch = batch_size * this)")
     parser.add_argument("--grad-clip-norm", type=float, default=5.0,
                         help="Grad-clip norm (5.0 is standard for ViT).")
+    parser.add_argument("--weight-decay", type=float, default=0.05,
+                        help="Weight decay for optimizer (default: 0.05; Kurin baseline uses 1e-3)")
     parser.add_argument("--compile", action="store_true",
                         help="Use torch.compile() for ~2x speedup (PyTorch 2.0+)")
     # ── SWA within-run checkpoint averaging (Task #259 / §6 lever #3) ─────
@@ -1747,6 +1880,50 @@ def main():
                         help="Distillation loss weight (default: 0.1)")
     parser.add_argument("--distill-temperature", type=float, default=4.0,
                         help="Softmax temperature for distillation (default: 4.0)")
+    # ── Kurin baseline: equal-weight loss combination ─────────────────────
+    parser.add_argument("--equal-weights", action="store_true", default=False,
+                        help="Kurin baseline: simple equal-weight sum of task losses (no adaptive weighting)")
+    # ── FAMO loss weighting (NeurIPS 2023) ────────────────────────────────
+    parser.add_argument("--famo", action="store_true", default=False,
+                        help="Use FAMO (O(1) single-backward) instead of UW-SO loss weighting")
+    parser.add_argument("--famo-lr", type=float, default=0.01,
+                        help="FAMO weight update learning rate (default: 0.01)")
+    parser.add_argument("--famo-temperature", type=float, default=1.0,
+                        help="FAMO softmax temperature (default: 1.0)")
+    # ── MS-TCN smoothing loss for PSR (CVPR 2019) ─────────────────────────
+    parser.add_argument("--ms-tcn-smooth", action="store_true", default=False,
+                        help="Add MS-TCN truncated-MSE smoothing loss to PSR head")
+    parser.add_argument("--ms-tcn-tau", type=float, default=4.0,
+                        help="MS-TCN truncation threshold (default: 4.0)")
+    parser.add_argument("--ms-tcn-lambda", type=float, default=0.15,
+                        help="MS-TCN smoothing loss weight (default: 0.15)")
+    # ── Varifocal + WIoU v3 detection losses ───────────────────────────────
+    parser.add_argument("--varifocal", action="store_true", default=False,
+                        help="Use Varifocal Loss (Zhang CVPR 2021) for detection classification")
+    parser.add_argument("--wiou-v3", action="store_true", default=False,
+                        help="Use WIoU v3 (Tong 2023) for detection box regression")
+    # ── Huberised geodesic pose loss ──────────────────────────────────────
+    parser.add_argument("--pose-geodesic-huber", action="store_true", default=False,
+                        help="Use Huber-capped geodesic loss (delta=30°) for pose")
+    parser.add_argument("--img-size", type=int, default=224,
+                        help="Input H=W. 224=fast (default), 640=matches Schonbeek 2024 YOLOv8 baseline (8x slower but should give much higher mAP).")
+    # ── v4: RotoGrad feature rotation (ICLR 2022) ─────────────────────────
+    parser.add_argument("--rotograd", action="store_true", default=False,
+                        help="Per-task feature rotation for gradient direction alignment (Javaloy 2022)")
+    parser.add_argument("--rotograd-subspace", type=int, default=128,
+                        help="RotoGrad subspace dimension (0=full, default: 128)")
+    # ── v4: MetaBalance gradient rescaling (WWW 2022) ─────────────────────
+    parser.add_argument("--metabalance", action="store_true", default=False,
+                        help="Per-parameter gradient magnitude rescaling to match target task")
+    # ── v4: MS-TCN PSR refinement stages (CVPR 2019) ─────────────────────
+    parser.add_argument("--psr-refinement", action="store_true", default=False,
+                        help="Stack MS-TCN dilated refinement stages on PSR causal transformer")
+    parser.add_argument("--psr-refinement-stages", type=int, default=2,
+                        help="Number of MS-TCN refinement stages (default: 2)")
+    parser.add_argument("--grad-checkpoint", action="store_true", default=False,
+                        help="[v4 480px] Enable gradient checkpointing — reduces VRAM ~3x at cost of ~30%% compute. Required for 480x480 batch=1 on 16GB GPU.")
+    parser.add_argument("--sequence-length", type=int, default=16,
+                        help="T frames per sequence. Default 16. Use 4 for 480px training to fit in 16GB GPU.")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -1784,12 +1961,21 @@ def main():
 
     train_ds = IndustRealMultiTaskDataset(
         split="train",
-        img_size=(224, 224),
+        img_size=(args.img_size, args.img_size),
         augment=True,
         sequence_mode=True,
-        sequence_length=16,
+        sequence_length=args.sequence_length,
     )
     logger.info("Train samples: %d", len(train_ds))
+
+    # ── Curriculum decay initialization ──
+    # If curriculum decay is enabled, start from DET_GT_CURRICULUM_START and
+    # linearly interpolate to DET_GT_CURRICULUM_END over the first N epochs.
+    if C.DET_GT_CURRICULUM_DECAY:
+        C.DET_GT_FRAME_FRACTION = C.DET_GT_CURRICULUM_START
+        logger.info("Curriculum decay enabled: DET_GT_FRAME_FRACTION=%.2f → %.2f over %d epochs",
+                    C.DET_GT_CURRICULUM_START, C.DET_GT_CURRICULUM_END,
+                    C.DET_GT_CURRICULUM_EPOCHS)
 
     sampler = torch.utils.data.WeightedRandomSampler(
         train_ds.get_sampler_weights() if hasattr(train_ds, "get_sampler_weights")
@@ -1811,10 +1997,10 @@ def main():
     # ── Eval split for model selection ────────────────────────────────────
     eval_ds = IndustRealMultiTaskDataset(
         split=args.eval_split,
-        img_size=(224, 224),
+        img_size=(args.img_size, args.img_size),
         augment=False,
         sequence_mode=True,
-        sequence_length=16,
+        sequence_length=args.sequence_length,
     )
     eval_loader = torch.utils.data.DataLoader(
         eval_ds,
@@ -1830,6 +2016,10 @@ def main():
     # ── Model ─────────────────────────────────────────────────────────────
     logger.info("Building MTL-MViT model...")
     model = MTLMViTModel(num_act_classes=getattr(C, "NUM_ACT_OUTPUTS", 75)).to(device)
+    # [v4 480px] Enable gradient checkpointing if requested
+    if getattr(args, 'grad_checkpoint', False):
+        model._grad_checkpoint = True
+        logger.info("Gradient checkpointing ENABLED — reduces VRAM ~3x at cost of ~30%% compute")
     total_params = sum(p.numel() for p in model.parameters()) / 1e6
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6
     logger.info("Params: %.1fM total, %.1fM trainable", total_params, trainable_params)
@@ -1863,10 +2053,10 @@ def main():
 
         test_ds = IndustRealMultiTaskDataset(
             split="test",
-            img_size=(224, 224),
+            img_size=(args.img_size, args.img_size),
             augment=False,
             sequence_mode=True,
-            sequence_length=16,
+            sequence_length=args.sequence_length,
         )
         test_loader = torch.utils.data.DataLoader(
             test_ds,
@@ -1948,12 +2138,16 @@ def main():
         for n, p in model.named_parameters():
             if any(n.startswith(pref) for pref in prefixes):
                 params.append(p)
-        return {"params": params, "lr": args.lr_head * lr_mult, "weight_decay": 0.05}
+        return {"params": params, "lr": args.lr_head * lr_mult, "weight_decay": args.weight_decay}
 
     # Task-specific LR multipliers: detection/activity at 1.0x, PSR/pose at 0.3x
+    # [FIX Claude Science V2 Agent 8] "feature_pyramid.fpn" prefix was a
+    # copy-paste bug — the LightweightFPN module is registered as model.fpn,
+    # not model.feature_pyramid.fpn. All 14.5M BiFPN params were missing from
+    # the optimizer. Fix: use "fpn" prefix (matches named_parameters keys).
     param_groups = [
-        {"params": model.feature_pyramid.backbone.parameters(), "lr": args.lr_backbone, "weight_decay": 0.05},
-        _group_params(["feature_pyramid.fpn", "det_head"], 1.0),
+        {"params": model.feature_pyramid.backbone.parameters(), "lr": args.lr_backbone, "weight_decay": args.weight_decay},
+        _group_params(["fpn", "det_head"], 1.0),
         _group_params(["act_head"], 1.0),
         _group_params(["psr_head"], 0.3),
         _group_params(["pose_head"], 0.3),
@@ -2078,6 +2272,57 @@ def main():
                            max_m=0.5, s=30, reweight_epoch=35)
         logger.info("LDAM-DRW initialized — reweight at epoch 35")
 
+    # ── FAMO loss weighter (NeurIPS 2023) ────────────────────────────────
+    famo_weighter = None
+    if args.famo:
+        from src.losses.famo import FAMOWeighter
+        famo_weighter = FAMOWeighter(
+            num_tasks=4, lr=args.famo_lr, temperature=args.famo_temperature,
+        )
+        logger.info("FAMO weighter initialized — lr=%.3f, temp=%.1f, O(1) single-backward",
+                    args.famo_lr, args.famo_temperature)
+
+    # ── v4: RotoGrad feature rotation (ICLR 2022) ─────────────────────────
+    rotograd_model = None
+    if args.rotograd:
+        from src.models.rotograd import RotoGradRotation
+        _subspace = args.rotograd_subspace if args.rotograd_subspace > 0 else None
+        rotograd_model = RotoGradRotation(
+            feat_dim=768, num_tasks=3,  # act, pose, psr (det uses FPN)
+            subspace_dim=_subspace,
+        ).to(device)
+        _n_params = sum(p.numel() for p in rotograd_model.parameters())
+        logger.info("RotoGrad initialized — %d tasks, subspace=%s, params=%d",
+                    3, _subspace, _n_params)
+        # [FIX Claude Science V2 Agent 8] RotoGrad was instantiated AFTER
+        # optimizer creation, so its 639K parameters were never added to any
+        # param group — they sat at random init throughout training.
+        optimizer.add_param_group({
+            "params": rotograd_model.parameters(),
+            "lr": args.lr_head * 0.3,  # match PSR/pose rate
+            "weight_decay": args.weight_decay,
+        })
+        logger.info("RotoGrad params added to optimizer (lr=%.2e)", args.lr_head * 0.3)
+
+    # ── v4: MetaBalance gradient rescaling (WWW 2022) ─────────────────────
+    metabalance = None
+    if args.metabalance:
+        from src.losses.metabalance import MetaBalance
+        metabalance = MetaBalance(target_task="pose")
+        logger.info("MetaBalance initialized — target=pose, rescaling per-block gradients")
+
+    # ── v4: MS-TCN PSR refinement head (CVPR 2019) ───────────────────────
+    psr_refinement_head = None
+    if args.psr_refinement:
+        from src.models.psr_refinement import PSRRefinementHead
+        psr_refinement_head = PSRRefinementHead(
+            num_components=11, num_stages=args.psr_refinement_stages,
+            num_layers=10, num_filters=64,
+        ).to(device)
+        _n_params = sum(p.numel() for p in psr_refinement_head.parameters())
+        logger.info("PSR refinement head initialized — %d stages, params=%d",
+                    args.psr_refinement_stages, _n_params)
+
     # ── Training loop ─────────────────────────────────────────────────────
     logger.info("Starting training (%d epochs)...", args.epochs)
     if args.act_decoupled:
@@ -2087,6 +2332,24 @@ def main():
     act_decoupled_phase_b = False  # [OPUS 207] Tracks whether we've transitioned
 
     for epoch in range(start_epoch + 1, args.epochs + 1):
+        # ── Curriculum decay: update DET_GT_FRAME_FRACTION at each epoch ──
+        if C.DET_GT_CURRICULUM_DECAY:
+            prev_frac = float(C.DET_GT_FRAME_FRACTION)
+            new_frac = C.apply_curriculum_decay(epoch)
+            if abs(new_frac - prev_frac) > 1e-6:
+                _new_weights = train_ds.get_sampler_weights()
+                sampler = torch.utils.data.WeightedRandomSampler(
+                    _new_weights, num_samples=len(train_ds), replacement=True,
+                )
+                train_loader = torch.utils.data.DataLoader(
+                    train_ds, batch_size=args.batch_size, sampler=sampler,
+                    num_workers=args.num_workers, pin_memory=True,
+                    prefetch_factor=2 if args.num_workers > 0 else None,
+                    collate_fn=collate_fn_sequences, drop_last=True,
+                )
+                logger.info("Curriculum decay epoch %d: DET_GT_FRAME_FRACTION %.3f → %.3f",
+                            epoch, prev_frac, new_frac)
+
         # [OPUS 207] Decoupled training Phase B transition.
         # Freeze backbone, retrain only activity classifier with class-balanced sampling.
         if args.act_decoupled and epoch > args.act_decoupled_epoch and not act_decoupled_phase_b:
@@ -2177,6 +2440,18 @@ def main():
                 act_balanced_softmax=act_balanced_softmax,
                 act_ldam=act_ldam,
                 act_ldam_epoch=epoch,
+                famo_weighter=famo_weighter,
+                ms_tcn_smooth=args.ms_tcn_smooth,
+                ms_tcn_tau=args.ms_tcn_tau,
+                ms_tcn_lambda=args.ms_tcn_lambda,
+                use_varifocal=args.varifocal,
+                use_wiou_v3=args.wiou_v3,
+                use_pose_geodesic_huber=args.pose_geodesic_huber,
+                equal_weight_loss=args.equal_weights,
+                rotograd_model=rotograd_model,
+                metabalance=metabalance,
+                psr_refinement_head=psr_refinement_head,
+                grad_checkpoint=args.grad_checkpoint,
             )
 
             for k in epoch_metrics:
@@ -2342,7 +2617,7 @@ def main():
     logger.info("Running final evaluation on test split...")
     test_ds = IndustRealMultiTaskDataset(
         split="test",
-        img_size=(224, 224),
+        img_size=(args.img_size, args.img_size),
         augment=False,
         sequence_mode=True,
         sequence_length=16,

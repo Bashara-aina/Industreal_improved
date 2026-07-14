@@ -1,0 +1,53 @@
+method,venue_year,arxiv_doi,family,benchmark,task_count,reported_MTL_ST_or_dm,single_forward_pass,per_task_backward,applicability_industreal,in_doc213
+InvPT,ECCV 2022,arXiv:2203.07997,decoder-transformer,NYUD-v2,3-4,positive Δm (decoder cross-task),yes,no,Med — decoder-per-task on shared encoder; dense-task regime,no
+MQTransformer,2022,—,decoder-transformer,NYUD-v2,3-4,"competitive, no clean Δm",yes,no,Low-Med,no
+TaskPrompter,ICLR 2023,arXiv:2304.13886,decoder-transformer/prompt,NYUD-v2/PASCAL,3-5,+4.49% Δm NYUD; +2.09% PASCAL,yes,no,Med — task prompts in shared encoder,no
+DeMT / MTFormer,AAAI 2023,—,decoder-transformer,NYUD-v2,3-4,~InvPT at lower cost,yes,no,Low-Med,no
+MLoRE,CVPR 2024,arXiv:2403.17749,MoE low-rank experts,NYUD-v2/PASCAL,3-5,beats TaskExpert on all 4 NYUD tasks,yes,no,HIGH — low-rank experts add head capacity at flat param cost,no
+TaskExpert,ICCV 2023,arXiv:2307.15324,MoE decoder,NYUD-v2,3-4,Semseg55.35/Depth0.5157/Norm18.54,yes,partial,Med,no
+TaskDiffusion,2024,—,diffusion decoder,NYUD-v2,3-4,"competitive, iterative sampling cost",no,no,Low — iterative sampling breaks single-pass latency,no
+MTMamba++,TPAMI 2025,arXiv:2408.15101,SSM cross-task decoder,NYUD-v2/PASCAL,3-4,"+4.82% Δm, BEATS ST on ALL 4 tasks",yes,no,HIGH — explicit cheap cross-task exchange vs pure trunk competition,no
+MTMamba,ECCV 2024,arXiv:2407.02228,SSM cross-task decoder,NYUD-v2,3-4,+2.63-4.82% Δm,yes,no,HIGH,no
+PAMM,2025,arXiv:2511.14503,SSM param-aware decoder,NYUD-v2/PASCAL,3-5,higher Δg than prior,yes,no,Med,no
+M3ViT,NeurIPS 2022,arXiv:2210.14793,MoE / task-gating,NYUD-v2/PASCAL,3-5,-6.27%->+1.59% Δm NYUD; +2.71% PASCAL,near,no,HIGH — MoE converts NEGATIVE->POSITIVE transfer; on-point for Kendall-collapse,no
+Mod-Squad,CVPR 2023,—,MoE modular,PASCAL-Context,5,"~+5.6% δt, beats all baselines all tasks",near,no,HIGH — experts self-organize per task; dedicated capacity for starved heads,no
+Polyhistor / -Lite,NeurIPS 2022,arXiv:2210.03265,hypernetwork adapters,4 dense tasks,4,+2.34% @6.41M (Lite +1.74% @0.41M),yes,no,Med — pushes task-specific frac <10%,no
+VMT-Adapter,AAAI 2024,—,adapter O(1),dense MTL,multi,O(1) cost in #tasks,yes,no,Med-HIGH — best single-pass adapter fit,no
+Hyperformer,2021,—,hypernetwork,dense MTL,multi,O(T) baseline,yes,no,Low,no
+Standley task grouping,ICML 2020,arXiv:1905.07553,task grouping,Taskonomy,5,grouping beats big-MTL & all-ST on tradeoff,n/a,n/a,HIGH — test 4-into-1 premise; 2-group split still ~2x efficient,yes
+TAG (Task Affinity Groupings),NeurIPS 2021,—,task grouping diagnostic,Taskonomy/CelebA,multi,inter-task affinity metric,n/a,n/a,HIGH — diagnostic: quantify if activity/PSR harmed vs under-weighted,yes
+DMTG,2024,arXiv:2407.05082,differentiable grouping,dense MTL,multi,one-shot differentiable grouping,n/a,n/a,Med,no
+FAMO,NeurIPS 2023,—,loss weighting O(1),NYUv2/Cityscapes,2-3,NYUv2 Δm -4.10; Cityscapes 8.13,yes,no (single),"HIGHEST — O(1) single backward, matches Nash-MTL at fraction of walltime; TIME-bound",yes
+FairGrad,ICML 2024,arXiv:2402.15638,gradient balancing (alpha-fair),NYUv2/Cityscapes/CelebA/QM9,2-40,"BEST Δm: Cityscapes 5.18, NYUv2 -4.96",yes,yes (k),Med — closest framing to Kendall-collapse BUT k backward passes,no
+Aligned-MTL,CVPR 2023,arXiv:2305.19000,gradient alignment (SVD),NYUv2/Cityscapes/MT10,2-4,"stable, pre-specified weight control",yes,yes (k),Med — weight-control attractive but k passes + SVD/step,no
+SDMGrad,NeurIPS 2023,—,direction-oriented MOO,NYUv2/Cityscapes/CelebA,2-40,competitive w/ CAGrad/Nash,yes,yes (k),Low-Med,no
+MoCo (MTL),ICLR 2023,—,MOO w/ momentum,NYUv2/Cityscapes,2-3,NYUv2 +0.16; Cityscapes 9.90,yes,yes (k),Low-Med,no
+Recon,ICLR 2023,—,conflict-layer splitting,NYUv2/Cityscapes,2-3,"reduces conflict, no per-step overhead",yes,no (offline),HIGH — offline profiling then split most-conflicted MViT layers; TIME-friendly,no
+CAGrad,NeurIPS 2021,—,conflict-averse grad,NYUv2/Cityscapes,2-3,NYUv2 +0.20; Cityscapes 11.64,yes,yes (k),"Low — k passes, normal worsens",yes
+Nash-MTL,ICML 2022,—,Nash bargaining grad,NYUv2/Cityscapes,2-3,NYUv2 -4.04; Cityscapes 6.82,yes,yes (k),Med — strong but k passes+solve; amortize every N steps,yes
+IMTL-G / IMTL-L,ICLR 2021,—,impartial MTL,NYUv2/Cityscapes,2-3,Cityscapes 11.10,yes,G:yes / L:no,Med — IMTL-L single-pass magnitude balance,yes
+RotoGrad,ICLR 2022,—,feature rotation + mag,dense MTL,multi,single fwd + rotation params,yes,partial,Med — one of few designed for HETEROGENEOUS tasks,yes
+RLW (Random Loss Weighting),TMLR 2022,—,random weighting control,Cityscapes/NYUv2,2-3,Cityscapes 24.38 (litmus test),yes,no,"HIGH — cheap CONTROL; if capped-Kendall can't beat RLW, gain isn't the scheme",no
+MetaBalance,WWW 2022,—,aux-grad magnitude rescale,recsys/aux-task,multi,matches target-task grad magnitude,yes,partial,HIGH — directly targets 312x activity-vs-PSR gradient domination,no
+Auto-Lambda,TMLR 2022,—,meta-learned weights,NYUv2/CityScapes,2-3,encodes task relationships,yes,no (~2x),Med,yes
+DB-MTL,2023,—,dual balancing,NYUv2/Cityscapes/CelebA,2-40,near FairGrad-level,yes,partial,Med,no
+ConICGrad / UPGrad,2024-25,arXiv:2502.00217,gradient balancing,NYUv2/Cityscapes,2-3,competitive w/ Nash/FairGrad,yes,yes (k),"Low — frontier, unreplicated",no
+Kurin unitary scalarization,NeurIPS 2022,arXiv:2201.04122,baseline / counter-evidence,MTL suites + RL,multi,tuned sum-loss MATCHES/BEATS optimizers,yes,no,CRITICAL — must beat regularized scalarization baseline,no
+Xin et al.,2022,—,counter-evidence,MTL benchmarks,multi,MTL opt ~= tuned scalarization,yes,no,CRITICAL — pre-empt reviewer,no
+Elich examining paradigms,GCPR 2024,arXiv:2311.04698,counter-evidence,MTL benchmarks,multi,grad-conflict narrative nuanced,n/a,n/a,CRITICAL — pre-empt for gradient-pathology paper,no
+YOLOP (grid vs region),MIR 2022,10.1007/s11633-022-1339-y,detection-in-MTL,BDD100K,3,1-stage det -0.4 AP; 2-stage -4.7 AP,yes,no,HIGH — proves YOLOv8-style head shares losslessly; degradation not a det-MTL law,no
+cRT / LWS / tau-norm (decoupling),ICLR 2020,arXiv:1910.09217,long-tail (head-only),ImageNet-LT/Places-LT,1,tail recovery (MTL-retention not reported),yes,no,"HIGH — head-only rebalance, never touches shared backbone; safest",no
+LDAM-DRW,NeurIPS 2019,arXiv:1906.07413,long-tail loss+schedule,CIFAR-LT/ImageNet-LT,1,margin+deferred reweight (MTL not reported),yes,no,Med-HIGH — DRW schedule fits EMA loop,no
+Balanced Softmax,NeurIPS 2020,arXiv:2007.10740,long-tail loss,CIFAR-LT/ImageNet-LT/LVIS,1,logit-adjust (MTL not reported),yes,no,"HIGH — drop-in loss change, single fwd preserved",no
+Use Your Head (video long-tail),CVPR 2023,arXiv:2304.01143,long-tail VIDEO,EPIC-KITCHENS-100,1,closest regime match (MTL not reported),yes,no,HIGH — video-native long-tail; sampling x frequency interaction,no
+EPIC-KITCHENS-100 benchmark,IJCV 2022,10.1007/s11263-021-01531-2,egocentric multi-head,EPIC-100,3 (verb/noun/action),use class-mean recall metric,yes,no,HIGH — adopt class-mean recall so collapse is visible,no
+MS-TCN,CVPR 2019,arXiv:1903.01945,temporal refinement,50Salads/GTEA/Breakfast,1,F1@10 27.0->76.3 at const frame-acc,yes,no,HIGH — template for per-frame->event-F1 (PSR),no
+ASFormer,BMVC 2021,arXiv:2110.08568,temporal transformer refine,50Salads/GTEA/Breakfast,1,improves segmental F1 over MS-TCN,yes,no,Med-HIGH — upgrade path from causal transformer PSR head,no
+VideoMAE / V2,CVPR 2022 / 2023,—,video FM (backbone),K400 (transfer),seq,81.5-90% K400; sequential transfer only,yes,n/a,Low-Med — raises ceiling not gap; large params,no
+UMT (Unmasked Teacher),2023,—,video FM,K400,seq,"~90% K400, transfer not joint MTL",yes,n/a,Low,no
+InternVideo2,2024,—,video FM,39+ tasks,seq,up to 92.1%; task-specific adaptation,yes,n/a,Low — B variant budget-fit but ceiling lift only,no
+Hiera,ICML 2023,—,video/image FM,K400,seq,84-87.8% K400; no joint-MTL,yes,n/a,Low,no
+VideoMamba,ECCV 2024,arXiv:2403.06977,SSM backbone,K400/IN1K/SthSthV2,seq,"85% K400; +2.6% vs TimeSformer, ~6x less mem",yes,n/a,"Med — latency/memory lever, NOT MTL lever; 74M budget-fit",no
+EgoVLP / v2,2022-23,—,egocentric video-lang FM,Ego4D/EPIC,seq,"domain match, tasks evaluated separately",yes,n/a,Med — best domain match but no joint-head training,no
+DINOv2 (frozen),2023-24,—,image FM frozen trunk,dense tasks,multi,frozen trunk -> many tasks (no co-adapt),yes,no,FOIL — multi-task without co-adaptation; address head-on,no
+Vandenhende MTL survey,TPAMI 2021,10.1109/TPAMI.2021.3054719,reporting convention,dense MTL,n/a,Δm% + matched-backbone + Pareto plot,n/a,n/a,CRITICAL — adopt Δm% reporting + FLOPs-once + Pareto plot,yes

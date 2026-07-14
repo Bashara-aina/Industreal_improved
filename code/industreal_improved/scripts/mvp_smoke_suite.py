@@ -27,6 +27,7 @@ Usage:
     python scripts/mvp_smoke_suite.py --probe 4 --head det
     python scripts/mvp_smoke_suite.py --probe all
 """
+# DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import json
 import sys

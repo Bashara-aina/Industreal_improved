@@ -31,6 +31,7 @@ This test runs ~10 micro-batches with grad_accum=2, verifies:
 Usage:
     python scripts/integration_test.py
 """
+# DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import sys
 import time

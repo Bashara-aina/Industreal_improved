@@ -15,6 +15,7 @@ Note: This is the smallest, most surgical probe. The eval-harness check
 Usage:
     python scripts/mvp_probe4_tal_vs_3x3.py --n-steps 200
 """
+# DEPRECATED: This script uses the legacy MTLMViTModel. Use POPWMultiTaskModel from src/models/model.py instead.
 import argparse
 import json
 import sys
