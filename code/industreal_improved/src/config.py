@@ -720,8 +720,8 @@ ORIGINAL_HEIGHT = 720
 #   480^2 / 224^2 ~ 4.6x the 224px activation volume.
 #   At batch=2: estimated ~2.5-3.5 GB additional VRAM for the detection
 #   backbone+FPN pass. Total model fits within 16 GB (RTX 5060 Ti).
-DETECTION_RESOLUTION = 224  # Detection head feature resolution (px)
-USE_HIGH_RES_DETECTION = False  # When True, detection uses 480px input
+DETECTION_RESOLUTION = int(os.environ.get("DETECTION_RESOLUTION", "224"))  # 224 default, 480 for high-res detection
+USE_HIGH_RES_DETECTION = os.environ.get("USE_HIGH_RES_DETECTION", "0") == "1"  # 480px dual-res detection flag
 
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]

@@ -1603,7 +1603,17 @@ def train_one_epoch(
             video_ids = (
                 [m["recording_id"] for m in targets["metadata"]] if "metadata" in targets else None
             )
-            outputs = model(images, video_ids=video_ids, clip_rgb=clip_rgb)
+            # === Dual-resolution detection (USE_HIGH_RES_DETECTION=True) ===
+            # Resize a copy of the input image to DETECTION_RESOLUTION (480px)
+            # for the detection head's second backbone pass. Other heads
+            # continue to use the lower-res `images` features.
+            images_det = None
+            if bool(getattr(C, "USE_HIGH_RES_DETECTION", False)) and images.dim() == 4:
+                _det_res = int(getattr(C, "DETECTION_RESOLUTION", 480))
+                images_det = torch.nn.functional.interpolate(
+                    images, size=(_det_res, _det_res), mode="bilinear", align_corners=False
+                )
+            outputs = model(images, video_ids=video_ids, clip_rgb=clip_rgb, images_det=images_det)
         for _k in ("cls_preds", "reg_preds", "head_pose", "psr_logits", "act_logits"):
             if _k in outputs and isinstance(outputs[_k], torch.Tensor):
                 outputs[_k] = outputs[_k].float()

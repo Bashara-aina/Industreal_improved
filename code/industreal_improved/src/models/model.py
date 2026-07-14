@@ -213,6 +213,14 @@ class ConvNeXtBackbone(nn.Module):
 
         self.model = convnext_tiny(weights=ConvNeXt_Tiny_Weights.DEFAULT if pretrained else None)
         self.use_checkpoint = use_checkpoint
+        # === Dual-resolution detection support (USE_HIGH_RES_DETECTION) ===
+        # When True, the model accepts an `images_det` argument to forward() and
+        # runs a second backbone pass at the higher resolution for the
+        # detection head only. Other heads continue to use the lower-res
+        # backbone features. Default off; flip on via env or attribute.
+        self.use_high_res_detection = bool(
+            __import__("src.config", fromlist=["USE_HIGH_RES_DETECTION"]).USE_HIGH_RES_DETECTION
+        )
 
         # Stage definitions: (stage_modules, output_name)
         # Stages 0-1: stem + stage1 -> C2 (stride 4, 96ch)
@@ -2042,6 +2050,11 @@ class POPWMultiTaskModel(nn.Module):
         self.backbone = build_backbone(
             backbone_type, pretrained=pretrained, use_checkpoint=use_backbone_checkpoint
         )
+        # === Dual-resolution detection: enable second backbone pass at 480px ===
+        # Set the flag on the backbone so forward() can decide whether to use it.
+        self.backbone.use_high_res_detection = bool(
+            getattr(C, "USE_HIGH_RES_DETECTION", False)
+        )
 
         # Channel dimensions by backbone type
         if backbone_type == "convnext_tiny":
@@ -2204,14 +2217,21 @@ class POPWMultiTaskModel(nn.Module):
         images: torch.Tensor,
         video_ids: Optional[List[str]] = None,
         clip_rgb: Optional[torch.Tensor] = None,
+        images_det: Optional[torch.Tensor] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Full forward pass.
 
         Args:
-            images: [B, 3, H, W] -- current frame
+            images: [B, 3, H, W] -- current frame (typically 224px)
             video_ids: list of video IDs for Feature Bank (optional)
             clip_rgb: [B, T, 3, 224, 224] optional clip for VideoMAE stream (Doc 2 A.1)
+            images_det: [B, 3, Hd, Wd] optional high-res image (e.g. 480px) used ONLY
+                       for the detection head. When provided, the detection head
+                       runs a second backbone pass on this image for improved
+                       small-object detection. Other heads still use the
+                       lower-res `images` features. Set USE_HIGH_RES_DETECTION=True
+                       in config to enable. (Doc 2 §T2.3)
         Returns:
             dict with all outputs
         """
@@ -2226,6 +2246,34 @@ class POPWMultiTaskModel(nn.Module):
             images = images.reshape(BT, images.shape[2], images.shape[3], images.shape[4])
 
         c2, c3, c4, c5 = self.backbone(images)
+
+        # === Dual-resolution detection (USE_HIGH_RES_DETECTION=True) ===
+        # If images_det is provided, run a second backbone pass at higher resolution
+        # for the detection head only. The first backbone pass (above) provides
+        # c2-c5 for activity, PSR, pose, and FiLM modulation. The second pass
+        # provides finer c3-c5 for the detection head.
+        use_high_res = bool(getattr(self, "use_high_res_detection", False))
+        if images_det is not None and use_high_res:
+            _c2_det, _c3_det, _c4_det, _c5_det = self.backbone(images_det)
+            _c3_det, _c4_det, _c5_det = (
+                torch.nan_to_num(_c3_det, nan=0.0, posinf=100.0, neginf=-100.0).clamp(-100.0, 100.0),
+                torch.nan_to_num(_c4_det, nan=0.0, posinf=100.0, neginf=-100.0).clamp(-100.0, 100.0),
+                torch.nan_to_num(_c5_det, nan=0.0, posinf=100.0, neginf=-100.0).clamp(-100.0, 100.0),
+            )
+            pyramid_det = self.fpn(_c3_det, _c4_det, _c5_det)
+            for _k in pyramid_det:
+                if not torch.isfinite(pyramid_det[_k]).all():
+                    pyramid_det[_k] = torch.where(
+                        torch.isfinite(pyramid_det[_k]),
+                        pyramid_det[_k].clamp(-100.0, 100.0),
+                        torch.zeros_like(pyramid_det[_k]),
+                    )
+                else:
+                    pyramid_det[_k] = pyramid_det[_k].clamp(-100.0, 100.0)
+            # Override the pyramid used by detection head below
+            _use_high_res = True
+        else:
+            _use_high_res = False
 
         # NaN guard: sanitize backbone features before FPN. A single NaN in
         # c2-c5 infects all downstream heads. torch.where preserves gradient
@@ -2250,7 +2298,9 @@ class POPWMultiTaskModel(nn.Module):
             else:
                 pyramid[_k] = pyramid[_k].clamp(-100.0, 100.0)
 
-        cls_preds, reg_preds = self.detection_head(pyramid)
+        # === Use high-res pyramid for detection if available ===
+        _det_pyramid = pyramid_det if _use_high_res else pyramid
+        cls_preds, reg_preds = self.detection_head(_det_pyramid)
         anchors = self.anchor_gen(pyramid)
 
         heatmaps, keypoints, pose_confidence = self.pose_head(pyramid["p3"])
