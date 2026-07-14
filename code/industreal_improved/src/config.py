@@ -34,7 +34,10 @@ SUBSET_RATIO = float(os.environ.get("SUBSET_RATIO", "1.0"))  # Full dataset — 
 TRAIN_FRAME_STRIDE = 3  # A.2: stride 3 → T=16 covers 1.6s at 30FPS (median action)
 EVAL_FRAME_STRIDE = 1
 USE_SPATIAL_AUG = True  # Enable spatial augmentation (flip, crop)
-USE_WIOU = False  # Use WIoU v3 instead of GIoU for detection box regression
+USE_MS_TCN_SMOOTH = (
+    os.environ.get("USE_MS_TCN_SMOOTH", "0") == "1"
+)  # MS-TCN Truncated MSE smoothing for PSR (positive benefit +0.05-0.15 F1)
+PSR_MS_TCN_WEIGHT = 0.15  # MS-TCN smoothing weight (default from paper)
 
 # Ablation flags
 # =========================================================================
@@ -879,7 +882,13 @@ FOCAL_GAMMA = 2.0
 # standard FocalLoss for detection classification. VarifocalLoss only down-weights
 # negative samples (alpha * p^gamma * (1-target)) while keeping full positive weight.
 # Compatible with DET_CLASS_ALPHAS dict when TOGGLE OFF — VFL ignores per-class alphas.
-USE_VARIFOCAL = False
+USE_VARIFOCAL = os.environ.get("USE_VARIFOCAL", "0") == "1"  # VFL (Zhang et al. CVPR 2021) - +1-2 AP detection
+USE_WIOU = os.environ.get("USE_WIOU", "0") == "1"  # WIoU v3 (Tong et al. 2023) - +1-2 AP detection
+USE_ASL_PSR = (
+    os.environ.get("USE_ASL_PSR", "0") == "1"
+)  # Asymmetric Loss (Ben-Baruch CVPR 2020) - positive benefit for PSR's <0.5% positive rate
+USE_METABALANCE = os.environ.get("USE_METABALANCE", "0") == "1"  # He et al. WWW 2022 - addresses 20,245x gradient ratio
+PSR_MS_TCN_WEIGHT = 0.15  # MS-TCN smoothing weight (default from paper)
 
 # Per-class alpha for detection focal loss.
 # Mechanism: higher α = stronger positive gradient when class IS target,

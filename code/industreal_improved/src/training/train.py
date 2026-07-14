@@ -187,6 +187,7 @@ CFG_USE_FAMO = bool(getattr(C, "USE_FAMO", False))
 CFG_USE_IMTL_L = bool(getattr(C, "USE_IMTL_L", False))
 CFG_USE_RLW = bool(getattr(C, "USE_RLW", False))
 CFG_USE_UW_SO = bool(getattr(C, "USE_UW_SO", False))
+CFG_USE_MS_TCN_SMOOTH = bool(getattr(C, "USE_MS_TCN_SMOOTH", False))
 CFG_VAL_NUM_WORKERS = int(getattr(C, "VAL_NUM_WORKERS", C.NUM_WORKERS))
 CFG_VAL_BATCH_SIZE = int(getattr(C, "VAL_BATCH_SIZE", C.BATCH_SIZE))
 CFG_EVAL_MAX_BATCHES = int(getattr(C, "EVAL_MAX_BATCHES", 0))
@@ -4044,6 +4045,7 @@ def main(args):
         use_rlw=CFG_USE_RLW,
         use_uw_so=CFG_USE_UW_SO,
         uw_so_temperature=float(getattr(C, "UW_SO_TEMPERATURE", 1.0)),
+        use_ms_tcn_smooth=CFG_USE_MS_TCN_SMOOTH,
     ).to(device)
     criterion.set_class_counts(class_counts)
 

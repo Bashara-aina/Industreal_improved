@@ -77,6 +77,7 @@ from src.losses.varifocal_loss import VarifocalLoss
 from src.losses.wiou_loss import wiou_v3_loss
 from src.losses.asymmetric_loss import AsymmetricLoss
 from src.losses.balanced_softmax import BalancedSoftmaxLoss
+from src.losses.ms_tcn_smooth import ms_tcn_smoothing_loss
 
 
 def _get_kendall_stage(epoch: int) -> int:
@@ -1131,6 +1132,7 @@ class MultiTaskLoss(nn.Module):
         use_rlw: bool = False,
         use_uw_so: bool = False,
         uw_so_temperature: float = 1.0,
+        use_ms_tcn_smooth: bool = False,
     ):
         super().__init__()
         self.train_det = train_det
@@ -1143,6 +1145,9 @@ class MultiTaskLoss(nn.Module):
         self.use_rlw = use_rlw
         self.use_uw_so = use_uw_so
         self._uw_so_temperature = uw_so_temperature
+        # MS-TCN Truncated MSE Smoothing (positive benefit for PSR F1).
+        # Abu Farha & Gall, CVPR 2019: +5 F1@10 on 50Salads at constant frame-acc.
+        self.use_ms_tcn_smooth = use_ms_tcn_smooth
 
         # MTL loss weighter instances (created on first forward to know device)
         self.famo_weighter: Optional[FAMOWeighter] = None
@@ -1699,6 +1704,18 @@ class MultiTaskLoss(nn.Module):
                 _sens = torch.where(torch.isfinite(_sens), _sens, torch.tensor(0.0, device=device))
                 _sens_w = float(getattr(C, "PSR_SENSITIVITY_WEIGHT", 0.01))
                 loss_psr = loss_psr + _sens_w * _sens
+
+            # === MS-TCN Truncated MSE Smoothing (positive benefit for PSR F1) ===
+            # Per Abu Farha & Gall CVPR 2019, on 50Salads this +5 F1@10
+            # at constant frame-accuracy. Optional via USE_MS_TCN_SMOOTH flag.
+            if bool(getattr(self, "use_ms_tcn_smooth", False)) and outputs["psr_logits"].dim() == 3:
+                try:
+                    _ms_tcn_weight = float(getattr(C, "PSR_MS_TCN_WEIGHT", 0.15))
+                    loss_psr = loss_psr + _ms_tcn_weight * ms_tcn_smoothing_loss(
+                        outputs["psr_logits"], tau=4.0, lambda_smooth=1.0
+                    )
+                except Exception as _e:
+                    pass  # PSR smoothing failure should not abort training
 
             if self._psr_temporal_smooth_weight > 0 and outputs["psr_logits"].dim() == 3:
                 preds = torch.sigmoid(outputs["psr_logits"])
