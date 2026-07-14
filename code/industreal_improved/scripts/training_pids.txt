@@ -1,6 +1,10 @@
-# Training PIDs (for monitoring only)
-# MTL baseline (GPU 1): 2886409 — runs/aa_main_mtl/
-# ST pose baseline (GPU 0): 2886480 — runs/aa_st_pose/
-# Started: Tue Jul 14 04:43:04 PM JST 2026
-# Kill with: kill 2886409 2886480
-# Monitor with: bash scripts/monitor_training.sh
+# Training PIDs (2026-07-14 18:35 update)
+# MTL 480 T=8 baseline (GPU 1 = RTX 5060 Ti): 3245451
+#   runs/aa_main_mtl/train.log
+#   Settings: DETECTION_RESOLUTION=480, USE_HIGH_RES_DETECTION=1, PSR_SEQUENCE_LENGTH=8
+#   num_workers=0, batch=6, accum=8
+# ST pose baseline (GPU 0 = RTX 3060): 3254504
+#   runs/aa_st_pose/train.log
+#   Settings: BATCH_SIZE=2, num_workers=0, 30 epochs
+# Monitor: bash scripts/monitor_training.sh
+# Kill: kill 3245451 3254504
