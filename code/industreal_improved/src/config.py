@@ -2334,6 +2334,13 @@ PRESETS = {
         "benchmark_mode": True,
         "use_tma_cell": True,
         "use_temporal_bank": True,
+        # [FIX 2026-07-15] Disable transition objective: under USE_PSR_TRANSITION=True,
+        # per-frame batches structurally zero PSR loss (only seq batches every 4 steps
+        # compute it). This starves 5/11 rare-transition components — they only get
+        # gradient when a seq batch 8-frame window happens to capture their transition.
+        # Per-frame focal BCE gives EVERY batch PSR gradient for ALL 11 components,
+        # with per-component alpha/weights handling label imbalance.
+        "use_psr_transition": False,
         # Keep existing batch/accum from module defaults (batch=6, accum=8)
     },
     "img_size_balanced": {

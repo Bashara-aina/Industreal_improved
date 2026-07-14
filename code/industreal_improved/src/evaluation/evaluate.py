@@ -545,6 +545,10 @@ def compute_authors_psr_metrics(
     all_f1, all_pos, all_delay = [], [], []
     all_sys_TPs = all_sys_FPs = all_sys_FNs = 0
     processed = 0
+    _n_short = 0
+    _n_no_gt = 0
+    _n_empty_gt = 0
+    _n_no_events = 0
 
     for rec_id, pred_rows in by_rec_preds.items():
         # Sort by frame number (stable)
@@ -553,17 +557,21 @@ def compute_authors_psr_metrics(
         frame_nums = np.asarray(by_rec_frames[rec_id], dtype=np.int64)[order]
 
         if pred_bin.shape[0] < 2:
+            _n_short += 1
+            logger.info(f"  [AUTHORS PSR] {rec_id}: too few frames ({pred_bin.shape[0]}), skipping")
             continue
 
         # Load GT from PSR_labels.csv
         gt_path = Path(recordings_root) / split / rec_id / "PSR_labels.csv"
         if not gt_path.exists():
-            logger.debug(f"  [AUTHORS PSR] No PSR_labels.csv for {rec_id}, skipping")
+            _n_no_gt += 1
+            logger.info(f"  [AUTHORS PSR] {rec_id}: PSR_labels.csv not found at {gt_path}, skipping")
             continue
 
         gt_events = _load_psr_labels(str(gt_path))
         if len(gt_events) == 0:
-            logger.debug(f"  [AUTHORS PSR] Empty GT for {rec_id}, skipping")
+            _n_empty_gt += 1
+            logger.info(f"  [AUTHORS PSR] {rec_id}: empty GT, skipping")
             continue
 
         # Convert per-frame binary states to step completion events
@@ -588,8 +596,10 @@ def compute_authors_psr_metrics(
                 pred_events.extend(events)
                 prev_state = curr_state
 
+        logger.info(f"  [AUTHORS PSR] {rec_id}: {len(pred_events)} predicted events from {pred_bin.shape[0]} frames (method={_psr_method})")
         if len(pred_events) == 0:
-            logger.debug(f"  [AUTHORS PSR] No predicted events for {rec_id}, skipping")
+            _n_no_events += 1
+            logger.info(f"  [AUTHORS PSR] {rec_id}: no predicted events (check sigmoid range & threshold), skipping")
             continue
 
         # Score
@@ -603,7 +613,7 @@ def compute_authors_psr_metrics(
         processed += 1
 
     if processed == 0:
-        logger.warning("  [AUTHORS PSR] No recordings processed — returning zeros")
+        logger.warning(f"  [AUTHORS PSR] No recordings processed — returning zeros (n_recs={len(by_rec_preds)} short={_n_short} no_gt={_n_no_gt} empty_gt={_n_empty_gt} no_events={_n_no_events})")
         return {
             "authors_psr_f1": 0.0,
             "authors_psr_pos": 0.0,

@@ -1230,9 +1230,13 @@ class MultiTaskLoss(nn.Module):
         # [V1 Item 8] Asymmetric Loss (Ben-Baruch et al. CVPR 2020) as alternative to Focal-BCE for PSR.
         self.use_psr_asl = bool(getattr(C, "USE_ASL_PSR", False))
         if self.use_psr_asl:
-            self.psr_asl_loss = AsymmetricLoss(gamma_neg=4, gamma_pos=0, clip=0.05)
+            _asl_gn = float(getattr(C, "PSR_ASL_GAMMA_NEG", 1.0))
+            _asl_gp = float(getattr(C, "PSR_ASL_GAMMA_POS", 0.0))
+            _asl_clip = float(getattr(C, "PSR_ASL_CLIP", 0.05))
+            self.psr_asl_loss = AsymmetricLoss(gamma_neg=_asl_gn, gamma_pos=_asl_gp, clip=_asl_clip)
             logger.info(
-                "  [ASL] USE_ASL_PSR=True — using AsymmetricLoss for PSR instead of Focal-BCE"
+                "  [ASL] USE_ASL_PSR=True — using AsymmetricLoss"
+                f"(gamma_neg={_asl_gn}, gamma_pos={_asl_gp}, clip={_asl_clip}) for PSR"
             )
         self._psr_per_component_alpha: torch.Tensor = None
         self._psr_num_components = num_psr_components
