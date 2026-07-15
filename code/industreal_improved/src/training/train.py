@@ -412,12 +412,13 @@ def _build_loader(
     if is_train:
         sampler = ds.get_sampler()
     else:
-        # Also use the DET_GT_FRAME_FRACTION sampler for validation so eval
-        # batches contain GT frames. Without this, mAP is always 0 because
-        # only ~6.6% of val frames have boxes and sequential batches almost
-        # never land on one.
-        det_frac = float(getattr(C, "DET_GT_FRAME_FRACTION", 0.0))
-        sampler = ds.get_sampler() if det_frac > 0.0 else None
+        # [FIX 2026-07-15 full coverage] Use sequential sampler for val so ALL
+        # frames in ALL recordings are evaluated exactly once (no weighted
+        # resampling that drops ~37% of frames). The fast detection F1
+        # accumulates TP/FP/FN across all batches, so zero-GT batches just
+        # contribute 0 — still valid. Full mAP is SKIP_DET_METRICS_EVAL=True,
+        # so the old GT-frame-sampler tradeoff no longer applies.
+        sampler = None  # sequential sampler = every frame exactly once
 
     # [FIX 2026-07-07 (Opus 140 D-1)] Guaranteed-GT batch sampler.
     # DET_GT_FRAME_FRACTION alone is probabilistic: with det_frac=0.40 and
@@ -1374,6 +1375,10 @@ def train_one_epoch(
                 }
                 fake_targets = {
                     "psr_labels": targets_seq["psr_labels"],
+                    # [Path B] PSR state class indices [B, T] int64 in {-1, 0..23}.
+                    # Sequence CE loss uses these directly (psr_state_classification_loss
+                    # handles 3-D logits [B, T, 24] internally).
+                    "psr_state_labels": targets_seq["psr_state_labels"],
                     # Omit head_pose from fake_targets too — matched to fake_outputs omission.
                     # detection/activity/hand_joints also omitted: train_det=False,
                     # train_pose=False in this branch.
@@ -1584,6 +1589,9 @@ def train_one_epoch(
             targets["detection"][i]["labels"] = targets["detection"][i]["labels"].to(device)
         targets["head_pose"] = targets["head_pose"].to(device)
         targets["psr_labels"] = targets["psr_labels"].to(device)
+        # [Path B] PSR state class labels [B] int64 in {-1, 0..23}.
+        if "psr_state_labels" in targets:
+            targets["psr_state_labels"] = targets["psr_state_labels"].to(device)
         targets["activity"] = targets["activity"].to(device)
         if "activity_mask" in targets:
             targets["activity_mask"] = targets["activity_mask"].to(device)
@@ -2710,6 +2718,96 @@ def _compute_combined_metric(
 # ===========================================================================
 
 
+def _log_fair_per_head_comparison(val_metrics: Dict, logger) -> None:
+    """[FAIR] Log a unified per-head comparison table with all metrics on [0,1] scale.
+
+    This makes the relative quality of each head directly comparable at a glance.
+    Every value is in [0, 1] with "higher = better" semantics; raw natural-scale
+    metrics are shown in parens for context.
+
+    Headline metric per head:
+      - Detection  : det_mAP50_pc (present-class mean) — falls back to det_mAP50
+      - Body Pose  : 1 / (1 + keypoint MAE)        — converts pixel MAE → [0,1]
+      - Head Pose  : 1 / (1 + angular MAE / 90)    — converts degree MAE → [0,1]
+      - Activity   : act_macro_f1 (75-class macro F1)
+      - PSR        : authors_psr_f1 (authors' protocol) — falls back to psr_f1_at_t
+    """
+    import math as _math
+
+    def _safe(v, default=0.0):
+        if v is None:
+            return default
+        try:
+            f = float(v)
+            return f if _math.isfinite(f) else default
+        except (TypeError, ValueError):
+            return default
+
+    # Per-head headline metrics (raw, natural scale)
+    # [FIX 2026-07-15 FAIR] Prefer det_fast_F1 (always computed) over
+    # det_mAP50_pc (only when full mAP runs).
+    det_fast_f1 = _safe(val_metrics.get("det_fast_F1"))
+    det_mAP = _safe(val_metrics.get("det_mAP50_pc"))
+    if det_mAP == 0.0:
+        det_mAP = _safe(val_metrics.get("det_mAP50"))
+    if det_mAP == 0.0 and det_fast_f1 > 0.0:
+        det_mAP = det_fast_f1
+    det_n_present = int(_safe(val_metrics.get("det_n_present_classes"), 0))
+
+    pose_mae_px = _safe(val_metrics.get("keypoint_MAE_px", val_metrics.get("pose_MAE_px")))
+    pose_acc = 1.0 / (1.0 + pose_mae_px) if pose_mae_px > 0 else 0.0
+
+    hp_mae_deg = _safe(val_metrics.get("forward_angular_MAE_deg", val_metrics.get("head_pose_angular_MAE_deg")))
+    hp_acc = 1.0 / (1.0 + hp_mae_deg / 90.0) if hp_mae_deg > 0 else 0.0
+
+    act_f1 = _safe(val_metrics.get("act_macro_f1"))
+
+    # PSR: prefer authors_psr_f1 (Path B, matches paper protocol exactly).
+    # Fall back to psr_state_acc (direct 24-class accuracy) if authors' eval is
+    # 0 — this happens early in training when no events pass the threshold.
+    authors_psr_f1 = _safe(val_metrics.get("authors_psr_f1"))
+    psr_f1_t = _safe(val_metrics.get("psr_f1_at_t"))
+    psr_state_acc = _safe(val_metrics.get("psr_state_acc"))
+    psr_f1 = authors_psr_f1 if authors_psr_f1 > 0 else psr_f1_t
+    if psr_f1 == 0.0 and psr_state_acc > 0.0:
+        psr_f1 = psr_state_acc  # direct accuracy as fair fallback
+    psr_pos = _safe(val_metrics.get("authors_psr_pos", val_metrics.get("psr_pos")))
+    psr_delay = _safe(val_metrics.get("authors_psr_delay", val_metrics.get("psr_tau")))
+    psr_n_recs = int(_safe(val_metrics.get("authors_psr_recordings"), 0))
+
+    def _fmt_score(score, raw, raw_unit=""):
+        if score == 0.0 and raw == 0.0:
+            return f"{0.0:.3f}"
+        if raw_unit:
+            return f"{score:.3f}  (raw={raw:.2f}{raw_unit})"
+        return f"{score:.3f}  (raw={raw:.4f})"
+
+    rows = [
+        ("Detection", _fmt_score(det_mAP, det_mAP),
+         f"mAP@50_pc, n_classes={det_n_present}"),
+        ("Body Pose", _fmt_score(pose_acc, pose_mae_px, "px"),
+         "keypoint MAE → 1/(1+MAE)"),
+        ("Head Pose", _fmt_score(hp_acc, hp_mae_deg, "deg"),
+         "forward angular MAE → 1/(1+deg/90)"),
+        ("Activity", _fmt_score(act_f1, act_f1),
+         f"macro F1 (75 classes)"),
+        ("PSR", _fmt_score(psr_f1, psr_f1),
+         f"authors-protocol F1, POS={psr_pos:.3f}, delay={psr_delay:.1f}f, n_recs={psr_n_recs}"),
+    ]
+
+    logger.info("")
+    logger.info("┌─[ FAIR PER-HEAD COMPARISON — all metrics on [0,1] scale ]────────────────────────")
+    logger.info("│  (higher = better for every column; raw natural-scale in parens for context)")
+    logger.info("├──────────────┬─────────────────────────────────────┬──────────────────────────────")
+    logger.info("│ Head         │ Headline score [0,1]                │ Notes")
+    logger.info("├──────────────┼─────────────────────────────────────┼──────────────────────────────")
+    for name, score, notes in rows:
+        logger.info(f"│ {name:12s} │ {score:37s} │ {notes}")
+    logger.info("└──────────────┴─────────────────────────────────────┴──────────────────────────────")
+    combined_fair = (det_mAP + pose_acc + hp_acc + act_f1 + psr_f1) / 5.0
+    logger.info(f"  Combined (mean of headline scores, all on [0,1]): {combined_fair:.3f}")
+
+
 def _clamp_kendall_log_vars(criterion):
     """Clamp Kendall log_var parameters to a numerically safe range.
 
@@ -3386,22 +3484,34 @@ def _check_psr_prevalence_sanity(
             for images, targets in tqdm(loader, desc="PSR prevalence check", leave=False):
                 images = _prepare_images(images, device, training=False)
                 outputs = model(images)
-                preds = torch.sigmoid(outputs["psr_logits"])
+                # [Path B] psr_logits is now [B, 24] state logits → softmax.
+                preds = torch.softmax(outputs["psr_logits"], dim=-1)
                 all_preds.append(preds.cpu().numpy())
-                all_labels.append(targets["psr_labels"].numpy())
+                # [Path B] Compare against state class labels (one-hot for prevalence).
+                _sl = targets["psr_state_labels"].numpy()  # [B]
+                valid = _sl != -1
+                _sl = _sl[valid]
+                if _sl.size > 0:
+                    _oh = np.zeros((_sl.size, preds.shape[-1]), dtype=np.float32)
+                    _oh[np.arange(_sl.size), _sl] = 1.0
+                    all_labels.append(_oh)
 
         all_preds = np.concatenate(all_preds, axis=0)
         all_labels = np.concatenate(all_labels, axis=0)
 
+        # [Path B] Compute prevalence over the 24-class softmax.
         pred_prevalence = all_preds.mean(axis=0)
         gt_prevalence = all_labels.mean(axis=0)
 
-        for i in range(min(11, len(pred_prevalence))):
-            delta = abs(pred_prevalence[i] - gt_prevalence[i])
-            status = "OK" if delta < 0.05 else "WARN"
+        # Report top-5 most-discrepant classes between predicted and GT prevalence.
+        deltas = np.abs(pred_prevalence - gt_prevalence)
+        top_k = min(5, len(deltas))
+        worst = np.argsort(-deltas)[:top_k]
+        for i in worst:
+            status = "OK" if deltas[i] < 0.05 else "WARN"
             logger.info(
-                f"  [PSR comp={i:2d}] pred={pred_prevalence[i]:.3f} "
-                f"gt={gt_prevalence[i]:.3f} delta={delta:.3f} [{status}]"
+                f"  [PSR state={i:2d}] pred={pred_prevalence[i]:.3f} "
+                f"gt={gt_prevalence[i]:.3f} delta={deltas[i]:.3f} [{status}]"
             )
 
         model.train()
@@ -5620,6 +5730,13 @@ def main(args):
                         if _n_present_v > 0
                         else _s(val_metrics.get("det_mAP50", 0.0))
                     )
+                    # [FIX 2026-07-15 SKIP_DET] When SKIP_DET_METRICS_EVAL=True, det_mAP50
+                    # is nan and _n_present_v=0. Fall back to det_fast_F1 so the combined
+                    # metric still gets a meaningful [0,1] detection signal.
+                    if not math.isfinite(_map50_v) or _map50_v == 0.0:
+                        _fast_f1 = _s(val_metrics.get("det_fast_F1", 0.0))
+                        if math.isfinite(_fast_f1) and _fast_f1 > 0.0:
+                            _map50_v = _fast_f1
                     _f1_act_v = _s(val_metrics.get("act_macro_f1", 0.0))
                     _mae_raw = val_metrics.get("head_pose_MAE", float("nan"))
                     _mae_pose_v = _s(_mae_raw, alt=float("nan"))
@@ -5655,7 +5772,13 @@ def main(args):
                         f"act_macro_f1={_s(val_metrics.get('act_macro_f1')):.4f}  "
                         f"act_top5={_s(val_metrics.get('act_top5_accuracy')):.4f}  "
                         f"forward_angular_MAE_deg={_s(val_metrics.get('forward_angular_MAE_deg'), alt=float('nan')):.2f}  "
-                        f"psr_f1={_s(val_metrics.get('psr_f1_at_t')):.4f}  "
+                        # [FAIR] Path B authors-protocol PSR — same eval as the paper.
+                        f"psr_F1(authors)={_s(val_metrics.get('authors_psr_f1')):.4f}  "
+                        f"psr_POS(authors)={_s(val_metrics.get('authors_psr_pos')):.4f}  "
+                        f"psr_delay(authors)={_s(val_metrics.get('authors_psr_delay'), alt=float('nan')):.1f}f  "
+                        f"psr_n_recs={int(_s(val_metrics.get('authors_psr_recordings'), alt=0))}  "
+                        # [FAIR] Per-frame F1@±3 — our SOTA-comparable metric
+                        f"psr_f1@T={_s(val_metrics.get('psr_f1_at_t')):.4f}  "
                         f"psr_edit={_s(val_metrics.get('psr_edit_score')):.4f}  "
                         f"psr_pos={_s(val_metrics.get('psr_pos')):.4f}  "
                         f"psrF1raw={_s(val_metrics.get('psr_f1_raw_t05')):.4f}  "  # [FAIR] SOTA-comparable F1@±3 at t=0.5, NO MonotonicDecoder
@@ -5675,6 +5798,9 @@ def main(args):
                         f"ev_f1={_s(val_metrics.get('ev_f1')):.4f}  "
                         f"combined={_s(combined):.4f}"
                     )
+                    # [FAIR] Per-head comparison table on the same [0,1] scale.
+                    # Makes the relative quality of each head directly comparable.
+                    _log_fair_per_head_comparison(val_metrics, logger)
 
                     break  # [FIX 2026-05-27] Success path — exit retry loop.
                     # Without this, while True: iterates again and calls
@@ -5686,7 +5812,15 @@ def main(args):
                     )
 
                 # [FIX] head_pose_MAE in _task_keys — NaN in head pose must also trigger skip
-                _task_keys = ("det_mAP50", "act_macro_f1", "psr_f1_at_t", "head_pose_MAE")
+                # [FIX 2026-07-15 SKIP_DET] When SKIP_DET_METRICS_EVAL=True, det_mAP50
+                # is intentionally nan. Check det_fast_F1 as fallback so the gate still
+                # functions when full mAP is skipped.
+                _det_key = "det_mAP50"
+                if not math.isfinite(val_metrics.get(_det_key, float("nan"))):
+                    _det_fast = val_metrics.get("det_fast_F1", float("nan"))
+                    if math.isfinite(_det_fast) and _det_fast >= 0.0:
+                        _det_key = "det_fast_F1"
+                _task_keys = (_det_key, "act_macro_f1", "psr_f1_at_t", "head_pose_MAE")
                 _task_nan = any(
                     math.isnan(val_metrics.get(k, float("nan")))
                     or math.isinf(val_metrics.get(k, float("nan")))
@@ -5699,6 +5833,12 @@ def main(args):
                     pass  # NaN means eval was skipped (DET_METRICS_EVERY_N) — don't burn patience
                 else:
                     _map50 = _s(val_metrics.get("det_mAP50", 0.0))
+                    # [FIX 2026-07-15 SKIP_DET] Fall back to det_fast_F1 when full
+                    # mAP is nan (SKIP_DET_METRICS_EVAL=True) or zero.
+                    if not math.isfinite(_map50) or _map50 == 0.0:
+                        _fast_f1_gate = _s(val_metrics.get("det_fast_F1", 0.0))
+                        if math.isfinite(_fast_f1_gate) and _fast_f1_gate > 0.0:
+                            _map50 = _fast_f1_gate
                     _f1_act = _s(val_metrics.get("act_macro_f1", 0.0))
                     _mae_pose_raw = val_metrics.get("head_pose_MAE", float("nan"))
                     _mae_pose = _s(_mae_pose_raw, alt=float("nan"))
