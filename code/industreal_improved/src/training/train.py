@@ -3438,7 +3438,7 @@ def _check_per_class_activity_sanity(
     ):
         return
 
-    per_class_acc = val_metrics.get("act_per_class_acc", [])
+    per_class_acc = val_metrics.get("act_confusion_matrix", [])
     if not per_class_acc:
         return
 

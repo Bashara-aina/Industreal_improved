@@ -595,9 +595,10 @@ class VideoMultiTaskModel(nn.Module):
         )
 
         # -- 8. PSR Head --
-        psr_full = self.psr_head(pyramid)
-        psr_logits = psr_full[..., :11]
-        psr_confidence = psr_full[..., 11:]
+        # [Path B 2026-07-15] PSR head now returns 24-class state logits directly
+        # (was 11 component logits + 1 confidence = 12). No slicing needed.
+        psr_logits = self.psr_head(pyramid)  # [B, 24]
+        psr_confidence = torch.softmax(psr_logits, dim=-1).max(dim=-1, keepdim=True)[0]  # [B, 1]
 
         # -- 9. Keypoint normalization --
         if self.train_pose:

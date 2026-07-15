@@ -596,6 +596,19 @@ NUM_HAND_JOINTS = 26
 # --- Procedure Step Recognition (PSR) ---
 NUM_PSR_STEPS = 36  # number of distinct procedure step types (from procedure_info.json)
 NUM_PSR_COMPONENTS = 11  # number of assembly components (comp0-comp19 in PSR_labels_raw.csv)
+# [Path B] PSR 24-class state space (background + 22 valid 11-bit states + error_state).
+# Matches psr_categories.CATEGORIES — see src/data/psr_categories.py.
+NUM_PSR_STATES = 24
+# [Path B] State classification loss config. Replaces per-component binary focal.
+PSR_STATE_LABEL_SMOOTHING = 0.1  # uniform smoothing across 23 non-true classes
+PSR_STATE_FOCAL_GAMMA = 1.5       # focal-style modulation; 0 = plain CE
+PSR_STATE_CB_BETA = 0.99          # effective-number decay (Cui et al. 2019); softer than 0.999
+# Authors' PSR pipeline (eval-only, no training impact). Used to convert
+# 24-class softmax predictions → step completion events → POS/F1/delay.
+PSR_AUTHORS_METHOD = "accumulated"  # options: naive, accumulated
+PSR_AUTHORS_CONF_THRESHOLD = 0.6    # for naive (B1)
+PSR_AUTHORS_CUM_THRESHOLD = 8.0     # for accumulated (B2/B3)
+PSR_AUTHORS_CUM_DECAY = 0.75       # multiplicative decay per frame
 # [NEW METRIC 2026-07-04] Per-component PSR threshold calibration (Add 2 / Q18).
 PSR_PER_COMPONENT_THRESHOLDS = False  # default off; when True, calibrates per-component thresholds
 # using prevalence-aligned prior: threshold[c] = base * 1/sqrt(prevalence[c])
@@ -770,7 +783,7 @@ GRAD_CLIP_NORM = (
 # 5.0 is the standard multi-task value (still safe against gradient explosion).
 VAL_EVERY = 1  # Evaluate every epoch (was 3 — now that training is stable, more frequent val is safe and informative)
 VAL_EVERY_N_STEPS = 0  # Disabled — intra-epoch step-vals caused CUDA hangs. End-of-epoch val every VAL_EVERY epochs is sufficient.
-EVAL_MAX_BATCHES = 250  # Cap validation to 250 batches — shorter eval window reduces CUDA hang risk
+EVAL_MAX_BATCHES = 500  # [FIX 2026-07-15] Was 250 — at VAL_BATCH_SIZE=4, 250x4=1000 frames = only 52% of 1928-val. 500x4=2000 covers 100%.
 # Full 38K-frame eval takes 5+ hours. Fast val every epoch,
 # then one full eval at the very end before the paper deadline.
 
@@ -1275,10 +1288,12 @@ CLEAR_FRAME_CACHE_EPOCH_END = True  # free ~5-7GB FRAME_CACHE between epochs
 USE_LDAM_DRW = True  # [V2 D7 + A5] Activated — CB-Focal loss moves, LDAM-DRW wiring verified solid. Deferred DRW to epoch 50 to avoid 1-class collapse from s=30 + CB + LS early on.
 LDAM_MAX_M = 0.5
 LDAM_S = 30
-LDAM_DRW_EPOCH = 50  # [V2 D7 + A5] Deferred — run LDAM margins only for 50 epochs, then introduce CB re-weighting.
-# Deferred to avoid 1-class collapse from s=30 × CB sampling × label smoothing simultaneously.
-# The prior "epoch 0" setting was correct in spirit but risky in practice: the first 50 epochs let
-# features stabilize before CB re-weighting kicks in, matching the original LDAM-DRW paper intent.
+LDAM_DRW_EPOCH = 15  # [FIX 2026-07-16] Reduced from 50 to 15 for 30-epoch training schedules.
+# At 30 max-epochs with DRW_EPOCH=50, class-balanced reweighting NEVER activates,
+# causing activity macro F1 to stagnate at ~0.21 (target 0.35-0.50). Lowering to
+# epoch 15 gives 15 epochs of LDAM margins then 15 epochs of CB reweighting,
+# matching the original LDAM-DRW paper's midpoint-activation strategy on short runs.
+# For 100-epoch runs, increase back to 50.
 
 # [OPUS FIX] LDAM_USE_DRW flag: when True, LDAMLoss.set_class_counts wires cb_weights
 # so that DRW applies class-balanced re-weighting at epoch >= LDAM_DRW_EPOCH.
@@ -1353,7 +1368,7 @@ USE_AUTHORS_PSR_EVAL = True  # Enable only during paper-comparison runs
 #   "accumulated" (B2/B3 equivalent): accumulate confidences per action with
 #     exponential decay; emit when cumulative confidence > PSR_AUTHORS_CUM_THRESHOLD.
 #   "none": raw frame-to-frame diff (original behavior, no debounce).
-PSR_AUTHORS_METHOD = "naive"
+PSR_AUTHORS_METHOD = "accumulated"  # [FIX 2026-07-15 FAIR] must match training section (line 608) for Path B consistency
 
 # NaivePSR (B1) confidence threshold. Only accept a component state change
 # when |sigmoid - 0.5| > (threshold - 0.5). 0.5 = no filtering (same as
@@ -1498,9 +1513,11 @@ DET_METRICS_EVERY_N = int(
 # [F11 2026-07-02 Fable consult] 200 → 250: at VAL_BATCH_SIZE=8, 200 batches
 # covered only 1600/1928 val frames (83%) — tail activity groups could be
 # entirely absent from a gated eval, making macro-F1 noisy exactly where gate
-# decisions are made. 250 covers the full val set for +25% eval time.
+# decisions are made.
+# [FIX 2026-07-15] 250 → 500: VAL_BATCH_SIZE was reduced from 8 to 4, so
+# 250x4=1000 frames only covers 52%. 500x4=2000 covers 100%.
 GATE_EVAL_MAX_BATCHES = int(
-    os.environ.get("GATE_EVAL_MAX_BATCHES", "250")
+    os.environ.get("GATE_EVAL_MAX_BATCHES", "500")
 )  # Max val batches on non-full-eval epochs
 
 # [OPUS DECISION 5] Use subprocess evaluation on GPU 0 (idle RTX 3060).

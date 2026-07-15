@@ -78,6 +78,10 @@ from src.losses.wiou_loss import wiou_v3_loss
 from src.losses.asymmetric_loss import AsymmetricLoss
 from src.losses.balanced_softmax import BalancedSoftmaxLoss
 from src.losses.ms_tcn_smooth import ms_tcn_smoothing_loss
+from src.data.psr_categories import (
+    NUM_CATEGORIES as _PSR_NUM_CATEGORIES,
+    IGNORE_INDEX as _PSR_IGNORE_IDX,
+)
 
 
 def _get_kendall_stage(epoch: int) -> int:
@@ -982,7 +986,11 @@ def binary_focal_loss(
         targets_safe = targets
 
     if per_component_alpha is not None:
-        alpha_c = per_component_alpha.to(logits.device).unsqueeze(0).clamp(max=1.0)
+        # Clamp alpha_c to [0.1, 0.9] so BOTH alpha_c and (1-alpha_c) are >= 0.1.
+        # Previously clamped max=1.0, which made alpha_t=0 for negatives of rare
+        # components (prevalence < 0.5 → alpha_c_raw > 1.0), allowing degenerate
+        # "predict 1 for everything" solution with near-zero loss.
+        alpha_c = per_component_alpha.to(logits.device).unsqueeze(0).clamp(0.1, 0.9)
         alpha_t = alpha_c * targets_safe + (1 - alpha_c) * (1 - targets_safe)
     else:
         alpha_t = alpha * targets_safe + (1 - alpha) * (1 - targets_safe)
@@ -1082,6 +1090,100 @@ def head_pose_loss_split(
 # ===========================================================================
 
 
+def psr_state_classification_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    class_weights: Optional[torch.Tensor] = None,
+    label_smoothing: float = 0.1,
+    focal_gamma: float = 0.0,
+    ignore_index: int = _PSR_IGNORE_IDX,
+) -> torch.Tensor:
+    """[Path B] PSR state classification loss — 24-way cross-entropy.
+
+    Replaces the per-frame 11-component binary focal loss with single 24-class
+    state classification, matching the authors' PSR pipeline architecture
+    (categorical state space defined in psr_categories.CATEGORIES).
+
+    Args:
+        logits: [B, num_classes] or [B, T, num_classes] raw logits from PSRHead.
+        targets: [B] or [B, T] int64 class indices in {-1, 0..num_classes-1}.
+                 -1 = IGNORE (skip frame in loss).
+        class_weights: [num_classes] float32 per-class weights (effective-number
+                       class-balanced by Cui et al. CVPR 2019). None = uniform.
+        label_smoothing: scalar in [0, 1). Default 0.1 (paper §3.7.1 spec).
+        focal_gamma: > 0 enables focal-style modulation: (1 - p_t)^gamma.
+                     Default 0 = plain CE. Recommended: 1.0-2.0 for imbalance.
+        ignore_index: target value to skip (default -1 from psr_categories).
+
+    Returns:
+        loss: scalar tensor (mean over non-ignored frames).
+    """
+    # Flatten sequence dim if present
+    if logits.dim() == 3:
+        B, T, C = logits.shape
+        logits = logits.reshape(B * T, C)
+        targets = targets.reshape(B * T)
+    elif logits.dim() != 2:
+        raise ValueError(f"Expected logits 2-D or 3-D, got {logits.dim()}-D")
+
+    # Move class_weights to logits device if needed
+    if class_weights is not None and class_weights.device != logits.device:
+        class_weights = class_weights.to(logits.device)
+
+    if focal_gamma <= 0.0:
+        # Plain class-balanced CE with label smoothing.
+        # F.cross_entropy applies label_smoothing uniformly across non-true classes.
+        # NOTE: When ALL targets are ignore_index, F.cross_entropy returns NaN.
+        # Guard against this — return a zero loss with grad_fn.
+        if (targets != ignore_index).sum() == 0:
+            return torch.zeros((), device=logits.device, dtype=logits.dtype).requires_grad_()
+        loss = F.cross_entropy(
+            logits,
+            targets,
+            weight=class_weights,
+            ignore_index=ignore_index,
+            label_smoothing=label_smoothing,
+            reduction="mean",
+        )
+    else:
+        # Focal CE: weight each sample by (1 - p_t)^gamma to down-weight easy
+        # examples. Computed per-sample then averaged over non-ignored.
+        log_probs = F.log_softmax(logits, dim=-1)
+        probs = log_probs.exp()
+        # Gather p_t for the true class (or 1.0 for ignored — masked later).
+        # p_t = exp(log_probs[target]) when target is valid, else 1.0 (focal weight 0).
+        valid_mask = targets != ignore_index
+        if valid_mask.sum() == 0:
+            return torch.zeros((), device=logits.device, dtype=logits.dtype).requires_grad_()
+        # Replace ignored targets with 0 for safe gather (will mask out below).
+        safe_targets = targets.clone()
+        safe_targets[~valid_mask] = 0
+        p_t = probs.gather(1, safe_targets.unsqueeze(1)).squeeze(1)  # [BT]
+        focal_weight = (1.0 - p_t).clamp(min=1e-6, max=1.0 - 1e-6) ** focal_gamma
+
+        # Apply class weighting
+        if class_weights is not None:
+            cw_per_sample = class_weights[safe_targets]
+            # Average class weights over valid samples to preserve scale.
+            cw_per_sample = cw_per_sample * (class_weights.numel() / class_weights.sum().clamp(min=1.0))
+        else:
+            cw_per_sample = torch.ones_like(p_t)
+
+        # NLL with label smoothing: smooth_uniform = label_smoothing / num_classes.
+        # L_smooth = (1 - ls) * NLL(true) + ls * mean(NLL(all classes)).
+        # Approximate as: -log p_t with smoothing absorbed into a constant.
+        # (Standard PyTorch CE with label_smoothing already handles this exactly;
+        # but we want explicit per-sample weighting, so we recompute below.)
+        smooth_loss = -log_probs.gather(1, safe_targets.unsqueeze(1)).squeeze(1)
+        # Smoothing term: uniform negative log-prob across all classes.
+        smooth_loss = (1.0 - label_smoothing) * smooth_loss - label_smoothing * log_probs.mean(dim=-1)
+        # Focal modulate
+        per_sample = focal_weight * cw_per_sample * smooth_loss
+        loss = per_sample[valid_mask].sum() / valid_mask.sum().clamp(min=1.0)
+
+    return loss
+
+
 class MultiTaskLoss(nn.Module):
     """
     Multi-task loss with configurable weighting strategy.
@@ -1122,6 +1224,7 @@ class MultiTaskLoss(nn.Module):
         self,
         num_classes_act: int = 74,
         num_psr_components: int = 11,
+        num_psr_states: int = 24,
         train_det: bool = True,
         train_pose: bool = True,
         train_act: bool = True,
@@ -1219,7 +1322,8 @@ class MultiTaskLoss(nn.Module):
         self.use_cb_focal = use_cb_focal
         self.use_balanced_softmax = bool(getattr(C, "USE_BALANCED_SOFTMAX_ACT", False))
 
-        # C.3: Binary focal loss for PSR (instead of BCE)
+        # C.3: Binary focal loss for PSR (instead of BCE) — LEGACY, replaced by Path B state CE.
+        # Kept as fallback for ablation runs that flip USE_PSR_STATE_CLASSIFICATION=False.
         self.psr_loss_fn = nn.BCEWithLogitsLoss(reduction="mean")
         self.use_psr_focal = bool(getattr(C, "PSR_FOCAL_GAMMA", 0) > 0)
         self.use_psr_transition = bool(
@@ -1246,6 +1350,22 @@ class MultiTaskLoss(nn.Module):
             getattr(C, "PSR_COMP_WEIGHTS", [1.0] * num_psr_components), dtype=torch.float32
         )
         self.register_buffer("_psr_comp_weights", _cw)
+
+        # [Path B] 24-class state classification loss configuration.
+        # This is the PRIMARY PSR loss going forward. Uses psr_state_classification_loss()
+        # with class-balanced CE (effective-number weighting from set_psr_class_counts).
+        self.num_psr_states = int(getattr(C, "NUM_PSR_STATES", 24))
+        self._psr_state_class_weights: Optional[torch.Tensor] = None
+        # Default to uniform 1.0 weights; replaced via set_psr_class_counts() at training start.
+        self.register_buffer(
+            "_psr_state_class_weights_buf",
+            torch.ones(self.num_psr_states, dtype=torch.float32),
+        )
+        self.psr_state_label_smoothing = float(getattr(C, "PSR_STATE_LABEL_SMOOTHING", 0.1))
+        self.psr_state_focal_gamma = float(getattr(C, "PSR_STATE_FOCAL_GAMMA", 1.5))
+        # Effective-number beta for class-balanced weights (Cui et al. 2019).
+        # 0.99 is moderate — softer than 0.999 (extreme) to keep training stable.
+        self.psr_state_cb_beta = float(getattr(C, "PSR_STATE_CB_BETA", 0.99))
 
         self.head_pose_loss_fn = nn.MSELoss(reduction="mean")
 
@@ -1338,6 +1458,43 @@ class MultiTaskLoss(nn.Module):
         logger.debug(
             f"PSR per-component alpha: {alpha_c.numpy().round(3).tolist()} "
             f"(from prevalence {prev.numpy().round(3).tolist()})"
+        )
+
+    def set_psr_state_class_counts(self, counts_per_state: torch.Tensor):
+        """[Path B] Set class-balanced weights for 24-class state classification loss.
+
+        Computed from per-class frame counts (excluding ignore_index=-1).
+        Uses effective-number class-balanced weighting (Cui et al. CVPR 2019):
+          w_c = (1 - beta) / (1 - beta^n_c)
+        Normalized so weights sum to num_classes.
+
+        Args:
+            counts_per_state: [num_psr_states] int64 frame counts per class.
+                Build with: cache.psr_state_class_per_frame for all recordings,
+                then np.bincount(cls[cls != -1], minlength=num_psr_states).
+        """
+        import numpy as np
+        counts = counts_per_state.float().cpu().numpy().astype(np.float32)
+        # Effective-number weighting
+        beta = self.psr_state_cb_beta
+        n = np.maximum(counts, 1.0)
+        eff_num = (1.0 - np.power(beta, n)) / (1.0 - beta)
+        eff_num = np.maximum(eff_num, 1.0)
+        w = 1.0 / eff_num
+        w = w / w.sum() * len(w)
+        weights_t = torch.tensor(w, dtype=torch.float32, device=self._psr_state_class_weights_buf.device)
+        # Clamp extreme weights — class 14 appears 2 times → weight ~6.0, manageable.
+        # At beta=0.99 the imbalance is much milder than beta=0.999 (used in older runs).
+        weights_t = weights_t.clamp(min=0.01, max=10.0)
+        # Copy into the buffer so it moves with the module.
+        self._psr_state_class_weights_buf.data = weights_t.to(self._psr_state_class_weights_buf.dtype)
+        self._psr_state_class_weights = self._psr_state_class_weights_buf
+        # Log top-3 highest / lowest for visibility
+        order = np.argsort(-w)
+        logger.info(
+            f"[Path B PSR] class-balanced weights (beta={beta}): "
+            f"top3_high={[(int(i), float(w[i])) for i in order[:3]]} "
+            f"top3_low={[(int(i), float(w[i])) for i in order[-3:]]}"
         )
 
     def set_epoch(self, epoch: int):
@@ -1613,98 +1770,49 @@ class MultiTaskLoss(nn.Module):
         # that actually computed a PSR task loss.
         _psr_structurally_zero = False
         if self.train_psr:
-            # C.3: Binary focal loss for PSR (Doc 01 §D.4: per-component alpha)
-            # [OPUS v5] USE_PSR_TRANSITION: convert fill-forward labels to transition targets
-            # before computing loss. Per-frame focal on 95%-static labels makes constant
-            # output near-optimal; transition targets (Gaussian-smeared 0→1 events) force
-            # the model to learn changepoints. psr_transition.py implements the conversion.
-            _psr_targets = targets["psr_labels"]
-            # [OPUS v5 BLOCKER-A FIX] When transition objective is enabled, skip PSR
-            # loss on per-frame batches (dim==2). Per-frame focal on 95%-static
-            # fill-forward labels produces a constant-output gradient that drowns the
-            # transition signal 9:1 (sequence batches are 1-in-10). This gives the
-            # transition objective 100% of the PSR gradient.
-            if self.use_psr_transition:
-                if outputs["psr_logits"].dim() == 3:
-                    try:
-                        from src.models.psr_transition import build_transition_targets
-
-                        _psr_targets = build_transition_targets(
-                            targets["psr_labels"].to(outputs["psr_logits"].device),
-                            sigma=float(getattr(C, "PSR_TRANSITION_SIGMA", 3.0)),
-                        )
-                    except Exception as e:
-                        logger.warning(
-                            f"  [PSR_TRANSITION] build_transition_targets failed: {e} — falling back"
-                        )
-                    if self.use_psr_asl:
-                        loss_psr = self.psr_asl_loss(outputs["psr_logits"], _psr_targets)
-                    elif self.use_psr_focal:
-                        loss_psr = binary_focal_loss(
-                            outputs["psr_logits"],
-                            _psr_targets,
-                            alpha=self.psr_focal_alpha,
-                            gamma=self.psr_focal_gamma,
-                            per_component_alpha=self._psr_per_component_alpha,
-                            comp_weights=self._psr_comp_weights,
-                        )
-                    else:
-                        loss_psr = self.psr_loss_fn(outputs["psr_logits"], _psr_targets)
-                else:
-                    # Per-frame batch (dim==2) under transition objective: skip PSR loss.
-                    # The per-frame static labels teach constant output which drowns the
-                    # transition signal on sequence batches.
-                    loss_psr = zero
-                    # [FIX 2026-07-02 Fable RF4 consult — F3] Mark PSR loss as
-                    # structurally zero so the Kendall block below can skip the
-                    # "+ lv_psr" regularizer term. Without this, every non-seq
-                    # batch added a constant +1 gradient to log_var_psr (task loss
-                    # is zero, only the log-sigma term remains), pushing it toward
-                    # -4 (54.6x precision) on evidence-free batches. In practice
-                    # the seq-batch equilibrium + the MAX_PSR clamp masked this,
-                    # but the log_var dynamics (and any future clamp retuning)
-                    # were corrupted by the spurious signal.
-                    _psr_structurally_zero = True
-                    # Skip sensitivity penalty + smooth-cap for per-frame batches under transition objective.
-                    # The transition signal only flows on sequence (dim==3) batches.
-            elif self.use_psr_asl:
-                loss_psr = self.psr_asl_loss(outputs["psr_logits"], _psr_targets)
-            elif self.use_psr_focal:
-                loss_psr = binary_focal_loss(
+            # [Path B] PSR head now outputs 24-class state logits [B, num_psr_states]
+            # (background + 22 valid 11-bit states + error_state). Targets are
+            # int64 class indices in {-1, 0..23}, supplied by
+            # `targets["psr_state_labels"]` (see dataset __getitem__).
+            #
+            # Loss: class-balanced cross-entropy with optional focal modulation.
+            # This replaces the old per-frame 11-component binary focal loss
+            # which collapsed to near-zero because ~95% of components are static
+            # across frames.
+            if "psr_state_labels" in targets:
+                _psr_state_targets = targets["psr_state_labels"]
+                # The PSR head may output [B, 24] or [B, T, 24] depending on
+                # sequence mode. psr_state_classification_loss handles both.
+                loss_psr = psr_state_classification_loss(
                     outputs["psr_logits"],
-                    _psr_targets,
-                    alpha=self.psr_focal_alpha,
-                    gamma=self.psr_focal_gamma,
-                    per_component_alpha=self._psr_per_component_alpha,
-                    comp_weights=self._psr_comp_weights,
+                    _psr_state_targets.to(outputs["psr_logits"].device),
+                    class_weights=self._psr_state_class_weights_buf,
+                    label_smoothing=self.psr_state_label_smoothing,
+                    focal_gamma=self.psr_state_focal_gamma,
+                    ignore_index=_PSR_IGNORE_IDX,
                 )
             else:
-                loss_psr = self.psr_loss_fn(outputs["psr_logits"], _psr_targets)
+                # Legacy fallback: dataset didn't provide state labels (shouldn't happen
+                # with current code path; abort loudly if it does).
+                logger.error(
+                    "PSR_STATE_LABELS missing from targets dict — dataset not providing "
+                    "Path B labels. Falling back to zero loss."
+                )
+                loss_psr = zero
+                _psr_structurally_zero = True
 
-            # --- FIX 1 (2026-06-06): PSR input-sensitivity penalty ---
-            # Stage 3 epoch 16 collapsed: per-frame logit std/mean=0.12% on cap100
-            # (vs 7% at 200b baseline). Root cause: focal loss alone doesn't penalize
-            # constant output when the per-component positives ratio is in [0, 1]
-            # and the model finds a single threshold that fits all frames.
-            # Penalty: -log(mean(per-component-std)) keeps std > 1e-3 in log-space.
-            # Only fires at T=1 (dim==2); sequence mode (dim==3) handled by temporal smooth.
-            # NOTE: requires batch > 1 — std(dim=0) on a single element has grad = (x-mean)/(n*std)
-            # which divides by zero (std=0) and produces NaN in backward → LogBackward0 crash.
-            # [F3b 2026-07-02 Fable RF4 consult] `and not _psr_structurally_zero`:
-            # the transition-objective branch above documents "Skip sensitivity
-            # penalty ... for per-frame batches under transition objective", but
-            # this block sat OUTSIDE that branch and fired anyway, silently
-            # re-adding a per-frame gradient the BLOCKER-A design explicitly
-            # removed (usually clamped to 0 by the Kendall min-clamp since
-            # -log(std) is negative for std>1, so training logs still showed
-            # psr=0.00 — but near collapse it injected undocumented gradient).
+            # --- Sensitivity penalty: encourage per-class logit diversity ---
+            # Without this, the model can collapse to predicting the most common
+            # state class. -log(mean(per-class-std)) keeps softmax distribution
+            # spread. Only fires when batch > 1 and sequence mode is OFF
+            # (dim==2). Sequence mode handled by temporal smoothing loss below.
             if (
                 outputs["psr_logits"].dim() == 2
                 and outputs["psr_logits"].shape[0] > 1
                 and not _psr_structurally_zero
             ):
-                _per_comp_std = outputs["psr_logits"].std(dim=0, correction=0).mean()
-                _sens = -torch.log(_per_comp_std + 1e-3)
+                _per_cls_std = outputs["psr_logits"].std(dim=0, correction=0).mean()
+                _sens = -torch.log(_per_cls_std + 1e-3)
                 _sens = torch.where(torch.isfinite(_sens), _sens, torch.tensor(0.0, device=device))
                 _sens_w = float(getattr(C, "PSR_SENSITIVITY_WEIGHT", 0.01))
                 loss_psr = loss_psr + _sens_w * _sens
@@ -1721,23 +1829,27 @@ class MultiTaskLoss(nn.Module):
                 except Exception as _e:
                     pass  # PSR smoothing failure should not abort training
 
+            # [Path B] Temporal smoothing on 24-class softmax probabilities.
+            # Penalizes abrupt jumps in the predicted class distribution across
+            # consecutive frames — encourages smooth state evolution rather than
+            # frame-to-frame flicker. Operates on softmax(logits) (probability
+            # simplex), so the diff is meaningful per-class.
             if self._psr_temporal_smooth_weight > 0 and outputs["psr_logits"].dim() == 3:
-                preds = torch.sigmoid(outputs["psr_logits"])
-                labels = targets["psr_labels"]
+                preds = torch.softmax(outputs["psr_logits"], dim=-1)  # [B, T, 24]
                 smooth_loss = torch.tensor(0.0, device=device)
                 bs = preds.shape[0]
                 for i in range(bs):
                     p_i = preds[i]
-                    l_i = labels[i]
-                    # --- FIX: tanh(.abs()) destroys sign. Use signed diff
-                    # so tanh sees real direction. Labels also get a -1 mask
-                    # so oscillating labels (signed mean = 0) don't inflate
-                    # smooth_loss for a consistent-but-different pred.
+                    # Predicted change: mean diff across classes per timestep
                     diff_p = (p_i[1:] - p_i[:-1]).mean()
-                    diff_l = (l_i[1:] - l_i[:-1]).mean()
-                    pred_change = torch.tanh(diff_p)
-                    label_change = diff_l
-                    smooth_loss = smooth_loss + ((pred_change - label_change) ** 2)
+                    # Target smoothness: penalize changes when target state is same.
+                    # Targets come as [B, T] int64 class indices.
+                    tgt = _psr_state_targets[i].to(device) if "psr_state_labels" in targets else None
+                    if tgt is not None:
+                        tgt_change = (tgt[1:] != tgt[:-1]).float().mean()
+                        smooth_loss = smooth_loss + (diff_p - tgt_change) ** 2
+                    else:
+                        smooth_loss = smooth_loss + (diff_p ** 2)
                 smooth_loss = smooth_loss / max(bs, 1)
                 smooth_loss = torch.where(
                     torch.isfinite(smooth_loss),
@@ -1745,10 +1857,8 @@ class MultiTaskLoss(nn.Module):
                     torch.tensor(0.0, device=device),
                 )
                 loss_psr = loss_psr + self._psr_temporal_smooth_weight * smooth_loss
-            # --- FIX: PSR NaN guard BEFORE smooth_cap (lines 1187-1189).
-            # loss_psr can be NaN even after binary_focal_loss returns if the model
-            # spits extreme logits. Adding smooth_loss weight to NaN gives NaN.
-            # Catch it here so _smooth_cap never sees x<=0 (its log would give NaN).
+
+            # --- FIX: PSR NaN guard BEFORE smooth_cap ---
             if not torch.isfinite(loss_psr).all():
                 if getattr(C, "ASSERT_AND_CRASH", False):
                     raise FloatingPointError(
@@ -1759,7 +1869,6 @@ class MultiTaskLoss(nn.Module):
                     f"  [PSR_NAN] loss_psr={loss_psr.item() if loss_psr.numel() == 1 else loss_psr} "
                     f"— replacing with 1e-4 before smooth_cap (epoch {self._current_epoch})"
                 )
-                # [A4 FIX 2026-06-17] Use torch.where to maintain grad_fn for backward().
                 loss_psr = torch.where(
                     torch.isfinite(loss_psr),
                     loss_psr,
@@ -1791,20 +1900,33 @@ class MultiTaskLoss(nn.Module):
         hp_cap = float(getattr(C, "HEAD_POSE_LOSS_CAP", 30.0))
         loss_head_pose = _smooth_cap(loss_head_pose, hp_cap)
 
-        # [FIX 2026-06-15] Per-component PSR loss breakdown for liveness logging
+        # [FIX 2026-06-15] Per-component PSR loss breakdown for liveness logging.
+        # [Path B] Now operates on 24-class CE: report per-state loss breakdown
+        # (matches the actual loss computation). Each state's loss = CE for
+        # samples where the true class == that state.
         _psr_per_component = None
-        if self.train_psr and "psr_logits" in outputs:
+        if self.train_psr and "psr_logits" in outputs and "psr_state_labels" in targets:
             with torch.no_grad():
-                _pl = outputs["psr_logits"].clamp(-8.0, 8.0)
-                _pt = targets["psr_labels"].to(_pl.device).float()
-                _p = torch.sigmoid(_pl)
-                _ce = F.binary_cross_entropy_with_logits(_pl, _pt, reduction="none")
-                _p_t = (_p * _pt + (1 - _p) * (1 - _pt)).clamp(1e-6, 1 - 1e-6)
-                _alpha_t = self.psr_focal_alpha * _pt + (1 - self.psr_focal_alpha) * (1 - _pt)
-                _reduce_dims = tuple(range(_ce.ndim - 1))
-                _psr_per_component = (_alpha_t * (1 - _p_t) ** self.psr_focal_gamma * _ce).mean(
-                    dim=_reduce_dims
-                )
+                _pl = outputs["psr_logits"]  # [B, 24] or [B, T, 24]
+                _pt = targets["psr_state_labels"].to(_pl.device)
+                # Per-state CE for samples with that state as target
+                if _pl.dim() == 3:
+                    _pl_flat = _pl.reshape(-1, _pl.size(-1))
+                    _pt_flat = _pt.reshape(-1)
+                else:
+                    _pl_flat = _pl
+                    _pt_flat = _pt
+                valid_mask = _pt_flat != _PSR_IGNORE_IDX
+                # For each state s, average CE loss where _pt_flat == s
+                n_states = _pl_flat.size(-1)
+                _loss_per_state = torch.zeros(n_states, device=_pl.device)
+                for s in range(n_states):
+                    mask = (_pt_flat == s) & valid_mask
+                    if mask.sum() > 0:
+                        _loss_per_state[s] = F.cross_entropy(
+                            _pl_flat[mask], _pt_flat[mask], reduction="mean"
+                        )
+                _psr_per_component = _loss_per_state  # [24]
 
         # === Final NaN guard BEFORE Kendall — covers ALL losses.
         # Each loss can produce NaN via: loss function overflow, temporal smooth

@@ -1325,6 +1325,110 @@ def _psr_edit_score(pred_states, gt_states):
     return 1.0 - dp[m, n] / max(m, n, 1)
 
 
+def _decode_24class_psr_transitions(
+    pred_states: np.ndarray,
+    gt_labels: np.ndarray,
+    rec_ids: list,
+    frame_nums: list,
+    tol_frames: int = 3,
+) -> Dict[str, float]:
+    """Decode 24-class state predictions → 11-bit binary transition metrics.
+
+    For Path B (24-class softmax output), converts per-frame argmax predictions
+    to 11-bit binary state vectors via CATEGORIES lookup, then computes
+    transition event F1, POS, and edit score per recording — mirroring what
+    decode_and_score_psr does for 11-binary output.
+
+    Args:
+        pred_states: [N] argmax class indices (0..23) from 24-way softmax.
+        gt_labels:   [N] or [N, 11] GT labels. If [N, 11] binary, auto-converts
+                     via dense_labels_to_class_idx(). If [N], treated as class
+                     indices with -1 = ignore.
+        rec_ids:     [N] per-frame recording ID strings.
+        frame_nums:  [N] per-frame frame numbers (for temporal sorting).
+        tol_frames:  ±frame tolerance for bi-directional greedy event matching.
+
+    Returns:
+        Dict with psr_f1, psr_pos, psr_edit, psr_f1_at_t (all 0 if no data).
+    """
+    from src.data.psr_categories import (
+        CATEGORIES,
+        dense_labels_to_class_idx,
+        state_string_to_list,
+    )
+
+    # Build class_idx → 11-bit binary lookup (fast, no string parsing per row)
+    _class_to_binary = np.zeros((len(CATEGORIES), 11), dtype=np.float32)
+    for i, s in enumerate(CATEGORIES):
+        if s not in ("background", "error_state"):
+            _class_to_binary[i] = state_string_to_list(s)
+    # background(0) and error_state(23) remain all-zeros
+
+    # Normalise GT labels: if [N, 11] binary → convert to class indices
+    gt_labels = np.asarray(gt_labels)
+    if gt_labels.ndim == 2 and gt_labels.shape[1] == 11:
+        gt_labels = dense_labels_to_class_idx(gt_labels)
+    gt_labels = np.asarray(gt_labels, dtype=np.int64).ravel()
+
+    pred_states = np.asarray(pred_states, dtype=np.int64).ravel()
+    valid = gt_labels >= 0
+    if valid.sum() < 3:
+        return {"psr_f1": 0.0, "psr_pos": 0.0, "psr_edit": 0.0, "psr_f1_at_t": 0.0}
+
+    # Group by recording
+    rec_frames: Dict[str, Dict] = {}
+    for i in range(len(pred_states)):
+        if not valid[i]:
+            continue
+        rec = str(rec_ids[i]) if i < len(rec_ids) else f"rec_{i}"
+        fn = int(frame_nums[i]) if frame_nums is not None and i < len(frame_nums) else i
+        if rec not in rec_frames:
+            rec_frames[rec] = {"pred": [], "gt": [], "fn": []}
+        rec_frames[rec]["pred"].append(int(pred_states[i]))
+        rec_frames[rec]["gt"].append(int(gt_labels[i]))
+        rec_frames[rec]["fn"].append(fn)
+
+    f1s, poss, edits = [], [], []
+    for rec, data in rec_frames.items():
+        pred_idx = np.asarray(data["pred"], dtype=np.int32)
+        gt_idx = np.asarray(data["gt"], dtype=np.int32)
+        order = np.argsort(data["fn"], kind="stable")
+        pred_idx = pred_idx[order]
+        gt_idx = gt_idx[order]
+
+        # Convert class indices → 11-bit binary state vectors
+        pred_bin = _class_to_binary[pred_idx]  # [T, 11]
+        gt_bin = _class_to_binary[gt_idx]  # [T, 11]
+
+        if len(pred_bin) < 3:
+            continue
+
+        # Transition events: 0→1 flips (assembly actions are monotone)
+        pred_tr = np.clip(pred_bin[1:] - pred_bin[:-1], 0, 1)
+        gt_tr = np.clip(gt_bin[1:] - gt_bin[:-1], 0, 1)
+
+        # Skip recordings with no GT transitions (all background / no assembly)
+        if not gt_tr.any() and not pred_tr.any():
+            f1s.append(1.0)
+            poss.append(1.0)
+            edits.append(1.0)
+            continue
+
+        f1s.append(_event_f1(pred_tr, gt_tr, tol=tol_frames))
+        poss.append(_ordered_pair_fraction(pred_bin, gt_bin))
+        edits.append(_psr_edit_score(pred_bin, gt_bin))
+
+    if not f1s:
+        return {"psr_f1": 0.0, "psr_pos": 0.0, "psr_edit": 0.0, "psr_f1_at_t": 0.0}
+
+    return {
+        "psr_f1": float(np.mean(f1s)),
+        "psr_pos": float(np.mean(poss)),
+        "psr_edit": float(np.mean(edits)),
+        "psr_f1_at_t": float(np.mean(f1s)),
+    }
+
+
 # =============================================================================
 # CHECKLIST ITEM 43 — PSR Accuracy Computation
 # =============================================================================
@@ -5445,14 +5549,32 @@ def evaluate_all(
                 _f1 = 2 * _p * _r / max(_p + _r, 1e-6)
                 _per_state_pr.append((_c, _p, _r, _f1))
             _macro_f1 = float(np.mean([row[3] for row in _per_state_pr])) if _per_state_pr else 0.0
+            # [FIX 2026-07-16] Compute transition event metrics from 24-class
+            # predictions. Convert argmax → 11-bit binary via CATEGORIES lookup,
+            # then compute event F1, POS, edit per recording — same as the
+            # Gap-A2 MonotonicDecoder path does for 11-binary output.
+            _trans_metrics = _decode_24class_psr_transitions(
+                pred_states=_pred_state,
+                gt_labels=all_psr_labels,
+                rec_ids=psr_rec_ids,
+                frame_nums=psr_frame_nums,
+                tol_frames=3,
+            )
+            _trans_f1 = _trans_metrics.get("psr_f1", 0.0)
+            _trans_pos = _trans_metrics.get("psr_pos", 0.0)
+            _trans_edit = _trans_metrics.get("psr_edit", 0.0)
+            # Use transition F1 as the primary metric (honest event-based)
+            # instead of state accuracy. Fall back to state_acc if transition
+            # metrics are zero due to no events in the eval subset.
+            _psr_primary_f1 = _trans_f1 if _trans_f1 > 0.0 else _state_acc
             psr_metrics = {
-                "psr_f1": _state_acc,
-                "psr_f1_at_t": _state_acc,
-                "psr_f1_at_t5": _state_acc,
-                "psr_edit": _state_acc,
-                "psr_edit_score": _state_acc,
-                "psr_pos": _state_acc,
-                "psr_pos_blind": _state_acc,
+                "psr_f1": _psr_primary_f1,
+                "psr_f1_at_t": _trans_f1,
+                "psr_f1_at_t5": _trans_f1,
+                "psr_edit": _trans_edit,
+                "psr_edit_score": _trans_edit,
+                "psr_pos": _trans_pos,
+                "psr_pos_blind": _trans_pos,
                 "psr_overall_f1": _macro_f1,
                 "psr_precision_at_t": 0.0,
                 "psr_recall_at_t": 0.0,
@@ -5467,6 +5589,9 @@ def evaluate_all(
             }
             logger.info(
                 f"  PSR (Path B) — State Accuracy: {_state_acc:.4f}  "
+                f"Transition F1: {_trans_f1:.4f}  "
+                f"Transition POS: {_trans_pos:.4f}  "
+                f"Transition Edit: {_trans_edit:.4f}  "
                 f"Per-state macro F1: {_macro_f1:.4f}  "
                 f"valid frames: {_valid_mask.sum()}/{len(_valid_mask)}"
             )

@@ -50,6 +50,16 @@ from torch.utils.data import Dataset, WeightedRandomSampler
 from PIL import Image
 
 from src import config as C
+from src.data.psr_categories import (
+    CATEGORIES as _PSR_CATEGORIES,
+    NUM_CATEGORIES as _PSR_NUM_CATEGORIES,
+    BACKGROUND_IDX as _PSR_BG_IDX,
+    ERROR_STATE_IDX as _PSR_ERR_IDX,
+    IGNORE_INDEX as _PSR_IGNORE_IDX,
+    dense_labels_to_class_idx as _dense_to_cls,
+    class_frequencies_from_indices as _psr_class_freq,
+    class_weights_from_counts as _psr_class_weights,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -437,6 +447,14 @@ class _PerRecordingCache:
         # Sparse PSR raw → per-frame dense [num_frames, 11]
         self._psr_per_frame: Optional[np.ndarray] = None
 
+        # PSR per-frame state class index [num_frames], int64, values in {-1, 0..23}.
+        # Derived from _psr_per_frame via the 24-category state lookup.
+        # -1 (IGNORE_INDEX): any component has -1 sentinel → skip in loss.
+        #  0 (background): all components zero → no assembly.
+        #  1..22: matching one of the 22 valid 11-bit state strings.
+        # 23 (error_state): 11-bit pattern matches none of the 22 valid states.
+        self._psr_state_class_per_frame: Optional[np.ndarray] = None
+
         # Dense pose.csv → [num_frames, 9]
         self._pose: Optional[np.ndarray] = None
 
@@ -672,6 +690,9 @@ class _PerRecordingCache:
         self._num_frames = num_frames
         self._ar_per_frame = self._parse_ar_labels()
         self._psr_per_frame = self._parse_psr_raw()
+        # Path B: derive 24-class state index per-frame from the 11-bit dense labels.
+        # Author-faithful: matches psr_utils.py categories [background, 22 valid, error_state].
+        self._psr_state_class_per_frame = _dense_to_cls(self._psr_per_frame)
         self._pose = self._parse_pose()
         self._hands = self._parse_hands()
         self._loaded = True
@@ -685,6 +706,23 @@ class _PerRecordingCache:
     def psr_per_frame(self) -> np.ndarray:
         assert self._psr_per_frame is not None, "Call load() first"
         return self._psr_per_frame
+
+    @property
+    def psr_state_class_per_frame(self) -> np.ndarray:
+        """Per-frame PSR state class index [num_frames], int64, values in {-1, 0..23}.
+
+        Path B: this is the PRIMARY PSR label. The 11-component psr_per_frame is
+        kept for backward-compat with ablation code; new training/eval pipelines
+        should use this state class index.
+
+        Class semantics:
+          -1 = IGNORE (any -1 sentinel in source 11-bit dense labels)
+           0 = background (no assembly)
+        1-22 = the 22 valid 11-bit assembly states (psr_categories.CATEGORIES)
+          23 = error_state (11-bit pattern matches none of the 22 valid states)
+        """
+        assert self._psr_state_class_per_frame is not None, "Call load() first"
+        return self._psr_state_class_per_frame
 
     @property
     def pose(self) -> np.ndarray:
@@ -938,6 +976,13 @@ class IndustRealMultiTaskDataset(Dataset):
         # PSR per-frame labels
         psr_labels = torch.from_numpy(cache.psr_per_frame[frame_num]).float()
 
+        # PSR state class index (Path B): single int in {-1, 0..23} per frame.
+        # 11-component psr_labels above is kept for backward-compat with
+        # ablation / evaluation code that depends on the old format.
+        psr_state_label = torch.tensor(
+            int(cache.psr_state_class_per_frame[frame_num]), dtype=torch.long
+        )
+
         # Head pose
         head_pose = torch.from_numpy(cache.pose[frame_num]).float()
 
@@ -967,6 +1012,7 @@ class IndustRealMultiTaskDataset(Dataset):
             "gt_classes": {"rgb": gt_classes},
             "head_pose": head_pose,
             "psr_labels": psr_labels,
+            "psr_state_label": psr_state_label,  # [Path B] int class idx in {-1, 0..23}
             "hand_joints": hand_joints,
             "action_label": action_label,
             "activity": action_label,  # Alias for IKEA loss compatibility
@@ -1014,6 +1060,9 @@ class IndustRealMultiTaskDataset(Dataset):
         # PSR labels for all T frames: [T, 11]
         psr_labels = torch.from_numpy(cache.psr_per_frame[frame_nums]).float()
 
+        # [Path B] PSR state class indices for all T frames: [T] int64 in {-1, 0..23}
+        psr_state_labels = torch.from_numpy(cache.psr_state_class_per_frame[frame_nums]).long()
+
         # Head poses for all T frames: [T, 9]
         head_pose = torch.from_numpy(cache.pose[frame_nums]).float()
 
@@ -1042,6 +1091,7 @@ class IndustRealMultiTaskDataset(Dataset):
             "gt_classes": {"rgb": gt_classes},
             "head_pose": head_pose,
             "psr_labels": psr_labels,
+            "psr_state_labels": psr_state_labels,  # [Path B] [T] int64 in {-1, 0..23}
             "hand_joints": hand_joints,
             "action_label": torch.tensor(most_common_action, dtype=torch.long),
             "clip_rgb": None,
@@ -1828,6 +1878,7 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Tuple[torch.Tensor, Dict[str, Any
     detection_list = []
     head_poses = []
     psr_labels_list = []
+    psr_state_labels_list = []  # [Path B] per-frame state class indices
     hand_joints_list = []
     activity_labels = []
     box_masks_list = []
@@ -1841,6 +1892,12 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Tuple[torch.Tensor, Dict[str, Any
 
         head_poses.append(item["head_pose"])
         psr_labels_list.append(item["psr_labels"])
+        # [Path B] PSR state class — single int per sample in {-1, 0..23}
+        psr_state_labels_list.append(
+            item["psr_state_label"]
+            if isinstance(item["psr_state_label"], torch.Tensor)
+            else torch.tensor(item["psr_state_label"], dtype=torch.long)
+        )
         hand_joints_list.append(item["hand_joints"])
         activity_labels.append(
             item["action_label"]
@@ -1903,6 +1960,9 @@ def collate_fn(batch: List[Dict[str, Any]]) -> Tuple[torch.Tensor, Dict[str, Any
         "box_mask": {"rgb": stacked_box_mask},
         "head_pose": torch.stack(head_poses, dim=0),
         "psr_labels": torch.stack(psr_labels_list, dim=0),
+        # [Path B] PSR state class indices [B] int64, values in {-1, 0..23}.
+        # -1 = IGNORE (skip in loss), 0 = background, 1..22 = valid states, 23 = error_state.
+        "psr_state_labels": torch.stack(psr_state_labels_list, dim=0),
         "hand_joints": torch.stack(hand_joints_list, dim=0),
         "activity": activity_stacked,
         "activity_mask": activity_mask,
@@ -1949,6 +2009,8 @@ def collate_fn_sequences(
 
     images = torch.stack([item["images"]["rgb"] for item in batch], dim=0)
     psr_labels = torch.stack([item["psr_labels"] for item in batch], dim=0)
+    # [Path B] PSR state class indices [B, T] int64 in {-1, 0..23}
+    psr_state_labels = torch.stack([item["psr_state_labels"] for item in batch], dim=0)
     head_pose = torch.stack([item["head_pose"] for item in batch], dim=0)
     hand_joints = torch.stack([item["hand_joints"] for item in batch], dim=0)
 
@@ -1997,6 +2059,9 @@ def collate_fn_sequences(
         "box_mask": {"rgb": stacked_box_mask},
         "head_pose": head_pose,
         "psr_labels": psr_labels,
+        # [Path B] PSR state class indices [B, T] int64, values in {-1, 0..23}.
+        # Per-frame target for 24-way cross-entropy. -1 = IGNORE (skip in loss).
+        "psr_state_labels": psr_state_labels,
         "sequence_lengths": sequence_lengths,
         "hand_joints": hand_joints,
         "activity": activity_labels,

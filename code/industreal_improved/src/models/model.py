@@ -1769,35 +1769,49 @@ class HeadPoseHead(nn.Module):
 # ===========================================================================
 class PSRHead(nn.Module):
     """
-    PSR Head with architectural improvements from Doc 01 C.
+    PSR Head — Path B: 24-class state classification + temporal inference.
 
-    Architecture (actual implementation):
+    Architecture (matches authors' PSR pipeline, psr_utils.py):
       C.1: Causal Transformer Encoder (3 layers, 4 heads, d_model=256) --
            processes per-frame features with upper-triangular causal masking.
            Each position attends only to itself and prior positions (no future).
            At inference with per-video cache: O(1) new frame cost after warmup.
-      C.2: Per-component output heads -- each of 11 components has different
-           transition statistics. Shared head underfits rare components.
+      C.2: Single multi-class output head — 24-way softmax over the state
+           categories defined in psr_categories.py (background + 22 valid
+           11-bit states + error_state). Output is [B, 24] logits.
 
-    Architecture:
-      - Per-frame feature: multi-scale P3+P4+P5 GAP -> MLP -> 256-D
-      - Causal Transformer Encoder (3 layers, 4 heads, d_model=256, gelu, pre-norm)
-      - Per-component output heads (11 separate tiny MLPs)
+    Why this replaces the 11-component heads:
+      The authors' PSR algorithm (NaivePSR / AccumulatedConfidencePSR) operates
+      on per-frame STATE STRINGS (11-bit vectors), not per-component binary
+      outputs. Predicting one of 24 mutually-exclusive states gives the model
+      a single discrete target per frame, which is structurally constrained
+      (invalid 11-bit combinations like '01000000000' are simply not in the
+      output space).
 
-    Doc 2 C.3: Binary focal loss, not BCE. Heavy class imbalance per component.
+    Loss:
+      Class-balanced cross-entropy with label smoothing (see losses.py). The
+      ignore_index=-1 marks frames with -1 sentinel in source labels (no
+      contribution to loss). Focal CE optional via PSR_FOCAL_GAMMA.
+
+    Inference:
+      The model outputs logits [B, 24]. Softmax → argmax → state string from
+      psr_categories.CATEGORIES. The sequence of state strings is fed to
+      NaivePSR or AccumulatedConfidencePSR (evaluation pipeline) for temporal
+      inference → step completion events → POS/F1/delay scoring.
     """
 
     def __init__(
         self,
         in_channels: int = 256,
         hidden_dim: int = 128,
-        num_components: int = 11,
+        num_components: int = 24,  # [Path B] 24 categories: 0=bg, 1-22=valid, 23=error
         dropout: float = 0.2,
         num_scales: int = 3,
         gru_hidden: int = 256,
-    ):  # [FIX #2 HIGH] d_model=256 per paper
+    ):
         super().__init__()
-        self.num_components = num_components
+        self.num_components = num_components  # alias for state categories count
+        self.num_states = num_components
         self.gru_hidden = gru_hidden
 
         self.gap_p3 = nn.AdaptiveAvgPool2d(1)
@@ -1814,7 +1828,7 @@ class PSRHead(nn.Module):
             nn.LayerNorm(gru_hidden),
         )
 
-        # C.1: Causal Transformer (3 layers, 4 heads, d_model=256) -- paper ?PSR Head
+        # C.1: Causal Transformer (3 layers, 4 heads, d_model=256) — same as before
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=gru_hidden,
             nhead=4,
@@ -1822,49 +1836,34 @@ class PSRHead(nn.Module):
             dropout=dropout,
             activation="gelu",
             batch_first=True,
-            norm_first=True,  # pre-norm as per paper ViT-style
+            norm_first=True,
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=3)
-        # Causal mask: upper-triangular prevents attending to future tokens
         self._causal_mask = None
-        # Project back to gru_hidden for per-component heads
 
-        # C.2: Per-component output heads (11 separate tiny MLPs)
-        # comp0 (base plate) placed first 95%; comp10 (wheels) come last.
-        # Each component has different transition statistics.
-        # [REPAIR 2026-07-07 Opus 140 §-1d + diagnostic 96b144e51]
-        # Activation: LeakyReLU(0.01) instead of GELU — GELU was 99.7%+ saturated
-        # because pre-activations had mean ~ -130 (1300x too negative for the
-        # +0.1 bias to push them out of the dead zone). LeakyReLU does not
-        # saturate for negative inputs (constant 0.01 gradient). Weight init:
-        # normal(0, 0.01) instead of default — keeps pre-activations small at
-        # init. Final bias: 0.0 instead of default — no default prediction.
-        self.output_heads = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.Linear(gru_hidden, 64),
-                    nn.LeakyReLU(negative_slope=0.01),
-                    nn.Dropout(dropout * 0.3),
-                    nn.Linear(64, 1),
-                )
-                for _ in range(num_components)
-            ]
+        # [Path B] Single 24-way classifier head.
+        # Replaces the 11 per-component heads — we now predict a SINGLE state
+        # class per frame (multi-class softmax), not 11 independent binary outputs.
+        # Architecture: gru_hidden -> 128 -> num_states (default 24).
+        # LeakyReLU(0.01) + LayerNorm to avoid the GELU dead-neuron trap from
+        # the previous PSR HEAD REPAIR (2026-07-07 Opus 140 §-1d).
+        self.classifier = nn.Sequential(
+            nn.Linear(gru_hidden, 128),
+            nn.LayerNorm(128),
+            nn.LeakyReLU(negative_slope=0.01),
+            nn.Dropout(dropout * 0.5),
+            nn.Linear(128, num_components),
         )
 
-        # [AUDIT] Replaced previous +0.1 bias init (insufficient by 1300x).
-        # New init: small-normal weights + zero bias. Warm-start safe since
-        # GELU was passing ~zero gradient through all training — checkpoint
-        # state for these heads is effectively random.
-        # Sequential indices: [0]=Linear, [1]=Activation, [2]=Dropout, [3]=Linear
-        for head in self.output_heads:
-            if isinstance(head[0], nn.Linear):
-                nn.init.normal_(head[0].weight, std=0.01)
-                nn.init.zeros_(head[0].bias)
-            if isinstance(head[3], nn.Linear):
-                nn.init.normal_(head[3].weight, std=0.01)
-                nn.init.zeros_(head[3].bias)
+        # [AUDIT] Small init + zero bias to avoid logit saturation at start.
+        # Pre-activations should have small variance so the initial softmax
+        # is roughly uniform over 24 classes (~ log(24) = 3.18 nats).
+        for m in self.classifier:
+            if isinstance(m, nn.Linear):
+                nn.init.normal_(m.weight, std=0.01)
+                nn.init.zeros_(m.bias)
 
-        self._debug_step = 0  # step counter for gradient-audit logging
+        self._debug_step = 0
         self._cache: Dict[Tuple[str, str], List[torch.Tensor]] = {}
         self._MAX_CACHE_LEN = 32
 
@@ -1876,33 +1875,27 @@ class PSRHead(nn.Module):
         return self.per_frame_mlp(fused)  # [B, gru_hidden]
 
     def _get_causal_mask(self, seq_len: int, device: torch.device) -> torch.Tensor:
-        """Generate causal mask (upper-triangular, prevents attending to future)."""
         if (
             not hasattr(self, "_cached_mask")
             or self._cached_mask is None
             or self._cached_mask.size(0) != seq_len
         ):
-            # causal mask: position i can attend to positions 0..i (not i+1..T-1)
             ones = torch.ones(seq_len, seq_len, device=device)
-            # torch.triu with diagonal=0 keeps main diagonal and above (past positions)
             mask = torch.triu(ones, diagonal=1).bool()
-            # invert so True = ignore (cannot attend), False = attend
             self._cached_mask = mask
         return self._cached_mask
 
-    def _debug_log_head0(self, feat: torch.Tensor) -> None:
-        """Log intermediate activations of output_heads[0] at key steps."""
+    def _debug_log_classifier(self, feat: torch.Tensor) -> None:
+        """Log intermediate activations of the 24-way classifier at key steps."""
         if not self.training:
             return
         if self._debug_step not in (0, 1, 10, 100, 200, 500):
             return
-        head0 = self.output_heads[0]
-        h = head0[0](feat)  # Linear(256,64)
-        h_gelu = head0[1](h)  # GELU
-        if len(head0) > 2 and isinstance(head0[2], nn.Dropout):
-            h_drop = head0[2](h_gelu)
-        else:
-            h_drop = h_gelu
+        h = self.classifier[0](feat)  # Linear(256, 128)
+        h_n = self.classifier[1](h)   # LayerNorm
+        h_a = self.classifier[2](h_n) # LeakyReLU
+        h_d = self.classifier[3](h_a) # Dropout
+        out = self.classifier[4](h_d) # Linear(128, 24)
         print(
             f"[PSR_DEBUG step={self._debug_step}] "
             f"pre_linear:  mean={feat.mean():.4f} std={feat.std():.4f} "
@@ -1910,18 +1903,18 @@ class PSRHead(nn.Module):
         )
         print(
             f"[PSR_DEBUG step={self._debug_step}] "
-            f"post_linear64: mean={h.mean():.4f} std={h.std():.4f} "
+            f"post_linear128: mean={h.mean():.4f} std={h.std():.4f} "
             f"min={h.min():.4f} max={h.max():.4f}"
         )
         print(
             f"[PSR_DEBUG step={self._debug_step}] "
-            f"post_gelu:   mean={h_gelu.mean():.4f} std={h_gelu.std():.4f} "
-            f"min={h_gelu.min():.4f} max={h_gelu.max():.4f}"
+            f"post_lrelu: mean={h_a.mean():.4f} std={h_a.std():.4f} "
+            f"min={h_a.min():.4f} max={h_a.max():.4f}"
         )
         print(
             f"[PSR_DEBUG step={self._debug_step}] "
-            f"post_dropout: mean={h_drop.mean():.4f} std={h_drop.std():.4f} "
-            f"min={h_drop.min():.4f} max={h_drop.max():.4f}"
+            f"post_logits: mean={out.mean():.4f} std={out.std():.4f} "
+            f"min={out.min():.4f} max={out.max():.4f}"
         )
 
     def forward(
@@ -1936,7 +1929,9 @@ class PSRHead(nn.Module):
             video_ids: for per-sequence caching (optional)
             camera_views: for per-sequence caching (optional)
         Returns:
-            psr_logits: [B, 11] per-frame predictions
+            psr_logits: [B, 24] per-frame state logits.
+            Channel 0 = background, 1..22 = valid states, 23 = error_state.
+            (No confidence channel — softmax max is computed downstream.)
         """
         B = pyramid["p3"].shape[0]
         frame_feat = self._get_frame_feat(pyramid)  # [B, gru_hidden]
@@ -1959,43 +1954,30 @@ class PSRHead(nn.Module):
                 if len(self._cache[key]) > self._MAX_CACHE_LEN:
                     self._cache[key] = self._cache[key][-self._MAX_CACHE_LEN :]
 
-                # Causal Transformer: process sequence with causal masking
                 seq = torch.stack(self._cache[key], dim=0).squeeze(1)  # [T, gru_hidden]
                 T = seq.size(0)
                 seq = seq.unsqueeze(0)  # [1, T, gru_hidden]
                 causal_mask = self._get_causal_mask(T, seq.device)
                 encoded = self.transformer(seq, mask=causal_mask)  # [1, T, gru_hidden]
-                # Use the last position's output (causal = only sees past)
                 last_out = encoded[:, -1, :]  # [1, gru_hidden]
 
-                # Per-component heads
-                comp_logits = torch.cat(
-                    [head(last_out) for head in self.output_heads], dim=-1
-                )  # [1, 11]
-                # psr_confidence: max sigmoid per component group (Item 32)
-                confidence = torch.sigmoid(comp_logits).max(dim=-1, keepdim=True)[0]  # [1, 1]
-                comp_out = torch.cat([comp_logits, confidence], dim=-1)  # [1, 12]
-                outputs.append(comp_out)
+                state_logits = self.classifier(last_out)  # [1, 24]
+                outputs.append(state_logits)
 
-            return torch.cat(outputs, dim=0)  # [B, 12]
+            return torch.cat(outputs, dim=0)  # [B, 24]
 
         # Non-cached mode: single frame / batch without caching
-        # For single frame (T=1): causal mask allows attending to position 0 only
         feat_seq = frame_feat.unsqueeze(1)  # [B, 1, gru_hidden]
         T = feat_seq.size(1)
         causal_mask = self._get_causal_mask(T, feat_seq.device)
         encoded = self.transformer(feat_seq, mask=causal_mask)  # [B, 1, gru_hidden]
-        # For single frame, use the last position output
         last_out = encoded.squeeze(1)  # [B, gru_hidden]
 
-        self._debug_log_head0(last_out)
+        self._debug_log_classifier(last_out)
         self._debug_step += 1
 
-        # Per-component heads
-        logits = torch.cat([head(last_out) for head in self.output_heads], dim=-1)  # [B, 11]
-        # psr_confidence: per-frame certainty = max sigmoid across 11 components (Item 32)
-        confidence = torch.sigmoid(logits).max(dim=-1, keepdim=True)[0]  # [B, 1]
-        return torch.cat([logits, confidence], dim=-1)  # [B, 12]
+        state_logits = self.classifier(last_out)  # [B, 24]
+        return state_logits
 
     def reset_sequence(self, video_id: str, camera_view: str = "default"):
         key = (str(video_id), str(camera_view))
@@ -2156,7 +2138,7 @@ class POPWMultiTaskModel(nn.Module):
         self.psr_head = PSRHead(
             in_channels=256,
             hidden_dim=128,
-            num_components=C.NUM_PSR_COMPONENTS,
+            num_components=getattr(C, "NUM_PSR_STATES", 24),  # [Path B] 24 = background + 22 valid + error_state
             dropout=0.2,
         )
 
@@ -2477,13 +2459,15 @@ class POPWMultiTaskModel(nn.Module):
             # every position is a valid (and supervised) per-frame prediction.
             enc_flat = encoded.reshape(B_main * T_main, -1)  # [BT, hidden]
 
-            # [AUDIT] Debug prints for output_heads[0] in sequence path
+            # [AUDIT] Debug prints for the new Path B classifier in sequence path
             if self.training and hasattr(self.psr_head, "_debug_step"):
                 ds = self.psr_head._debug_step
                 if ds in (0, 1, 10, 100, 200, 500):
-                    head0 = self.psr_head.output_heads[0]
-                    h = head0[0](enc_flat)
-                    h_gelu = head0[1](h)
+                    h = self.psr_head.classifier[0](enc_flat)
+                    h_ln = self.psr_head.classifier[1](h)
+                    h_lrelu = self.psr_head.classifier[2](h_ln)
+                    h_drop = self.psr_head.classifier[3](h_lrelu)
+                    out = self.psr_head.classifier[4](h_drop)
                     print(
                         f"[PSR_DEBUG_seq step={ds}] "
                         f"pre_linear:  mean={enc_flat.mean():.4f} std={enc_flat.std():.4f} "
@@ -2491,22 +2475,27 @@ class POPWMultiTaskModel(nn.Module):
                     )
                     print(
                         f"[PSR_DEBUG_seq step={ds}] "
-                        f"post_linear64: mean={h.mean():.4f} std={h.std():.4f} "
+                        f"post_linear128: mean={h.mean():.4f} std={h.std():.4f} "
                         f"min={h.min():.4f} max={h.max():.4f}"
                     )
                     print(
                         f"[PSR_DEBUG_seq step={ds}] "
-                        f"post_gelu:   mean={h_gelu.mean():.4f} std={h_gelu.std():.4f} "
-                        f"min={h_gelu.min():.4f} max={h_gelu.max():.4f}"
+                        f"post_lrelu:  mean={h_lrelu.mean():.4f} std={h_lrelu.std():.4f} "
+                        f"min={h_lrelu.min():.4f} max={h_lrelu.max():.4f}"
+                    )
+                    print(
+                        f"[PSR_DEBUG_seq step={ds}] "
+                        f"post_logits: mean={out.mean():.4f} std={out.std():.4f} "
+                        f"min={out.min():.4f} max={out.max():.4f}"
                     )
 
-            psr_full = torch.cat(
-                [head(enc_flat) for head in self.psr_head.output_heads], dim=-1
-            )  # [BT, 11]
+            # [Path B] PSR head now outputs a single 24-way state classification
+            # (background + 22 valid 11-bit states + error_state). No more per-component
+            # sigmoid outputs — see PSRHead.classifier in this file.
+            psr_full = self.psr_head.classifier(enc_flat)  # [BT, 24]
             self.psr_head._debug_step += 1
-            confidence = torch.sigmoid(psr_full).max(dim=-1, keepdim=True)[0]  # [BT, 1]
-            psr_logits = torch.cat([psr_full, confidence], dim=-1)  # [BT, 12]
-            psr_confidence = psr_logits[..., 11:]  # [BT, 1]
+            psr_logits = psr_full  # [BT, 24] — softmax probabilities downstream
+            psr_confidence = torch.softmax(psr_full, dim=-1).max(dim=-1, keepdim=True)[0]  # [BT, 1]
         else:
             # [FIX 2026-06-16] Gradient isolation for PSR non-sequence path
             if getattr(C, "DETACH_PSR_FPN", False):
@@ -2515,9 +2504,10 @@ class POPWMultiTaskModel(nn.Module):
                 }
             else:
                 psr_pyramid = pyramid
-            psr_full = self.psr_head(psr_pyramid, video_ids=video_ids)  # [B, 12]
-            psr_logits = psr_full[..., :11]  # [B, 11]
-            psr_confidence = psr_full[..., 11:]  # [B, 1]
+            # [Path B] psr_head.forward returns [B, 24] (state logits) directly.
+            psr_full = self.psr_head(psr_pyramid, video_ids=video_ids)  # [B, 24]
+            psr_logits = psr_full  # [B, 24]
+            psr_confidence = torch.softmax(psr_full, dim=-1).max(dim=-1, keepdim=True)[0]  # [B, 1]
 
         # Head pose: computed when TRAIN_HEAD_POSE=True (paper: disabled for IKEA ASM)
         # ALSO compute during eval mode (self.training=False) so evaluate.py gets tensors.
@@ -2639,7 +2629,10 @@ class POPWMultiTaskModel(nn.Module):
             "c5_mod": c5_mod,
             "det_conf": det_conf,
             "act_logits": act_logits,
-            "psr_logits": psr_logits[..., :11],  # [BT, 11] for loss compatibility
+            # [Path B] PSR head outputs 24-class state logits (background + 22 valid
+            # 11-bit states + error_state). The old per-component 11-D binary output
+            # is replaced by single multi-class classification — see PSRHead.classifier.
+            "psr_logits": psr_logits,  # [B or BT, 24] — softmax/CE downstream
             "psr_confidence": psr_confidence if not self.training else None,  # Item 32
             "temporal_features": bank_output,
             "c5_raw": c5,
