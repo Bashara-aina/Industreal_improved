@@ -3207,7 +3207,7 @@ def _reinit_dead_heads(model, reinit_pi=0.01):
             logger.info(
                 f"  [REINIT] act.vit ({len(ah.vit)} blocks): Xavier-uniform + LayerNorm reset"
             )
-        if hasattr(ah, "activity_classifier"):
+        if hasattr(ah, "activity_classifier") and ah.activity_classifier is not None:
             for m in ah.activity_classifier.modules():
                 if isinstance(m, nn.Linear):
                     nn.init.normal_(m.weight, std=0.01)
