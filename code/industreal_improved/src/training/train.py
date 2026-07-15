@@ -3189,7 +3189,7 @@ def _reinit_dead_heads(model, reinit_pi=0.01):
                 nn.init.zeros_(ah.proj_features.bias)
             init_count["act"] += 1
             logger.info("  [REINIT] act.proj_features: std=0.02, bias=0")
-        if hasattr(ah, "cls_token"):
+        if hasattr(ah, "cls_token") and ah.cls_token is not None:
             nn.init.trunc_normal_(ah.cls_token, std=0.02)
             init_count["act"] += 1
             logger.info("  [REINIT] act.cls_token: trunc_normal std=0.02")
@@ -6323,7 +6323,7 @@ if __name__ == "__main__":
         action="store_true",
         help="[Recovery] Re-initialize det/act/psr heads + FPN from priors before training. "
         "Keeps backbone + pose_head + pretrained ConvNeXt. Resets FPN with Kaiming-uniform, "
-        "det.cls_score pi=REINIT_PI (config-driven, default 0.01), act full reinit, psr bias=-0.2. "
+        "det.cls_score pi=REINIT_PI (config-driven, default 0.15), act full reinit, psr bias=-0.2. "
         "Use after head collapse (all 3 heads producing constant output).",
     )
     parser.add_argument(
