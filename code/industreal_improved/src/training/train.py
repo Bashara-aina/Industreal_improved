@@ -3193,7 +3193,7 @@ def _reinit_dead_heads(model, reinit_pi=0.01):
             nn.init.trunc_normal_(ah.cls_token, std=0.02)
             init_count["act"] += 1
             logger.info("  [REINIT] act.cls_token: trunc_normal std=0.02")
-        if hasattr(ah, "vit"):
+        if hasattr(ah, "vit") and ah.vit is not None:
             for blk in ah.vit:
                 for m in blk.modules():
                     if isinstance(m, nn.Linear):
@@ -3239,7 +3239,7 @@ def _reinit_dead_heads(model, reinit_pi=0.01):
             logger.info(
                 "  [REINIT] act.simple_classifier: hidden Xavier + logit std=0.01 bias=-0.5"
             )
-        if hasattr(ah, "tcn"):
+        if hasattr(ah, "tcn") and ah.tcn is not None:
             for m in ah.tcn.modules():
                 if isinstance(m, nn.Conv1d):
                     nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
