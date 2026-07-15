@@ -701,7 +701,7 @@ class DetectionHead(nn.Module):
         # Init bias to a less aggressive prior -- pi=0.03 (3% positive rate) instead of 0.01
         # This prevents all predictions collapsing to "no object" when EMA locks in the bias.
         # The bias learns from data during training; starting at -3.4 is not catastrophic.
-        pi = 0.03
+        pi = 0.15
         nn.init.normal_(self.cls_score.weight, std=0.01)
         nn.init.constant_(self.cls_score.bias, -math.log((1 - pi) / pi))
         nn.init.normal_(self.reg_pred.weight, std=0.01)

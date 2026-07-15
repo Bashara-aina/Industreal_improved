@@ -1058,7 +1058,7 @@ DET_AUG_ENABLED = (
 # Staged training (Doc 2 B.1)
 # =========================================================================
 STAGED_TRAINING = False  # Full production: all 5 heads active from epoch 0
-REINIT_PI = 0.01  # cls_score bias prior for reinit (RF1 uses 0.05)
+REINIT_PI = 0.15  # cls_score bias prior for reinit (RF1 uses 0.05)
 STAGE1_EPOCHS = 5  # Detection-only warmup
 STAGE2_EPOCHS = (
     10  # Add head pose (9-DoF from pose.csv, real GT) + body keypoints (pseudo, no real GT)
@@ -1109,8 +1109,8 @@ SOFT_ARGMAX_TEMP_TRAIN = 1.0  # Training temperature for gradient flow
 # The subsampling + scale bounds the gradient to ~0.005-0.9 per empty image
 # (vs 130-200 for full 173K anchors), preventing the RC-28 collapse while
 # keeping detection head weights active.
-DET_EMPTY_SAMPLE = 2048  # [TUNE 2026-06-15] Increased from 512 — detection head grad norm was decaying to 0.0049 (DEAD) between GT-bearing batches. More bg samples + higher scale keeps gradient alive.
-DET_EMPTY_BG_SCALE = 0.05  # [TUNE 2026-06-15] Increased from 0.01 — detection head was dying (grad norm 0.005, DEAD). Empty-frame bg loss at 0.01 scale produced ~0.003-0.005 loss, insufficient to maintain weights over ~2200 steps without GT.
+DET_EMPTY_SAMPLE = 256  # [TUNE 2026-06-15] Reduced from 2048 — was overwhelming positive signal. At pi=0.15, fewer bg samples needed to maintain gradient.
+DET_EMPTY_BG_SCALE = 0.02  # [TUNE 2026-06-15] Reduced from 0.05 — was overwhelming positive signal. At pi=0.15 with focal gamma=2, bg samples produce sufficient gradient at 0.02 scale.
 
 # [FIX 2026-06-15] Task-aware sampling: upweight frames with GT boxes
 # The purely activity-balanced sampler yields ~24% GT-bearing batches.
