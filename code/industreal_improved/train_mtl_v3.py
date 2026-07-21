@@ -1283,12 +1283,12 @@ def main():
                         help="TAL alignment exponent alpha (TOOD default=2.0)")
     parser.add_argument("--tal-lr-mult", type=float, default=2.0,
                         help="TAL detection head LR multiplier (TOOD default 2x)")
-    # [FIX-2026-07-21] Disable update_logit_bias - probe shows 16% lower BG conf,
-    # 11% higher FG conf, 15% better FG/BG separation vs enabled (500-step overfit).
-    # Default OFF because the fill_() overwrites gradient updates, preventing the
-    # classification head from learning per-class background suppression.
+    # [FIX-2026-07-21] Scalar EMA-based bias adjustment (kept OFF by default).
+    # The probe showed disabling helps BG suppression (16% lower) and FG/BG
+    # separation (15% better). Per-class experiment showed EMA collapses all
+    # classes to sigmoid~0, hurting mAP. To re-enable, use --use-logit-bias-update.
     parser.add_argument("--use-logit-bias-update", action="store_true",
-                        help="Enable update_logit_bias() EMA-based bias fill each step (default OFF)")
+                        help="Enable update_logit_bias() (default OFF; probe shows it hurts)")
     args = parser.parse_args()
 
     # Effective det_lr_mult: TAL heads get 2x higher LR per TOOD paper
@@ -1552,12 +1552,10 @@ def main():
                     opt.zero_grad()
                     global_step += 1
 
-                # [IMP-10] Dynamic logit bias adjustment: updates detection head
-                # classification bias based on observed per-sample positive anchor
-                # ratio. Uses EMA smoothing (momentum=0.05) to prevent oscillation.
-                # [FIX-2026-07-21] DISABLED by default (probe shows it hurts BG suppression
-                # by 16% and FG/BG separation by 15% vs disabled). Enable with
-                # --use-logit-bias-update only if you're trying to reproduce the bug.
+                # [IMP-10] Dynamic logit bias adjustment.
+                # [FIX-2026-07-21] Use running_pos_ratio (persistent buffer) and
+                # pass scalar pos_ratio. Per-class experiment showed this hurts
+                # mAP because EMA collapses all classes to sigmoid~0 (cls 0.001).
                 if args.use_logit_bias_update:
                     total_anchors = sum(a.shape[0] * a.shape[1] * a.shape[2] for a in anchors_per_level.values())
                     pos_ratio = lc['det_pos'] / max(total_anchors * args.batch_size, 1)
@@ -1742,7 +1740,6 @@ def main():
                     grad_norm = 0.0
 
                 # [IMP-10] Dynamic logit bias adjustment (same as Phase 1).
-                # [FIX-2026-07-21] Disabled by default (see Phase 1 comment).
                 if args.use_logit_bias_update:
                     total_anchors = sum(a.shape[0] * a.shape[1] * a.shape[2] for a in anchors_per_level.values())
                     pos_ratio = lc['det_pos'] / max(total_anchors * args.batch_size, 1)
