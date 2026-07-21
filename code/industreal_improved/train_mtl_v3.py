@@ -1110,6 +1110,9 @@ def build_llrd_param_groups(
     base_lr: float,
     llrd_decay: float = 0.95,
     det_lr_mult: float = 1000.0,
+    act_lr_mult: float = 50.0,
+    pose_lr_mult: float = 50.0,
+    psr_lr_mult: float = 50.0,
     weight_decay: float = 0.05,
 ) -> list[dict]:
     """Build optimizer parameter groups with Layer-wise Learning Rate Decay.
@@ -1122,16 +1125,29 @@ def build_llrd_param_groups(
         blocks.1:                  lr = base_lr * decay^14
         ...
         blocks.15 (latest):        lr = base_lr * decay^0 = base_lr
-        FPN + non-det heads:       lr = base_lr               (no decay)
+        FPN:                       lr = base_lr               (no decay)
+        Activity head:             lr = base_lr * act_lr_mult
+        Pose head:                 lr = base_lr * pose_lr_mult
+        PSR head:                  lr = base_lr * psr_lr_mult
         Detection head:            lr = base_lr * det_lr_mult (highest)
 
     Reference: BEiT/MAE-style LLRD with AdamW wd=0.05.
+
+    [FIX-2026-07-22] Each task head (activity/pose/PSR/detection) now gets its
+    own LR multiplier. Previously only detection had a multiplier (1000x), and
+    all other heads used base_lr=2e-5. This 1000x imbalance meant the non-det
+    heads were severely undertrained: Activity Top-1=37%, Pose MAE=13.5°,
+    PSR F1=17% (vs SOTA 95%/<5°/80%). Default mults: det=1000, others=50
+    (50x boost is empirically sufficient for heads to learn).
 
     Args:
         model: The WrappedMTL model.
         base_lr: Base learning rate.
         llrd_decay: LLRD decay factor (0.9-0.95 typical).
         det_lr_mult: Detection head LR multiplier.
+        act_lr_mult: Activity head LR multiplier (75-class classification).
+        pose_lr_mult: Pose head LR multiplier (6D regression).
+        psr_lr_mult: PSR head LR multiplier (11-component binary).
         weight_decay: AdamW weight decay for backbone params.
 
     Returns:
@@ -1154,10 +1170,13 @@ def build_llrd_param_groups(
     # Classify params into groups
     groups: dict[str, any] = {
         "det": [],
+        "act": [],
+        "pose": [],
+        "psr": [],
+        "fpn": [],
         "conv_proj": [],
         "pos_encoding": [],
         "blocks": {},  # block_idx -> list of params
-        "heads": [],
     }
 
     for name, p in model.named_parameters():
@@ -1169,9 +1188,40 @@ def build_llrd_param_groups(
             groups["det"].append(p)
             continue
 
-        # Backbone blocks
-        if ".blocks." in name:
-            parts = name.split(".blocks.")
+        # Activity head
+        if name.startswith("m.act_head."):
+            groups["act"].append(p)
+            continue
+
+        # Pose head
+        if name.startswith("m.pose_head."):
+            groups["pose"].append(p)
+            continue
+
+        # PSR head
+        if name.startswith("m.psr_head."):
+            groups["psr"].append(p)
+            continue
+
+        # FPN module (separate from backbone). Note: backbone is at
+        # m.feature_pyramid.backbone.* while FPN is at m.fpn.*
+        if name.startswith("m.fpn."):
+            groups["fpn"].append(p)
+            continue
+
+        # Backbone is at m.feature_pyramid.backbone.* with submodules:
+        #   .conv_proj.*  -> deepest layer
+        #   .pos_encoding.* -> same depth as conv_proj
+        #   .blocks.N.* -> block index N
+        # NOTE: Order matters - check submodules BEFORE "feature_pyramid"
+        if "backbone.conv_proj" in name:
+            groups["conv_proj"].append(p)
+            continue
+        if "backbone.pos_encoding" in name:
+            groups["pos_encoding"].append(p)
+            continue
+        if "backbone.blocks." in name:
+            parts = name.split("backbone.blocks.")
             if len(parts) > 1:
                 try:
                     block_idx = int(parts[1].split(".")[0])
@@ -1180,44 +1230,38 @@ def build_llrd_param_groups(
                 except (ValueError, IndexError):
                     pass
 
-        # Conv projection (deepest layer)
-        if "conv_proj" in name:
-            groups["conv_proj"].append(p)
-            continue
-
-        # Position encoding (same depth as conv_proj)
-        if "pos_encoding" in name:
-            groups["pos_encoding"].append(p)
-            continue
-
-        # Everything else (FPN, act_head, psr_head, pose_head)
-        groups["heads"].append(p)
+        # Default: should not normally hit. Put in fpn as a catch-all.
+        groups["fpn"].append(p)
 
     param_groups: list[dict] = []
 
-    def _add_group(params, lr_val, wd):
+    def _add_group(name, params, lr_val, wd):
         if params:
             param_groups.append({
+                "name": name,
                 "params": params, "lr": lr_val, "weight_decay": wd,
                 "_lr_mult": lr_val / base_lr if base_lr > 0 else 1.0,
             })
 
     # 1. Conv proj: deepest -> lowest LR
-    _add_group(groups["conv_proj"], base_lr * (llrd_decay ** num_blocks), weight_decay)
+    _add_group("conv_proj", groups["conv_proj"], base_lr * (llrd_decay ** num_blocks), weight_decay)
 
     # 2. Pos encoding: same depth as conv_proj
-    _add_group(groups["pos_encoding"], base_lr * (llrd_decay ** num_blocks), weight_decay)
+    _add_group("pos_encoding", groups["pos_encoding"], base_lr * (llrd_decay ** num_blocks), weight_decay)
 
     # 3. Blocks sorted by index (earlier = deeper = lower LR)
     for idx in sorted(groups["blocks"].keys()):
         lr = base_lr * (llrd_decay ** (num_blocks - 1 - idx))
-        _add_group(groups["blocks"][idx], lr, weight_decay)
+        _add_group(f"block_{idx}", groups["blocks"][idx], lr, weight_decay)
 
-    # 4. Non-detection heads + FPN: full LR
-    _add_group(groups["heads"], base_lr, weight_decay)
+    # 4. FPN: full base LR (feature pyramid network)
+    _add_group("fpn", groups["fpn"], base_lr, weight_decay)
 
-    # 5. Detection head: highest LR, lower wd
-    _add_group(groups["det"], base_lr * det_lr_mult, 0.01)
+    # 5. Per-head LR multipliers (FIX-2026-07-22)
+    _add_group("act_head", groups["act"], base_lr * act_lr_mult, 0.01)
+    _add_group("pose_head", groups["pose"], base_lr * pose_lr_mult, 0.01)
+    _add_group("psr_head", groups["psr"], base_lr * psr_lr_mult, 0.01)
+    _add_group("det_head", groups["det"], base_lr * det_lr_mult, 0.01)
 
     return param_groups
 
@@ -1236,6 +1280,12 @@ def main():
     parser.add_argument("--lr", type=float, default=2e-5)
     parser.add_argument("--det-lr-mult", type=float, default=1000,
                         help="Detection head LR multiplier (default 1000 with prior_prob=0.1 for faster learning)")
+    parser.add_argument("--act-lr-mult", type=float, default=50,
+                        help="[FIX-2026-07-22] Activity head LR multiplier (default 50; was 1)")
+    parser.add_argument("--pose-lr-mult", type=float, default=50,
+                        help="[FIX-2026-07-22] Pose head LR multiplier (default 50; was 1)")
+    parser.add_argument("--psr-lr-mult", type=float, default=50,
+                        help="[FIX-2026-07-22] PSR head LR multiplier (default 50; was 1)")
     parser.add_argument("--det-prior-prob", type=float, default=0.1,
                         help="Detection head prior probability for bias init (default 0.1; higher = faster warmup)")
     parser.add_argument("--logit-bias-scale", type=float, default=1.0,
@@ -1402,7 +1452,11 @@ def main():
     if args.use_llrd:
         param_groups = build_llrd_param_groups(
             model, args.lr, llrd_decay=args.llrd_decay,
-            det_lr_mult=det_lr_mult_eff, weight_decay=0.05,
+            det_lr_mult=det_lr_mult_eff,
+            act_lr_mult=args.act_lr_mult,
+            pose_lr_mult=args.pose_lr_mult,
+            psr_lr_mult=args.psr_lr_mult,
+            weight_decay=0.05,
         )
         if uw_so_loss is not None:
             param_groups.append({
@@ -1413,19 +1467,29 @@ def main():
         opt = torch.optim.AdamW(param_groups)
         llrd_msg = f"LLRD enabled: decay={args.llrd_decay}, {len(param_groups)} param groups"
         for g in param_groups:
-            llrd_msg += f"\n    lr={g['lr']:.6f}, wd={g.get('weight_decay', 0.01):.4f}, n={len(g['params'])}"
+            llrd_msg += f"\n    lr={g['lr']:.6f}, wd={g.get('weight_decay', 0.01):.4f}, n={len(g['params'])} [{g.get('name', '?')}]"
         logger.info(llrd_msg)
     else:
-        det_params, base_params = [], []
+        # [FIX-2026-07-22] Per-head LR multipliers in non-LLRD path too
+        det_params, act_params, pose_params, psr_params, base_params = [], [], [], [], []
         for name, p in model.named_parameters():
             if not p.requires_grad:
                 continue
             if name.startswith("m.det_head."):
                 det_params.append(p)
+            elif name.startswith("m.act_head."):
+                act_params.append(p)
+            elif name.startswith("m.pose_head."):
+                pose_params.append(p)
+            elif name.startswith("m.psr_head."):
+                psr_params.append(p)
             else:
                 base_params.append(p)
         opt_groups = [
             {"params": base_params, "lr": args.lr, "weight_decay": 0.01},
+            {"params": act_params, "lr": args.lr * args.act_lr_mult, "weight_decay": 0.01},
+            {"params": pose_params, "lr": args.lr * args.pose_lr_mult, "weight_decay": 0.01},
+            {"params": psr_params, "lr": args.lr * args.psr_lr_mult, "weight_decay": 0.01},
             {"params": det_params, "lr": args.lr * det_lr_mult_eff, "weight_decay": 0.01},
         ]
         if uw_so_loss is not None:
@@ -1436,11 +1500,14 @@ def main():
             })
         opt = torch.optim.AdamW(opt_groups)
         opt_msg = (
-            f"Optimizer: {len(base_params)} base params @ lr={args.lr}"
-            f" + {len(det_params)} det_head params @ lr={args.lr * det_lr_mult_eff}"
+            f"Optimizer: base={len(base_params)} @ lr={args.lr}"
+            f" | act={len(act_params)} @ lr={args.lr*args.act_lr_mult}"
+            f" | pose={len(pose_params)} @ lr={args.lr*args.pose_lr_mult}"
+            f" | psr={len(psr_params)} @ lr={args.lr*args.psr_lr_mult}"
+            f" | det={len(det_params)} @ lr={args.lr*det_lr_mult_eff}"
         )
         if uw_so_loss is not None:
-            opt_msg += f" + {len(list(uw_so_loss.parameters()))} uw_so params @ lr={args.lr}"
+            opt_msg += f" + uw_so @ lr={args.lr}"
         logger.info(opt_msg)
 
     # ---- LR helpers ----
@@ -1534,10 +1601,15 @@ def main():
                     for g in opt.param_groups:
                         g["lr"] = base_lr * g.get("_lr_mult", 1.0)
                 else:
+                    # [FIX-2026-07-22] Per-head LR multipliers in non-LLRD path.
+                    # Order: base, act, pose, psr, det, [uw_so]
                     opt.param_groups[0]["lr"] = base_lr
-                    opt.param_groups[1]["lr"] = base_lr * det_lr_mult_eff
+                    opt.param_groups[1]["lr"] = base_lr * args.act_lr_mult
+                    opt.param_groups[2]["lr"] = base_lr * args.pose_lr_mult
+                    opt.param_groups[3]["lr"] = base_lr * args.psr_lr_mult
+                    opt.param_groups[4]["lr"] = base_lr * det_lr_mult_eff
                     if uw_so_loss is not None:
-                        opt.param_groups[2]["lr"] = base_lr
+                        opt.param_groups[5]["lr"] = base_lr
                 cur_lr = base_lr
 
                 loss_scaled = loss / args.grad_accum
@@ -1637,7 +1709,11 @@ def main():
         if args.use_llrd:
             param_groups = build_llrd_param_groups(
                 model, phase2_lr, llrd_decay=args.llrd_decay,
-                det_lr_mult=det_lr_mult_eff, weight_decay=0.05,
+                det_lr_mult=det_lr_mult_eff,
+                act_lr_mult=args.act_lr_mult,
+                pose_lr_mult=args.pose_lr_mult,
+                psr_lr_mult=args.psr_lr_mult,
+                weight_decay=0.05,
             )
             if uw_so_loss is not None:
                 param_groups.append({
@@ -1648,19 +1724,29 @@ def main():
             opt = torch.optim.AdamW(param_groups)
             llrd_msg = f"P2 LLRD enabled: decay={args.llrd_decay}, {len(param_groups)} param groups"
             for g in param_groups:
-                llrd_msg += f"\n    lr={g['lr']:.6f}, wd={g.get('weight_decay', 0.01):.4f}, n={len(g['params'])}"
+                llrd_msg += f"\n    lr={g['lr']:.6f}, wd={g.get('weight_decay', 0.01):.4f}, n={len(g['params'])} [{g.get('name', '?')}]"
             logger.info(llrd_msg)
         else:
-            det_params, base_params = [], []
+            # [FIX-2026-07-22] Per-head LR multipliers in Phase 2 non-LLRD path too
+            det_params, act_params, pose_params, psr_params, base_params = [], [], [], [], []
             for name, p in model.named_parameters():
                 if not p.requires_grad:
                     continue
                 if name.startswith("m.det_head."):
                     det_params.append(p)
+                elif name.startswith("m.act_head."):
+                    act_params.append(p)
+                elif name.startswith("m.pose_head."):
+                    pose_params.append(p)
+                elif name.startswith("m.psr_head."):
+                    psr_params.append(p)
                 else:
                     base_params.append(p)
             opt_groups = [
                 {"params": base_params, "lr": phase2_lr, "weight_decay": 0.01},
+                {"params": act_params, "lr": phase2_lr * args.act_lr_mult, "weight_decay": 0.01},
+                {"params": pose_params, "lr": phase2_lr * args.pose_lr_mult, "weight_decay": 0.01},
+                {"params": psr_params, "lr": phase2_lr * args.psr_lr_mult, "weight_decay": 0.01},
                 {"params": det_params, "lr": phase2_lr * det_lr_mult_eff, "weight_decay": 0.01},
             ]
             if uw_so_loss is not None:
@@ -1671,11 +1757,14 @@ def main():
                 })
             opt = torch.optim.AdamW(opt_groups)
             opt_msg = (
-                f"Optimizer: {len(base_params)} base params @ lr={phase2_lr}"
-                f" + {len(det_params)} det_head params @ lr={phase2_lr * det_lr_mult_eff}"
+                f"P2 Optimizer: base={len(base_params)} @ lr={phase2_lr}"
+                f" | act={len(act_params)} @ lr={phase2_lr*args.act_lr_mult}"
+                f" | pose={len(pose_params)} @ lr={phase2_lr*args.pose_lr_mult}"
+                f" | psr={len(psr_params)} @ lr={phase2_lr*args.psr_lr_mult}"
+                f" | det={len(det_params)} @ lr={phase2_lr*det_lr_mult_eff}"
             )
             if uw_so_loss is not None:
-                opt_msg += f" + {len(list(uw_so_loss.parameters()))} uw_so params @ lr={phase2_lr}"
+                opt_msg += f" + uw_so @ lr={phase2_lr}"
             logger.info(opt_msg)
 
         # Phase 2 warmup + cosine decay LR scheduler (was missing — fixed)
@@ -1719,10 +1808,14 @@ def main():
                     for g in opt.param_groups:
                         g["lr"] = cur_lr * g.get("_lr_mult", 1.0)
                 else:
+                    # [FIX-2026-07-22] Per-head LR multipliers in non-LLRD Phase 2 path
                     opt.param_groups[0]["lr"] = cur_lr
-                    opt.param_groups[1]["lr"] = cur_lr * det_lr_mult_eff
+                    opt.param_groups[1]["lr"] = cur_lr * args.act_lr_mult
+                    opt.param_groups[2]["lr"] = cur_lr * args.pose_lr_mult
+                    opt.param_groups[3]["lr"] = cur_lr * args.psr_lr_mult
+                    opt.param_groups[4]["lr"] = cur_lr * det_lr_mult_eff
                     if uw_so_loss is not None:
-                        opt.param_groups[2]["lr"] = cur_lr
+                        opt.param_groups[5]["lr"] = cur_lr
 
                 loss_scaled = loss / args.grad_accum
                 loss_scaled.backward()
