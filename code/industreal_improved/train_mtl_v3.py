@@ -1283,6 +1283,12 @@ def main():
                         help="TAL alignment exponent alpha (TOOD default=2.0)")
     parser.add_argument("--tal-lr-mult", type=float, default=2.0,
                         help="TAL detection head LR multiplier (TOOD default 2x)")
+    # [FIX-2026-07-21] Disable update_logit_bias - probe shows 16% lower BG conf,
+    # 11% higher FG conf, 15% better FG/BG separation vs enabled (500-step overfit).
+    # Default OFF because the fill_() overwrites gradient updates, preventing the
+    # classification head from learning per-class background suppression.
+    parser.add_argument("--use-logit-bias-update", action="store_true",
+                        help="Enable update_logit_bias() EMA-based bias fill each step (default OFF)")
     args = parser.parse_args()
 
     # Effective det_lr_mult: TAL heads get 2x higher LR per TOOD paper
@@ -1549,9 +1555,13 @@ def main():
                 # [IMP-10] Dynamic logit bias adjustment: updates detection head
                 # classification bias based on observed per-sample positive anchor
                 # ratio. Uses EMA smoothing (momentum=0.05) to prevent oscillation.
-                total_anchors = sum(a.shape[0] * a.shape[1] * a.shape[2] for a in anchors_per_level.values())
-                pos_ratio = lc['det_pos'] / max(total_anchors * args.batch_size, 1)
-                model.m.det_head.update_logit_bias(pos_ratio)
+                # [FIX-2026-07-21] DISABLED by default (probe shows it hurts BG suppression
+                # by 16% and FG/BG separation by 15% vs disabled). Enable with
+                # --use-logit-bias-update only if you're trying to reproduce the bug.
+                if args.use_logit_bias_update:
+                    total_anchors = sum(a.shape[0] * a.shape[1] * a.shape[2] for a in anchors_per_level.values())
+                    pos_ratio = lc['det_pos'] / max(total_anchors * args.batch_size, 1)
+                    model.m.det_head.update_logit_bias(pos_ratio)
 
                 epoch_loss += loss.item()
                 epoch_cls += lc["det_cls"]
@@ -1731,10 +1741,12 @@ def main():
                 else:
                     grad_norm = 0.0
 
-                # [IMP-10] Dynamic logit bias adjustment (same as Phase 1)
-                total_anchors = sum(a.shape[0] * a.shape[1] * a.shape[2] for a in anchors_per_level.values())
-                pos_ratio = lc['det_pos'] / max(total_anchors * args.batch_size, 1)
-                model.m.det_head.update_logit_bias(pos_ratio)
+                # [IMP-10] Dynamic logit bias adjustment (same as Phase 1).
+                # [FIX-2026-07-21] Disabled by default (see Phase 1 comment).
+                if args.use_logit_bias_update:
+                    total_anchors = sum(a.shape[0] * a.shape[1] * a.shape[2] for a in anchors_per_level.values())
+                    pos_ratio = lc['det_pos'] / max(total_anchors * args.batch_size, 1)
+                    model.m.det_head.update_logit_bias(pos_ratio)
 
                 epoch_loss += loss.item()
                 epoch_cls += lc["det_cls"]

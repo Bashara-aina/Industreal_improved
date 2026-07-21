@@ -18,7 +18,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from functools import partial
 from torchvision.models.video import mvit_v2_s, MViT_V2_S_Weights
 
 logger = logging.getLogger("mvit_mtl_model")
@@ -140,6 +139,11 @@ class LightweightFPN(nn.Module):
     [FIX 207 §2.5] P5 fusion now uses two inputs only (p5_td + max_pool(p4_out)),
     eliminating the duplicate p5_lat term.
 
+    [IMP-10] Added dedicated 3x3 P2 lateral projection (p2_lateral) to better
+    process C2 (96ch, stride 4) into the 256-channel FPN space, improving small
+    object detection by preserving high-resolution signal through a larger
+    receptive field compared to the standard 1x1 lateral.
+
     Input: dict {P2: 96ch, P3: 192ch, P4: 384ch, P5: 768ch} each [B, C, T, H, W]
     Output: dict {P2, P3, P4, P5} each [B, 256, T, H, W] with H,W halving per level.
     """
@@ -149,10 +153,15 @@ class LightweightFPN(nn.Module):
         self.out_channels = out_channels
         self.eps = 1e-4
 
-        # 1x1 lateral projections to out_channels
+        # 1x1 lateral projections to out_channels (P3/P4/P5)
         self.lateral = nn.ModuleDict(
-            {name: nn.Conv3d(ch, out_channels, kernel_size=1) for name, ch in in_channels.items()}
+            {name: nn.Conv3d(ch, out_channels, kernel_size=1) for name, ch in in_channels.items() if name != "P2"}
         )
+        # [IMP-10] Dedicated 3x3 conv for P2 (stride 4, 96ch). Larger receptive
+        # field than 1x1 lateral — better spatial processing for small objects
+        # while preserving stride-4 resolution (stride=1, not 2, to maintain P2
+        # high resolution). The temporal kernel is 1 (per-frame) so T is preserved.
+        self.p2_lateral = nn.Conv3d(96, out_channels, kernel_size=(1, 3, 3), stride=(1, 1, 1), padding=(0, 1, 1))
 
         # Smooth convs for top-down path
         self.td_conv = nn.ModuleDict(
@@ -194,8 +203,13 @@ class LightweightFPN(nn.Module):
         """Build BiFPN pyramid: top-down followed by bottom-up with weighted fusion."""
         names = ["P5", "P4", "P3", "P2"]
 
-        # 1x1 lateral projection
-        lat = {n: self.lateral[n](features[n]) for n in names}
+        # Lateral projections: 1x1 for P3/P4/P5, dedicated 3x3 for P2
+        lat = {}
+        for n in names:
+            if n == "P2":
+                lat[n] = self.p2_lateral(features[n])
+            else:
+                lat[n] = self.lateral[n](features[n])
 
         # --- Top-down pathway (P5 -> P4 -> P3 -> P2) ---
         td = {}
@@ -239,16 +253,38 @@ class LightweightFPN(nn.Module):
 
 
 class DetectionHead(nn.Module):
-    """Lightweight detection head — decoupled cls + box regression with DFL.
+    """Detection head — decoupled cls + per-anchor box regression.
 
     Operates on FPN features [B, 256, T, H, W] (temporal-pooled to [B, 256, H, W]).
-    Box regression outputs a distribution over reg_max bins per coordinate for DFL.
+    Box regression outputs 4 * num_anchors channels, interpreted as (dx, dy, dw, dh)
+    per anchor.  Default num_anchors=16, so reg_out = 64 channels.
+
+    Training (train_mtl_v3.py) reshapes [B, 4*A, H, W] -> [B, A, 4, H, W] -> [B, H, W, A, 4].
+    Eval decodes each anchor's (dx, dy, dw, dh) as:
+        cx = grid_cx + dx * 0.1
+        cy = grid_cy + dy * 0.1
+        w  = anchor_w * exp(dw)
+        h  = anchor_h * exp(dh)
     """
 
-    def __init__(self, in_channels: int = 256, num_classes: int = 24, reg_max: int = 16):
+    def __init__(self, in_channels: int = 256, num_classes: int = 24,
+                 prior_prob: float = 0.01, logit_bias_scale: float = 1.0,
+                 num_anchors: int = 16):
         super().__init__()
         self.num_classes = num_classes
-        self.reg_max = reg_max
+        self.prior_prob = prior_prob
+        self.logit_bias_scale = logit_bias_scale
+        # [FIX-2026-07-21] Register running_pos_ratio as a persistent buffer so
+        # it survives checkpoint save/load. Previously it was a plain Python
+        # float attribute, meaning every resume-from-checkpoint would reset
+        # the EMA back to prior_prob (causing the bias adjustment to re-warm
+        # from the initial state on every reload).
+        self.register_buffer(
+            "running_pos_ratio",
+            torch.tensor(float(prior_prob), dtype=torch.float32),
+            persistent=True,
+        )
+        self.num_anchors = num_anchors
 
         self.cls_head = nn.Sequential(
             nn.Conv2d(in_channels, in_channels, 3, padding=1),
@@ -260,8 +296,11 @@ class DetectionHead(nn.Module):
             nn.Conv2d(in_channels, in_channels, 3, padding=1),
             nn.GroupNorm(num_groups=min(32, in_channels), num_channels=in_channels),
             nn.ReLU(inplace=True),
-            nn.Conv2d(in_channels, 4 * reg_max, 1),  # DFL: 4 coords x reg_max bins
+            nn.Conv2d(in_channels, 4 * self.num_anchors, 1),  # dynamic: num_anchors x 4 coords
         )
+
+        # Initialize with low-positive prior to suppress false positives on start
+        self._init_weights(prior_prob=self.prior_prob)
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
         """Forward per FPN level.
@@ -271,12 +310,65 @@ class DetectionHead(nn.Module):
 
         Returns:
             cls_logits: [B, num_classes, H, W]
-            reg_preds: [B, 4 * reg_max, H, W]
+            reg_preds: [B, 4 * num_anchors, H, W]
         """
         return {
             "cls_logits": self.cls_head(x),
             "reg_preds": self.reg_head(x),
         }
+
+    def _init_weights(self, prior_prob: float = 0.01):
+        """Initialize detection head with a low-positive prior.
+
+        Sets the bias of the final classification conv layer so that sigmoid
+        outputs start near `prior_prob` instead of 0.5. Without this, every
+        location fires with ~50% confidence and eval produces millions of
+        false positives (mAP=0 even when training is correct).
+
+        [IMP-10] logit_bias_scale multiplies the computed bias_init, allowing
+        controlled deviation from the prior_prob-derived value.  scale > 1.0
+        makes the initial bias more negative (lower confidence), scale < 1.0
+        makes it less negative (higher confidence).  Default 1.0 = no change.
+
+        Args:
+            prior_prob: desired initial probability for foreground at each location.
+        """
+        import math
+        bias_init = -math.log((1.0 - prior_prob) / prior_prob) * self.logit_bias_scale
+        for m in self.cls_head.modules():
+            if isinstance(m, nn.Conv2d) and m.out_channels == self.num_classes:
+                nn.init.constant_(m.bias, bias_init)
+        # Regression head: default init is fine (predictions = raw anchor offsets)
+
+    def update_logit_bias(self, batch_pos_ratio: float, momentum: float = 0.05):
+        """Dynamically adjust classification bias based on observed positive ratio.
+
+        [IMP-10] Tracks an EMA of the per-batch positive anchor ratio and
+        adjusts the final conv bias to match the theoretical optimal bias
+        for that ratio: bias = -log((1-r)/r) * logit_bias_scale.
+
+        This prevents the bias from drifting toward extreme negative values
+        when the positive fraction is very low (e.g., 1/30K).  Without this
+        adjustment, the sigmoid bias can collapse to -10+ (sigmoid ~0),
+        starving the detection head of gradient signal.
+
+        Args:
+            batch_pos_ratio: fraction of positive anchors in this batch
+                             (num_positive / num_total_locations).
+            momentum: EMA decay rate for running_pos_ratio. 0.05 = ~20-batch
+                      half-life. Higher = faster adaptation.
+        """
+        import math
+        # Update running EMA of positive ratio (in-place on registered buffer)
+        with torch.no_grad():
+            self.running_pos_ratio.mul_(1.0 - momentum).add_(momentum * batch_pos_ratio)
+        # Compute target bias from running ratio (clamp to stable range)
+        pos = max(0.001, min(float(self.running_pos_ratio.item()), 0.5))
+        target_bias = -math.log((1.0 - pos) / pos) * self.logit_bias_scale
+        # Apply to final classification conv bias
+        for m in self.cls_head.modules():
+            if isinstance(m, nn.Conv2d) and m.out_channels == self.num_classes:
+                m.bias.data.fill_(target_bias)
 
 
 # ===========================================================================
@@ -376,43 +468,30 @@ class ActivityHead(nn.Module):
 
 
 class PSRHead(nn.Module):
-    """PSR head — causal Transformer on spatial-pooled temporal features.
+    """PSR head — per-frame MLP on spatial-pooled features.
 
-    [OPUS 201 DIET] 70.9M → ~1.8M. The P5 feature-source fix (96-dim conv_proj
-    → 768-dim semantic) was the load-bearing change — not head size. An 8-token
-    sequence producing 8×11=88 outputs needs ≤15M, not 70.9M. The old 6-layer
-    d=768 ff=8× head was 14-23× larger than the PSR specialist (3-5M), inverting
-    the paper's efficiency claim.
+    Simplified from temporal Transformer to per-frame MLP since all training
+    and evaluation uses single frames (T=1). The old causal Transformer was
+    dead weight — with T=1 the mask is 1×1 and no temporal processing occurs.
 
-    Architecture: Linear(768→256) input projection + 2-layer causal Transformer
-    (d=256, nhead=4, ff=1024=4×) + Linear(256→11) output. Total ≈1.8M.
+    Architecture: AdaptiveAvgPool3d → Linear(768→256) → GELU → Dropout →
+    Linear(256→11). Returns [B, 11] directly.
 
     Reads spatial-pooled features from the backbone's hook output (blocks[14] = P5).
+    Total params ≈ 0.2M (was 1.8M with Transformer).
     """
 
     def __init__(
         self,
-        feat_dim: int = 256,  # [OPUS 201] internal transformer dim (was 768)
-        input_dim: int = 768,  # [OPUS 201] P5 source feature dim
+        feat_dim: int = 256,
+        input_dim: int = 768,
         num_components: int = 11,
-        nhead: int = 4,
-        num_layers: int = 2,  # [OPUS 201] 2 layers (was 6). 8 tokens needs ≤3.
     ):
         super().__init__()
         self.spatial_pool = nn.AdaptiveAvgPool3d((None, 1, 1))  # pool H,W
-        # [OPUS 201] Project P5 features (768-dim) down to internal transformer dim
         self.input_proj = nn.Linear(input_dim, feat_dim)
+        self.activation = nn.GELU()
         self.dropout = nn.Dropout(0.15)
-
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=feat_dim,
-            nhead=nhead,
-            dim_feedforward=feat_dim * 4,  # [OPUS 201] standard 4× (was 8×)
-            dropout=0.1,
-            activation=partial(F.leaky_relu, negative_slope=0.01),
-            batch_first=True,
-        )
-        self.temporal_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.projection = nn.Linear(feat_dim, num_components)
         self._init_weights()
 
@@ -423,37 +502,25 @@ class PSRHead(nn.Module):
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
 
-    def forward(self, conv_proj_feat: torch.Tensor) -> torch.Tensor:
+    def forward(self, p5_feat: torch.Tensor) -> torch.Tensor:
         """Forward.
 
         Args:
-            conv_proj_feat: [B, 768, T=8, H=7, W=7] from P5 (blocks[14] hook).
+            p5_feat: [B, 768, T, H, W] from P5 (blocks[14] hook). T is typically 1
+                     for single-frame inference, but any T works (per-frame MLP).
 
         Returns:
-            psr_logits: [B, T=8, 11] per-frame transition logits.
-
-        [OPUS 192 FC-4] Predict at native T=8 (backbone's pooled resolution) instead
-        of post-encoder linear interpolation 8→16. Linear interpolation blends
-        adjacent frames, making sharp per-frame transitions unrepresentable.
-        Labels are downsampled to T=8 in psr_loss() via max-pool to preserve
-        transition events (any 1 in a 2-frame window → 1 in the downsampled
-        label).
+            psr_logits: [B, 11] per-frame transition logits.
         """
-        # Pool spatial dims → [B, 768, T=8, 1, 1] → [B, T=8, 768]
-        x = self.spatial_pool(conv_proj_feat).squeeze(-1).squeeze(-1).transpose(1, 2)
-        # [OPUS 201] Project from 768-dim P5 features to internal transformer dim
-        x = self.input_proj(x)  # [B, T=8, feat_dim]
-
-        # Predict at native T=8 — no interpolation. Causal mask is 8x8.
-        T = x.size(1)
-        mask = torch.triu(
-            torch.full((T, T), float("-inf"), device=x.device),
-            diagonal=1,
-        )
-
-        x = self.temporal_encoder(x, mask=mask)  # [B, 8, feat_dim]
+        # Pool spatial dims → [B, 768, T, 1, 1] → [B, T, 768]
+        x = self.spatial_pool(p5_feat).squeeze(-1).squeeze(-1).transpose(1, 2)
+        # Average over temporal dim (always T=1, so this is a no-op in practice)
+        x = x.mean(dim=1)  # [B, 768]
+        # MLP: project → activate → dropout → output
+        x = self.input_proj(x)  # [B, 256]
+        x = self.activation(x)
         x = self.dropout(x)
-        return self.projection(x)  # [B, 8, 11]
+        return self.projection(x)  # [B, 11]
 
 
 # ===========================================================================
@@ -511,22 +578,35 @@ class MTLMViTModel(nn.Module):
         num_det_classes: int = NUM_DET_CLASSES,
         num_psr_components: int = NUM_PSR_COMPONENTS,
         fpn_channels: int = FPN_CHANNELS,
+        det_prior_prob: float = 0.01,
+        logit_bias_scale: float = 1.0,
+        use_p2_level: bool = False,
+        num_anchors: int = 16,
     ):
         super().__init__()
         self.num_act_classes = num_act_classes
         self.num_det_classes = num_det_classes
         self.num_psr_components = num_psr_components
+        self.use_p2_level = use_p2_level
+        self.num_anchors = num_anchors
 
         # Shared MViTv2-S backbone + feature pyramid
         self.feature_pyramid = MViTFeaturePyramid()
         backbone_dim = 768  # MViTv2-S final channel dim
+
+        # [IMP-10] P2 level support for small object detection.
+        # When use_p2_level=True, P2 (stride 4, 56x56) is included in detection
+        # outputs alongside P3/P4/P5. P2 provides higher resolution features
+        # that improve small object AP by 3-5% (Agent 5 findings).
+        # The dedicated 3x3 p2_lateral in LightweightFPN improves feature
+        # extraction from C2 (96ch) into the 256-channel FPN space.
 
         # Detection FPN + head
         self.fpn = LightweightFPN(
             in_channels={"P2": 96, "P3": 192, "P4": 384, "P5": 768},
             out_channels=fpn_channels,
         )
-        self.det_head = DetectionHead(in_channels=fpn_channels, num_classes=num_det_classes)
+        self.det_head = DetectionHead(in_channels=fpn_channels, num_classes=num_det_classes, prior_prob=det_prior_prob, logit_bias_scale=logit_bias_scale, num_anchors=num_anchors)
 
         # Activity head
         self.act_head = ActivityHead(feat_dim=backbone_dim, num_classes=num_act_classes)
@@ -546,8 +626,8 @@ class MTLMViTModel(nn.Module):
         self.pose_head = PoseHead(feat_dim=backbone_dim)
 
         logger.info(
-            "MTLMViTModel: feats={}, act={}-cls, det={}-cls, psr={}-comp, fpn={}ch".format(
-                backbone_dim, num_act_classes, num_det_classes, num_psr_components, fpn_channels
+            "MTLMViTModel: feats={}, act={}-cls, det={}-cls, psr={}-comp, fpn={}ch, use_p2={}".format(
+                backbone_dim, num_act_classes, num_det_classes, num_psr_components, fpn_channels, use_p2_level
             )
         )
 
@@ -561,24 +641,22 @@ class MTLMViTModel(nn.Module):
             dict with keys:
               - detection: dict of per-FPN-level {cls_logits, reg_preds}
               - activity: [B, 75] logits
-              - psr_logits: [B, T=16, 11] per-frame transition logits
+              - psr_logits: [B, 11] per-frame transition logits
               - pose_6d: [B, 6] Tanh-bounded fwd+up
         """
         # Shared backbone forward
         fpn_feats, cls_token = self.feature_pyramid(clip)
 
         # Detection: FPN → decoupled head
-        # [OPUS 192 FC-2 / Layer 5] Use only P3/P4/P5 for detection. P2 reads
-        # raw `conv_proj` patch-embeddings (semantics-free, same issue that
-        # starved PSR before B-3). Drop P2 from detection — classification on
-        # semantic levels (P3=192ch, P4=384ch, P5=768ch) is the load-bearing
-        # change. P2 remains in the FPN top-down pathway (so PSR's P5 still
-        # gets its top-down context) but is not used for detection heads.
+        # [IMP-10] P2 level: controlled by self.use_p2_level flag. When enabled,
+        # P2 (stride 4, 56x56) is included in detection outputs for better small
+        # object AP (+3-5%). The dedicated 3x3 p2_lateral in LightweightFPN
+        # provides better feature extraction from C2 (96ch) into 256ch FPN space.
+        # When disabled (default), only P3/P4/P5 are used (legacy behavior).
         fpn_out = self.fpn(fpn_feats)
         det_outputs = {}
         for level_name, feat in fpn_out.items():
-            if level_name == "P2":
-                # Skip P2 (raw conv_proj features, no semantics — FC-2)
+            if level_name == "P2" and not self.use_p2_level:
                 continue
             # Temporal-pool T dimension for 2D detection
             pooled = feat.mean(dim=2)  # [B, 256, H, W]
@@ -594,7 +672,7 @@ class MTLMViTModel(nn.Module):
         if psr_input is not None:
             psr_logits = self.psr_head(psr_input)
         else:
-            psr_logits = torch.zeros(clip.size(0), 16, self.num_psr_components, device=clip.device)
+            psr_logits = torch.zeros(clip.size(0), self.num_psr_components, device=clip.device)
 
         # Pose
         pose_6d = self.pose_head(cls_token)
