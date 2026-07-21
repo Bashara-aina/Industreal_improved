@@ -1,0 +1,29 @@
+# IndustReal YOLOv8 training dataset (real data only)
+path: /home/newadmin/swarm-bot/master/POPW/datasets/industreal/recordings/train_yolo
+train: images
+val: /home/newadmin/swarm-bot/master/POPW/datasets/industreal/recordings/val_yolo/images
+names:
+  0: background
+  1: '10000000000'
+  2: '10010010000'
+  3: '10010100000'
+  4: '10010110000'
+  5: '11100000000'
+  6: '11110010000'
+  7: '11110100000'
+  8: '11110110000'
+  9: '11110111100'
+  10: '11110111110'
+  11: '11110110001'
+  12: '11110111101'
+  13: '11110111111'
+  14: '11110101111'
+  15: '11110011111'
+  16: '11110011110'
+  17: '11110101110'
+  18: '11100001110'
+  19: '11101101110'
+  20: '11101011110'
+  21: '11101111110'
+  22: '11101111111'
+  23: error_state
