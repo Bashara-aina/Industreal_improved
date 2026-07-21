@@ -136,7 +136,7 @@ def generate_anchors(H: int, W: int, device: torch.device) -> torch.Tensor:
     """Generate anchor boxes for one FPN level.
 
     Each anchor center is at the grid cell center (i+0.5)/H, (j+0.5)/W.
-    Anchors are the same 16 shapes (4 sizes x 4 ratios) at every location.
+    Anchors are the same NUM_ANCHORS shapes at every location.
 
     Returns:
         anchors: [H, W, NUM_ANCHORS, 4] in (cx, cy, w, h), normalized [0,1]
@@ -935,6 +935,7 @@ def multi_task_loss_v3(
     loss_type: str = "focal",
     matcher_type: str = "iou",
     use_tal: bool = False,
+    tal_alpha: float = 2.0,
     use_class_balanced_sampling: bool = False,
     class_weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
@@ -992,6 +993,7 @@ def multi_task_loss_v3(
             loss_type=loss_type,
             matcher_type=matcher_type,
             use_tal=use_tal,
+            tal_alpha=tal_alpha,
             hard_neg_ratio=cb_hard_neg_ratio,
         )
         if uw_so is not None:
@@ -1283,6 +1285,11 @@ def main():
                         help="TAL detection head LR multiplier (TOOD default 2x)")
     args = parser.parse_args()
 
+    # Effective det_lr_mult: TAL heads get 2x higher LR per TOOD paper
+    det_lr_mult_eff = args.det_lr_mult * (args.tal_lr_mult if args.use_tal else 1.0)
+    if args.use_tal:
+        logger.info(f"TAL enabled: tal_alpha={args.tal_alpha}, det_lr_mult={args.det_lr_mult:.0f} -> {det_lr_mult_eff:.0f}x (TAL 2x)")
+
     # Apply --num-anchors to global anchor config
     global NUM_ANCHORS, _ANCHOR_SPECS
     if args.num_anchors == 8:
@@ -1369,7 +1376,7 @@ def main():
     model = WrappedMTL(full).to(device)
     n_params = sum(p.numel() for p in model.parameters())
     logger.info(f"Model: {n_params / 1e6:.1f}M params")
-    logger.info(f"Detection: prior_prob={args.det_prior_prob:.2f}, lr_mult={args.det_lr_mult:.0f}x")
+    logger.info(f"Detection: prior_prob={args.det_prior_prob:.2f}, lr_mult={args.det_lr_mult:.0f}x (eff={det_lr_mult_eff:.0f}x{' TAL 2x' if args.use_tal else ''})")
 
     # ---- UW-SO uncertainty weighting (if enabled) ----
     uw_so_loss = None
@@ -1389,7 +1396,7 @@ def main():
     if args.use_llrd:
         param_groups = build_llrd_param_groups(
             model, args.lr, llrd_decay=args.llrd_decay,
-            det_lr_mult=args.det_lr_mult, weight_decay=0.05,
+            det_lr_mult=det_lr_mult_eff, weight_decay=0.05,
         )
         if uw_so_loss is not None:
             param_groups.append({
@@ -1413,7 +1420,7 @@ def main():
                 base_params.append(p)
         opt_groups = [
             {"params": base_params, "lr": args.lr, "weight_decay": 0.01},
-            {"params": det_params, "lr": args.lr * args.det_lr_mult, "weight_decay": 0.01},
+            {"params": det_params, "lr": args.lr * det_lr_mult_eff, "weight_decay": 0.01},
         ]
         if uw_so_loss is not None:
             opt_groups.append({
@@ -1424,7 +1431,7 @@ def main():
         opt = torch.optim.AdamW(opt_groups)
         opt_msg = (
             f"Optimizer: {len(base_params)} base params @ lr={args.lr}"
-            f" + {len(det_params)} det_head params @ lr={args.lr * args.det_lr_mult}"
+            f" + {len(det_params)} det_head params @ lr={args.lr * det_lr_mult_eff}"
         )
         if uw_so_loss is not None:
             opt_msg += f" + {len(list(uw_so_loss.parameters()))} uw_so params @ lr={args.lr}"
@@ -1508,21 +1515,21 @@ def main():
                 # Build anchors from current FPN output sizes
                 anchors_per_level = build_anchors(out_dict["detection"])
 
-                loss, lc = multi_task_loss_v3(out_dict, targets, anchors_per_level, use_supcon=args.use_supcon, uw_so=uw_so_loss, loss_type=args.loss, matcher_type=args.matcher, use_tal=args.use_tal, use_class_balanced_sampling=args.use_class_balanced_sampling)
+                loss, lc = multi_task_loss_v3(out_dict, targets, anchors_per_level, use_supcon=args.use_supcon, uw_so=uw_so_loss, loss_type=args.loss, matcher_type=args.matcher, use_tal=args.use_tal, tal_alpha=args.tal_alpha, use_class_balanced_sampling=args.use_class_balanced_sampling)
 
                 if torch.isnan(loss) or torch.isinf(loss):
                     n_skipped += 1
                     opt.zero_grad()
                     continue
 
-                # Update LR (detection head gets args.det_lr_mult multiplier)
+                # Update LR (detection head gets det_lr_mult_eff multiplier)
                 base_lr = lr_at_step(global_step)
                 if args.use_llrd:
                     for g in opt.param_groups:
                         g["lr"] = base_lr * g.get("_lr_mult", 1.0)
                 else:
                     opt.param_groups[0]["lr"] = base_lr
-                    opt.param_groups[1]["lr"] = base_lr * args.det_lr_mult
+                    opt.param_groups[1]["lr"] = base_lr * det_lr_mult_eff
                     if uw_so_loss is not None:
                         opt.param_groups[2]["lr"] = base_lr
                 cur_lr = base_lr
@@ -1622,7 +1629,7 @@ def main():
         if args.use_llrd:
             param_groups = build_llrd_param_groups(
                 model, phase2_lr, llrd_decay=args.llrd_decay,
-                det_lr_mult=args.det_lr_mult, weight_decay=0.05,
+                det_lr_mult=det_lr_mult_eff, weight_decay=0.05,
             )
             if uw_so_loss is not None:
                 param_groups.append({
@@ -1646,7 +1653,7 @@ def main():
                     base_params.append(p)
             opt_groups = [
                 {"params": base_params, "lr": phase2_lr, "weight_decay": 0.01},
-                {"params": det_params, "lr": phase2_lr * args.det_lr_mult, "weight_decay": 0.01},
+                {"params": det_params, "lr": phase2_lr * det_lr_mult_eff, "weight_decay": 0.01},
             ]
             if uw_so_loss is not None:
                 opt_groups.append({
@@ -1657,7 +1664,7 @@ def main():
             opt = torch.optim.AdamW(opt_groups)
             opt_msg = (
                 f"Optimizer: {len(base_params)} base params @ lr={phase2_lr}"
-                f" + {len(det_params)} det_head params @ lr={phase2_lr * args.det_lr_mult}"
+                f" + {len(det_params)} det_head params @ lr={phase2_lr * det_lr_mult_eff}"
             )
             if uw_so_loss is not None:
                 opt_msg += f" + {len(list(uw_so_loss.parameters()))} uw_so params @ lr={phase2_lr}"
@@ -1691,7 +1698,7 @@ def main():
                 # Build anchors from current FPN output sizes
                 anchors_per_level = build_anchors(out_dict["detection"])
 
-                loss, lc = multi_task_loss_v3(out_dict, targets, anchors_per_level, use_supcon=args.use_supcon, uw_so=uw_so_loss, loss_type=args.loss, matcher_type=args.matcher, use_tal=args.use_tal, use_class_balanced_sampling=args.use_class_balanced_sampling)
+                loss, lc = multi_task_loss_v3(out_dict, targets, anchors_per_level, use_supcon=args.use_supcon, uw_so=uw_so_loss, loss_type=args.loss, matcher_type=args.matcher, use_tal=args.use_tal, tal_alpha=args.tal_alpha, use_class_balanced_sampling=args.use_class_balanced_sampling)
 
                 if torch.isnan(loss) or torch.isinf(loss):
                     n_skipped += 1
@@ -1705,7 +1712,7 @@ def main():
                         g["lr"] = cur_lr * g.get("_lr_mult", 1.0)
                 else:
                     opt.param_groups[0]["lr"] = cur_lr
-                    opt.param_groups[1]["lr"] = cur_lr * args.det_lr_mult
+                    opt.param_groups[1]["lr"] = cur_lr * det_lr_mult_eff
                     if uw_so_loss is not None:
                         opt.param_groups[2]["lr"] = cur_lr
 
