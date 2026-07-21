@@ -56,7 +56,8 @@ class YOLOv8Distiller:
         """Run YOLOv8 on a batch of RGB images, return per-frame soft labels.
 
         Args:
-            images_rgb: [B, 3, H, W] RGB images normalized for MTL model
+            images_rgb: [B, 3, H, W] RGB images in [0, 1] range (post TF.to_tensor
+                        but pre-MTL normalization)
             img_w, img_h: MTL model image dimensions
 
         Returns:
@@ -69,11 +70,9 @@ class YOLOv8Distiller:
         B = images_rgb.shape[0]
         results_list = []
 
-        # Convert MTL-normalized images back to RGB uint8 for YOLOv8
-        # MTL normalization: (img/255 - 0.45) / 0.225
-        # Inverse: img_norm * 0.225 + 0.45, then * 255
-        images_rgb_f = images_rgb * 0.225 + 0.45
-        images_rgb_u8 = (images_rgb_f.clamp(0, 1) * 255).byte().cpu().numpy()
+        # Input is already in [0, 1] range (TF.to_tensor output)
+        # Just convert to uint8 for YOLOv8
+        images_rgb_u8 = (images_rgb.clamp(0, 1) * 255).byte().cpu().numpy()
         # Shape: [B, 3, H, W] -> [B, H, W, 3] for YOLOv8
         images_rgb_hwc = images_rgb_u8.transpose(0, 2, 3, 1)
 

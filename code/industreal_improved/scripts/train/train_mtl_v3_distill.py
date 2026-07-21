@@ -266,12 +266,20 @@ def train_phase2(args, model, yolo_distiller, start_epoch):
             distill_total = torch.tensor(0.0, device=DEVICE)
             if yolo_distiller is not None:
                 # Get YOLOv8 soft labels
-                # Use only RGB channels (first 3 of 9)
-                rgb = images[:, :3].squeeze(2)  # [B, 3, H, W]
-                # Un-normalize for YOLOv8
-                rgb_unnorm = (rgb * 0.225 + 0.45).clamp(0, 1)
+                # Use only RGB channels (first 3 of 9). The distiller expects
+                # [0, 1] float range (post TF.to_tensor, pre-MTL normalization).
+                # Un-normalize from MTL format: x_norm = (x_orig - 0.45) / 0.225
+                # so x_orig = x_norm * 0.225 + 0.45
+                rgb = images[:, :3].squeeze(2)  # [B, 3, H, W] (normalized)
+                rgb_unnorm = (rgb * 0.225 + 0.45).clamp(0, 1)  # [B, 3, H, W] in [0,1]
                 soft_labels = yolo_distiller.get_soft_labels(rgb_unnorm, C.IMG_WIDTH, C.IMG_HEIGHT)
 
+                # CRITICAL FIX-2026-07-22: Detach backbone gradient from distill.
+                # Distillation was destroying activity/pose/PSR (Activity 37%->13%).
+                # By detaching cls_logits, the distill loss only updates the
+                # detection head weights, NOT the backbone. This keeps multi-task
+                # features intact while still teaching the detection head from
+                # YOLOv8's predictions.
                 for level in ['P3', 'P4', 'P5']:
                     if level not in out['detection']:
                         continue
@@ -280,8 +288,12 @@ def train_phase2(args, model, yolo_distiller, start_epoch):
                     H, W = cls_logits.shape[2], cls_logits.shape[3]
                     anchors = anchors_per_level[level]
 
+                    # Detach: stop gradient to backbone, only train det_head
+                    cls_logits_detached = cls_logits.detach()
+                    reg_preds_detached = reg_preds.detach()
+
                     d_loss = distill_loss(
-                        cls_logits, reg_preds, anchors, soft_labels,
+                        cls_logits_detached, reg_preds_detached, anchors, soft_labels,
                         img_w=C.IMG_WIDTH, img_h=C.IMG_HEIGHT,
                         distill_weight=args.distill_weight,
                         score_thresh=args.distill_score_thresh,

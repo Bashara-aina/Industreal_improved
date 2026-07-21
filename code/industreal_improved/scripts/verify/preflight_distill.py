@@ -268,8 +268,10 @@ def check_combined_training(R, weights_path):
         )
 
         # Distillation loss
-        rgb = x[:, :3].squeeze(2)  # [B, 3, H, W]
-        rgb_unnorm = (rgb * 0.225 + 0.45).clamp(0, 1)
+        # x is normalized: x_norm = (x_orig - 0.45) / 0.225
+        # Un-normalize: x_orig = x_norm * 0.225 + 0.45 (in [0,1])
+        rgb = x[:, :3].squeeze(2)  # [B, 3, H, W] (normalized)
+        rgb_unnorm = (rgb * 0.225 + 0.45).clamp(0, 1)  # [B, 3, H, W] in [0,1]
         soft_labels = distiller.get_soft_labels(rgb_unnorm, 640, 360)
 
         distill_total = torch.tensor(0.0, device=x.device)
