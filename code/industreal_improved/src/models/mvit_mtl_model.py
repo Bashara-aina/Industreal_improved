@@ -582,6 +582,7 @@ class MTLMViTModel(nn.Module):
         logit_bias_scale: float = 1.0,
         use_p2_level: bool = False,
         num_anchors: int = 16,
+        use_yolov8_head: bool = False,
     ):
         super().__init__()
         self.num_act_classes = num_act_classes
@@ -589,6 +590,7 @@ class MTLMViTModel(nn.Module):
         self.num_psr_components = num_psr_components
         self.use_p2_level = use_p2_level
         self.num_anchors = num_anchors
+        self.use_yolov8_head = use_yolov8_head
 
         # Shared MViTv2-S backbone + feature pyramid
         self.feature_pyramid = MViTFeaturePyramid()
@@ -606,7 +608,18 @@ class MTLMViTModel(nn.Module):
             in_channels={"P2": 96, "P3": 192, "P4": 384, "P5": 768},
             out_channels=fpn_channels,
         )
-        self.det_head = DetectionHead(in_channels=fpn_channels, num_classes=num_det_classes, prior_prob=det_prior_prob, logit_bias_scale=logit_bias_scale, num_anchors=num_anchors)
+
+        # [v3.19] Choose detection head: standard 3x3 or YOLOv8-style DFL
+        if use_yolov8_head:
+            from src.models.yolov8_det_head import YOLOv8DetectHead
+            self.det_head = YOLOv8DetectHead(
+                in_channels=fpn_channels,
+                num_classes=num_det_classes,
+                reg_max=16,
+            )
+            logger.info(f'Using YOLOv8-style DFL detection head (anchor-free)')
+        else:
+            self.det_head = DetectionHead(in_channels=fpn_channels, num_classes=num_det_classes, prior_prob=det_prior_prob, logit_bias_scale=logit_bias_scale, num_anchors=num_anchors)
 
         # Activity head
         self.act_head = ActivityHead(feat_dim=backbone_dim, num_classes=num_act_classes)
@@ -655,12 +668,24 @@ class MTLMViTModel(nn.Module):
         # When disabled (default), only P3/P4/P5 are used (legacy behavior).
         fpn_out = self.fpn(fpn_feats)
         det_outputs = {}
-        for level_name, feat in fpn_out.items():
-            if level_name == "P2" and not self.use_p2_level:
-                continue
-            # Temporal-pool T dimension for 2D detection
-            pooled = feat.mean(dim=2)  # [B, 256, H, W]
-            det_outputs[level_name] = self.det_head(pooled)
+
+        if self.use_yolov8_head:
+            # YOLOv8 head: takes list of [B, 256, H, W] features
+            level_feats = []
+            for level_name in ['P3', 'P4', 'P5']:
+                if level_name in fpn_out:
+                    # Temporal-pool T dimension for 2D detection
+                    pooled = fpn_out[level_name].mean(dim=2)  # [B, 256, H, W]
+                    level_feats.append(pooled)
+            det_outputs = self.det_head(level_feats)
+        else:
+            # Legacy 3x3 anchor-based head: takes single feature map
+            for level_name, feat in fpn_out.items():
+                if level_name == "P2" and not self.use_p2_level:
+                    continue
+                # Temporal-pool T dimension for 2D detection
+                pooled = feat.mean(dim=2)  # [B, 256, H, W]
+                det_outputs[level_name] = self.det_head(pooled)
 
         # Activity
         act_logits = self.act_head(cls_token)
