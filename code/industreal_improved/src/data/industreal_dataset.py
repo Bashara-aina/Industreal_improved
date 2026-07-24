@@ -904,6 +904,27 @@ class IndustRealMultiTaskDataset(Dataset):
         self._psr_prevalence_cache = (component_sums / max(total_frames, 1)).astype(np.float32)
         return self._psr_prevalence_cache
 
+    @property
+    def psr_state_class_counts(self) -> np.ndarray:
+        """Per-class frame counts for 24 PSR states, excluding IGNORE_INDEX (-1).
+
+        Aggregated across all training recording annotation caches.
+        Used to compute class-balanced weights for Path B state classification loss.
+        Returns: [_PSR_NUM_CATEGORIES] int64 array of frame counts.
+        """
+        if getattr(self, "_psr_state_class_counts_cache", None) is not None:
+            return self._psr_state_class_counts_cache
+
+        total_counts = np.zeros(_PSR_NUM_CATEGORIES, dtype=np.int64)
+        for cache in self._anno_cache.values():
+            psr_cls = cache.psr_state_class_per_frame  # [num_frames], int64
+            valid = psr_cls[psr_cls != _PSR_IGNORE_IDX].astype(np.int64)
+            counts = np.bincount(valid, minlength=_PSR_NUM_CATEGORIES).astype(np.int64)
+            total_counts += counts
+
+        self._psr_state_class_counts_cache = total_counts
+        return total_counts
+
     # [GAP-B] Action-segment clip protocol (MViTv2-comparable activity eval)
     def build_activity_segments(self):
         """Returns [(rec_id, start, end, action_id), ...] from AR spans; NA excluded."""

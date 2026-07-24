@@ -154,6 +154,43 @@ class YOLOv8DetectHead(nn.Module):
 
         self.strides = torch.tensor([8.0, 16.0, 32.0])
 
+        # Initialize input adapters with identity-like mapping.
+        # Without this, the random 1x1 conv weights scramble FPN features
+        # and the pretrained YOLOv8 cv2/cv3 weights receive garbage ->
+        # head collapses to sigmoid=0.5 everywhere.
+        self._init_input_adapters()
+
+    def _init_input_adapters(self):
+        """Initialize channel adapters with identity-like mapping.
+
+        1x1 conv weight shapes: [out_c, in_c, 1, 1]
+        - For out_c <= in_c (P3: 192→256): copy first out_c input channels
+        - For out_c > in_c (P4/P5: 384→256, 576→256): copy cyclically
+        BN is already identity at init (weight=1, bias=0, running_mean=0, running_var=1).
+        """
+        with torch.no_grad():
+            for adapter_name, expected_out in [
+                ('input_adapter_p3', 192),
+                ('input_adapter_p4', 384),
+                ('input_adapter_p5', 576),
+            ]:
+                adapter = getattr(self, adapter_name)
+                w = adapter.conv.weight  # [out_c, in_c, 1, 1]
+                out_c, in_c = w.shape[0], w.shape[1]
+                w.zero_()
+                if out_c <= in_c:
+                    # First out_c channels pass through
+                    for i in range(out_c):
+                        w[i, i, 0, 0] = 1.0
+                else:
+                    # Duplicate input channels to fill output
+                    for i in range(out_c):
+                        w[i, i % in_c, 0, 0] = 1.0
+                logger.info(
+                    f'  {adapter_name}: {in_c}->{out_c} identity-initialized '
+                    f'(init_range=[{w.min():.3f}, {w.max():.3f}])'
+                )
+
     def forward(self, feats: List[torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Forward pass: returns dict per level with raw cls/reg outputs."""
         # feats: list of [B, 256, H, W] for P3, P4, P5

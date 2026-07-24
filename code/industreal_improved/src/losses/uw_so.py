@@ -29,15 +29,24 @@ class UWSOLoss(nn.Module):
     Each task has a learnable log_sigma parameter. With init_log_sigma=0.0,
     the initial weight for each task is 1.0 (since exp(-2*0) = 1).
 
+    log_sigma is clipped to [log_sigma_min, log_sigma_max] each forward()
+    to prevent pathological divergence where one task gets completely
+    suppressed (log_sigma → +inf → weight → 0). With the default bounds
+    [-1.0, 2.0], the min weight is exp(-4) ≈ 0.018 and max is exp(2) ≈ 7.4.
+
     Task order (4 tasks): det, act, pose, psr
     """
 
     TASK_NAMES = ("det", "act", "pose", "psr")
+    LOG_SIGMA_MIN = -1.0
+    LOG_SIGMA_MAX = 2.0
 
     def __init__(self, init_log_sigma: float = 0.0):
         super().__init__()
+        # Initialize within bounds
+        init_val = max(self.LOG_SIGMA_MIN, min(self.LOG_SIGMA_MAX, init_log_sigma))
         self.log_sigma = nn.Parameter(
-            torch.full((len(self.TASK_NAMES),), init_log_sigma)
+            torch.full((len(self.TASK_NAMES),), init_val)
         )
 
     @property
@@ -63,7 +72,16 @@ class UWSOLoss(nn.Module):
         for i, name in enumerate(self.TASK_NAMES):
             if name in losses:
                 ls = self.log_sigma[i]
-                # weight = 1 / sigma^2 = exp(-2 * log_sigma)
                 weight = torch.exp(-2.0 * ls)
                 total = total + weight * losses[name] + ls
         return total
+
+    def project(self) -> None:
+        """Clip log_sigma parameters to [min, max] after optimizer step.
+
+        Must be called after each uwso_opt.step() to prevent pathological
+        divergence where log_sigma → +inf and a task gets completely
+        suppressed.
+        """
+        with torch.no_grad():
+            self.log_sigma.data.clamp_(self.LOG_SIGMA_MIN, self.LOG_SIGMA_MAX)

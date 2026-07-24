@@ -188,7 +188,7 @@ CONVNEXT_CHANNELS = {
 # [V2 D2] BiFPN — Weighted Bidirectional FPN (Tan et al. CVPR 2020, EfficientDet).
 # When enabled, replaces the standard FPN with weighted top-down + bottom-up fusion.
 # Estimated +0.4-0.7 mAP improvement. Default False for backward compatibility.
-USE_BIFPN = False
+USE_BIFPN = True
 
 # HeadPoseFiLM — second-stage FiLM from 9-DoF head pose (Doc 01 E)
 USE_HEADPOSE_FILM = True
@@ -2369,6 +2369,16 @@ PRESETS = {
         ),
         "img_width": 480,
         "img_height": 360,
+    },
+    "img_size_640": {
+        "description": (
+            "640x480 input resolution (2.67x more pixels than 320x240 baseline, "
+            "1.78x more than 480x360). Matches the SOTA paper WACV 2024 IndustReal "
+            "resolution regime. Requires gradient checkpointing (USE_BACKBONE_CHECKPOINT=True) "
+            "and batch<=32 on RTX 5060 Ti 16GB. Anchors at 512px cover full 640-wide image."
+        ),
+        "img_width": 640,
+        "img_height": 480,
     },
 }
 

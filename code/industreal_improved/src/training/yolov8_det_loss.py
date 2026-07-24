@@ -217,30 +217,42 @@ def yolov8_detection_loss_v2(
     focal_alpha: float = 0.25,
     reg_weight: float = 5.0,
 ):
-    """Simpler YOLOv8-style loss with TAL-like target assignment.
+    """YOLOv8-style loss with CORRECT DFL target assignment.
 
-    For each GT, find all grid cells within pos_radius (3.5 by default).
-    Assign cls target = GT class, reg target = (l, t, r, b) distances.
+    BUG FIX 2026-07-22 — The original (l, t, r, b) target computation was WRONG:
+    it computed distances from cell EDGES to GT center, but YOLOv8 DFL expects
+    distances from grid CENTER to box edges. This caused:
+    - DFL loss to train wrong distribution targets
+    - CIoU loss to compute IoU between incorrect box coordinates
+    - Only ~1 positive per GT (the center-containing cell) due to wrong l>=0/r>=0 checks
+
+    Correct DFL targets (grid units):
+        grid_center = (cx+0.5, cy+0.5)
+        l = grid_center_x - (gt_cx - gt_w/2)  = (cx+0.5) - x1_in_grid
+        t = grid_center_y - (gt_cy - gt_h/2)  = (cy+0.5) - y1_in_grid
+        r = (gt_cx + gt_w/2) - grid_center_x  = x2_in_grid - (cx+0.5)
+        b = (gt_cy + gt_h/2) - grid_center_y  = y2_in_grid - (cy+0.5)
+
+    Positive assignment: cells whose grid center falls within the GT box.
+    For small objects (width/height < 1 grid unit), also include the nearest cell.
     """
     B, C, H, W = cls_logits.shape
     device = cls_logits.device
 
-    # Initialize targets (-1 = background, 0..C-1 = class index, matches sigmoid_focal_loss convention)
+    # Initialize targets (-1 = background, matches sigmoid_focal_loss convention)
     cls_target = torch.full((B, H, W), -1, dtype=torch.long, device=device)
     reg_target = torch.zeros(B, 4, H, W, device=device)
     reg_target_dist = torch.zeros(B, 4 * reg_max, H, W, device=device)
     assigned_mask = torch.zeros(B, H, W, dtype=torch.bool, device=device)
-    n_pos_per_level = []
 
-    pos_radius = 3.5  # YOLOv8 default
-
-    # Grid centers
+    # Grid centers in grid units: (grid_x+0.5, grid_y+0.5)
     grid_y, grid_x = torch.meshgrid(
         torch.arange(H, device=device, dtype=torch.float32),
         torch.arange(W, device=device, dtype=torch.float32),
         indexing='ij',
     )
-    # grid_x, grid_y: [H, W] in grid units (0 to W-1)
+    grid_center_x = grid_x + 0.5  # [H, W]
+    grid_center_y = grid_y + 0.5  # [H, W]
 
     for b in range(B):
         gt_b = gt_boxes[b]
@@ -258,61 +270,87 @@ def yolov8_detection_loss_v2(
         w_grid = gt_b_dev[:, 2] * W
         h_grid = gt_b_dev[:, 3] * H
 
+        cx_half = w_grid / 2
+        cy_half = h_grid / 2
+        x1_grid = cx_grid - cx_half  # left edge
+        y1_grid = cy_grid - cy_half  # top edge
+        x2_grid = cx_grid + cx_half  # right edge
+        y2_grid = cy_grid + cy_half  # bottom edge
+
         n_in_level = 0
         for n in range(int(gt_b_dev.shape[0])):
-            cx_n = float(cx_grid[n].item())
-            cy_n = float(cy_grid[n].item())
+            x1_n = float(x1_grid[n].item())
+            y1_n = float(y1_grid[n].item())
+            x2_n = float(x2_grid[n].item())
+            y2_n = float(y2_grid[n].item())
             w_n = float(w_grid[n].item())
             h_n = float(h_grid[n].item())
 
-            # Find grid cells within pos_radius
-            radius = max(pos_radius, 2.5 * max(w_n, h_n) / stride)
+            # Approach: find ALL cells whose grid center falls within the GT box.
+            # Grid center (cx+0.5, cy+0.5) is in GT box iff:
+            #   x1_n <= cx+0.5 < x2_n  AND  y1_n <= cy+0.5 < y2_n
+            # This naturally covers ceil(w_n) * ceil(h_n) cells.
+            #
+            # For very small objects (< 1 grid unit), where center-containment
+            # gives 0-1 cells, we also include the cell containing the GT center.
 
-            cell_x_min = max(0, int(cx_n - radius))
-            cell_x_max = min(W - 1, int(cx_n + radius))
-            cell_y_min = max(0, int(cy_n - radius))
-            cell_y_max = min(H - 1, int(cy_n + radius))
+            # Cells whose grid centers are within the GT box
+            cell_x_min = max(0, int(math.ceil(x1_n - 0.5)))
+            cell_x_max = min(W - 1, int(math.floor(x2_n - 0.5)))
+            cell_y_min = max(0, int(math.ceil(y1_n - 0.5)))
+            cell_y_max = min(H - 1, int(math.floor(y2_n - 0.5)))
+
+            # If object is too small for any cell center to be inside,
+            # assign the cell containing the GT center
+            if cell_x_min > cell_x_max or cell_y_min > cell_y_max:
+                # GT center in grid units
+                gx = (x1_n + x2_n) / 2
+                gy = (y1_n + y2_n) / 2
+                cell_x_min = max(0, int(gx))
+                cell_x_max = min(W - 1, int(gx))
+                cell_y_min = max(0, int(gy))
+                cell_y_max = min(H - 1, int(gy))
 
             for cy in range(cell_y_min, cell_y_max + 1):
                 for cx in range(cell_x_min, cell_x_max + 1):
-                    # Compute (l, t, r, b) targets in grid units
-                    l = float(cx_n - cx)
-                    t = float(cy_n - cy)
-                    r = float((cx + 1) - cx_n)
-                    b = float((cy + 1) - cy_n)
-
-                    # Skip if outside [0, reg_max)
-                    if l < 0 or t < 0 or r < 0 or b < 0:
-                        continue
-                    if l >= reg_max or t >= reg_max or r >= reg_max or b >= reg_max:
+                    # Skip if already assigned (first GT takes priority)
+                    if bool(assigned_mask[b, cy, cx].item()):
                         continue
 
-                    # Skip if already assigned (center cell takes priority)
-                    b_i, cy_i, cx_i = int(b), int(cy), int(cx)
-                    if bool(assigned_mask[b_i, cy_i, cx_i].item()):
-                        continue
+                    # CORRECT DFL targets: distance from grid CENTER to box edges
+                    gc_x = grid_center_x[cy, cx].item()  # cx + 0.5
+                    gc_y = grid_center_y[cy, cx].item()  # cy + 0.5
 
-                    cls_target[b_i, cy_i, cx_i] = int(gc_b_dev[n].item())
-                    reg_target[b_i, 0, cy_i, cx_i] = l
-                    reg_target[b_i, 1, cy_i, cx_i] = t
-                    reg_target[b_i, 2, cy_i, cx_i] = r
-                    reg_target[b_i, 3, cy_i, cx_i] = b
+                    # DFL targets in grid units (must be in [0, reg_max))
+                    # NOTE: dfl_l/dfl_t/dfl_r/dfl_b to avoid shadowing batch index b and temporal t
+                    dfl_l = gc_x - x1_n
+                    dfl_t = gc_y - y1_n
+                    dfl_r = x2_n - gc_x
+                    dfl_b = y2_n - gc_y
 
-                    # Soft target distribution with linear interpolation
-                    l_int = int(l)
-                    t_int = int(t)
-                    r_int = int(r)
-                    b_int = int(b)
-                    for side, (val, idx) in enumerate([(l, l_int), (t, t_int), (r, r_int), (b, b_int)]):
+                    # Clamp to DFL range
+                    dfl_l = max(0.0, min(dfl_l, reg_max - 1e-6))
+                    dfl_t = max(0.0, min(dfl_t, reg_max - 1e-6))
+                    dfl_r = max(0.0, min(dfl_r, reg_max - 1e-6))
+                    dfl_b = max(0.0, min(dfl_b, reg_max - 1e-6))
+
+                    cls_target[b, cy, cx] = int(gc_b_dev[n].item())
+                    reg_target[b, 0, cy, cx] = dfl_l
+                    reg_target[b, 1, cy, cx] = dfl_t
+                    reg_target[b, 2, cy, cx] = dfl_r
+                    reg_target[b, 3, cy, cx] = dfl_b
+
+                    # Soft DFL target distribution with linear interpolation
+                    for side, val in enumerate([dfl_l, dfl_t, dfl_r, dfl_b]):
+                        idx = int(val)
                         frac = val - idx
                         channel = side * reg_max
-                        reg_target_dist[b_i, channel + idx, cy_i, cx_i] += 1 - frac
+                        reg_target_dist[b, channel + idx, cy, cx] += 1.0 - frac
                         if idx + 1 < reg_max:
-                            reg_target_dist[b_i, channel + idx + 1, cy_i, cx_i] += frac
+                            reg_target_dist[b, channel + idx + 1, cy, cx] += frac
 
                     n_in_level += 1
-                    assigned_mask[b_i, cy_i, cx_i] = True
-        n_pos_per_level.append(n_in_level)
+                    assigned_mask[b, cy, cx] = True
 
     # Classification loss
     cls_target_flat = cls_target.view(-1)
@@ -342,6 +380,7 @@ def yolov8_detection_loss_v2(
         cy_grid_pix_flat = cy_grid_pix.view(-1).expand(B, -1).reshape(-1)
 
         # Convert (l, t, r, b) in grid units to (x1, y1, x2, y2) in pixels
+        # box_x1 = grid_center_pix - l * stride = (cx+0.5)*stride - l*stride
         pred_boxes = torch.stack([
             cx_grid_pix_flat - pred_ltrb_flat[:, 0] * stride,
             cy_grid_pix_flat - pred_ltrb_flat[:, 1] * stride,

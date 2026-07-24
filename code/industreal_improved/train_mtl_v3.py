@@ -853,8 +853,23 @@ class ForegroundBatchSampler:
         act_ptr = 0
         bg_ptr = 0
         batch_counter = 0
+        n_batches = len(self)
 
-        while det_ptr < len(det_pool) or act_ptr < len(act_pool) or bg_ptr < len(bg_pool):
+        for _ in range(n_batches):
+            # Wrap pools when exhausted so detection always sees positive anchors
+            if det_ptr >= len(det_pool):
+                if self.shuffle:
+                    rng.shuffle(det_pool)
+                det_ptr = 0
+            if act_ptr >= len(act_pool):
+                if self.shuffle:
+                    rng.shuffle(act_pool)
+                act_ptr = 0
+            if bg_ptr >= len(bg_pool):
+                if self.shuffle:
+                    rng.shuffle(bg_pool)
+                bg_ptr = 0
+
             batch = []
             batch_counter += 1
 
@@ -862,64 +877,23 @@ class ForegroundBatchSampler:
             # In class-balanced mode, occasionally inject a rare-class sample
             if (self.class_balanced and batch_counter % 5 == 0
                     and self._rare_class_pool):
-                rare_idx = self._rare_class_pool.pop(0)
-                batch.append(rare_idx)
-                # Also consume from main pool to avoid double-sampling
-                if rare_idx in det_pool[det_ptr:]:
-                    pool_idx = det_pool.index(rare_idx, det_ptr)
-                    # Swap to current pointer position
-                    det_pool[det_ptr], det_pool[pool_idx] = det_pool[pool_idx], det_pool[det_ptr]
-                    det_ptr += 1
-                elif rare_idx in act_pool:
-                    pool_idx = act_pool.index(rare_idx)
-                    act_pool[pool_idx] = act_pool[act_ptr] if act_ptr < len(act_pool) else rare_idx
-                elif rare_idx in bg_pool:
-                    pool_idx = bg_pool.index(rare_idx)
-                    bg_pool[pool_idx] = bg_pool[bg_ptr] if bg_ptr < len(bg_pool) else rare_idx
-            elif det_ptr < len(det_pool):
+                batch.append(self._rare_class_pool.pop(0))
+                det_ptr += 1  # skip one det-FG slot to avoid double-sampling
+            else:
                 batch.append(det_pool[det_ptr])
                 det_ptr += 1
-            elif act_ptr < len(act_pool):
-                batch.append(act_pool[act_ptr])
-                act_ptr += 1
-            elif bg_ptr < len(bg_pool):
-                batch.append(bg_pool[bg_ptr])
-                bg_ptr += 1
-            else:
-                break
 
             # Slot 2: prioritize act_fg (ensures activity/PSR signal)
             # In class-balanced mode, occasionally inject another rare-class sample
             if (self.class_balanced and batch_counter % 7 == 0
                     and self._rare_class_pool):
-                rare_idx = self._rare_class_pool.pop(0)
-                batch.append(rare_idx)
-                # Consume from main pool
-                if rare_idx in act_pool:
-                    pool_idx = act_pool.index(rare_idx)
-                    act_pool[pool_idx] = act_pool[act_ptr] if act_ptr < len(act_pool) else rare_idx
-                elif rare_idx in det_pool:
-                    pool_idx = det_pool.index(rare_idx)
-                    det_pool[pool_idx] = det_pool[det_ptr] if det_ptr < len(det_pool) else rare_idx
-                elif rare_idx in bg_pool:
-                    pool_idx = bg_pool.index(rare_idx)
-                    bg_pool[pool_idx] = bg_pool[bg_ptr] if bg_ptr < len(bg_pool) else rare_idx
-            elif act_ptr < len(act_pool):
+                batch.append(self._rare_class_pool.pop(0))
+                act_ptr += 1  # skip one act-FG slot to avoid double-sampling
+            else:
                 batch.append(act_pool[act_ptr])
                 act_ptr += 1
-            elif det_ptr < len(det_pool):
-                batch.append(det_pool[det_ptr])
-                det_ptr += 1
-            elif bg_ptr < len(bg_pool):
-                batch.append(bg_pool[bg_ptr])
-                bg_ptr += 1
-            else:
-                break
 
             yield batch
-            if (det_ptr >= len(det_pool) and act_ptr >= len(act_pool)
-                    and bg_ptr >= len(bg_pool)):
-                break
 
 
 # ===========================================================================

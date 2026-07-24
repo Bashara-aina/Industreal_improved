@@ -1,17 +1,17 @@
 {
   "epoch": 0,
   "status": "running",
-  "last_heartbeat": "2026-07-14T09:49:05.448848+00:00",
-  "training_pid": 3306807,
+  "last_heartbeat": "2026-07-16T04:51:59.884751+00:00",
+  "training_pid": 1756352,
   "batch": {
-    "current": 200,
-    "total": 13161
+    "current": 550,
+    "total": 822
   },
-  "best_metric": 0.4684010215948263,
+  "best_metric": 0.17876880557258112,
   "best_metrics": {
-    "det_mAP50": 0.3122673477298841,
-    "det_mAP50_pc": 0.4684010215948263,
-    "det_n_present_classes": 16,
-    "forward_angular_MAE_deg": 8.118844985961914
+    "det_mAP50": NaN,
+    "det_mAP50_pc": NaN,
+    "det_n_present_classes": 0,
+    "forward_angular_MAE_deg": 6.238091945648193
   }
 }

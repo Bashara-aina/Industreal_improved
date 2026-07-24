@@ -4164,6 +4164,14 @@ def main(args):
         criterion.set_psr_class_counts(psr_prev)
         logger.info(f"PSR per-component prevalence: {psr_prev.numpy().round(3).tolist()}")
 
+    # [Path B PSR] Set 24-class state class-balanced weights.
+    # CRITICAL BUG FIX: this call was missing, causing the Path B loss to use
+    # uniform weights (all 1.0) instead of effective-number class-balanced weights.
+    if hasattr(train_ds, "psr_state_class_counts"):
+        psr_state_counts = torch.from_numpy(train_ds.psr_state_class_counts)
+        criterion.set_psr_state_class_counts(psr_state_counts)
+        logger.info(f"[Path B PSR] state class counts: {psr_state_counts.numpy().tolist()}")
+
     # [E6] Knowledge Distillation — only active when USE_DISTILLATION=True
     distill_loss_fn = (
         DistillationLoss().to(device) if getattr(C, "USE_DISTILLATION", False) else None
